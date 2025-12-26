@@ -27,7 +27,7 @@ class EasClient(
     private val acceptAllCerts: Boolean = false,
     private val port: Int = 443,
     private val useHttps: Boolean = true,
-    deviceIdSuffix: String = "", // Для стабильного deviceId
+    private val deviceIdSuffix: String = "", // Для стабильного deviceId и реального email
     initialPolicyKey: String? = null // PolicyKey из предыдущей сессии
 ) {
     private val wbxmlParser = WbxmlParser()
@@ -146,32 +146,15 @@ class EasClient(
         // Настраиваем SSL/TLS
         try {
             if (acceptAllCerts) {
+                // Принимаем все сертификаты (самоподписанные)
                 builder.hostnameVerifier { _, _ -> true }
                 builder.sslSocketFactory(createTrustAllSslSocketFactory(), createTrustAllManager())
-            } else {
-                // Пробуем использовать Conscrypt для лучшей совместимости
-                val sslContext = try {
-                    SSLContext.getInstance("TLS", "Conscrypt")
-                } catch (_: Exception) {
-                    // Fallback на стандартный TLS
-                    SSLContext.getInstance("TLS")
-                }
-                sslContext.init(null, null, SecureRandom())
-                
-                val defaultTrustManager = try {
-                    javax.net.ssl.TrustManagerFactory.getInstance(
-                        javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-                    ).apply { init(null as java.security.KeyStore?) }.trustManagers[0] as X509TrustManager
-                } catch (_: Exception) {
-                    // Если не получилось создать TrustManager - используем дефолтный
-                    null
-                }
-                
-                if (defaultTrustManager != null) {
-                    builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), defaultTrustManager)
-                }
-                // Если defaultTrustManager == null, OkHttp использует свои дефолты
             }
+            // Если acceptAllCerts = false, НЕ переопределяем sslSocketFactory!
+            // OkHttp сам использует системный TrustManager который учитывает:
+            // 1. Системные CA сертификаты
+            // 2. Пользовательские сертификаты (если разрешено в network_security_config)
+            // Переопределение TrustManagerFactory.init(null) даёт ТОЛЬКО системные сертификаты!
         } catch (_: Exception) {
             // Если вся настройка SSL упала - OkHttp использует свои дефолты
         }
@@ -865,8 +848,11 @@ class EasClient(
     }
     
     private fun buildMimeMessageBytes(to: String, subject: String, body: String, cc: String, requestReadReceipt: Boolean = false, requestDeliveryReceipt: Boolean = false): ByteArray {
-        // Определяем email отправителя
-        val fromEmail = if (domain.isNotEmpty() && !username.contains("@")) {
+        // Используем реальный email из deviceIdSuffix (передаётся account.email)
+        // Fallback на username@domain если deviceIdSuffix не содержит @
+        val fromEmail = if (deviceIdSuffix.contains("@")) {
+            deviceIdSuffix
+        } else if (domain.isNotEmpty() && !username.contains("@")) {
             "$username@$domain"
         } else {
             username
@@ -922,7 +908,10 @@ class EasClient(
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false
     ): ByteArray {
-        val fromEmail = if (domain.isNotEmpty() && !username.contains("@")) {
+        // Используем реальный email из deviceIdSuffix (передаётся account.email)
+        val fromEmail = if (deviceIdSuffix.contains("@")) {
+            deviceIdSuffix
+        } else if (domain.isNotEmpty() && !username.contains("@")) {
             "$username@$domain"
         } else {
             username
@@ -1324,7 +1313,10 @@ class EasClient(
      * Строит MDN сообщение (multipart/report)
      */
     private fun buildMdnMessage(to: String, originalSubject: String, originalMessageId: String?): ByteArray {
-        val fromEmail = if (domain.isNotEmpty() && !username.contains("@")) {
+        // Используем реальный email из deviceIdSuffix (передаётся account.email)
+        val fromEmail = if (deviceIdSuffix.contains("@")) {
+            deviceIdSuffix
+        } else if (domain.isNotEmpty() && !username.contains("@")) {
             "$username@$domain"
         } else {
             username

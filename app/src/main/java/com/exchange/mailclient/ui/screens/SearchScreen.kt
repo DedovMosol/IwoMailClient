@@ -41,6 +41,7 @@ import com.exchange.mailclient.ui.AppLanguage
 import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.NotificationStrings
 import com.exchange.mailclient.ui.Strings
+import com.exchange.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -301,8 +302,8 @@ fun SearchScreen(
                     modifier = Modifier.background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                Color(0xFF7C4DFF),
-                                Color(0xFF448AFF)
+                                LocalColorTheme.current.gradientStart,
+                                LocalColorTheme.current.gradientEnd
                             )
                         )
                     )

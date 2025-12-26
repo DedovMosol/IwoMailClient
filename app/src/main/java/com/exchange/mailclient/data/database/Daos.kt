@@ -44,6 +44,9 @@ interface AccountDao {
     @Query("UPDATE accounts SET syncIntervalMinutes = :intervalMinutes WHERE id = :id")
     suspend fun updateSyncInterval(id: Long, intervalMinutes: Int)
     
+    @Query("UPDATE accounts SET signature = :signature WHERE id = :id")
+    suspend fun updateSignature(id: Long, signature: String)
+    
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(account: AccountEntity): Long
     

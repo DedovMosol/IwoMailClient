@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -11,36 +12,86 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.window.DialogProperties
 import com.exchange.mailclient.ui.LocalFontScale
+import java.util.Calendar
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFF90CAF9),
-    secondary = Color(0xFF80DEEA),
-    tertiary = Color(0xFFA5D6A7),
-    background = Color(0xFF121212),
-    surface = Color(0xFF1E1E1E),
-    onPrimary = Color.Black,
-    onSecondary = Color.Black,
-    onBackground = Color.White,
-    onSurface = Color.White
-)
+/**
+ * Цветовые темы приложения
+ */
+enum class AppColorTheme(
+    val code: String,
+    val primaryLight: Color,
+    val primaryDark: Color,
+    val gradientStart: Color,
+    val gradientEnd: Color
+) {
+    PURPLE(
+        code = "purple",
+        primaryLight = Color(0xFF7C4DFF),
+        primaryDark = Color(0xFFB388FF),
+        gradientStart = Color(0xFF7C4DFF),
+        gradientEnd = Color(0xFF448AFF)
+    ),
+    BLUE(
+        code = "blue",
+        primaryLight = Color(0xFF1976D2),
+        primaryDark = Color(0xFF90CAF9),
+        gradientStart = Color(0xFF1976D2),
+        gradientEnd = Color(0xFF42A5F5)
+    ),
+    RED(
+        code = "red",
+        primaryLight = Color(0xFFD32F2F),
+        primaryDark = Color(0xFFEF9A9A),
+        gradientStart = Color(0xFFD32F2F),
+        gradientEnd = Color(0xFFFF5252)
+    ),
+    YELLOW(
+        code = "yellow",
+        primaryLight = Color(0xFFF9A825),
+        primaryDark = Color(0xFFFFF59D),
+        gradientStart = Color(0xFFF9A825),
+        gradientEnd = Color(0xFFFFD54F)
+    ),
+    ORANGE(
+        code = "orange",
+        primaryLight = Color(0xFFFF6D00),
+        primaryDark = Color(0xFFFFAB91),
+        gradientStart = Color(0xFFFF6D00),
+        gradientEnd = Color(0xFFFFAB40)
+    ),
+    GREEN(
+        code = "green",
+        primaryLight = Color(0xFF388E3C),
+        primaryDark = Color(0xFFA5D6A7),
+        gradientStart = Color(0xFF388E3C),
+        gradientEnd = Color(0xFF66BB6A)
+    ),
+    PINK(
+        code = "pink",
+        primaryLight = Color(0xFFE91E63),
+        primaryDark = Color(0xFFF48FB1),
+        gradientStart = Color(0xFFE91E63),
+        gradientEnd = Color(0xFFFF4081)
+    );
+    
+    companion object {
+        fun fromCode(code: String): AppColorTheme {
+            return entries.find { it.code == code } ?: PURPLE
+        }
+    }
+}
 
-private val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF1976D2),
-    secondary = Color(0xFF0097A7),
-    tertiary = Color(0xFF388E3C),
-    background = Color(0xFFFAFAFA),
-    surface = Color.White,
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onBackground = Color.Black,
-    onSurface = Color.Black
-)
+/**
+ * CompositionLocal для текущей цветовой темы
+ */
+val LocalColorTheme = compositionLocalOf { AppColorTheme.PURPLE }
 
 @Composable
 fun ExchangeMailTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
     fontScale: Float = 1.0f,
+    colorTheme: AppColorTheme = AppColorTheme.PURPLE,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -48,8 +99,28 @@ fun ExchangeMailTheme(
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+        darkTheme -> darkColorScheme(
+            primary = colorTheme.primaryDark,
+            secondary = Color(0xFF80DEEA),
+            tertiary = Color(0xFFA5D6A7),
+            background = Color(0xFF121212),
+            surface = Color(0xFF1E1E1E),
+            onPrimary = Color.Black,
+            onSecondary = Color.Black,
+            onBackground = Color.White,
+            onSurface = Color.White
+        )
+        else -> lightColorScheme(
+            primary = colorTheme.primaryLight,
+            secondary = Color(0xFF0097A7),
+            tertiary = Color(0xFF388E3C),
+            background = Color(0xFFFAFAFA),
+            surface = Color.White,
+            onPrimary = Color.White,
+            onSecondary = Color.White,
+            onBackground = Color.Black,
+            onSurface = Color.Black
+        )
     }
     
     val currentDensity = LocalDensity.current
@@ -60,7 +131,8 @@ fun ExchangeMailTheme(
 
     CompositionLocalProvider(
         LocalDensity provides scaledDensity,
-        LocalFontScale provides fontScale
+        LocalFontScale provides fontScale,
+        LocalColorTheme provides colorTheme
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

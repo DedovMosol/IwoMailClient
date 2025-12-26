@@ -600,5 +600,8 @@ class PushService : Service() {
         // Фиксированный ID на аккаунт — новые уведомления перезаписывают старые
         val notificationId = (NEW_MAIL_NOTIFICATION_REQUEST_CODE + accountId).toInt()
         notificationManager.notify(notificationId, builder.build())
+        
+        // Воспроизводим звук получения письма
+        com.exchange.mailclient.util.SoundPlayer.playReceiveSound(applicationContext)
     }
 }

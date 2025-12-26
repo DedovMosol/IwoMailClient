@@ -49,7 +49,7 @@ fun VerificationScreen(
     useSSL: Boolean,
     syncMode: SyncMode,
     onSuccess: () -> Unit,
-    onError: (String) -> Unit
+    onError: (String, String?) -> Unit // error, savedData
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -61,8 +61,18 @@ fun VerificationScreen(
     val sendingTestEmailText = Strings.sendingTestEmail
     val testEmailSubjectText = Strings.testEmailSubject
     val testEmailBodyText = Strings.testEmailBody
+    val emailMismatchTitle = Strings.emailMismatch
+    val isRussianLang = com.exchange.mailclient.ui.isRussian()
+    
+    // Функция для создания savedData (сохраняем всё кроме domain, username, password)
+    fun createSavedData(): String {
+        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}"
+    }
     
     var statusText by remember { mutableStateOf(verifyingAccountText) }
+    var showMismatchDialog by remember { mutableStateOf(false) }
+    var mismatchEnteredEmail by remember { mutableStateOf("") }
+    var mismatchActualEmail by remember { mutableStateOf("") }
     
     // Анимация вращения
     val infiniteTransition = rememberInfiniteTransition(label = "rotation")
@@ -118,14 +128,84 @@ fun VerificationScreen(
                     
                     when (addResult) {
                         is EasResult.Success -> onSuccess()
-                        is EasResult.Error -> onError(addResult.message)
+                        is EasResult.Error -> onError(addResult.message, createSavedData())
                     }
                 }
                 is VerificationResult.EmailMismatch -> {
-                    onError("EMAIL_MISMATCH:${result.enteredEmail}:${result.actualEmail}")
+                    // Показываем диалог
+                    mismatchEnteredEmail = result.enteredEmail
+                    mismatchActualEmail = result.actualEmail
+                    showMismatchDialog = true
                 }
                 is VerificationResult.Error -> {
-                    onError(result.message)
+                    onError(result.message, createSavedData())
+                }
+            }
+        }
+    }
+    
+    // Диалог несовпадения email
+    if (showMismatchDialog) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { }) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.extraLarge
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Text(
+                        emailMismatchTitle,
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Text(
+                        if (isRussianLang) "Введённый email:" else "Entered email:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        mismatchEnteredEmail,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Text(
+                        if (isRussianLang) "Реальный email:" else "Actual email:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        mismatchActualEmail,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Text(
+                        if (isRussianLang) "Пожалуйста, введите правильный email." 
+                        else "Please enter the correct email.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Justify
+                    )
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 24.dp),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = {
+                            showMismatchDialog = false
+                            onError("CLEAR_EMAIL", createSavedData())
+                        }) {
+                            Text("OK")
+                        }
+                    }
                 }
             }
         }

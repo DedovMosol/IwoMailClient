@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.0.7 (27.12.2025)
+
+### New Features
+- **Email mismatch dialog** — informative dialog shown during Exchange account verification instead of error
+- **Color themes** — choose from 7 color themes: purple, blue, red, yellow, orange, green, pink
+- **Daily themes** — ability to assign different colors for each day of the week
+- **Animated logo** — envelope icon in "About" section with pulse and wobble animation
+- **Settings grouping** — settings divided into sections: Appearance, Sync, About
+- **Account signature** — ability to set signature for each account, automatically added when composing emails
+- **Send/receive sounds** — audio notification when sending and receiving emails
+
+### UI Improvements
+- **Fixed word wrapping** — in donation dialog words no longer break by letters with large font
+- **Updated tips** — "Good to know" section reduced to 4 key items, added certificate tip
+- **Pull-to-refresh with envelope** — pull down email list to refresh, animated envelope instead of standard indicator
+- **Attachment preview** — if email contains downloaded image, thumbnail is shown in email list
+
+### Bug Fixes
+- **Fixed sender address in MDN/DSN** — read and delivery receipts now sent to correct email
+- **Fixed time input fields** — in schedule send dialog you can now properly edit hours/minutes/seconds
+- **Auto-activate new account** — when adding second account it automatically becomes active
+- **Preserve settings on 401 error** — on authorization error email, server, color, certificate checkbox are preserved; only domain, username and password are reset
+- **Fixed user certificates** — app now trusts user-installed certificates in Android settings (without "Accept all certificates")
+
+### Technical Improvements
+- **LocalColorTheme** — CompositionLocal for dynamic color theme switching
+- **TopAppBar and FAB gradients** — now use colors from selected theme
+
+### Security
+- **Disabled ADB backup** — `allowBackup="false"` prevents data extraction via ADB 
+
+---
+
 ## v1.0.6c (26.12.2025)
 
 ### New Features

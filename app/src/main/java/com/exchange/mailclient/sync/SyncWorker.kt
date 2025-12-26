@@ -166,6 +166,9 @@ class SyncWorker(
         // Фиксированный ID — новые уведомления перезаписывают старые
         val notificationId = 3001 // Уникальный ID для SyncWorker
         notificationManager.notify(notificationId, builder.build())
+        
+        // Воспроизводим звук получения письма
+        com.exchange.mailclient.util.SoundPlayer.playReceiveSound(applicationContext)
     }
     
     companion object {

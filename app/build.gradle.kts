@@ -12,8 +12,8 @@ android {
         applicationId = "com.exchange.mailclient"
         minSdk = 26  // Android 8.0
         targetSdk = 35  // Android 15
-        versionCode = 7
-        versionName = "1.0.6c"
+        versionCode = 8
+        versionName = "1.0.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -86,12 +86,16 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.8.2")
     
     // Compose BOM - используем стабильную версию
-    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material") // для pullRefresh
     implementation("androidx.compose.material:material-icons-extended")
+    
+    // Coil для загрузки изображений
+    implementation("io.coil-kt:coil-compose:2.5.0")
     
     // Navigation
     implementation("androidx.navigation:navigation-compose:2.7.6")

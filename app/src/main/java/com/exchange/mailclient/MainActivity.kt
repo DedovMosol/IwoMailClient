@@ -9,20 +9,76 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.exchange.mailclient.data.repository.SettingsRepository
 import com.exchange.mailclient.ui.AppLanguage
 import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.theme.ExchangeMailTheme
+import com.exchange.mailclient.ui.theme.AppColorTheme
 import com.exchange.mailclient.ui.navigation.AppNavigation
+
+@Composable
+private fun PermissionDialog(
+    title: String,
+    text: String,
+    dismissText: String,
+    confirmText: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraLarge
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Justify,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+                
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 24.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(dismissText)
+                    }
+                    TextButton(onClick = onConfirm) {
+                        Text(confirmText)
+                    }
+                }
+            }
+        }
+    }
+}
 
 class MainActivity : ComponentActivity() {
     
@@ -55,6 +111,20 @@ class MainActivity : ComponentActivity() {
             val initialFontSize = remember { settingsRepo.getFontSizeSync() }
             val fontSize by settingsRepo.fontSize.collectAsState(initial = initialFontSize)
             
+            // Цветовая тема с учётом расписания по дням
+            val initialColorTheme = remember { settingsRepo.getCurrentThemeSync() }
+            val colorThemeCode by settingsRepo.colorTheme.collectAsState(initial = initialColorTheme)
+            val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsState(initial = false)
+            
+            // Получаем тему для текущего дня если включено расписание
+            val currentDayOfWeek = remember { java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK) }
+            val dayThemeCode by settingsRepo.getDayTheme(currentDayOfWeek).collectAsState(initial = "purple")
+            
+            val effectiveThemeCode = if (dailyThemesEnabled) dayThemeCode else colorThemeCode
+            val colorTheme = remember(effectiveThemeCode) {
+                AppColorTheme.fromCode(effectiveThemeCode)
+            }
+            
             val currentLanguage = remember(languageCode) {
                 AppLanguage.entries.find { it.code == languageCode } ?: AppLanguage.RUSSIAN
             }
@@ -63,7 +133,7 @@ class MainActivity : ComponentActivity() {
             val emailIdToOpen by openEmailId
             
             CompositionLocalProvider(LocalLanguage provides currentLanguage) {
-                ExchangeMailTheme(fontScale = fontSize.scale) {
+                ExchangeMailTheme(fontScale = fontSize.scale, colorTheme = colorTheme) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background
@@ -77,31 +147,18 @@ class MainActivity : ComponentActivity() {
                     val showBattery by showBatteryDialog
                     if (showBattery) {
                         val isRu = currentLanguage == AppLanguage.RUSSIAN
-                        com.exchange.mailclient.ui.theme.ScaledAlertDialog(
-                            onDismissRequest = { showBatteryDialog.value = false },
-                            title = { 
-                                Text(if (isRu) "Фоновая работа" else "Background work") 
-                            },
-                            text = { 
-                                Text(
-                                    if (isRu) 
-                                        "Для получения уведомлений о новых письмах приложению нужно работать в фоне.\n\nНажмите «Разрешить» в следующем окне."
-                                    else 
-                                        "To receive notifications about new emails, the app needs to work in the background.\n\nTap «Allow» in the next screen."
-                                ) 
-                            },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    showBatteryDialog.value = false
-                                    openBatterySettings()
-                                }) {
-                                    Text(if (isRu) "Продолжить" else "Continue")
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showBatteryDialog.value = false }) {
-                                    Text(if (isRu) "Позже" else "Later")
-                                }
+                        PermissionDialog(
+                            title = if (isRu) "Фоновая работа" else "Background work",
+                            text = if (isRu) 
+                                "Для получения уведомлений о новых письмах приложению нужно работать в фоне.\n\nНажмите «Разрешить» в следующем окне."
+                            else 
+                                "To receive notifications about new emails, the app needs to work in the background.\n\nTap «Allow» in the next screen.",
+                            dismissText = if (isRu) "Позже" else "Later",
+                            confirmText = if (isRu) "Продолжить" else "Continue",
+                            onDismiss = { showBatteryDialog.value = false },
+                            onConfirm = {
+                                showBatteryDialog.value = false
+                                openBatterySettings()
                             }
                         )
                     }
@@ -109,31 +166,18 @@ class MainActivity : ComponentActivity() {
                     val showAlarm by showAlarmDialog
                     if (showAlarm) {
                         val isRu = currentLanguage == AppLanguage.RUSSIAN
-                        com.exchange.mailclient.ui.theme.ScaledAlertDialog(
-                            onDismissRequest = { showAlarmDialog.value = false },
-                            title = { 
-                                Text(if (isRu) "Точные уведомления" else "Exact notifications") 
-                            },
-                            text = { 
-                                Text(
-                                    if (isRu) 
-                                        "Для своевременной синхронизации почты приложению нужно разрешение на точные будильники.\n\nВключите переключатель в следующем окне."
-                                    else 
-                                        "For timely mail sync, the app needs permission for exact alarms.\n\nEnable the toggle in the next screen."
-                                ) 
-                            },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    showAlarmDialog.value = false
-                                    openAlarmSettings()
-                                }) {
-                                    Text(if (isRu) "Продолжить" else "Continue")
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showAlarmDialog.value = false }) {
-                                    Text(if (isRu) "Позже" else "Later")
-                                }
+                        PermissionDialog(
+                            title = if (isRu) "Точные уведомления" else "Exact notifications",
+                            text = if (isRu) 
+                                "Для своевременной синхронизации почты приложению нужно разрешение на точные будильники.\n\nВключите переключатель в следующем окне."
+                            else 
+                                "For timely mail sync, the app needs permission for exact alarms.\n\nEnable the toggle in the next screen.",
+                            dismissText = if (isRu) "Позже" else "Later",
+                            confirmText = if (isRu) "Продолжить" else "Continue",
+                            onDismiss = { showAlarmDialog.value = false },
+                            onConfirm = {
+                                showAlarmDialog.value = false
+                                openAlarmSettings()
                             }
                         )
                     }

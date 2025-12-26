@@ -34,6 +34,7 @@ import com.exchange.mailclient.ui.Strings
 import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.AppLanguage
 import com.exchange.mailclient.ui.NotificationStrings
+import com.exchange.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -455,16 +456,19 @@ fun EmailDetailScreen(
                 modifier = Modifier.background(
                     Brush.horizontalGradient(
                         colors = listOf(
-                            Color(0xFF7C4DFF),
-                            Color(0xFF448AFF)
+                            LocalColorTheme.current.gradientStart,
+                            LocalColorTheme.current.gradientEnd
                         )
                     )
                 )
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onReplyClick) {
-                Icon(Icons.Default.Reply, Strings.reply)
+            FloatingActionButton(
+                onClick = onReplyClick,
+                containerColor = LocalColorTheme.current.gradientStart
+            ) {
+                Icon(Icons.Default.Reply, Strings.reply, tint = Color.White)
             }
         }
     ) { padding ->

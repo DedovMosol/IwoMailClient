@@ -38,6 +38,15 @@ class SettingsRepository private constructor(private val context: Context) {
         val NIGHT_MODE_ENABLED = booleanPreferencesKey("night_mode_enabled")
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val LAST_NOTIFICATION_CHECK_TIME = longPreferencesKey("last_notification_check_time")
+        val COLOR_THEME = stringPreferencesKey("color_theme")
+        val DAILY_THEMES_ENABLED = booleanPreferencesKey("daily_themes_enabled")
+        val THEME_MONDAY = stringPreferencesKey("theme_monday")
+        val THEME_TUESDAY = stringPreferencesKey("theme_tuesday")
+        val THEME_WEDNESDAY = stringPreferencesKey("theme_wednesday")
+        val THEME_THURSDAY = stringPreferencesKey("theme_thursday")
+        val THEME_FRIDAY = stringPreferencesKey("theme_friday")
+        val THEME_SATURDAY = stringPreferencesKey("theme_saturday")
+        val THEME_SUNDAY = stringPreferencesKey("theme_sunday")
     }
     
     // Размеры шрифта
@@ -182,6 +191,84 @@ class SettingsRepository private constructor(private val context: Context) {
     fun getLastNotificationCheckTimeSync(): Long {
         return runBlocking {
             context.dataStore.data.first()[Keys.LAST_NOTIFICATION_CHECK_TIME] ?: 0L
+        }
+    }
+    
+    // Цветовая тема
+    val colorTheme: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[Keys.COLOR_THEME] ?: "purple"
+    }
+    
+    suspend fun setColorTheme(themeCode: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.COLOR_THEME] = themeCode
+        }
+    }
+    
+    fun getColorThemeSync(): String {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.COLOR_THEME] ?: "purple"
+        }
+    }
+    
+    // Темы по дням недели
+    val dailyThemesEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[Keys.DAILY_THEMES_ENABLED] ?: false
+    }
+    
+    suspend fun setDailyThemesEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.DAILY_THEMES_ENABLED] = enabled
+        }
+    }
+    
+    fun getDailyThemesEnabledSync(): Boolean {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.DAILY_THEMES_ENABLED] ?: false
+        }
+    }
+    
+    // Получить тему для конкретного дня (1=Воскресенье, 2=Понедельник, ..., 7=Суббота)
+    fun getDayTheme(dayOfWeek: Int): Flow<String> = context.dataStore.data.map { prefs ->
+        val key = getDayKey(dayOfWeek)
+        prefs[key] ?: "purple"
+    }
+    
+    suspend fun setDayTheme(dayOfWeek: Int, themeCode: String) {
+        context.dataStore.edit { prefs ->
+            prefs[getDayKey(dayOfWeek)] = themeCode
+        }
+    }
+    
+    fun getDayThemeSync(dayOfWeek: Int): String {
+        return runBlocking {
+            context.dataStore.data.first()[getDayKey(dayOfWeek)] ?: "purple"
+        }
+    }
+    
+    private fun getDayKey(dayOfWeek: Int): Preferences.Key<String> {
+        return when (dayOfWeek) {
+            java.util.Calendar.MONDAY -> Keys.THEME_MONDAY
+            java.util.Calendar.TUESDAY -> Keys.THEME_TUESDAY
+            java.util.Calendar.WEDNESDAY -> Keys.THEME_WEDNESDAY
+            java.util.Calendar.THURSDAY -> Keys.THEME_THURSDAY
+            java.util.Calendar.FRIDAY -> Keys.THEME_FRIDAY
+            java.util.Calendar.SATURDAY -> Keys.THEME_SATURDAY
+            java.util.Calendar.SUNDAY -> Keys.THEME_SUNDAY
+            else -> Keys.THEME_MONDAY
+        }
+    }
+    
+    /**
+     * Получить текущую тему с учётом расписания по дням
+     */
+    fun getCurrentThemeSync(): String {
+        val dailyEnabled = getDailyThemesEnabledSync()
+        return if (dailyEnabled) {
+            val dayOfWeek = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK)
+            getDayThemeSync(dayOfWeek)
+        } else {
+            getColorThemeSync()
         }
     }
 }

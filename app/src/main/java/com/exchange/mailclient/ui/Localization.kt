@@ -88,6 +88,8 @@ object Strings {
         "Аккаунт и все связанные данные будут удалены." 
         else "Account and all related data will be deleted."
     val general: String @Composable get() = if (isRussian()) "Общие" else "General"
+    val appearance: String @Composable get() = if (isRussian()) "Внешний вид" else "Appearance"
+    val syncSettings: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val sync: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val wifiOnly: String @Composable get() = if (isRussian()) "Только по Wi-Fi" else "Wi-Fi only"
     val wifiOnlyDesc: String @Composable get() = if (isRussian()) 
@@ -128,6 +130,12 @@ object Strings {
     // Интервалы синхронизации
     val syncOff: String @Composable get() = if (isRussian()) "Выключено" else "Off"
     val syncInterval: String @Composable get() = if (isRussian()) "Интервал синхронизации" else "Sync interval"
+    
+    // Подпись
+    val signature: String @Composable get() = if (isRussian()) "Подпись" else "Signature"
+    val signatureHint: String @Composable get() = if (isRussian()) "Текст подписи для писем" else "Email signature text"
+    val editSignature: String @Composable get() = if (isRussian()) "Редактировать подпись" else "Edit signature"
+    val noSignature: String @Composable get() = if (isRussian()) "Не задана" else "Not set"
     val syncModeDesc: String @Composable get() = if (isRussian()) 
         "Push — мгновенные уведомления, По расписанию — экономия батареи" 
         else "Push — instant notifications, Scheduled — battery saving"
@@ -249,23 +257,17 @@ object Strings {
     // Советы по работе с приложением
     val tipsTitle: String @Composable get() = if (isRussian()) "💡 Полезно знать" else "💡 Good to know"
     val tipNotification: String @Composable get() = if (isRussian()) 
-        "Уведомление «Ожидание писем» нельзя убрать — это требование Android для фоновой работы. Но письма будут приходить!"
-        else "The «Waiting for emails» notification cannot be removed — it's an Android requirement for background work. But emails will still arrive!"
+        "Уведомление «Ожидание писем» нельзя убрать — это требование Android для фоновой работы."
+        else "The «Waiting for emails» notification cannot be removed — it's an Android requirement."
     val tipBattery: String @Composable get() = if (isRussian())
         "Для надёжной доставки писем отключите оптимизацию батареи для приложения в настройках телефона."
         else "For reliable email delivery, disable battery optimization for the app in phone settings."
-    val tipSync: String @Composable get() = if (isRussian())
-        "Потяните вниз на экране папки чтобы обновить письма вручную."
-        else "Pull down on the folder screen to manually refresh emails."
-    val tipSettings: String @Composable get() = if (isRussian())
-        "В настройках можно выбрать размер шрифта и режим синхронизации для экономии батареи."
-        else "In settings you can choose font size and sync mode to save battery."
-    val tipFolders: String @Composable get() = if (isRussian())
-        "Долгое нажатие на папку в меню позволяет переименовать или удалить её."
-        else "Long press on a folder in the menu to rename or delete it."
+    val tipCertificate: String @Composable get() = if (isRussian())
+        "Для корпоративной почты рекомендую пользоваться сертификатом сервера."
+        else "For corporate email, I recommend using the server certificate."
     val tipBeta: String @Composable get() = if (isRussian())
-        "IMAP и POP3 в бета-режиме. Полная поддержка нескольких аккаунтов — в следующих версиях."
-        else "IMAP and POP3 are in beta. Full multi-account support coming in future versions."
+        "IMAP и POP3 в бета-режиме."
+        else "IMAP and POP3 are in beta."
     
     // Папки не найдены
     val noFoldersFound: String @Composable get() = if (isRussian()) "Папки не найдены" else "No folders found"
@@ -418,6 +420,29 @@ object Strings {
     val readReceiptRequest: String @Composable get() = if (isRussian()) "Запрос отчёта о прочтении" else "Read receipt request"
     val readReceiptRequestText: String @Composable get() = if (isRussian()) "Отправитель запросил уведомление о прочтении этого письма. Отправить?" else "The sender requested a read receipt for this message. Send it?"
     val readReceiptSent: String @Composable get() = if (isRussian()) "Отчёт о прочтении отправлен" else "Read receipt sent"
+    
+    // Цветовые темы
+    val colorTheme: String @Composable get() = if (isRussian()) "Цветовая тема" else "Color theme"
+    val selectColorTheme: String @Composable get() = if (isRussian()) "Выберите цветовую тему" else "Select color theme"
+    val themePurple: String @Composable get() = if (isRussian()) "Фиолетовая" else "Purple"
+    val themeBlue: String @Composable get() = if (isRussian()) "Синяя" else "Blue"
+    val themeRed: String @Composable get() = if (isRussian()) "Красная" else "Red"
+    val themeYellow: String @Composable get() = if (isRussian()) "Жёлтая" else "Yellow"
+    val themeOrange: String @Composable get() = if (isRussian()) "Оранжевая" else "Orange"
+    val themeGreen: String @Composable get() = if (isRussian()) "Зелёная" else "Green"
+    val themePink: String @Composable get() = if (isRussian()) "Розовая" else "Pink"
+    
+    // Темы по дням недели
+    val dailyThemes: String @Composable get() = if (isRussian()) "Темы по дням недели" else "Daily themes"
+    val dailyThemesDesc: String @Composable get() = if (isRussian()) "Разные цвета для каждого дня" else "Different colors for each day"
+    val configureDailyThemes: String @Composable get() = if (isRussian()) "Настроить темы по дням" else "Configure daily themes"
+    val monday: String @Composable get() = if (isRussian()) "Понедельник" else "Monday"
+    val tuesday: String @Composable get() = if (isRussian()) "Вторник" else "Tuesday"
+    val wednesday: String @Composable get() = if (isRussian()) "Среда" else "Wednesday"
+    val thursday: String @Composable get() = if (isRussian()) "Четверг" else "Thursday"
+    val friday: String @Composable get() = if (isRussian()) "Пятница" else "Friday"
+    val saturday: String @Composable get() = if (isRussian()) "Суббота" else "Saturday"
+    val sunday: String @Composable get() = if (isRussian()) "Воскресенье" else "Sunday"
 }
 
 /**

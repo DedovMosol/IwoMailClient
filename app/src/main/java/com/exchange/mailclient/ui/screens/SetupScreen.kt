@@ -39,6 +39,7 @@ import com.exchange.mailclient.ui.AppLanguage
 import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.Strings
 import com.exchange.mailclient.ui.isRussian
+import com.exchange.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -58,6 +59,7 @@ private val ACCOUNT_COLORS = listOf(
 fun SetupScreen(
     editAccountId: Long? = null,
     initialError: String? = null,
+    savedData: String? = null,
     onSetupComplete: () -> Unit,
     onNavigateToVerification: ((
         email: String, displayName: String, serverUrl: String, username: String,
@@ -82,8 +84,18 @@ fun SetupScreen(
     var selectedColor by rememberSaveable { mutableStateOf(ACCOUNT_COLORS[0]) }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var isLoading by rememberSaveable { mutableStateOf(false) }
-    var errorMessage by rememberSaveable { mutableStateOf<String?>(initialError) }
+    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var successMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    
+    // Поля для IMAP/POP3
+    var accountType by rememberSaveable { mutableStateOf(AccountType.EXCHANGE) }
+    var incomingPort by rememberSaveable { mutableStateOf("443") }
+    var outgoingServer by rememberSaveable { mutableStateOf("") }
+    var outgoingPort by rememberSaveable { mutableStateOf("587") }
+    var useSSL by rememberSaveable { mutableStateOf(true) }
+    
+    // Режим синхронизации (только для Exchange)
+    var syncMode by rememberSaveable { mutableStateOf(SyncMode.PUSH) }
     
     // Получаем строки локализации в Composable контексте
     val emailMismatchText = Strings.emailMismatch
@@ -91,7 +103,11 @@ fun SetupScreen(
     
     // Обработка ошибки верификации
     LaunchedEffect(initialError) {
-        if (initialError != null && initialError.startsWith("EMAIL_MISMATCH:")) {
+        if (initialError == "CLEAR_EMAIL") {
+            // Очищаем только email, остальные поля сохраняются
+            email = ""
+            errorMessage = null
+        } else if (initialError != null && initialError.startsWith("EMAIL_MISMATCH:")) {
             val parts = initialError.split(":")
             if (parts.size >= 3) {
                 val entered = parts[1]
@@ -107,18 +123,29 @@ fun SetupScreen(
         }
     }
     
+    // Восстановление данных из savedData (при возврате с ошибкой верификации)
+    // Формат: email|displayName|serverUrl|acceptAllCerts|color|incomingPort|outgoingServer|outgoingPort|useSSL|syncMode
+    LaunchedEffect(savedData) {
+        if (savedData != null) {
+            val parts = savedData.split("|")
+            if (parts.size >= 10) {
+                email = parts[0]
+                displayName = parts[1]
+                serverUrl = parts[2]
+                acceptAllCerts = parts[3].toBoolean()
+                selectedColor = parts[4].toIntOrNull() ?: ACCOUNT_COLORS[0]
+                incomingPort = parts[5]
+                outgoingServer = parts[6]
+                outgoingPort = parts[7]
+                useSSL = parts[8].toBoolean()
+                syncMode = try { SyncMode.valueOf(parts[9]) } catch (_: Exception) { SyncMode.PUSH }
+                // domain, username, password НЕ восстанавливаем — пользователь должен ввести заново
+            }
+        }
+    }
+    
     // Диалог выбора языка
     var showLanguageDialog by remember { mutableStateOf(false) }
-    
-    // Новые поля для IMAP/POP3
-    var accountType by rememberSaveable { mutableStateOf(AccountType.EXCHANGE) }
-    var incomingPort by rememberSaveable { mutableStateOf("443") }
-    var outgoingServer by rememberSaveable { mutableStateOf("") }
-    var outgoingPort by rememberSaveable { mutableStateOf("587") }
-    var useSSL by rememberSaveable { mutableStateOf(true) }
-    
-    // Режим синхронизации (только для Exchange)
-    var syncMode by rememberSaveable { mutableStateOf(SyncMode.PUSH) }
     
     val isEditing = editAccountId != null
     
@@ -183,6 +210,7 @@ fun SetupScreen(
     
     Scaffold(
         topBar = {
+            val colorTheme = LocalColorTheme.current
             // Современный TopAppBar с градиентом
             Box(
                 modifier = Modifier
@@ -190,8 +218,8 @@ fun SetupScreen(
                     .background(
                         brush = Brush.horizontalGradient(
                             colors = listOf(
-                                Color(0xFF7C4DFF), // Deep Purple
-                                Color(0xFF536DFE)  // Indigo
+                                colorTheme.gradientStart,
+                                colorTheme.gradientEnd
                             )
                         )
                     )

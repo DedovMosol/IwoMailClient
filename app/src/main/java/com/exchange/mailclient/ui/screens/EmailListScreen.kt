@@ -2,6 +2,7 @@ package com.exchange.mailclient.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -17,20 +18,29 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.exchange.mailclient.data.database.AttachmentEntity
 import com.exchange.mailclient.data.database.EmailEntity
 import com.exchange.mailclient.data.database.FolderEntity
 import com.exchange.mailclient.data.database.MailDatabase
@@ -40,6 +50,7 @@ import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.AppLanguage
 import com.exchange.mailclient.ui.NotificationStrings
 import com.exchange.mailclient.ui.Strings
+import com.exchange.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -643,8 +654,8 @@ fun EmailListScreen(
                     modifier = Modifier.background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                Color(0xFF7C4DFF),
-                                Color(0xFF448AFF)
+                                LocalColorTheme.current.gradientStart,
+                                LocalColorTheme.current.gradientEnd
                             )
                         )
                     )
@@ -653,8 +664,11 @@ fun EmailListScreen(
         },
         floatingActionButton = {
             if (!isSelectionMode) {
-                FloatingActionButton(onClick = onComposeClick) {
-                    Icon(Icons.Default.Edit, Strings.compose)
+                FloatingActionButton(
+                    onClick = onComposeClick,
+                    containerColor = LocalColorTheme.current.gradientStart
+                ) {
+                    Icon(Icons.Default.Edit, Strings.compose, tint = Color.White)
                 }
             }
         }
@@ -934,6 +948,7 @@ private fun SelectionTopBar(
     )
 }
 
+@OptIn(androidx.compose.material.ExperimentalMaterialApi::class)
 @Composable
 private fun EmailList(
     emails: List<EmailEntity>,
@@ -954,6 +969,7 @@ private fun EmailList(
     val scope = rememberCoroutineScope()
     val isAtTop by remember { derivedStateOf { listState.firstVisibleItemIndex < 3 } }
     val showScrollButton = emails.size > 5
+    val pullRefreshState = rememberPullRefreshState(isRefreshing, onRetry)
     
     // Автоскролл вверх при входе в режим выделения
     LaunchedEffect(isSelectionMode) {
@@ -974,34 +990,30 @@ private fun EmailList(
                 )
             }
             else -> {
-                LazyColumn(state = listState) {
-                    if (isSelectionMode) {
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().clickable(onClick = onSelectAll).padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(checked = selectedIds.size == emails.size, onCheckedChange = { onSelectAll() })
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(Strings.selectAll)
-                            }
-                            HorizontalDivider()
-                        }
-                    }
+                // Pull-to-refresh (только если не Избранное)
+                Box(
+                    modifier = if (!isFavorites) Modifier.pullRefresh(pullRefreshState) else Modifier
+                ) {
+                    EmailListContent(
+                        emails = emails,
+                        selectedIds = selectedIds,
+                        isSelectionMode = isSelectionMode,
+                        isTrashOrSpam = isTrashOrSpam,
+                        listState = listState,
+                        errorMessage = errorMessage,
+                        onEmailClick = onEmailClick,
+                        onLongClick = onLongClick,
+                        onStarClick = onStarClick,
+                        onSelectAll = onSelectAll,
+                        onDismissError = onDismissError
+                    )
                     
-                    if (errorMessage != null) {
-                        item { ErrorBanner(message = errorMessage, onDismiss = onDismissError) }
-                    }
-                    
-                    items(emails, key = { it.id }) { email ->
-                        EmailListItem(
-                            email = email,
-                            isSelected = email.id in selectedIds,
-                            isSelectionMode = isSelectionMode,
-                            showStar = !isTrashOrSpam,
-                            onClick = { onEmailClick(email) },
-                            onLongClick = { onLongClick(email) },
-                            onStarClick = { onStarClick(email) }
+                    // Кастомный индикатор с конвертиком
+                    if (!isFavorites) {
+                        EnvelopeRefreshIndicator(
+                            refreshing = isRefreshing,
+                            state = pullRefreshState,
+                            modifier = Modifier.align(Alignment.TopCenter)
                         )
                     }
                 }
@@ -1029,6 +1041,184 @@ private fun EmailList(
     }
 }
 
+/**
+ * Кастомный индикатор pull-to-refresh с анимированным конвертиком
+ */
+@OptIn(androidx.compose.material.ExperimentalMaterialApi::class)
+@Composable
+private fun EnvelopeRefreshIndicator(
+    refreshing: Boolean,
+    state: androidx.compose.material.pullrefresh.PullRefreshState,
+    modifier: Modifier = Modifier
+) {
+    val colorTheme = LocalColorTheme.current
+    
+    // Анимация вращения при загрузке
+    val infiniteTransition = rememberInfiniteTransition(label = "envelope")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "rotation"
+    )
+    
+    // Анимация пульсации
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.9f,
+        targetValue = 1.1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scale"
+    )
+    
+    // Анимация покачивания при тянутии
+    val wobble by infiniteTransition.animateFloat(
+        initialValue = -15f,
+        targetValue = 15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(300, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wobble"
+    )
+    
+    // Прогресс вытягивания (0..1)
+    val progress = if (refreshing) 1f else state.progress.coerceIn(0f, 1f)
+    
+    Box(
+        modifier = modifier
+            .padding(top = 16.dp)
+            .size(56.dp)
+            .graphicsLayer {
+                // Появление при вытягивании
+                alpha = progress
+                translationY = (1f - progress) * -50f
+            }
+            .background(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        colorTheme.gradientStart.copy(alpha = 0.2f),
+                        Color.Transparent
+                    )
+                ),
+                shape = CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        // Фоновый круг
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .background(
+                    color = colorTheme.gradientStart.copy(alpha = 0.15f),
+                    shape = CircleShape
+                )
+        )
+        
+        // Конвертик
+        Icon(
+            imageVector = Icons.Default.Email,
+            contentDescription = null,
+            tint = colorTheme.gradientStart,
+            modifier = Modifier
+                .size(32.dp)
+                .graphicsLayer {
+                    if (refreshing) {
+                        // При загрузке — вращение и пульсация
+                        rotationZ = rotation
+                        scaleX = scale
+                        scaleY = scale
+                    } else {
+                        // При вытягивании — покачивание и масштаб по прогрессу
+                        rotationZ = wobble * progress
+                        val pullScale = 0.5f + (progress * 0.5f)
+                        scaleX = pullScale
+                        scaleY = pullScale
+                    }
+                }
+        )
+    }
+}
+
+@Composable
+private fun EmailListContent(
+    emails: List<EmailEntity>,
+    selectedIds: Set<String>,
+    isSelectionMode: Boolean,
+    isTrashOrSpam: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    errorMessage: String?,
+    onEmailClick: (EmailEntity) -> Unit,
+    onLongClick: (EmailEntity) -> Unit,
+    onStarClick: (EmailEntity) -> Unit,
+    onSelectAll: () -> Unit,
+    onDismissError: () -> Unit
+) {
+    val context = LocalContext.current
+    val database = remember { MailDatabase.getInstance(context) }
+    
+    // Кэш превью изображений для писем с вложениями
+    var imagePreviewCache by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    
+    // Загружаем превью для писем с вложениями
+    LaunchedEffect(emails) {
+        val emailsWithAttachments = emails.filter { it.hasAttachments && it.id !in imagePreviewCache }
+        if (emailsWithAttachments.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                val newPreviews = mutableMapOf<String, String?>()
+                emailsWithAttachments.forEach { email ->
+                    val attachments = database.attachmentDao().getAttachmentsList(email.id)
+                    // Ищем первое скачанное изображение
+                    val imageAttachment = attachments.firstOrNull { att ->
+                        att.downloaded && att.localPath != null && 
+                        att.contentType.startsWith("image/", ignoreCase = true)
+                    }
+                    newPreviews[email.id] = imageAttachment?.localPath
+                }
+                imagePreviewCache = imagePreviewCache + newPreviews
+            }
+        }
+    }
+    
+    LazyColumn(state = listState) {
+        if (isSelectionMode) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onSelectAll).padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = selectedIds.size == emails.size, onCheckedChange = { onSelectAll() })
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(Strings.selectAll)
+                }
+                HorizontalDivider()
+            }
+        }
+        
+        if (errorMessage != null) {
+            item { ErrorBanner(message = errorMessage, onDismiss = onDismissError) }
+        }
+        
+        items(emails, key = { it.id }) { email ->
+            EmailListItem(
+                email = email,
+                isSelected = email.id in selectedIds,
+                isSelectionMode = isSelectionMode,
+                showStar = !isTrashOrSpam,
+                imagePreviewPath = imagePreviewCache[email.id],
+                onClick = { onEmailClick(email) },
+                onLongClick = { onLongClick(email) },
+                onStarClick = { onStarClick(email) }
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EmailListItem(
@@ -1036,11 +1226,13 @@ private fun EmailListItem(
     isSelected: Boolean,
     isSelectionMode: Boolean,
     showStar: Boolean = true,
+    imagePreviewPath: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onStarClick: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
     
     val backgroundColor by animateColorAsState(
         targetValue = when {
@@ -1121,13 +1313,36 @@ private fun EmailListItem(
                     )
                 }
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = email.subject,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (email.read) FontWeight.Normal else FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                
+                // Строка с темой и превью картинки
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = email.subject,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (email.read) FontWeight.Normal else FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    
+                    // Миниатюра изображения (если есть скачанная картинка)
+                    if (imagePreviewPath != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(java.io.File(imagePreviewPath))
+                                .crossfade(true)
+                                .size(48)
+                                .build(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    }
+                }
+                
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = email.preview,

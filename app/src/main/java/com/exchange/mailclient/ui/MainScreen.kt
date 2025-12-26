@@ -24,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -565,9 +566,10 @@ fun MainScreen(
                 )
             },
             floatingActionButton = {
+                val colorTheme = com.exchange.mailclient.ui.theme.LocalColorTheme.current
                 FloatingActionButton(
                     onClick = onNavigateToCompose,
-                    containerColor = Color(0xFF7C4DFF),
+                    containerColor = colorTheme.gradientStart,
                     contentColor = Color.White
                 ) {
                     Icon(Icons.Default.Edit, Strings.compose)
@@ -1003,16 +1005,8 @@ private fun HomeContent(
                                 text = Strings.tipBattery
                             )
                             TipItem(
-                                icon = Icons.Default.Refresh,
-                                text = Strings.tipSync
-                            )
-                            TipItem(
-                                icon = Icons.Default.Settings,
-                                text = Strings.tipSettings
-                            )
-                            TipItem(
-                                icon = Icons.Default.Folder,
-                                text = Strings.tipFolders
+                                icon = Icons.Default.Lock,
+                                text = Strings.tipCertificate
                             )
                             TipItem(
                                 icon = Icons.Default.Info,
@@ -1042,18 +1036,56 @@ private fun HomeContent(
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Анимированный конвертик с градиентом
+                        val colorTheme = com.exchange.mailclient.ui.theme.LocalColorTheme.current
+                        val infiniteTransition = rememberInfiniteTransition(label = "envelope")
+                        val envelopeScale by infiniteTransition.animateFloat(
+                            initialValue = 1f,
+                            targetValue = 1.08f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1200, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "envelopeScale"
+                        )
+                        val envelopeRotation by infiniteTransition.animateFloat(
+                            initialValue = -3f,
+                            targetValue = 3f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(2000, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "envelopeRotation"
+                        )
+                        
                         Box(
                             modifier = Modifier
-                                .size(44.dp)
+                                .size(48.dp)
+                                .scale(envelopeScale)
                                 .clip(MaterialTheme.shapes.medium)
-                                .background(MaterialTheme.colorScheme.primary),
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            colorTheme.gradientStart,
+                                            colorTheme.gradientEnd
+                                        )
+                                    )
+                                )
+                                .shadow(
+                                    elevation = 4.dp,
+                                    shape = MaterialTheme.shapes.medium,
+                                    ambientColor = colorTheme.gradientStart.copy(alpha = 0.3f),
+                                    spotColor = colorTheme.gradientStart.copy(alpha = 0.3f)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 Icons.Default.Email,
                                 null,
                                 tint = Color.White,
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier
+                                    .size(26.dp)
+                                    .rotate(envelopeRotation)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
@@ -1064,7 +1096,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.0.6c",
+                                text = "v1.0.7",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1241,8 +1273,10 @@ private fun HomeContent(
                                             Strings.accountNumber,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.width(85.dp)
+                                            softWrap = false,
+                                            modifier = Modifier.widthIn(min = 70.dp)
                                         )
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         SelectionContainer {
                                             Text(
                                                 "4081 7810 3544 0529 6071",
@@ -1349,12 +1383,15 @@ private fun DonateInfoRow(label: String, value: String) {
             text = label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(85.dp)
+            softWrap = false,
+            modifier = Modifier.widthIn(min = 70.dp)
         )
+        Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f)
         )
     }
 }
@@ -1555,6 +1592,7 @@ private fun SearchTopBar(
     onMenuClick: () -> Unit,
     onSearchClick: () -> Unit
 ) {
+    val colorTheme = com.exchange.mailclient.ui.theme.LocalColorTheme.current
     // Градиентный фон для топбара
     Box(
         modifier = Modifier
@@ -1562,8 +1600,8 @@ private fun SearchTopBar(
             .background(
                 brush = Brush.horizontalGradient(
                     colors = listOf(
-                        Color(0xFF7C4DFF), // Deep Purple
-                        Color(0xFF536DFE)  // Indigo
+                        colorTheme.gradientStart,
+                        colorTheme.gradientEnd
                     )
                 )
             )

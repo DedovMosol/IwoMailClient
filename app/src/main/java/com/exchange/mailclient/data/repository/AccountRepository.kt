@@ -180,6 +180,9 @@ class AccountRepository(private val context: Context) {
                 val accountId = accountDao.insert(account)
                 savePassword(accountId, password)
                 
+                // Делаем новый аккаунт активным
+                accountDao.setActiveAccount(accountId)
+                
                 // Запускаем немедленную синхронизацию для нового аккаунта
                 com.exchange.mailclient.sync.SyncWorker.syncNow(context)
                 
@@ -291,6 +294,13 @@ class AccountRepository(private val context: Context) {
      */
     suspend fun updateSyncInterval(accountId: Long, intervalMinutes: Int) {
         accountDao.updateSyncInterval(accountId, intervalMinutes)
+    }
+    
+    /**
+     * Обновляет подпись для аккаунта
+     */
+    suspend fun updateSignature(accountId: Long, signature: String) {
+        accountDao.updateSignature(accountId, signature)
     }
     
     /**

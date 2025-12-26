@@ -28,6 +28,8 @@ import com.exchange.mailclient.ui.AppLanguage
 import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.Strings
 import com.exchange.mailclient.ui.isRussian
+import com.exchange.mailclient.ui.theme.LocalColorTheme
+import com.exchange.mailclient.ui.theme.AppColorTheme
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,6 +60,21 @@ fun SettingsScreen(
     // Настройки размера шрифта
     val fontSize by settingsRepo.fontSize.collectAsState(initial = SettingsRepository.FontSize.MEDIUM)
     var showFontSizeDialog by remember { mutableStateOf(false) }
+    
+    // Настройки цветовой темы
+    val colorThemeCode by settingsRepo.colorTheme.collectAsState(initial = "purple")
+    val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsState(initial = false)
+    var showColorThemeDialog by remember { mutableStateOf(false) }
+    var showDailyThemesDialog by remember { mutableStateOf(false) }
+    
+    // Темы по дням недели
+    val mondayTheme by settingsRepo.getDayTheme(java.util.Calendar.MONDAY).collectAsState(initial = "purple")
+    val tuesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.TUESDAY).collectAsState(initial = "blue")
+    val wednesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.WEDNESDAY).collectAsState(initial = "green")
+    val thursdayTheme by settingsRepo.getDayTheme(java.util.Calendar.THURSDAY).collectAsState(initial = "orange")
+    val fridayTheme by settingsRepo.getDayTheme(java.util.Calendar.FRIDAY).collectAsState(initial = "red")
+    val saturdayTheme by settingsRepo.getDayTheme(java.util.Calendar.SATURDAY).collectAsState(initial = "pink")
+    val sundayTheme by settingsRepo.getDayTheme(java.util.Calendar.SUNDAY).collectAsState(initial = "yellow")
     
     // Диалог выбора размера шрифта
     if (showFontSizeDialog) {
@@ -92,6 +109,89 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = { showFontSizeDialog = false }) {
                     Text(Strings.cancel)
+                }
+            }
+        )
+    }
+    
+    // Диалог выбора цветовой темы
+    if (showColorThemeDialog) {
+        com.exchange.mailclient.ui.theme.ScaledAlertDialog(
+            onDismissRequest = { showColorThemeDialog = false },
+            title = { Text(Strings.selectColorTheme) },
+            text = {
+                Column {
+                    AppColorTheme.entries.forEach { theme ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        settingsRepo.setColorTheme(theme.code)
+                                    }
+                                    showColorThemeDialog = false
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = colorThemeCode == theme.code,
+                                onClick = null
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(theme.gradientStart)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(getThemeDisplayName(theme, isRu))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showColorThemeDialog = false }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
+    }
+    
+    // Диалог настройки тем по дням недели
+    if (showDailyThemesDialog) {
+        com.exchange.mailclient.ui.theme.ScaledAlertDialog(
+            onDismissRequest = { showDailyThemesDialog = false },
+            title = { Text(Strings.configureDailyThemes) },
+            text = {
+                Column {
+                    DayThemeRow(Strings.monday, mondayTheme, isRu) { theme ->
+                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.MONDAY, theme) }
+                    }
+                    DayThemeRow(Strings.tuesday, tuesdayTheme, isRu) { theme ->
+                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.TUESDAY, theme) }
+                    }
+                    DayThemeRow(Strings.wednesday, wednesdayTheme, isRu) { theme ->
+                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.WEDNESDAY, theme) }
+                    }
+                    DayThemeRow(Strings.thursday, thursdayTheme, isRu) { theme ->
+                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.THURSDAY, theme) }
+                    }
+                    DayThemeRow(Strings.friday, fridayTheme, isRu) { theme ->
+                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.FRIDAY, theme) }
+                    }
+                    DayThemeRow(Strings.saturday, saturdayTheme, isRu) { theme ->
+                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.SATURDAY, theme) }
+                    }
+                    DayThemeRow(Strings.sunday, sundayTheme, isRu) { theme ->
+                        scope.launch { settingsRepo.setDayTheme(java.util.Calendar.SUNDAY, theme) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDailyThemesDialog = false }) {
+                    Text(Strings.done)
                 }
             }
         )
@@ -174,8 +274,8 @@ fun SettingsScreen(
                 modifier = Modifier.background(
                     Brush.horizontalGradient(
                         colors = listOf(
-                            Color(0xFF7C4DFF),
-                            Color(0xFF448AFF)
+                            LocalColorTheme.current.gradientStart,
+                            LocalColorTheme.current.gradientEnd
                         )
                     )
                 )
@@ -216,6 +316,11 @@ fun SettingsScreen(
                             accountRepo.updateSyncInterval(account.id, minutes)
                             SyncWorker.scheduleWithNightMode(context)
                         }
+                    },
+                    onSignatureChange = { signature ->
+                        scope.launch {
+                            accountRepo.updateSignature(account.id, signature)
+                        }
                     }
                 )
             }
@@ -247,9 +352,10 @@ fun SettingsScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
             
+            // === СЕКЦИЯ: ВНЕШНИЙ ВИД ===
             item {
                 Text(
-                    text = Strings.general,
+                    text = Strings.appearance,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(16.dp)
@@ -273,6 +379,68 @@ fun SettingsScreen(
                     supportingContent = { Text(fontSize.getDisplayName(isRu)) },
                     leadingContent = { Icon(Icons.Default.TextFields, null) },
                     modifier = Modifier.clickable { showFontSizeDialog = true }
+                )
+            }
+            
+            // Выбор цветовой темы
+            item {
+                val currentTheme = AppColorTheme.fromCode(colorThemeCode)
+                ListItem(
+                    headlineContent = { Text(Strings.colorTheme) },
+                    supportingContent = { Text(getThemeDisplayName(currentTheme, isRu)) },
+                    leadingContent = { 
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(currentTheme.gradientStart)
+                        )
+                    },
+                    modifier = Modifier.clickable { showColorThemeDialog = true }
+                )
+            }
+            
+            // Темы по дням недели
+            item {
+                ListItem(
+                    headlineContent = { Text(Strings.dailyThemes) },
+                    supportingContent = { Text(Strings.dailyThemesDesc) },
+                    leadingContent = { Icon(Icons.Default.CalendarMonth, null) },
+                    trailingContent = {
+                        Switch(
+                            checked = dailyThemesEnabled,
+                            onCheckedChange = { enabled ->
+                                scope.launch {
+                                    settingsRepo.setDailyThemesEnabled(enabled)
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+            
+            // Настройка тем по дням (показывается только если включено)
+            if (dailyThemesEnabled) {
+                item {
+                    ListItem(
+                        headlineContent = { Text(Strings.configureDailyThemes) },
+                        leadingContent = { Icon(Icons.Default.Settings, null) },
+                        modifier = Modifier.clickable { showDailyThemesDialog = true }
+                    )
+                }
+            }
+            
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            }
+            
+            // === СЕКЦИЯ: СИНХРОНИЗАЦИЯ ===
+            item {
+                Text(
+                    text = Strings.syncSettings,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(16.dp)
                 )
             }
             
@@ -379,11 +547,14 @@ private fun AccountSettingsItem(
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onSyncModeChange: (SyncMode) -> Unit,
-    onSyncIntervalChange: (Int) -> Unit
+    onSyncIntervalChange: (Int) -> Unit,
+    onSignatureChange: (String) -> Unit
 ) {
     val isRu = isRussian()
     var showSyncModeDialog by remember { mutableStateOf(false) }
     var showSyncIntervalDialog by remember { mutableStateOf(false) }
+    var showSignatureDialog by remember { mutableStateOf(false) }
+    var signatureText by remember(account.signature) { mutableStateOf(account.signature) }
     
     val accountType = try {
         AccountType.valueOf(account.accountType)
@@ -464,6 +635,43 @@ private fun AccountSettingsItem(
             },
             confirmButton = {
                 TextButton(onClick = { showSyncIntervalDialog = false }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
+    }
+    
+    // Диалог редактирования подписи
+    if (showSignatureDialog) {
+        com.exchange.mailclient.ui.theme.ScaledAlertDialog(
+            onDismissRequest = { showSignatureDialog = false },
+            title = { Text(Strings.editSignature) },
+            text = {
+                OutlinedTextField(
+                    value = signatureText,
+                    onValueChange = { signatureText = it },
+                    label = { Text(Strings.signatureHint) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp),
+                    maxLines = 6
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onSignatureChange(signatureText)
+                        showSignatureDialog = false
+                    }
+                ) {
+                    Text(Strings.save)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { 
+                    signatureText = account.signature
+                    showSignatureDialog = false 
+                }) {
                     Text(Strings.cancel)
                 }
             }
@@ -558,6 +766,103 @@ private fun AccountSettingsItem(
                     leadingContent = { Icon(Icons.Default.Schedule, null, modifier = Modifier.size(20.dp)) },
                     modifier = Modifier.clickable { showSyncIntervalDialog = true }
                 )
+            }
+            
+            // Подпись (для всех типов аккаунтов)
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            ListItem(
+                headlineContent = { Text(Strings.signature, style = MaterialTheme.typography.bodyMedium) },
+                supportingContent = { 
+                    Text(
+                        if (account.signature.isBlank()) Strings.noSignature else account.signature.take(50) + if (account.signature.length > 50) "..." else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1
+                    ) 
+                },
+                leadingContent = { Icon(Icons.Default.Draw, null, modifier = Modifier.size(20.dp)) },
+                modifier = Modifier.clickable { showSignatureDialog = true }
+            )
+        }
+    }
+}
+
+/**
+ * Получить локализованное название темы
+ */
+@Composable
+private fun getThemeDisplayName(theme: AppColorTheme, isRu: Boolean): String {
+    return when (theme) {
+        AppColorTheme.PURPLE -> Strings.themePurple
+        AppColorTheme.BLUE -> Strings.themeBlue
+        AppColorTheme.RED -> Strings.themeRed
+        AppColorTheme.YELLOW -> Strings.themeYellow
+        AppColorTheme.ORANGE -> Strings.themeOrange
+        AppColorTheme.GREEN -> Strings.themeGreen
+        AppColorTheme.PINK -> Strings.themePink
+    }
+}
+
+/**
+ * Строка выбора темы для дня недели
+ */
+@Composable
+private fun DayThemeRow(
+    dayName: String,
+    currentThemeCode: String,
+    isRu: Boolean,
+    onThemeSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val currentTheme = AppColorTheme.fromCode(currentThemeCode)
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = true }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(dayName, modifier = Modifier.weight(1f))
+        
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(currentTheme.gradientStart)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                getThemeDisplayName(currentTheme, isRu),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                AppColorTheme.entries.forEach { theme ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(theme.gradientStart)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(getThemeDisplayName(theme, isRu))
+                            }
+                        },
+                        onClick = {
+                            onThemeSelected(theme.code)
+                            expanded = false
+                        }
+                    )
+                }
             }
         }
     }

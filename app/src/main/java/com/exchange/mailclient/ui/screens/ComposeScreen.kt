@@ -9,7 +9,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -34,6 +36,7 @@ import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.AppLanguage
 import com.exchange.mailclient.ui.NotificationStrings
 import com.exchange.mailclient.ui.Strings
+import com.exchange.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -92,6 +95,12 @@ fun ComposeScreen(
     // Загружаем активный аккаунт и все аккаунты
     LaunchedEffect(Unit) {
         activeAccount = accountRepo.getActiveAccountSync()
+        // Подставляем подпись для нового письма (если нет ответа/пересылки)
+        if (replyToEmailId == null && forwardEmailId == null) {
+            activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { sig ->
+                body = "\n\n--\n$sig"
+            }
+        }
         accountRepo.accounts.collect { allAccounts = it }
     }
     
@@ -123,7 +132,8 @@ fun ComposeScreen(
                 } else {
                     "Re: ${email.subject}"
                 }
-                body = "\n\n--- Исходное сообщение ---\n" +
+                val signature = activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
+                body = "$signature\n\n--- Исходное сообщение ---\n" +
                        "От: ${email.from}\n" +
                        "Дата: ${formatDate(email.dateReceived)}\n" +
                        "Тема: ${email.subject}\n\n" +
@@ -144,7 +154,8 @@ fun ComposeScreen(
                 } else {
                     "Fwd: ${email.subject}"
                 }
-                body = "\n\n---------- Пересылаемое сообщение ----------\n" +
+                val signature = activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
+                body = "$signature\n\n---------- Пересылаемое сообщение ----------\n" +
                        "От: ${email.from}\n" +
                        "Дата: ${formatDate(email.dateReceived)}\n" +
                        "Тема: ${email.subject}\n" +
@@ -220,6 +231,7 @@ fun ComposeScreen(
                 is EasResult.Success -> {
                     val isRussian = currentLanguage == AppLanguage.RUSSIAN
                     Toast.makeText(context, NotificationStrings.getEmailSent(isRussian), Toast.LENGTH_SHORT).show()
+                    com.exchange.mailclient.util.SoundPlayer.playSendSound(context)
                     onSent()
                 }
                 is EasResult.Error -> {
@@ -375,8 +387,8 @@ fun ComposeScreen(
                 modifier = Modifier.background(
                     Brush.horizontalGradient(
                         colors = listOf(
-                            Color(0xFF7C4DFF),
-                            Color(0xFF448AFF)
+                            LocalColorTheme.current.gradientStart,
+                            LocalColorTheme.current.gradientEnd
                         )
                     )
                 )
@@ -650,6 +662,11 @@ private fun ScheduleSendDialog(
     val fullDateFormat = java.text.SimpleDateFormat("d MMM yyyy, HH:mm:ss", java.util.Locale.getDefault())
     
     if (showCustomPicker) {
+        // Отдельные state для редактирования времени
+        var hourText by remember { mutableStateOf(String.format("%02d", customDate.get(Calendar.HOUR_OF_DAY))) }
+        var minuteText by remember { mutableStateOf(String.format("%02d", customDate.get(Calendar.MINUTE))) }
+        var secondText by remember { mutableStateOf(String.format("%02d", customDate.get(Calendar.SECOND))) }
+        
         // Диалог выбора кастомной даты и времени
         com.exchange.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showCustomPicker = false },
@@ -693,49 +710,62 @@ private fun ScheduleSendDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedTextField(
-                            value = String.format("%02d", customDate.get(Calendar.HOUR_OF_DAY)),
+                            value = hourText,
                             onValueChange = { value ->
-                                value.toIntOrNull()?.let { hour ->
-                                    if (hour in 0..23) {
-                                        customDate = (customDate.clone() as Calendar).apply {
-                                            set(Calendar.HOUR_OF_DAY, hour)
+                                // Разрешаем только цифры и максимум 2 символа
+                                if (value.length <= 2 && value.all { it.isDigit() }) {
+                                    hourText = value
+                                    value.toIntOrNull()?.let { hour ->
+                                        if (hour in 0..23) {
+                                            customDate = (customDate.clone() as Calendar).apply {
+                                                set(Calendar.HOUR_OF_DAY, hour)
+                                            }
                                         }
                                     }
                                 }
                             },
                             label = { Text(Strings.hour) },
                             modifier = Modifier.weight(1f),
-                            singleLine = true
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                         )
                         OutlinedTextField(
-                            value = String.format("%02d", customDate.get(Calendar.MINUTE)),
+                            value = minuteText,
                             onValueChange = { value ->
-                                value.toIntOrNull()?.let { minute ->
-                                    if (minute in 0..59) {
-                                        customDate = (customDate.clone() as Calendar).apply {
-                                            set(Calendar.MINUTE, minute)
+                                if (value.length <= 2 && value.all { it.isDigit() }) {
+                                    minuteText = value
+                                    value.toIntOrNull()?.let { minute ->
+                                        if (minute in 0..59) {
+                                            customDate = (customDate.clone() as Calendar).apply {
+                                                set(Calendar.MINUTE, minute)
+                                            }
                                         }
                                     }
                                 }
                             },
                             label = { Text(Strings.minute) },
                             modifier = Modifier.weight(1f),
-                            singleLine = true
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                         )
                         OutlinedTextField(
-                            value = String.format("%02d", customDate.get(Calendar.SECOND)),
+                            value = secondText,
                             onValueChange = { value ->
-                                value.toIntOrNull()?.let { second ->
-                                    if (second in 0..59) {
-                                        customDate = (customDate.clone() as Calendar).apply {
-                                            set(Calendar.SECOND, second)
+                                if (value.length <= 2 && value.all { it.isDigit() }) {
+                                    secondText = value
+                                    value.toIntOrNull()?.let { second ->
+                                        if (second in 0..59) {
+                                            customDate = (customDate.clone() as Calendar).apply {
+                                                set(Calendar.SECOND, second)
+                                            }
                                         }
                                     }
                                 }
                             },
                             label = { Text(Strings.second) },
                             modifier = Modifier.weight(1f),
-                            singleLine = true
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                         )
                     }
                     

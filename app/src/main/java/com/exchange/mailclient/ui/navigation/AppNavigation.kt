@@ -59,8 +59,8 @@ private fun popExitTransition(): ExitTransition {
 
 sealed class Screen(val route: String) {
     object Main : Screen("main")
-    object Setup : Screen("setup?editAccountId={editAccountId}&verificationError={verificationError}") {
-        fun createRoute(editAccountId: Long? = null, verificationError: String? = null): String {
+    object Setup : Screen("setup?editAccountId={editAccountId}&verificationError={verificationError}&savedData={savedData}") {
+        fun createRoute(editAccountId: Long? = null, verificationError: String? = null, savedData: String? = null): String {
             val params = mutableListOf<String>()
             if (editAccountId != null) params.add("editAccountId=$editAccountId")
             if (verificationError != null) {
@@ -70,9 +70,22 @@ sealed class Screen(val route: String) {
                 )
                 params.add("verificationError=$encoded")
             }
+            if (savedData != null) {
+                val encoded = android.util.Base64.encodeToString(
+                    savedData.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
+                )
+                params.add("savedData=$encoded")
+            }
             return if (params.isNotEmpty()) "setup?${params.joinToString("&")}" else "setup"
         }
         fun decodeError(encoded: String?): String? {
+            if (encoded == null) return null
+            return try {
+                String(android.util.Base64.decode(encoded, android.util.Base64.URL_SAFE), Charsets.UTF_8)
+            } catch (e: Exception) { null }
+        }
+        fun decodeSavedData(encoded: String?): String? {
             if (encoded == null) return null
             return try {
                 String(android.util.Base64.decode(encoded, android.util.Base64.URL_SAFE), Charsets.UTF_8)
@@ -344,14 +357,21 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                     type = NavType.StringType
                     nullable = true
                     defaultValue = null
+                },
+                navArgument("savedData") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
                 }
             )
         ) { backStackEntry ->
             val editAccountId = backStackEntry.arguments?.getString("editAccountId")?.toLongOrNull()
             val verificationError = Screen.Setup.decodeError(backStackEntry.arguments?.getString("verificationError"))
+            val savedData = Screen.Setup.decodeSavedData(backStackEntry.arguments?.getString("savedData"))
             SetupScreen(
                 editAccountId = editAccountId,
                 initialError = verificationError,
+                savedData = savedData,
                 onSetupComplete = {
                     // Если есть куда вернуться — просто возвращаемся
                     // Если это первый аккаунт (нет back stack) — переходим на Main
@@ -406,8 +426,8 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                             popUpTo(0) { inclusive = true }
                         }
                     },
-                    onError = { error ->
-                        navController.navigate(Screen.Setup.createRoute(verificationError = error)) {
+                    onError = { error, savedData ->
+                        navController.navigate(Screen.Setup.createRoute(verificationError = error, savedData = savedData)) {
                             popUpTo(Screen.Setup.route) { inclusive = true }
                         }
                     }
