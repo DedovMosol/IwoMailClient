@@ -1,0 +1,369 @@
+package com.exchange.mailclient.data.repository
+
+import android.content.Context
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
+import com.exchange.mailclient.data.database.AccountEntity
+import com.exchange.mailclient.data.database.AccountType
+import com.exchange.mailclient.data.database.SyncMode
+import com.exchange.mailclient.data.database.MailDatabase
+import com.exchange.mailclient.eas.EasClient
+import com.exchange.mailclient.eas.EasResult
+import com.exchange.mailclient.imap.ImapClient
+import com.exchange.mailclient.pop3.Pop3Client
+import kotlinx.coroutines.flow.Flow
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Репозиторий для управления аккаунтами Exchange
+ * Single Responsibility: только работа с аккаунтами
+ */
+class AccountRepository(private val context: Context) {
+    
+    private val database = MailDatabase.getInstance(context)
+    private val accountDao = database.accountDao()
+    
+    // Кэш EAS клиентов для предотвращения утечек памяти
+    // Каждый EasClient создаёт OkHttpClient с connection pool
+    private val easClientCache = ConcurrentHashMap<Long, EasClient>()
+    
+    private val securePrefs by lazy {
+        try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            
+            EncryptedSharedPreferences.create(
+                context,
+                "secure_passwords",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            // Fallback на обычные SharedPreferences если шифрование не работает
+            context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE)
+        }
+    }
+    
+    val accounts: Flow<List<AccountEntity>> = accountDao.getAllAccounts()
+    val activeAccount: Flow<AccountEntity?> = accountDao.getActiveAccount()
+    
+    suspend fun getActiveAccountSync(): AccountEntity? = accountDao.getActiveAccountSync()
+    
+    suspend fun getAccount(id: Long): AccountEntity? = accountDao.getAccount(id)
+    
+    suspend fun getAccountCount(): Int = accountDao.getCount()
+    
+    /**
+     * Добавляет новый аккаунт после проверки подключения
+     */
+    suspend fun addAccount(
+        email: String,
+        displayName: String,
+        serverUrl: String,
+        username: String,
+        password: String,
+        domain: String,
+        acceptAllCerts: Boolean,
+        color: Int,
+        accountType: AccountType = AccountType.EXCHANGE,
+        incomingPort: Int = 993,
+        outgoingServer: String = "",
+        outgoingPort: Int = 587,
+        useSSL: Boolean = true,
+        syncMode: SyncMode = SyncMode.PUSH
+    ): EasResult<Long> {
+        // Проверяем наличие интернета
+        if (!isNetworkAvailable()) {
+            return EasResult.Error("NO_INTERNET")
+        }
+        
+        // Проверяем подключение в зависимости от типа
+        val connectionResult: EasResult<Unit> = try {
+            when (accountType) {
+                AccountType.EXCHANGE -> {
+                    val client = EasClient(
+                        serverUrl = serverUrl,
+                        username = username,
+                        password = password,
+                        domain = domain,
+                        acceptAllCerts = acceptAllCerts,
+                        port = incomingPort,
+                        useHttps = useSSL,
+                        deviceIdSuffix = email // Используем email для стабильного deviceId
+                    )
+                    when (val result = client.testConnection()) {
+                        is EasResult.Success -> EasResult.Success(Unit)
+                        is EasResult.Error -> EasResult.Error(result.message)
+                    }
+                }
+                AccountType.IMAP -> {
+                    try {
+                        val tempAccount = AccountEntity(
+                            email = email,
+                            displayName = displayName,
+                            serverUrl = serverUrl,
+                            username = username,
+                            acceptAllCerts = acceptAllCerts,
+                            accountType = accountType.name,
+                            incomingPort = incomingPort,
+                            useSSL = useSSL
+                        )
+                        val client = ImapClient(tempAccount, password)
+                        client.connect().fold(
+                            onSuccess = { 
+                                client.disconnect()
+                                EasResult.Success(Unit) 
+                            },
+                            onFailure = { e -> 
+                                EasResult.Error(formatConnectionError(e, "IMAP")) 
+                            }
+                        )
+                    } catch (e: Exception) {
+                        EasResult.Error(formatConnectionError(e, "IMAP"))
+                    }
+                }
+                AccountType.POP3 -> {
+                    try {
+                        val tempAccount = AccountEntity(
+                            email = email,
+                            displayName = displayName,
+                            serverUrl = serverUrl,
+                            username = username,
+                            acceptAllCerts = acceptAllCerts,
+                            accountType = accountType.name,
+                            incomingPort = incomingPort,
+                            useSSL = useSSL
+                        )
+                        val client = Pop3Client(tempAccount, password)
+                        client.connect().fold(
+                            onSuccess = { 
+                                client.disconnect()
+                                EasResult.Success(Unit) 
+                            },
+                            onFailure = { e -> 
+                                EasResult.Error(formatConnectionError(e, "POP3")) 
+                            }
+                        )
+                    } catch (e: Exception) {
+                        EasResult.Error(formatConnectionError(e, "POP3"))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            EasResult.Error("Ошибка подключения: ${e.message ?: "Неизвестная ошибка"}")
+        }
+        
+        return when (connectionResult) {
+            is EasResult.Success -> {
+                val account = AccountEntity(
+                    email = email,
+                    displayName = displayName,
+                    serverUrl = serverUrl,
+                    username = username,
+                    domain = domain,
+                    acceptAllCerts = acceptAllCerts,
+                    color = color,
+                    isActive = accountDao.getCount() == 0,
+                    accountType = accountType.name,
+                    incomingPort = incomingPort,
+                    outgoingServer = outgoingServer,
+                    outgoingPort = outgoingPort,
+                    useSSL = useSSL,
+                    syncMode = syncMode.name
+                )
+                
+                val accountId = accountDao.insert(account)
+                savePassword(accountId, password)
+                
+                // Запускаем немедленную синхронизацию для нового аккаунта
+                com.exchange.mailclient.sync.SyncWorker.syncNow(context)
+                
+                // Запускаем PushService только для Exchange аккаунтов с режимом PUSH
+                if (accountType == AccountType.EXCHANGE && syncMode == SyncMode.PUSH) {
+                    com.exchange.mailclient.sync.PushService.start(context)
+                }
+                
+                EasResult.Success(accountId)
+            }
+            is EasResult.Error -> EasResult.Error(connectionResult.message)
+        }
+    }
+    
+    suspend fun updateAccount(account: AccountEntity, password: String? = null) {
+        accountDao.update(account)
+        password?.let { savePassword(account.id, it) }
+    }
+    
+    suspend fun deleteAccount(accountId: Long) {
+        // Очищаем кэшированный клиент
+        clearEasClientCache(accountId)
+        
+        accountDao.delete(accountId)
+        deletePassword(accountId)
+        
+        // Если удалили активный аккаунт, активируем первый доступный
+        if (accountDao.getActiveAccountSync() == null) {
+            accountDao.getAllAccountsList().firstOrNull()?.let {
+                accountDao.setActiveAccount(it.id)
+            }
+        }
+    }
+    
+    suspend fun setActiveAccount(accountId: Long) {
+        accountDao.setActiveAccount(accountId)
+    }
+    
+    fun getPassword(accountId: Long): String? {
+        return securePrefs.getString("password_$accountId", null)
+    }
+    
+    private fun savePassword(accountId: Long, password: String) {
+        securePrefs.edit().putString("password_$accountId", password).apply()
+    }
+    
+    private fun deletePassword(accountId: Long) {
+        securePrefs.edit().remove("password_$accountId").apply()
+    }
+    
+    /**
+     * Создаёт или возвращает кэшированный EAS клиент для указанного аккаунта
+     * Кэширование предотвращает создание множества OkHttpClient и утечки памяти
+     */
+    suspend fun createEasClient(accountId: Long): EasClient? {
+        // Проверяем кэш
+        easClientCache[accountId]?.let { return it }
+        
+        val account = accountDao.getAccount(accountId) ?: return null
+        val password = getPassword(accountId) ?: return null
+        
+        val client = EasClient(
+            serverUrl = account.serverUrl,
+            username = account.username,
+            password = password,
+            domain = account.domain,
+            acceptAllCerts = account.acceptAllCerts,
+            port = account.incomingPort,
+            useHttps = account.useSSL,
+            deviceIdSuffix = account.email, // Используем email для стабильного deviceId
+            initialPolicyKey = account.policyKey // Передаём сохранённый PolicyKey
+        )
+        
+        // Сохраняем в кэш
+        easClientCache[accountId] = client
+        return client
+    }
+    
+    /**
+     * Очищает кэшированный клиент для аккаунта (при удалении или изменении настроек)
+     */
+    fun clearEasClientCache(accountId: Long) {
+        easClientCache.remove(accountId)
+    }
+    
+    /**
+     * Очищает весь кэш клиентов
+     */
+    fun clearAllEasClientCache() {
+        easClientCache.clear()
+    }
+    
+    /**
+     * Сохраняет PolicyKey для аккаунта
+     */
+    suspend fun savePolicyKey(accountId: Long, policyKey: String?) {
+        accountDao.updatePolicyKey(accountId, policyKey)
+    }
+    
+    /**
+     * Обновляет режим синхронизации для аккаунта
+     */
+    suspend fun updateSyncMode(accountId: Long, syncMode: SyncMode) {
+        accountDao.updateSyncMode(accountId, syncMode.name)
+    }
+    
+    /**
+     * Обновляет интервал синхронизации для аккаунта
+     */
+    suspend fun updateSyncInterval(accountId: Long, intervalMinutes: Int) {
+        accountDao.updateSyncInterval(accountId, intervalMinutes)
+    }
+    
+    /**
+     * Создаёт IMAP клиент для указанного аккаунта
+     */
+    suspend fun createImapClient(accountId: Long): ImapClient? {
+        val account = accountDao.getAccount(accountId) ?: return null
+        val password = getPassword(accountId) ?: return null
+        return ImapClient(account, password)
+    }
+    
+    /**
+     * Создаёт POP3 клиент для указанного аккаунта
+     */
+    suspend fun createPop3Client(accountId: Long): Pop3Client? {
+        val account = accountDao.getAccount(accountId) ?: return null
+        val password = getPassword(accountId) ?: return null
+        return Pop3Client(account, password)
+    }
+    
+    /**
+     * @deprecated EWS больше не поддерживается, используйте createEasClient
+     */
+    @Deprecated("Use createEasClient instead", ReplaceWith("createEasClient(accountId)"))
+    suspend fun createEwsClient(accountId: Long): EasClient? = createEasClient(accountId)
+    
+    /**
+     * @deprecated Используйте createEasClient
+     */
+    suspend fun createClient(accountId: Long): EasClient? = createEasClient(accountId)
+    
+    suspend fun createClientForActiveAccount(): EasClient? {
+        val account = accountDao.getActiveAccountSync() ?: return null
+        return createEasClient(account.id)
+    }
+    
+    /**
+     * Форматирует ошибку подключения в понятное сообщение
+     */
+    private fun formatConnectionError(e: Throwable, protocol: String): String {
+        val message = e.message ?: "Неизвестная ошибка"
+        return when {
+            message.contains("Authentication failed", ignoreCase = true) ||
+            message.contains("AUTHENTICATIONFAILED", ignoreCase = true) -> 
+                "Неверный логин или пароль"
+            message.contains("Connection refused", ignoreCase = true) -> 
+                "Сервер недоступен. Проверьте адрес и порт."
+            message.contains("Connection timed out", ignoreCase = true) ||
+            message.contains("timeout", ignoreCase = true) -> 
+                "Превышено время ожидания. Проверьте подключение к сети."
+            message.contains("UnknownHostException", ignoreCase = true) ||
+            message.contains("Unable to resolve host", ignoreCase = true) -> 
+                "Сервер не найден. Проверьте адрес."
+            message.contains("SSL", ignoreCase = true) ||
+            message.contains("certificate", ignoreCase = true) -> 
+                "Ошибка SSL. Попробуйте включить 'Принимать самоподписанные сертификаты'."
+            message.contains("STARTTLS", ignoreCase = true) -> 
+                "Сервер требует STARTTLS. Попробуйте другой порт."
+            else -> "Ошибка $protocol: $message"
+        }
+    }
+    
+    /**
+     * Проверяет наличие активного интернет-соединения
+     */
+    private fun isNetworkAvailable(): Boolean {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+               capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+}
+
