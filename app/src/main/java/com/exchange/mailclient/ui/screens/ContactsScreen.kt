@@ -655,7 +655,9 @@ fun ContactsScreen(
                     onGroupDelete = { groupToDelete = it },
                     groupedContacts = groupedContacts,
                     onContactClick = { showContactDetails = it },
-                    onContactMoveToGroup = { showMoveToGroupDialog = it }
+                    onContactMoveToGroup = { showMoveToGroupDialog = it },
+                    onContactEdit = { editingContact = it },
+                    onContactDelete = { showDeleteDialog = it }
                 )
                 1 -> OrganizationContactsList(
                     query = galSearchQuery,
@@ -679,7 +681,9 @@ private fun PersonalContactsList(
     onGroupDelete: (ContactGroupEntity) -> Unit,
     groupedContacts: Map<Char, List<ContactEntity>>,
     onContactClick: (ContactEntity) -> Unit,
-    onContactMoveToGroup: (ContactEntity) -> Unit
+    onContactMoveToGroup: (ContactEntity) -> Unit,
+    onContactEdit: (ContactEntity) -> Unit,
+    onContactDelete: (ContactEntity) -> Unit
 ) {
     var expandedGroupMenu by remember { mutableStateOf<String?>(null) }
     
@@ -807,7 +811,9 @@ private fun PersonalContactsList(
                     ContactItemWithGroup(
                         contact = contact,
                         onClick = { onContactClick(contact) },
-                        onMoveToGroup = { onContactMoveToGroup(contact) }
+                        onMoveToGroup = { onContactMoveToGroup(contact) },
+                        onEdit = { onContactEdit(contact) },
+                        onDelete = { onContactDelete(contact) }
                     )
                 }
             }
@@ -928,7 +934,9 @@ private fun ContactItem(
 private fun ContactItemWithGroup(
     contact: ContactEntity,
     onClick: () -> Unit,
-    onMoveToGroup: () -> Unit
+    onMoveToGroup: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     
@@ -978,6 +986,22 @@ private fun ContactItemWithGroup(
                             onMoveToGroup()
                         },
                         leadingIcon = { Icon(Icons.Default.Folder, null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(Strings.edit) },
+                        onClick = {
+                            showMenu = false
+                            onEdit()
+                        },
+                        leadingIcon = { Icon(Icons.Default.Edit, null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(Strings.delete, color = MaterialTheme.colorScheme.error) },
+                        onClick = {
+                            showMenu = false
+                            onDelete()
+                        },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
                     )
                 }
             }
