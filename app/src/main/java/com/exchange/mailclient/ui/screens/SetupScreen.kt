@@ -153,11 +153,33 @@ fun SetupScreen(
     val emailMismatchText = Strings.emailMismatch
     
     // Обработка ошибки верификации
-    LaunchedEffect(initialError) {
-        if (initialError == "CLEAR_EMAIL") {
-            // Очищаем только email, остальные поля сохраняются
-            email = ""
-            errorMessage = null
+    LaunchedEffect(initialError, savedData) {
+        if (initialError == "CLEAR_EMAIL" && savedData != null) {
+            // Восстанавливаем все данные из savedData, но очищаем email
+            val parts = savedData.split("|")
+            if (parts.size >= 11) {
+                email = "" // Очищаем email — пользователь должен ввести правильный
+                displayName = parts[1]
+                serverUrl = parts[2]
+                acceptAllCerts = parts[3].toBoolean()
+                selectedColor = parts[4].toIntOrNull() ?: ACCOUNT_COLORS[0]
+                incomingPort = parts[5]
+                outgoingServer = parts[6]
+                outgoingPort = parts[7]
+                useSSL = parts[8].toBoolean()
+                syncMode = try { SyncMode.valueOf(parts[9]) } catch (_: Exception) { SyncMode.PUSH }
+                if (parts[10].isNotBlank()) {
+                    certificatePath = parts[10]
+                    certificateFileName = File(parts[10]).name
+                }
+                // Восстанавливаем domain, username, password если они есть
+                if (parts.size >= 14) {
+                    domain = parts[11]
+                    username = parts[12]
+                    password = parts[13]
+                }
+            }
+            errorMessage = emailMismatchText
         } else if (initialError != null && initialError.startsWith("EMAIL_MISMATCH:")) {
             val parts = initialError.split(":")
             if (parts.size >= 3) {
@@ -176,8 +198,9 @@ fun SetupScreen(
     
     // Восстановление данных из savedData (при возврате с ошибкой верификации)
     // Формат: email|displayName|serverUrl|acceptAllCerts|color|incomingPort|outgoingServer|outgoingPort|useSSL|syncMode|certificatePath
+    // При CLEAR_EMAIL данные уже восстановлены выше, поэтому пропускаем
     LaunchedEffect(savedData) {
-        if (savedData != null) {
+        if (savedData != null && initialError != "CLEAR_EMAIL") {
             val parts = savedData.split("|")
             if (parts.size >= 10) {
                 email = parts[0]

@@ -71,6 +71,12 @@ fun VerificationScreen(
         return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath"
     }
     
+    // Функция для создания savedData при несовпадении email (сохраняем ВСЁ включая domain, username, password)
+    fun createSavedDataForEmailMismatch(): String {
+        val certPath = certificatePath ?: ""
+        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$domain|$username|$password"
+    }
+    
     var statusText by remember { mutableStateOf(verifyingAccountText) }
     var showMismatchDialog by remember { mutableStateOf(false) }
     var mismatchEnteredEmail by remember { mutableStateOf("") }
@@ -205,7 +211,7 @@ fun VerificationScreen(
                     ) {
                         TextButton(onClick = {
                             showMismatchDialog = false
-                            onError("CLEAR_EMAIL", createSavedData())
+                            onError("CLEAR_EMAIL", createSavedDataForEmailMismatch())
                         }) {
                             Text("OK")
                         }

@@ -1793,7 +1793,7 @@ private fun SearchTopBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onMenuClick) {
-                    Icon(Icons.Default.Menu, Strings.menu, tint = Color(0xFF7C4DFF))
+                    Icon(Icons.Default.Menu, Strings.menu, tint = colorTheme.primaryLight)
                 }
                 
                 Text(
@@ -1955,6 +1955,7 @@ private fun DrawerHeader(
     showPicker: Boolean,
     onToggle: () -> Unit
 ) {
+    val colorTheme = com.exchange.mailclient.ui.theme.LocalColorTheme.current
     // Градиентный хедер как в SetupScreen
     Box(
         modifier = Modifier
@@ -1962,8 +1963,8 @@ private fun DrawerHeader(
             .background(
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color(0xFF7C4DFF), // Deep Purple
-                        Color(0xFF536DFE)  // Indigo
+                        colorTheme.gradientStart,
+                        colorTheme.gradientEnd
                     )
                 )
             )

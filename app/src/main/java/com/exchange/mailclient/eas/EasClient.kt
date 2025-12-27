@@ -161,6 +161,8 @@ class EasClient(
                     }
                     sslContext.init(null, arrayOf(certTrustManager), SecureRandom())
                     builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), certTrustManager)
+                    // Для самоподписанных сертификатов hostname может не совпадать
+                    builder.hostnameVerifier { _, _ -> true }
                 }
             } else {
                 // Используем системный TrustManager который учитывает:
@@ -401,7 +403,32 @@ class EasClient(
                 }
                 
                 override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                    // Сначала пробуем указанный сертификат
+                    // Для самоподписанных сертификатов — сравниваем напрямую
+                    // Проверяем что сертификат сервера совпадает с загруженным
+                    if (chain.isNotEmpty()) {
+                        val serverCert = chain[0]
+                        
+                        // Сравниваем публичные ключи (более надёжно чем сравнение всего сертификата)
+                        if (serverCert.publicKey == certificate.publicKey) {
+                            // Проверяем что сертификат ещё действителен
+                            try {
+                                serverCert.checkValidity()
+                                return // Сертификат совпадает и действителен
+                            } catch (_: Exception) {
+                                // Сертификат истёк, но всё равно принимаем (пользователь сам выбрал)
+                                return
+                            }
+                        }
+                        
+                        // Альтернативная проверка — сравниваем encoded форму
+                        try {
+                            if (serverCert.encoded.contentEquals(certificate.encoded)) {
+                                return // Сертификаты идентичны
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    
+                    // Пробуем через TrustManager с нашим KeyStore
                     try {
                         certTm?.checkServerTrusted(chain, authType)
                         return
@@ -418,6 +445,7 @@ class EasClient(
                 
                 override fun getAcceptedIssuers(): Array<X509Certificate> {
                     val issuers = mutableListOf<X509Certificate>()
+                    issuers.add(certificate) // Добавляем наш сертификат как доверенный issuer
                     certTm?.acceptedIssuers?.let { issuers.addAll(it) }
                     systemTm?.acceptedIssuers?.let { issuers.addAll(it) }
                     return issuers.toTypedArray()
