@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.0.8 (27.12.2025)
+
+### New Features
+- **Deferred trash deletion** — when emptying trash, a progress bar with cancel button is shown. Time depends on email count (100ms per email, 2-8 sec). While progress is running — emails are not deleted, can be cancelled.
+- **Auto-empty trash** — automatically delete old emails from trash after 3/5/7/14/30 days (default 30 days)
+- **Animation settings** — toggle in settings to enable/disable UI animations (animations enabled by default)
+- **Extended folder card animations** — icon pulse, slight wobble, scale animation on press
+- **Server certificate selection** — ability to specify certificate file for corporate servers with self-signed certificates
+- **Delete sound** — audio notification when deleting emails and folders
+
+### UI Improvements
+- **"View changelog" button** — animated button with link to changelog on GitHub
+- **Privacy policy link** — added in settings under "About" section
+- **Receipt checkboxes in menu** — "Request read/delivery receipt" moved to dropdown menu when composing email
+- **Card appearance animation** — staggered animation when loading main screen
+- **Unread badge pulse** — animated unread email counter
+- **Deletion progress bar** — appears at top of screen above all content
+
+### Bug Fixes
+- **certificatePath in all clients** — certificate now correctly passed when sending emails, downloading attachments and in background tasks
+- **EasClient cache clear on account update** — account settings changes apply immediately
+- **Load certificatePath when editing** — certificate path preserved when editing account
+- **Save certificatePath in savedData** — certificate not lost when returning from verification error
+- **Notifications for multiple accounts** — each account now shows separate notification with email address
+
+### Localization
+- Added strings for animations, color themes, days of week, deferred deletion and auto-empty trash
+
+---
+
 ## v1.0.7 (27.12.2025)
 
 ### New Features

@@ -2,6 +2,7 @@ package com.exchange.mailclient.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -336,6 +337,7 @@ fun MainScreen(
                         activeAccount?.let { account ->
                             scope.launch {
                                 isDeletingFolder = true
+                                com.exchange.mailclient.util.SoundPlayer.playDeleteSound(context)
                                 val result = withContext(Dispatchers.IO) {
                                     mailRepo.deleteFolder(account.id, folder.id)
                                 }
@@ -665,18 +667,12 @@ private fun HomeContent(
         
         // Приветственная карточка — современный градиентный стиль с анимацией
         item {
-            var welcomeVisible by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) { welcomeVisible = true }
+            val animationsEnabled = com.exchange.mailclient.ui.theme.LocalAnimationsEnabled.current
+            var welcomeVisible by remember { mutableStateOf(!animationsEnabled) }
+            LaunchedEffect(animationsEnabled) { welcomeVisible = true }
             
-            AnimatedVisibility(
-                visible = welcomeVisible,
-                enter = fadeIn(animationSpec = tween(400)) + 
-                        scaleIn(
-                            initialScale = 0.92f,
-                            animationSpec = tween(400, easing = FastOutSlowInEasing)
-                        )
-            ) {
-                val colorTheme = com.exchange.mailclient.ui.theme.LocalColorTheme.current
+            val colorTheme = com.exchange.mailclient.ui.theme.LocalColorTheme.current
+            val cardContent = @Composable {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.extraLarge,
@@ -704,52 +700,67 @@ private fun HomeContent(
                                 // Аватар аккаунта
                                 Box(
                                     modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.2f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = activeAccount?.displayName?.firstOrNull()?.uppercase() ?: "📧",
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = Color.White
-                                )
+                                        .size(56.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = activeAccount?.displayName?.firstOrNull()?.uppercase() ?: "📧",
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        color = Color.White
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column {
+                                    Text(
+                                        text = Strings.hello,
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = activeAccount?.email ?: Strings.loading,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White.copy(alpha = 0.85f)
+                                    )
+                                }
                             }
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column {
-                                Text(
-                                    text = Strings.hello,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                                Text(
-                                    text = activeAccount?.email ?: Strings.loading,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.White.copy(alpha = 0.85f)
-                                )
+                            
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            // Время последней синхронизации
+                            val syncTimeText = if (lastSyncTime > 0) {
+                                val formatter = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                                "${Strings.lastSync} ${formatter.format(java.util.Date(lastSyncTime))}"
+                            } else {
+                                Strings.neverSynced
                             }
+                            
+                            Text(
+                                text = syncTimeText,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontWeight = FontWeight.Medium
+                            )
                         }
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Время последней синхронизации
-                        val syncTimeText = if (lastSyncTime > 0) {
-                            val formatter = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                            "${Strings.lastSync} ${formatter.format(java.util.Date(lastSyncTime))}"
-                        } else {
-                            Strings.neverSynced
-                        }
-                        
-                        Text(
-                            text = syncTimeText,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontWeight = FontWeight.Medium
-                        )
                     }
                 }
             }
+            
+            if (animationsEnabled) {
+                AnimatedVisibility(
+                    visible = welcomeVisible,
+                    enter = fadeIn(animationSpec = tween(400)) + 
+                            scaleIn(
+                                initialScale = 0.92f,
+                                animationSpec = tween(400, easing = FastOutSlowInEasing)
+                            )
+                ) {
+                    cardContent()
+                }
+            } else {
+                cardContent()
             }
         }
         
@@ -856,21 +867,50 @@ private fun HomeContent(
             
             val chunkedFolders = displayFolders.chunked(2)
             itemsIndexed(chunkedFolders) { index, rowFolders ->
-                // Анимация появления с задержкой для каждой строки
-                var visible by remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) {
-                    kotlinx.coroutines.delay(index * 80L)
-                    visible = true
+                val animationsEnabled = com.exchange.mailclient.ui.theme.LocalAnimationsEnabled.current
+                // Анимация появления с задержкой для каждой строки (если анимации включены)
+                var visible by remember { mutableStateOf(!animationsEnabled) }
+                LaunchedEffect(animationsEnabled) {
+                    if (animationsEnabled) {
+                        kotlinx.coroutines.delay(index * 80L)
+                        visible = true
+                    } else {
+                        visible = true
+                    }
                 }
                 
-                AnimatedVisibility(
-                    visible = visible,
-                    enter = fadeIn(animationSpec = tween(300)) + 
-                            slideInVertically(
-                                initialOffsetY = { it / 2 },
-                                animationSpec = tween(300, easing = FastOutSlowInEasing)
-                            )
-                ) {
+                if (animationsEnabled) {
+                    AnimatedVisibility(
+                        visible = visible,
+                        enter = fadeIn(animationSpec = tween(300)) + 
+                                slideInVertically(
+                                    initialOffsetY = { it / 2 },
+                                    animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                )
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = if (rowFolders.size == 1) Arrangement.Center else Arrangement.spacedBy(12.dp)
+                        ) {
+                            rowFolders.forEach { folder ->
+                                FolderCardDisplay(
+                                    id = folder.id,
+                                    name = folder.name,
+                                    count = folder.count,
+                                    unreadCount = folder.unreadCount,
+                                    type = folder.type,
+                                    onClick = { onFolderClick(folder.id) },
+                                    modifier = if (rowFolders.size == 1) {
+                                        Modifier.fillMaxWidth(0.48f)
+                                    } else {
+                                        Modifier.weight(1f)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // Без анимации — просто показываем
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = if (rowFolders.size == 1) Arrangement.Center else Arrangement.spacedBy(12.dp)
@@ -884,7 +924,7 @@ private fun HomeContent(
                                 type = folder.type,
                                 onClick = { onFolderClick(folder.id) },
                                 modifier = if (rowFolders.size == 1) {
-                                    Modifier.fillMaxWidth(0.48f) // Примерно половина ширины для центрирования
+                                    Modifier.fillMaxWidth(0.48f)
                                 } else {
                                     Modifier.weight(1f)
                                 }
@@ -1047,25 +1087,35 @@ private fun HomeContent(
                     ) {
                         // Анимированный конвертик с градиентом
                         val colorTheme = com.exchange.mailclient.ui.theme.LocalColorTheme.current
-                        val infiniteTransition = rememberInfiniteTransition(label = "envelope")
-                        val envelopeScale by infiniteTransition.animateFloat(
-                            initialValue = 1f,
-                            targetValue = 1.08f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1200, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "envelopeScale"
-                        )
-                        val envelopeRotation by infiniteTransition.animateFloat(
-                            initialValue = -3f,
-                            targetValue = 3f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(2000, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "envelopeRotation"
-                        )
+                        val animationsEnabled = com.exchange.mailclient.ui.theme.LocalAnimationsEnabled.current
+                        
+                        val envelopeScale: Float
+                        val envelopeRotation: Float
+                        
+                        if (animationsEnabled) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "envelope")
+                            envelopeScale = infiniteTransition.animateFloat(
+                                initialValue = 1f,
+                                targetValue = 1.08f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1200, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "envelopeScale"
+                            ).value
+                            envelopeRotation = infiniteTransition.animateFloat(
+                                initialValue = -3f,
+                                targetValue = 3f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(2000, easing = FastOutSlowInEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "envelopeRotation"
+                            ).value
+                        } else {
+                            envelopeScale = 1f
+                            envelopeRotation = 0f
+                        }
                         
                         Box(
                             modifier = Modifier
@@ -1105,7 +1155,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.0.7",
+                                text = "v1.0.8",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1233,23 +1283,94 @@ private fun HomeContent(
             }
         }
         
+        // Кнопка "Ознакомиться с развитием программы" с анимацией
+        item {
+            val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+            val isRu = LocalLanguage.current == AppLanguage.RUSSIAN
+            val animationsEnabled = com.exchange.mailclient.ui.theme.LocalAnimationsEnabled.current
+            val changelogUrl = if (isRu) 
+                "https://github.com/DedovMosol/ExchangeMailClient/blob/main/CHANGELOG_RU.md"
+            else 
+                "https://github.com/DedovMosol/ExchangeMailClient/blob/main/CHANGELOG_EN.md"
+            
+            // Анимация пульсации (только если анимации включены)
+            val pulseScale: Float = if (animationsEnabled) {
+                val infiniteTransition = rememberInfiniteTransition(label = "changelogPulse")
+                infiniteTransition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 1.02f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1500, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "changelogScale"
+                ).value
+            } else {
+                1f
+            }
+            
+            // Анимация свечения границы
+            val borderAlpha: Float = if (animationsEnabled) {
+                val infiniteTransition = rememberInfiniteTransition(label = "changelogBorder")
+                infiniteTransition.animateFloat(
+                    initialValue = 0.6f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1200, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "borderAlpha"
+                ).value
+            } else {
+                1f
+            }
+            
+            OutlinedButton(
+                onClick = { uriHandler.openUri(changelogUrl) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .scale(pulseScale),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = com.exchange.mailclient.ui.theme.LocalColorTheme.current.gradientStart
+                ),
+                border = BorderStroke(
+                    1.5.dp, 
+                    com.exchange.mailclient.ui.theme.LocalColorTheme.current.gradientStart.copy(alpha = borderAlpha)
+                )
+            ) {
+                Icon(
+                    Icons.Default.History,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(Strings.viewChangelog)
+            }
+        }
+        
         // Кнопка пожертвований с пульсирующей анимацией
         item {
             var showDonateDialog by remember { mutableStateOf(false) }
             val context = LocalContext.current
             val accountCopiedText = Strings.accountCopied
+            val animationsEnabled = com.exchange.mailclient.ui.theme.LocalAnimationsEnabled.current
             
-            // Пульсирующая анимация
-            val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-            val pulseScale by infiniteTransition.animateFloat(
-                initialValue = 1f,
-                targetValue = 1.03f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(1000, easing = FastOutSlowInEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "pulseScale"
-            )
+            // Пульсирующая анимация (только если анимации включены)
+            val pulseScale: Float = if (animationsEnabled) {
+                val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                infiniteTransition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 1.03f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1000, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "pulseScale"
+                ).value
+            } else {
+                1f
+            }
             
             if (showDonateDialog) {
                 com.exchange.mailclient.ui.theme.ScaledAlertDialog(
@@ -1434,25 +1555,60 @@ private fun FolderCardDisplay(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val animationsEnabled = com.exchange.mailclient.ui.theme.LocalAnimationsEnabled.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     
-    // Анимация масштаба при нажатии
+    // Анимация масштаба при нажатии (только если анимации включены)
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.96f else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        ),
+        targetValue = if (animationsEnabled && isPressed) 0.96f else 1f,
+        animationSpec = if (animationsEnabled) {
+            spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow
+            )
+        } else {
+            snap()
+        },
         label = "scale"
     )
     
     // Анимация тени при нажатии
     val elevation by animateDpAsState(
-        targetValue = if (isPressed) 1.dp else 4.dp,
-        animationSpec = tween(150),
+        targetValue = if (animationsEnabled && isPressed) 1.dp else 4.dp,
+        animationSpec = if (animationsEnabled) tween(150) else snap(),
         label = "elevation"
     )
+    
+    // Пульсация и покачивание иконки (только если анимации включены)
+    val iconScale: Float
+    val iconRotation: Float
+    
+    if (animationsEnabled) {
+        val infiniteTransition = rememberInfiniteTransition(label = "icon")
+        iconScale = infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.08f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "iconScale"
+        ).value
+        
+        iconRotation = infiniteTransition.animateFloat(
+            initialValue = -2f,
+            targetValue = 2f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2000, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "iconRotation"
+        ).value
+    } else {
+        iconScale = 1f
+        iconRotation = 0f
+    }
     
     // Определяем цвета для каждого типа папки — единый современный стиль
     data class FolderColors(
@@ -1516,12 +1672,14 @@ private fun FolderCardDisplay(
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Иконка с полупрозрачным фоном
+                // Иконка с полупрозрачным фоном и анимацией
                 Box(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.2f)),
+                        .background(Color.White.copy(alpha = 0.2f))
+                        .scale(if (animationsEnabled) iconScale else 1f)
+                        .rotate(if (animationsEnabled) iconRotation else 0f),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -1554,21 +1712,25 @@ private fun FolderCardDisplay(
                     )
                 }
                 
-                // Badge с непрочитанными — с пульсацией
+                // Badge с непрочитанными — с пульсацией (если анимации включены)
                 if (unreadCount > 0) {
-                    val infiniteTransition = rememberInfiniteTransition(label = "badge")
-                    val badgeScale by infiniteTransition.animateFloat(
-                        initialValue = 1f,
-                        targetValue = 1.1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(600, easing = FastOutSlowInEasing),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "badgeScale"
-                    )
+                    val badgeScale: Float = if (animationsEnabled) {
+                        val badgeTransition = rememberInfiniteTransition(label = "badge")
+                        badgeTransition.animateFloat(
+                            initialValue = 1f,
+                            targetValue = 1.15f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(600, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "badgeScale"
+                        ).value
+                    } else {
+                        1f
+                    }
                     
                     Badge(
-                        modifier = Modifier.scale(if (unreadCount > 0) badgeScale else 1f),
+                        modifier = Modifier.scale(badgeScale),
                         containerColor = folderColors.gradientColors.first(),
                         contentColor = Color.White
                     ) {

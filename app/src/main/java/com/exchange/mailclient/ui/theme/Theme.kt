@@ -86,12 +86,18 @@ enum class AppColorTheme(
  */
 val LocalColorTheme = compositionLocalOf { AppColorTheme.PURPLE }
 
+/**
+ * CompositionLocal для включения/выключения анимаций
+ */
+val LocalAnimationsEnabled = compositionLocalOf { true }
+
 @Composable
 fun ExchangeMailTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
     fontScale: Float = 1.0f,
     colorTheme: AppColorTheme = AppColorTheme.PURPLE,
+    animationsEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -132,7 +138,8 @@ fun ExchangeMailTheme(
     CompositionLocalProvider(
         LocalDensity provides scaledDensity,
         LocalFontScale provides fontScale,
-        LocalColorTheme provides colorTheme
+        LocalColorTheme provides colorTheme,
+        LocalAnimationsEnabled provides animationsEnabled
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

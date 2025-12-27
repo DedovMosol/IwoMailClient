@@ -64,6 +64,7 @@ fun SettingsScreen(
     // Настройки цветовой темы
     val colorThemeCode by settingsRepo.colorTheme.collectAsState(initial = "purple")
     val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsState(initial = false)
+    val animationsEnabled by settingsRepo.animationsEnabled.collectAsState(initial = true)
     var showColorThemeDialog by remember { mutableStateOf(false) }
     var showDailyThemesDialog by remember { mutableStateOf(false) }
     
@@ -446,6 +447,25 @@ fun SettingsScreen(
                 }
             }
             
+            // Анимации интерфейса
+            item {
+                ListItem(
+                    headlineContent = { Text(Strings.animations) },
+                    supportingContent = { Text(Strings.animationsDesc) },
+                    leadingContent = { Icon(Icons.Default.Animation, null) },
+                    trailingContent = {
+                        Switch(
+                            checked = animationsEnabled,
+                            onCheckedChange = { enabled ->
+                                scope.launch {
+                                    settingsRepo.setAnimationsEnabled(enabled)
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+            
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
@@ -517,6 +537,57 @@ fun SettingsScreen(
                 )
             }
             
+            // Автоочистка корзины
+            item {
+                val autoEmptyDays by settingsRepo.autoEmptyTrashDays.collectAsState(initial = 30)
+                var showAutoEmptyDialog by remember { mutableStateOf(false) }
+                val currentOption = SettingsRepository.AutoEmptyTrashDays.fromDays(autoEmptyDays)
+                
+                if (showAutoEmptyDialog) {
+                    com.exchange.mailclient.ui.theme.ScaledAlertDialog(
+                        onDismissRequest = { showAutoEmptyDialog = false },
+                        title = { Text(Strings.autoEmptyTrash) },
+                        text = {
+                            Column {
+                                SettingsRepository.AutoEmptyTrashDays.entries.forEach { option ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                scope.launch {
+                                                    settingsRepo.setAutoEmptyTrashDays(option.days)
+                                                }
+                                                showAutoEmptyDialog = false
+                                            }
+                                            .padding(vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = autoEmptyDays == option.days,
+                                            onClick = null
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(option.getDisplayName(isRu))
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showAutoEmptyDialog = false }) {
+                                Text(Strings.cancel)
+                            }
+                        }
+                    )
+                }
+                
+                ListItem(
+                    headlineContent = { Text(Strings.autoEmptyTrash) },
+                    supportingContent = { Text(currentOption.getDisplayName(isRu)) },
+                    leadingContent = { Icon(Icons.Default.AutoDelete, null) },
+                    modifier = Modifier.clickable { showAutoEmptyDialog = true }
+                )
+            }
+            
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
@@ -533,7 +604,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("Exchange Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.0.7") },
+                    supportingContent = { Text("${Strings.version} 1.0.8") },
                     leadingContent = { Icon(Icons.Default.Info, null) }
                 )
             }
@@ -551,6 +622,19 @@ fun SettingsScreen(
                     headlineContent = { Text(Strings.supportedProtocols) },
                     supportingContent = { Text("Exchange (EAS), IMAP, POP3") },
                     leadingContent = { Icon(Icons.Default.Business, null) }
+                )
+            }
+            
+            // Ссылка на политику конфиденциальности
+            item {
+                val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                ListItem(
+                    headlineContent = { Text(Strings.privacyPolicy) },
+                    leadingContent = { Icon(Icons.Default.Policy, null) },
+                    trailingContent = { Icon(Icons.Default.OpenInNew, null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.clickable {
+                        uriHandler.openUri("https://github.com/DedovMosol/ExchangeMailClient/blob/main/PRIVACY_POLICY.md")
+                    }
                 )
             }
         }

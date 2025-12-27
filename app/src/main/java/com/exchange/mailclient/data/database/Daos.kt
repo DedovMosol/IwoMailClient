@@ -212,6 +212,13 @@ interface EmailDao {
         ORDER BY e.dateReceived DESC
     """)
     suspend fun getUnreadInboxEmails(accountId: Long): List<EmailEntity>
+    
+    /**
+     * Получает письма из папки, полученные раньше указанного времени
+     * Используется для автоочистки корзины
+     */
+    @Query("SELECT * FROM emails WHERE folderId = :folderId AND dateReceived < :beforeTime")
+    suspend fun getEmailsOlderThan(folderId: String, beforeTime: Long): List<EmailEntity>
 }
 
 @Dao

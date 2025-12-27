@@ -75,7 +75,8 @@ class AccountRepository(private val context: Context) {
         outgoingServer: String = "",
         outgoingPort: Int = 587,
         useSSL: Boolean = true,
-        syncMode: SyncMode = SyncMode.PUSH
+        syncMode: SyncMode = SyncMode.PUSH,
+        certificatePath: String? = null
     ): EasResult<Long> {
         // Проверяем наличие интернета
         if (!isNetworkAvailable()) {
@@ -94,7 +95,8 @@ class AccountRepository(private val context: Context) {
                         acceptAllCerts = acceptAllCerts,
                         port = incomingPort,
                         useHttps = useSSL,
-                        deviceIdSuffix = email // Используем email для стабильного deviceId
+                        deviceIdSuffix = email, // Используем email для стабильного deviceId
+                        certificatePath = certificatePath
                     )
                     when (val result = client.testConnection()) {
                         is EasResult.Success -> EasResult.Success(Unit)
@@ -174,7 +176,8 @@ class AccountRepository(private val context: Context) {
                     outgoingServer = outgoingServer,
                     outgoingPort = outgoingPort,
                     useSSL = useSSL,
-                    syncMode = syncMode.name
+                    syncMode = syncMode.name,
+                    certificatePath = certificatePath
                 )
                 
                 val accountId = accountDao.insert(account)
@@ -198,6 +201,8 @@ class AccountRepository(private val context: Context) {
     }
     
     suspend fun updateAccount(account: AccountEntity, password: String? = null) {
+        // Очищаем кэшированный клиент чтобы при следующем запросе создался новый с актуальными настройками
+        clearEasClientCache(account.id)
         accountDao.update(account)
         password?.let { savePassword(account.id, it) }
     }
@@ -253,7 +258,8 @@ class AccountRepository(private val context: Context) {
             port = account.incomingPort,
             useHttps = account.useSSL,
             deviceIdSuffix = account.email, // Используем email для стабильного deviceId
-            initialPolicyKey = account.policyKey // Передаём сохранённый PolicyKey
+            initialPolicyKey = account.policyKey, // Передаём сохранённый PolicyKey
+            certificatePath = account.certificatePath
         )
         
         // Сохраняем в кэш

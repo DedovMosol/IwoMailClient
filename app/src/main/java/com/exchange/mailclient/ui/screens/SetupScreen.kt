@@ -1,5 +1,8 @@
 package com.exchange.mailclient.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,8 +43,11 @@ import com.exchange.mailclient.ui.LocalLanguage
 import com.exchange.mailclient.ui.Strings
 import com.exchange.mailclient.ui.isRussian
 import com.exchange.mailclient.ui.theme.LocalColorTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 private val ACCOUNT_COLORS = listOf(
     0xFF1976D2.toInt(), // Blue
@@ -64,7 +70,8 @@ fun SetupScreen(
     onNavigateToVerification: ((
         email: String, displayName: String, serverUrl: String, username: String,
         password: String, domain: String, acceptAllCerts: Boolean, color: Int,
-        incomingPort: Int, outgoingServer: String, outgoingPort: Int, useSSL: Boolean, syncMode: String
+        incomingPort: Int, outgoingServer: String, outgoingPort: Int, useSSL: Boolean, syncMode: String,
+        certificatePath: String?
     ) -> Unit)? = null,
     onBackClick: (() -> Unit)? = null
 ) {
@@ -73,6 +80,7 @@ fun SetupScreen(
     val accountRepo = remember { AccountRepository(context) }
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val currentLanguage = LocalLanguage.current
+    val isRussianLang = currentLanguage == AppLanguage.RUSSIAN
     
     var displayName by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
@@ -97,9 +105,52 @@ fun SetupScreen(
     // Режим синхронизации (только для Exchange)
     var syncMode by rememberSaveable { mutableStateOf(SyncMode.PUSH) }
     
+    // Путь к файлу сертификата сервера
+    var certificatePath by rememberSaveable { mutableStateOf<String?>(null) }
+    var certificateFileName by rememberSaveable { mutableStateOf<String?>(null) }
+    
+    // Файловый пикер для выбора сертификата
+    val certificatePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { selectedUri ->
+            scope.launch {
+                try {
+                    // Копируем файл в приватное хранилище приложения
+                    val fileName = "cert_${System.currentTimeMillis()}.crt"
+                    val certFile = File(context.filesDir, fileName)
+                    
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(selectedUri)?.use { input ->
+                            certFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    }
+                    
+                    certificatePath = certFile.absolutePath
+                    // Получаем оригинальное имя файла
+                    val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
+                    cursor?.use {
+                        if (it.moveToFirst()) {
+                            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                            if (nameIndex >= 0) {
+                                certificateFileName = it.getString(nameIndex)
+                            }
+                        }
+                    }
+                    if (certificateFileName == null) {
+                        certificateFileName = fileName
+                    }
+                } catch (e: Exception) {
+                    errorMessage = if (isRussianLang) "Ошибка загрузки сертификата" else "Certificate loading error"
+                }
+            }
+        }
+    }
+    
     // Получаем строки локализации в Composable контексте
     val emailMismatchText = Strings.emailMismatch
-    val isRussianLang = isRussian()
     
     // Обработка ошибки верификации
     LaunchedEffect(initialError) {
@@ -124,7 +175,7 @@ fun SetupScreen(
     }
     
     // Восстановление данных из savedData (при возврате с ошибкой верификации)
-    // Формат: email|displayName|serverUrl|acceptAllCerts|color|incomingPort|outgoingServer|outgoingPort|useSSL|syncMode
+    // Формат: email|displayName|serverUrl|acceptAllCerts|color|incomingPort|outgoingServer|outgoingPort|useSSL|syncMode|certificatePath
     LaunchedEffect(savedData) {
         if (savedData != null) {
             val parts = savedData.split("|")
@@ -139,6 +190,11 @@ fun SetupScreen(
                 outgoingPort = parts[7]
                 useSSL = parts[8].toBoolean()
                 syncMode = try { SyncMode.valueOf(parts[9]) } catch (_: Exception) { SyncMode.PUSH }
+                // Восстанавливаем путь к сертификату если есть
+                if (parts.size >= 11 && parts[10].isNotBlank()) {
+                    certificatePath = parts[10]
+                    certificateFileName = File(parts[10]).name
+                }
                 // domain, username, password НЕ восстанавливаем — пользователь должен ввести заново
             }
         }
@@ -204,6 +260,11 @@ fun SetupScreen(
                 outgoingPort = account.outgoingPort.toString()
                 useSSL = account.useSSL
                 syncMode = try { SyncMode.valueOf(account.syncMode) } catch (_: Exception) { SyncMode.PUSH }
+                // Загружаем путь к сертификату
+                certificatePath = account.certificatePath
+                if (certificatePath != null) {
+                    certificateFileName = File(certificatePath!!).name
+                }
             }
         }
     }
@@ -777,6 +838,91 @@ fun SetupScreen(
                 )
             }
             
+            // Выбор сертификата сервера (только если не включено "Принимать все")
+            if (!acceptAllCerts) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Security,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isRussian()) "Сертификат сервера" else "Server certificate",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = certificateFileName 
+                                        ?: if (isRussian()) "Не выбран (опционально)" else "Not selected (optional)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (certificateFileName != null) 
+                                        MaterialTheme.colorScheme.primary 
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { certificatePicker.launch("*/*") },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(if (isRussian()) "Выбрать" else "Select")
+                            }
+                            
+                            if (certificatePath != null) {
+                                OutlinedButton(
+                                    onClick = {
+                                        // Удаляем файл сертификата
+                                        certificatePath?.let { path ->
+                                            try { File(path).delete() } catch (_: Exception) {}
+                                        }
+                                        certificatePath = null
+                                        certificateFileName = null
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (isRussian()) "Удалить" else "Remove")
+                                }
+                            }
+                        }
+                        
+                        Text(
+                            text = if (isRussian()) 
+                                "Для корпоративных серверов с самоподписанным сертификатом" 
+                            else "For corporate servers with self-signed certificate",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                }
+            }
+            
             // Сообщения
             errorMessage?.let {
                 Card(
@@ -839,7 +985,8 @@ fun SetupScreen(
                                             outgoingServer = outgoingServer,
                                             outgoingPort = outgoingPort.toIntOrNull() ?: 587,
                                             useSSL = useSSL,
-                                            syncMode = syncMode.name
+                                            syncMode = syncMode.name,
+                                            certificatePath = certificatePath
                                         ),
                                         password = if (password.isNotBlank()) password else null
                                     )
@@ -856,7 +1003,8 @@ fun SetupScreen(
                                     incomingPort.toIntOrNull() ?: 443,
                                     outgoingServer,
                                     outgoingPort.toIntOrNull() ?: 587,
-                                    useSSL, syncMode.name
+                                    useSSL, syncMode.name,
+                                    certificatePath
                                 )
                                 return@launch // Выходим, навигация произойдёт
                             } else {
@@ -880,7 +1028,8 @@ fun SetupScreen(
                                     outgoingServer = outgoingServer,
                                     outgoingPort = outgoingPort.toIntOrNull() ?: 587,
                                     useSSL = useSSL,
-                                    syncMode = syncMode
+                                    syncMode = syncMode,
+                                    certificatePath = certificatePath
                                 )
                             }
                             

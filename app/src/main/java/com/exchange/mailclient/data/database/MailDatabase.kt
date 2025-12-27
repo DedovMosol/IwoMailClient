@@ -5,7 +5,7 @@ import androidx.room.*
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -87,7 +87,9 @@ data class AccountEntity(
     // Интервал синхронизации в минутах (для SCHEDULED режима)
     val syncIntervalMinutes: Int = 15,
     // Подпись для писем
-    val signature: String = ""
+    val signature: String = "",
+    // Путь к файлу сертификата сервера (для самоподписанных)
+    val certificatePath: String? = null
 )
 
 @Entity(

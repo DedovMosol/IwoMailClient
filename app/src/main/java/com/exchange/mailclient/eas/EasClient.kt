@@ -28,7 +28,8 @@ class EasClient(
     private val port: Int = 443,
     private val useHttps: Boolean = true,
     private val deviceIdSuffix: String = "", // Для стабильного deviceId и реального email
-    initialPolicyKey: String? = null // PolicyKey из предыдущей сессии
+    initialPolicyKey: String? = null, // PolicyKey из предыдущей сессии
+    private val certificatePath: String? = null // Путь к файлу сертификата сервера
 ) {
     private val wbxmlParser = WbxmlParser()
     private val client: OkHttpClient
@@ -149,6 +150,18 @@ class EasClient(
                 // Принимаем все сертификаты (самоподписанные)
                 builder.hostnameVerifier { _, _ -> true }
                 builder.sslSocketFactory(createTrustAllSslSocketFactory(), createTrustAllManager())
+            } else if (certificatePath != null) {
+                // Используем указанный сертификат из файла
+                val certTrustManager = createCertificateTrustManager(certificatePath)
+                if (certTrustManager != null) {
+                    val sslContext = try {
+                        SSLContext.getInstance("TLS", "Conscrypt")
+                    } catch (_: Exception) {
+                        SSLContext.getInstance("TLS")
+                    }
+                    sslContext.init(null, arrayOf(certTrustManager), SecureRandom())
+                    builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), certTrustManager)
+                }
             } else {
                 // Используем системный TrustManager который учитывает:
                 // 1. Системные сертификаты
@@ -344,6 +357,74 @@ class EasClient(
                 userTm?.acceptedIssuers?.let { issuers.addAll(it) }
                 return issuers.toTypedArray()
             }
+        }
+    }
+    
+    /**
+     * Создаёт TrustManager который доверяет сертификату из указанного файла
+     * Поддерживает форматы: PEM (.crt, .pem), DER (.cer, .der)
+     */
+    private fun createCertificateTrustManager(certPath: String): X509TrustManager? {
+        return try {
+            val certFile = java.io.File(certPath)
+            if (!certFile.exists()) return null
+            
+            // Загружаем сертификат
+            val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+            val certificate = certFile.inputStream().use { inputStream ->
+                certFactory.generateCertificate(inputStream) as X509Certificate
+            }
+            
+            // Создаём KeyStore с этим сертификатом
+            val keyStore = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType())
+            keyStore.load(null, null)
+            keyStore.setCertificateEntry("server_cert", certificate)
+            
+            // Создаём TrustManager на основе этого KeyStore
+            val tmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
+            )
+            tmf.init(keyStore)
+            
+            // Получаем системный TrustManager для fallback
+            val systemTmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
+            )
+            systemTmf.init(null as java.security.KeyStore?)
+            val systemTm = systemTmf.trustManagers.filterIsInstance<X509TrustManager>().firstOrNull()
+            val certTm = tmf.trustManagers.filterIsInstance<X509TrustManager>().firstOrNull()
+            
+            // Возвращаем комбинированный TrustManager
+            object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+                    systemTm?.checkClientTrusted(chain, authType)
+                }
+                
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+                    // Сначала пробуем указанный сертификат
+                    try {
+                        certTm?.checkServerTrusted(chain, authType)
+                        return
+                    } catch (_: Exception) {}
+                    
+                    // Потом пробуем системные
+                    try {
+                        systemTm?.checkServerTrusted(chain, authType)
+                        return
+                    } catch (_: Exception) {}
+                    
+                    throw java.security.cert.CertificateException("Certificate not trusted")
+                }
+                
+                override fun getAcceptedIssuers(): Array<X509Certificate> {
+                    val issuers = mutableListOf<X509Certificate>()
+                    certTm?.acceptedIssuers?.let { issuers.addAll(it) }
+                    systemTm?.acceptedIssuers?.let { issuers.addAll(it) }
+                    return issuers.toTypedArray()
+                }
+            }
+        } catch (e: Exception) {
+            null
         }
     }
     

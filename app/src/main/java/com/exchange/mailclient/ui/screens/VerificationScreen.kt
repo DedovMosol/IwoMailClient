@@ -48,6 +48,7 @@ fun VerificationScreen(
     outgoingPort: Int,
     useSSL: Boolean,
     syncMode: SyncMode,
+    certificatePath: String? = null,
     onSuccess: () -> Unit,
     onError: (String, String?) -> Unit // error, savedData
 ) {
@@ -66,7 +67,8 @@ fun VerificationScreen(
     
     // Функция для создания savedData (сохраняем всё кроме domain, username, password)
     fun createSavedData(): String {
-        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}"
+        val certPath = certificatePath ?: ""
+        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath"
     }
     
     var statusText by remember { mutableStateOf(verifyingAccountText) }
@@ -98,6 +100,7 @@ fun VerificationScreen(
                 acceptAllCerts = acceptAllCerts,
                 port = incomingPort,
                 useSSL = useSSL,
+                certificatePath = certificatePath,
                 verifyingAccountText = verifyingAccountText,
                 verifyingEmailText = verifyingEmailText,
                 sendingTestEmailText = sendingTestEmailText,
@@ -123,7 +126,8 @@ fun VerificationScreen(
                         outgoingServer = outgoingServer,
                         outgoingPort = outgoingPort,
                         useSSL = useSSL,
-                        syncMode = syncMode
+                        syncMode = syncMode,
+                        certificatePath = certificatePath
                     )
                     
                     when (addResult) {
@@ -296,6 +300,7 @@ private suspend fun verifyEmail(
     acceptAllCerts: Boolean,
     port: Int,
     useSSL: Boolean,
+    certificatePath: String? = null,
     verifyingAccountText: String,
     verifyingEmailText: String,
     sendingTestEmailText: String,
@@ -311,7 +316,8 @@ private suspend fun verifyEmail(
         acceptAllCerts = acceptAllCerts,
         port = port,
         useHttps = useSSL,
-        deviceIdSuffix = email
+        deviceIdSuffix = email,
+        certificatePath = certificatePath
     )
     
     // Шаг 1: Получаем список папок

@@ -166,6 +166,7 @@ fun SearchScreen(
     
     fun deleteSelected() {
         scope.launch {
+            com.exchange.mailclient.util.SoundPlayer.playDeleteSound(context)
             val result = withContext(Dispatchers.IO) {
                 mailRepo.moveToTrash(selectedIds.toList())
             }

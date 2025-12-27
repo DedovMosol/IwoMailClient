@@ -40,6 +40,9 @@ class SettingsRepository private constructor(private val context: Context) {
         val LAST_NOTIFICATION_CHECK_TIME = longPreferencesKey("last_notification_check_time")
         val COLOR_THEME = stringPreferencesKey("color_theme")
         val DAILY_THEMES_ENABLED = booleanPreferencesKey("daily_themes_enabled")
+        val ANIMATIONS_ENABLED = booleanPreferencesKey("animations_enabled")
+        val AUTO_EMPTY_TRASH_DAYS = intPreferencesKey("auto_empty_trash_days")
+        val LAST_TRASH_CLEANUP_TIME = longPreferencesKey("last_trash_cleanup_time")
         val THEME_MONDAY = stringPreferencesKey("theme_monday")
         val THEME_TUESDAY = stringPreferencesKey("theme_tuesday")
         val THEME_WEDNESDAY = stringPreferencesKey("theme_wednesday")
@@ -228,6 +231,72 @@ class SettingsRepository private constructor(private val context: Context) {
         }
     }
     
+    // Анимации интерфейса
+    val animationsEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[Keys.ANIMATIONS_ENABLED] ?: true
+    }
+    
+    suspend fun setAnimationsEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.ANIMATIONS_ENABLED] = enabled
+        }
+    }
+    
+    fun getAnimationsEnabledSync(): Boolean {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.ANIMATIONS_ENABLED] ?: true
+        }
+    }
+    
+    // Автоочистка корзины (0 = выключено, иначе количество дней)
+    enum class AutoEmptyTrashDays(val days: Int, val displayNameRu: String, val displayNameEn: String) {
+        DISABLED(0, "Выключено", "Disabled"),
+        DAYS_3(3, "3 дня", "3 days"),
+        DAYS_5(5, "5 дней", "5 days"),
+        DAYS_7(7, "7 дней", "7 days"),
+        DAYS_14(14, "14 дней", "14 days"),
+        DAYS_30(30, "30 дней", "30 days");
+        
+        fun getDisplayName(isRussian: Boolean): String = if (isRussian) displayNameRu else displayNameEn
+        
+        companion object {
+            fun fromDays(days: Int): AutoEmptyTrashDays = entries.find { it.days == days } ?: DAYS_30
+        }
+    }
+    
+    val autoEmptyTrashDays: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[Keys.AUTO_EMPTY_TRASH_DAYS] ?: 30 // По умолчанию 30 дней
+    }
+    
+    suspend fun setAutoEmptyTrashDays(days: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.AUTO_EMPTY_TRASH_DAYS] = days
+        }
+    }
+    
+    fun getAutoEmptyTrashDaysSync(): Int {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.AUTO_EMPTY_TRASH_DAYS] ?: 30
+        }
+    }
+    
+    // Время последней очистки корзины
+    val lastTrashCleanupTime: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[Keys.LAST_TRASH_CLEANUP_TIME] ?: 0L
+    }
+    
+    suspend fun setLastTrashCleanupTime(timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.LAST_TRASH_CLEANUP_TIME] = timeMillis
+        }
+    }
+    
+    fun getLastTrashCleanupTimeSync(): Long {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.LAST_TRASH_CLEANUP_TIME] ?: 0L
+        }
+    }
+
     // Получить тему для конкретного дня (1=Воскресенье, 2=Понедельник, ..., 7=Суббота)
     fun getDayTheme(dayOfWeek: Int): Flow<String> = context.dataStore.data.map { prefs ->
         val key = getDayKey(dayOfWeek)

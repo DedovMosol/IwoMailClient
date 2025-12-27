@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +22,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextIndent
@@ -140,6 +142,9 @@ class MainActivity : ComponentActivity() {
                 AppColorTheme.fromCode(effectiveThemeCode)
             }
             
+            // Анимации
+            val animationsEnabled by settingsRepo.animationsEnabled.collectAsState(initial = true)
+            
             val currentLanguage = remember(languageCode) {
                 AppLanguage.entries.find { it.code == languageCode } ?: AppLanguage.RUSSIAN
             }
@@ -147,15 +152,29 @@ class MainActivity : ComponentActivity() {
             val shouldOpenInboxUnread by openInboxUnread
             val emailIdToOpen by openEmailId
             
-            CompositionLocalProvider(LocalLanguage provides currentLanguage) {
-                ExchangeMailTheme(fontScale = fontSize.scale, colorTheme = colorTheme) {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        color = MaterialTheme.colorScheme.background
-                    ) {
-                        AppNavigation(
-                            openInboxUnread = shouldOpenInboxUnread,
-                            openEmailId = emailIdToOpen
+            // Контроллер отложенного удаления
+            val deletionController = remember { com.exchange.mailclient.ui.components.DeletionController() }
+            
+            CompositionLocalProvider(
+                LocalLanguage provides currentLanguage,
+                com.exchange.mailclient.ui.components.LocalDeletionController provides deletionController
+            ) {
+                ExchangeMailTheme(fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Surface(
+                            modifier = Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.background
+                        ) {
+                            AppNavigation(
+                                openInboxUnread = shouldOpenInboxUnread,
+                                openEmailId = emailIdToOpen
+                            )
+                        }
+                        
+                        // Плашка прогресса удаления поверх всего
+                        com.exchange.mailclient.ui.components.DeletionProgressBar(
+                            controller = deletionController,
+                            modifier = Modifier.align(Alignment.TopCenter)
                         )
                     }
                     

@@ -78,6 +78,15 @@ object Strings {
         "Все письма в корзине будут удалены безвозвратно. Продолжить?" 
         else "All emails in trash will be permanently deleted. Continue?"
     val trashEmptied: String @Composable get() = if (isRussian()) "Корзина очищена" else "Trash emptied"
+    val deletionCancelled: String @Composable get() = if (isRussian()) "Удаление отменено" else "Deletion cancelled"
+    @Composable
+    fun deletingEmails(count: Int): String = if (isRussian()) "Удаление $count писем..." else "Deleting $count emails..."
+    
+    // Автоочистка корзины
+    val autoEmptyTrash: String @Composable get() = if (isRussian()) "Автоочистка корзины" else "Auto-empty trash"
+    val autoEmptyTrashDesc: String @Composable get() = if (isRussian()) 
+        "Автоматически удалять старые письма из корзины" 
+        else "Automatically delete old emails from trash"
     
     // Настройки
     val settings: String @Composable get() = if (isRussian()) "Настройки" else "Settings"
@@ -91,6 +100,28 @@ object Strings {
     val appearance: String @Composable get() = if (isRussian()) "Внешний вид" else "Appearance"
     val syncSettings: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
     val sync: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
+    
+    // Цветовые темы
+    val colorTheme: String @Composable get() = if (isRussian()) "Цветовая тема" else "Color theme"
+    val selectColorTheme: String @Composable get() = if (isRussian()) "Выберите тему" else "Select theme"
+    val dailyThemes: String @Composable get() = if (isRussian()) "Темы по дням недели" else "Daily themes"
+    val dailyThemesDesc: String @Composable get() = if (isRussian()) "Разные цвета для каждого дня" else "Different colors for each day"
+    val dailyThemesActive: String @Composable get() = if (isRussian()) "Активны темы по дням" else "Daily themes active"
+    val configureDailyThemes: String @Composable get() = if (isRussian()) "Настроить темы по дням" else "Configure daily themes"
+    
+    // Анимации
+    val animations: String @Composable get() = if (isRussian()) "Анимации" else "Animations"
+    val animationsDesc: String @Composable get() = if (isRussian()) "Анимированные элементы интерфейса" else "Animated UI elements"
+    
+    // Дни недели
+    val monday: String @Composable get() = if (isRussian()) "Понедельник" else "Monday"
+    val tuesday: String @Composable get() = if (isRussian()) "Вторник" else "Tuesday"
+    val wednesday: String @Composable get() = if (isRussian()) "Среда" else "Wednesday"
+    val thursday: String @Composable get() = if (isRussian()) "Четверг" else "Thursday"
+    val friday: String @Composable get() = if (isRussian()) "Пятница" else "Friday"
+    val saturday: String @Composable get() = if (isRussian()) "Суббота" else "Saturday"
+    val sunday: String @Composable get() = if (isRussian()) "Воскресенье" else "Sunday"
+    
     val wifiOnly: String @Composable get() = if (isRussian()) "Только по Wi-Fi" else "Wi-Fi only"
     val wifiOnlyDesc: String @Composable get() = if (isRussian()) 
         "Синхронизация только через Wi-Fi" 
@@ -269,6 +300,10 @@ object Strings {
         "IMAP и POP3 в бета-режиме."
         else "IMAP and POP3 are in beta."
     
+    // Ссылки
+    val viewChangelog: String @Composable get() = if (isRussian()) "Ознакомиться с развитием программы" else "View changelog"
+    val privacyPolicy: String @Composable get() = if (isRussian()) "Политика конфиденциальности" else "Privacy Policy"
+    
     // Папки не найдены
     val noFoldersFound: String @Composable get() = if (isRussian()) "Папки не найдены" else "No folders found"
     val tapToSync: String @Composable get() = if (isRussian()) "Нажмите для синхронизации" else "Tap to sync"
@@ -421,9 +456,7 @@ object Strings {
     val readReceiptRequestText: String @Composable get() = if (isRussian()) "Отправитель запросил уведомление о прочтении этого письма. Отправить?" else "The sender requested a read receipt for this message. Send it?"
     val readReceiptSent: String @Composable get() = if (isRussian()) "Отчёт о прочтении отправлен" else "Read receipt sent"
     
-    // Цветовые темы
-    val colorTheme: String @Composable get() = if (isRussian()) "Цветовая тема" else "Color theme"
-    val selectColorTheme: String @Composable get() = if (isRussian()) "Выберите цветовую тему" else "Select color theme"
+    // Названия цветовых тем
     val themePurple: String @Composable get() = if (isRussian()) "Фиолетовая" else "Purple"
     val themeBlue: String @Composable get() = if (isRussian()) "Синяя" else "Blue"
     val themeRed: String @Composable get() = if (isRussian()) "Красная" else "Red"
@@ -431,19 +464,6 @@ object Strings {
     val themeOrange: String @Composable get() = if (isRussian()) "Оранжевая" else "Orange"
     val themeGreen: String @Composable get() = if (isRussian()) "Зелёная" else "Green"
     val themePink: String @Composable get() = if (isRussian()) "Розовая" else "Pink"
-    
-    // Темы по дням недели
-    val dailyThemes: String @Composable get() = if (isRussian()) "Темы по дням недели" else "Daily themes"
-    val dailyThemesDesc: String @Composable get() = if (isRussian()) "Разные цвета для каждого дня" else "Different colors for each day"
-    val dailyThemesActive: String @Composable get() = if (isRussian()) "Активны темы по дням" else "Daily themes active"
-    val configureDailyThemes: String @Composable get() = if (isRussian()) "Настроить темы по дням" else "Configure daily themes"
-    val monday: String @Composable get() = if (isRussian()) "Понедельник" else "Monday"
-    val tuesday: String @Composable get() = if (isRussian()) "Вторник" else "Tuesday"
-    val wednesday: String @Composable get() = if (isRussian()) "Среда" else "Wednesday"
-    val thursday: String @Composable get() = if (isRussian()) "Четверг" else "Thursday"
-    val friday: String @Composable get() = if (isRussian()) "Пятница" else "Friday"
-    val saturday: String @Composable get() = if (isRussian()) "Суббота" else "Saturday"
-    val sunday: String @Composable get() = if (isRussian()) "Воскресенье" else "Sunday"
 }
 
 /**

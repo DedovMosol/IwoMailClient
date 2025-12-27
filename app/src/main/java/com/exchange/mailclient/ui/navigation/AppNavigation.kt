@@ -96,9 +96,11 @@ sealed class Screen(val route: String) {
         fun createRoute(
             email: String, displayName: String, serverUrl: String, username: String,
             password: String, domain: String, acceptAllCerts: Boolean, color: Int,
-            incomingPort: Int, outgoingServer: String, outgoingPort: Int, useSSL: Boolean, syncMode: String
+            incomingPort: Int, outgoingServer: String, outgoingPort: Int, useSSL: Boolean, syncMode: String,
+            certificatePath: String? = null
         ): String {
-            val data = "$email|$displayName|$serverUrl|$username|$password|$domain|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|$syncMode"
+            val certPathEncoded = certificatePath ?: ""
+            val data = "$email|$displayName|$serverUrl|$username|$password|$domain|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|$syncMode|$certPathEncoded"
             val encoded = android.util.Base64.encodeToString(
                 data.toByteArray(Charsets.UTF_8),
                 android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP
@@ -383,11 +385,11 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                         }
                     }
                 },
-                onNavigateToVerification = { email, displayName, serverUrl, username, password, domain, acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode ->
+                onNavigateToVerification = { email, displayName, serverUrl, username, password, domain, acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode, certificatePath ->
                     navController.navigate(
                         Screen.Verification.createRoute(
                             email, displayName, serverUrl, username, password, domain,
-                            acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode
+                            acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode, certificatePath
                         )
                     )
                 },
@@ -407,6 +409,7 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
             } catch (e: Exception) { "" }
             val parts = decoded.split("|")
             if (parts.size >= 13) {
+                val certificatePath = if (parts.size >= 14 && parts[13].isNotBlank()) parts[13] else null
                 VerificationScreen(
                     email = parts[0],
                     displayName = parts[1],
@@ -421,6 +424,7 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                     outgoingPort = parts[10].toIntOrNull() ?: 587,
                     useSSL = parts[11].toBoolean(),
                     syncMode = try { com.exchange.mailclient.data.database.SyncMode.valueOf(parts[12]) } catch (e: Exception) { com.exchange.mailclient.data.database.SyncMode.PUSH },
+                    certificatePath = certificatePath,
                     onSuccess = {
                         navController.navigate(Screen.Main.route) {
                             popUpTo(0) { inclusive = true }

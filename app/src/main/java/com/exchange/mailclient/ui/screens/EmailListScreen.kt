@@ -195,7 +195,6 @@ fun EmailListScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showDeletePermanentlyDialog by remember { mutableStateOf(false) }
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
-    var isEmptyingTrash by remember { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<FolderEntity>>(emptyList()) }
 
     // Применяем фильтры
@@ -280,6 +279,7 @@ fun EmailListScreen(
     fun deleteSelected() {
         val isRussian = currentLanguage == AppLanguage.RUSSIAN
         scope.launch {
+            com.exchange.mailclient.util.SoundPlayer.playDeleteSound(context)
             // Перемещаем в корзину на сервере (не удаляем локально)
             val result = withContext(Dispatchers.IO) {
                 mailRepo.moveToTrash(selectedIds.toList())
@@ -314,6 +314,7 @@ fun EmailListScreen(
     fun deleteSelectedPermanently() {
         val isRussian = currentLanguage == AppLanguage.RUSSIAN
         scope.launch {
+            com.exchange.mailclient.util.SoundPlayer.playDeleteSound(context)
             val result = withContext(Dispatchers.IO) {
                 mailRepo.deleteEmailsPermanently(selectedIds.toList())
             }
@@ -419,22 +420,31 @@ fun EmailListScreen(
     
     // Диалог очистки корзины
     if (showEmptyTrashDialog) {
+        val deletionController = com.exchange.mailclient.ui.components.LocalDeletionController.current
+        val deletingMessage = Strings.deletingEmails(displayEmails.size)
         val trashEmptiedMsg = Strings.trashEmptied
+        
         com.exchange.mailclient.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { if (!isEmptyingTrash) showEmptyTrashDialog = false },
+            onDismissRequest = { showEmptyTrashDialog = false },
             icon = { Icon(Icons.Default.DeleteForever, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.emptyTrash) },
             text = { Text(Strings.emptyTrashConfirm) },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        scope.launch {
-                            isEmptyingTrash = true
-                            // Удаляем все письма в корзине
-                            val allEmailIds = displayEmails.map { it.id }
-                            if (allEmailIds.isNotEmpty()) {
+                        showEmptyTrashDialog = false
+                        com.exchange.mailclient.util.SoundPlayer.playDeleteSound(context)
+                        
+                        val allEmailIds = displayEmails.map { it.id }
+                        if (allEmailIds.isNotEmpty()) {
+                            deletionController.startDeletion(
+                                emailIds = allEmailIds,
+                                message = deletingMessage,
+                                scope = scope
+                            ) { emailIds ->
+                                // Этот callback вызывается когда прогресс завершён
                                 val result = withContext(Dispatchers.IO) {
-                                    mailRepo.deleteEmailsPermanently(allEmailIds)
+                                    mailRepo.deleteEmailsPermanently(emailIds)
                                 }
                                 when (result) {
                                     is EasResult.Success -> {
@@ -450,24 +460,14 @@ fun EmailListScreen(
                                     }
                                 }
                             }
-                            isEmptyingTrash = false
-                            showEmptyTrashDialog = false
                         }
-                    },
-                    enabled = !isEmptyingTrash
-                ) {
-                    if (isEmptyingTrash) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(Strings.delete, color = MaterialTheme.colorScheme.error)
                     }
+                ) {
+                    Text(Strings.delete, color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { showEmptyTrashDialog = false },
-                    enabled = !isEmptyingTrash
-                ) {
+                TextButton(onClick = { showEmptyTrashDialog = false }) {
                     Text(Strings.cancel)
                 }
             }
@@ -1052,40 +1052,49 @@ private fun EnvelopeRefreshIndicator(
     modifier: Modifier = Modifier
 ) {
     val colorTheme = LocalColorTheme.current
+    val animationsEnabled = com.exchange.mailclient.ui.theme.LocalAnimationsEnabled.current
     
-    // Анимация вращения при загрузке
-    val infiniteTransition = rememberInfiniteTransition(label = "envelope")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
-    )
+    // Анимации (только если включены)
+    val rotation: Float
+    val scale: Float
+    val wobble: Float
     
-    // Анимация пульсации
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 0.9f,
-        targetValue = 1.1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scale"
-    )
-    
-    // Анимация покачивания при тянутии
-    val wobble by infiniteTransition.animateFloat(
-        initialValue = -15f,
-        targetValue = 15f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(300, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "wobble"
-    )
+    if (animationsEnabled) {
+        val infiniteTransition = rememberInfiniteTransition(label = "envelope")
+        rotation = infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "rotation"
+        ).value
+        
+        scale = infiniteTransition.animateFloat(
+            initialValue = 0.9f,
+            targetValue = 1.1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(500, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "scale"
+        ).value
+        
+        wobble = infiniteTransition.animateFloat(
+            initialValue = -15f,
+            targetValue = 15f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(300, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "wobble"
+        ).value
+    } else {
+        rotation = 0f
+        scale = 1f
+        wobble = 0f
+    }
     
     // Прогресс вытягивания (0..1)
     val progress = if (refreshing) 1f else state.progress.coerceIn(0f, 1f)

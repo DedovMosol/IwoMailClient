@@ -52,13 +52,11 @@ class SyncWorker(
         if (accounts.isEmpty()) return Result.success()
         
         val lastNotificationCheck = settingsRepo.getLastNotificationCheckTimeSync()
-        val newEmails = mutableListOf<NewEmailInfo>()
+        // Собираем новые письма по аккаунтам
+        val newEmailsByAccount = mutableMapOf<Long, MutableList<NewEmailInfo>>()
         var hasErrors = false
-        var lastAccountEmail = ""
         
         for (account in accounts) {
-            lastAccountEmail = account.email
-            
             when (mailRepo.syncFolders(account.id)) {
                 is EasResult.Error -> {
                     hasErrors = true
@@ -78,14 +76,18 @@ class SyncWorker(
             }
             
             val newEmailEntities = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
-            for (email in newEmailEntities) {
-                newEmails.add(NewEmailInfo(email.id, email.fromName, email.from, email.subject))
+            if (newEmailEntities.isNotEmpty()) {
+                val accountEmails = newEmailsByAccount.getOrPut(account.id) { mutableListOf() }
+                for (email in newEmailEntities) {
+                    accountEmails.add(NewEmailInfo(email.id, email.fromName, email.from, email.subject))
+                }
             }
         }
         
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
-        if (newEmails.isNotEmpty()) {
+        // Показываем уведомления для каждого аккаунта отдельно
+        if (newEmailsByAccount.isNotEmpty()) {
             val prefs = applicationContext.getSharedPreferences("push_service", Context.MODE_PRIVATE)
             val lastPushNotification = prefs.getLong("last_notification_time", 0)
             val timeSinceLastPush = System.currentTimeMillis() - lastPushNotification
@@ -93,12 +95,18 @@ class SyncWorker(
             if (timeSinceLastPush >= 30_000) {
                 val notificationsEnabled = settingsRepo.notificationsEnabled.first()
                 if (notificationsEnabled) {
-                    showNotification(newEmails, lastAccountEmail)
+                    for ((accountId, emails) in newEmailsByAccount) {
+                        val account = accounts.find { it.id == accountId } ?: continue
+                        showNotification(emails, account.email, accountId)
+                    }
                 }
             }
         }
         
         settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
+        
+        // Автоочистка корзины
+        performAutoTrashCleanup()
         
         // Перепланируем с учётом ночного режима (интервал может измениться)
         scheduleWithNightMode(applicationContext)
@@ -106,7 +114,7 @@ class SyncWorker(
         return if (hasErrors) Result.retry() else Result.success()
     }
     
-    private suspend fun showNotification(newEmails: List<NewEmailInfo>, accountEmail: String) {
+    private suspend fun showNotification(newEmails: List<NewEmailInfo>, accountEmail: String, accountId: Long) {
         val count = newEmails.size
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -133,8 +141,9 @@ class SyncWorker(
             }
         }
         
+        // Уникальный requestCode для каждого аккаунта
         val pendingIntent = PendingIntent.getActivity(
-            applicationContext, 0, intent, 
+            applicationContext, accountId.toInt(), intent, 
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
@@ -149,6 +158,8 @@ class SyncWorker(
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setSubText(accountEmail)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_EMAIL)
         
         if (count > 1) {
             val senders = newEmails.mapNotNull { email ->
@@ -163,12 +174,45 @@ class SyncWorker(
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(subject))
         }
         
-        // Фиксированный ID — новые уведомления перезаписывают старые
-        val notificationId = 3001 // Уникальный ID для SyncWorker
+        // Уникальный ID для каждого аккаунта — уведомления не перезаписывают друг друга
+        val notificationId = 3000 + accountId.toInt()
         notificationManager.notify(notificationId, builder.build())
         
         // Воспроизводим звук получения письма
         com.exchange.mailclient.util.SoundPlayer.playReceiveSound(applicationContext)
+    }
+    
+    /**
+     * Автоматическая очистка корзины — удаляет письма старше N дней
+     */
+    private suspend fun performAutoTrashCleanup() {
+        val autoEmptyDays = settingsRepo.getAutoEmptyTrashDaysSync()
+        if (autoEmptyDays <= 0) return // Выключено
+        
+        // Проверяем раз в день
+        val lastCleanup = settingsRepo.getLastTrashCleanupTimeSync()
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        if (System.currentTimeMillis() - lastCleanup < oneDayMs) return
+        
+        val cutoffTime = System.currentTimeMillis() - (autoEmptyDays * oneDayMs)
+        
+        // Получаем все папки корзины (type = 4)
+        val accounts = database.accountDao().getAllAccountsList()
+        for (account in accounts) {
+            val trashFolders = database.folderDao().getFoldersByAccountList(account.id)
+                .filter { it.type == 4 } // Deleted Items
+            
+            for (trashFolder in trashFolders) {
+                // Получаем старые письма из корзины
+                val oldEmails = database.emailDao().getEmailsOlderThan(trashFolder.id, cutoffTime)
+                if (oldEmails.isNotEmpty()) {
+                    val emailIds = oldEmails.map { it.id }
+                    mailRepo.deleteEmailsPermanently(emailIds)
+                }
+            }
+        }
+        
+        settingsRepo.setLastTrashCleanupTime(System.currentTimeMillis())
     }
     
     companion object {

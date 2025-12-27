@@ -218,7 +218,8 @@ fun ComposeScreen(
                 password = password,
                 domain = account.domain,
                 acceptAllCerts = account.acceptAllCerts,
-                deviceIdSuffix = account.email
+                deviceIdSuffix = account.email,
+                certificatePath = account.certificatePath
             )
             
             val result = if (attachmentDataList.isEmpty()) {
@@ -365,6 +366,29 @@ fun ComposeScreen(
                             onDismissRequest = { showMenu = false }
                         ) {
                             DropdownMenuItem(
+                                text = { Text(Strings.requestReadReceipt) },
+                                onClick = { requestReadReceipt = !requestReadReceipt },
+                                leadingIcon = {
+                                    Checkbox(
+                                        checked = requestReadReceipt,
+                                        onCheckedChange = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(Strings.requestDeliveryReceipt) },
+                                onClick = { requestDeliveryReceipt = !requestDeliveryReceipt },
+                                leadingIcon = {
+                                    Checkbox(
+                                        checked = requestDeliveryReceipt,
+                                        onCheckedChange = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
                                 text = { Text(Strings.scheduleSend) },
                                 onClick = {
                                     showMenu = false
@@ -506,39 +530,6 @@ fun ComposeScreen(
                         ),
                         singleLine = true
                     )
-                }
-                HorizontalDivider()
-                
-                // Запрос отчёта о прочтении
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { requestReadReceipt = !requestReadReceipt }
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = requestReadReceipt,
-                        onCheckedChange = { requestReadReceipt = it }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(Strings.requestReadReceipt)
-                }
-                
-                // Запрос отчёта о доставке
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { requestDeliveryReceipt = !requestDeliveryReceipt }
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = requestDeliveryReceipt,
-                        onCheckedChange = { requestDeliveryReceipt = it }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(Strings.requestDeliveryReceipt)
                 }
                 HorizontalDivider()
             }
@@ -952,7 +943,8 @@ class ScheduledEmailWorker(
             password = password,
             domain = account.domain,
             acceptAllCerts = account.acceptAllCerts,
-            deviceIdSuffix = account.email
+            deviceIdSuffix = account.email,
+            certificatePath = account.certificatePath
         )
         
         return when (client.sendMail(to, subject, body, cc, requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt)) {

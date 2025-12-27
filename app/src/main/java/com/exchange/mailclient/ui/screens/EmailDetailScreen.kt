@@ -243,6 +243,7 @@ fun EmailDetailScreen(
                     onClick = {
                         scope.launch {
                             isDeleting = true
+                            com.exchange.mailclient.util.SoundPlayer.playDeleteSound(context)
                             val result = withContext(Dispatchers.IO) {
                                 mailRepo.moveToTrash(listOf(emailId))
                             }
@@ -607,7 +608,8 @@ fun EmailDetailScreen(
                                                 acceptAllCerts = account.acceptAllCerts,
                                                 port = account.incomingPort,
                                                 useHttps = account.useSSL,
-                                                deviceIdSuffix = account.email // ВАЖНО: тот же deviceId что и при синхронизации!
+                                                deviceIdSuffix = account.email, // ВАЖНО: тот же deviceId что и при синхронизации!
+                                                certificatePath = account.certificatePath
                                             )
                                             
                                             // Устанавливаем policyKey если есть

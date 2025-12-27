@@ -25,6 +25,13 @@ object SoundPlayer {
         playSound(context, R.raw.get_message)
     }
     
+    /**
+     * Воспроизводит звук удаления письма
+     */
+    fun playDeleteSound(context: Context) {
+        playSound(context, R.raw.delete_message)
+    }
+    
     private fun playSound(context: Context, resId: Int) {
         try {
             // Освобождаем предыдущий плеер
