@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.exchange.mailclient"
+    namespace = "com.iwo.mailclient"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.exchange.mailclient"
+        applicationId = "com.iwo.mailclient"
         minSdk = 26  // Android 8.0
         targetSdk = 35  // Android 15
         versionCode = 12

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ExchangeMailClient"
+rootProject.name = "IwoMailClient"
 include(":app")
