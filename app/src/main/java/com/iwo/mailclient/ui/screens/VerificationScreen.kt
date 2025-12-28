@@ -3,9 +3,8 @@ package com.iwo.mailclient.ui.screens
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -218,7 +217,7 @@ fun VerificationScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                Icons.Default.Warning,
+                                AppIcons.Warning,
                                 contentDescription = null,
                                 tint = androidx.compose.ui.graphics.Color.White,
                                 modifier = Modifier.size(28.dp)

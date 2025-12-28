@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.2.0 (29.12.2025)
+
+### New Features
+- **Rebranding** — app renamed to "iwo Mail Client"
+- **Background GAL contacts sync** — contacts from organization address book now automatically download in background and save to local database (like emails)
+- **Contacts sync interval setting** — in account settings choose: disabled, daily, weekly, biweekly, monthly (default — daily)
+- **Manual contacts sync** — "Sync" button on "Organization" tab in contacts
+- **Multiple signatures** — up to 5 signatures per account with selection when composing email
+- **Auto cleanup** — individual settings per account: trash, drafts, spam (never, 3, 7, 14, 30, 60 days)
+- **Contact picker for composing** — contact selection button next to To/Cc/Bcc fields with two tabs (Personal and Organization), search and multiple selection
+
+### Improvements
+- **Audio optimization** — MP3→OGG conversion (~45 KB savings)
+- **Sent folder** — now shows recipient with "To:" prefix instead of sender
+- **"Write more" button** — in Sent folder instead of "Reply" for continuing conversation
+- **HTML cleanup in quotes** — when replying and forwarding, HTML tags are removed, clean text is shown
+- **Exchange 2007 compatibility** — improved XML request format for EAS 12.x (BodyPreference with TruncationSize)
+- **GAL loading by letters** — for servers not supporting wildcard "*", contacts are loaded by alphabet letters (A-Z, А-Я)
+- **Account settings** — moved to separate screen (like interface personalization)
+- **Fixed delete dialog texts** — for drafts and trash shows "will be deleted permanently", for other folders "will be moved to deleted"
+- **Localized authorization errors** — 401, timeout and other errors now shown in selected language
+- Fixed avatar colors — now uses selected account color
+- Fixed drafts list refresh after deletion
+- Warning when deleting server certificate
+- Updated GitHub repository links
+- Recipient fields now support multiple lines (up to 3) for convenient display of multiple addresses
+
+### Bug Fixes
+- **Contacts in picker dialog** — now shows synced contacts from database
+- **Repeated GAL loading** — contacts no longer reload on every visit to "Organization" tab
+- **Fixed recipient duplication** — email view no longer duplicates name and email
+- "Waiting for emails" notification in "Scheduled" mode
+- Reply from Sent folder now fills "To" field with recipient, not sender
+
+---
+
 ## v1.1.2 (28.12.2025)
 
 ### New Features

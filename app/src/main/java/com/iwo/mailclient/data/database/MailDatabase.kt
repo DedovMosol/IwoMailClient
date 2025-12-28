@@ -4,8 +4,8 @@ import android.content.Context
 import androidx.room.*
 
 @Database(
-    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class],
-    version = 13,
+    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class],
+    version = 16,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -13,6 +13,7 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun emailDao(): EmailDao
     abstract fun folderDao(): FolderDao
+    abstract fun signatureDao(): SignatureDao
     abstract fun attachmentDao(): AttachmentDao
     abstract fun contactDao(): ContactDao
     abstract fun contactGroupDao(): ContactGroupDao
@@ -91,7 +92,15 @@ data class AccountEntity(
     // Подпись для писем
     val signature: String = "",
     // Путь к файлу сертификата сервера (для самоподписанных)
-    val certificatePath: String? = null
+    val certificatePath: String? = null,
+    // Автоочистка папок (0 = выключено, иначе количество дней)
+    val autoCleanupTrashDays: Int = 60,
+    val autoCleanupDraftsDays: Int = 60,
+    val autoCleanupSpamDays: Int = 60,
+    // Синхронизация контактов Exchange (0 = никогда, иначе интервал в днях)
+    val contactsSyncIntervalDays: Int = 1, // По умолчанию каждый день
+    // Ключ синхронизации для папки контактов
+    val contactsSyncKey: String = "0"
 )
 
 @Entity(

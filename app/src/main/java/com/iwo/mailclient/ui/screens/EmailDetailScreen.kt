@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -75,9 +75,10 @@ fun EmailDetailScreen(
         }
     }
     
-    // Определяем, находится ли письмо в папке Удалённые (тип 4)
+    // Определяем, находится ли письмо в папке Удалённые (тип 4) или Отправленные (тип 5)
     val currentFolder = folders.find { it.id == email?.folderId }
     val isInTrash = currentFolder?.type == 4
+    val isInSent = currentFolder?.type == 5
     
     // Кэш inline изображений: contentId -> base64 data URL
     var inlineImages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -188,7 +189,7 @@ fun EmailDetailScreen(
                 // Помечаем что пользователь отказался (чтобы не показывать снова)
                 scope.launch { mailRepo.markMdnSent(emailId) }
             },
-            icon = { Icon(Icons.Default.MarkEmailRead, null, tint = MaterialTheme.colorScheme.primary) },
+            icon = { Icon(AppIcons.MarkEmailRead, null, tint = MaterialTheme.colorScheme.primary) },
             title = { Text(Strings.readReceiptRequest) },
             text = { Text(Strings.readReceiptRequestText) },
             confirmButton = {
@@ -235,7 +236,7 @@ fun EmailDetailScreen(
     if (showDeleteDialog) {
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            icon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.deleteEmail) },
             text = { Text(Strings.emailWillBeMovedToTrash) },
             confirmButton = {
@@ -312,7 +313,7 @@ fun EmailDetailScreen(
                             ListItem(
                                 headlineContent = { Text(folder.displayName) },
                                 leadingContent = { 
-                                    Icon(Icons.Default.Folder, null) 
+                                    Icon(AppIcons.Folder, null) 
                                 },
                                 modifier = Modifier.clickable {
                                     scope.launch {
@@ -354,7 +355,7 @@ fun EmailDetailScreen(
                 title = { },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
                 actions = {
@@ -386,21 +387,21 @@ fun EmailDetailScreen(
                             if (isRestoring) {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
                             } else {
-                                Icon(Icons.Default.Restore, Strings.restore, tint = Color.White)
+                                Icon(AppIcons.Restore, Strings.restore, tint = Color.White)
                             }
                         }
                     } else {
                         // Не в корзине - показываем кнопку Переместить
                         IconButton(onClick = { showMoveDialog = true }) {
-                            Icon(Icons.Default.DriveFileMove, Strings.moveTo, tint = Color.White)
+                            Icon(AppIcons.DriveFileMove, Strings.moveTo, tint = Color.White)
                         }
                     }
                     IconButton(onClick = { showDeleteDialog = true }) {
-                        Icon(Icons.Default.Delete, Strings.delete, tint = Color.White)
+                        Icon(AppIcons.Delete, Strings.delete, tint = Color.White)
                     }
                     Box {
                         IconButton(onClick = { showMoreMenu = true }) {
-                            Icon(Icons.Default.MoreVert, Strings.more, tint = Color.White)
+                            Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
                         }
                         DropdownMenu(
                             expanded = showMoreMenu,
@@ -412,7 +413,7 @@ fun EmailDetailScreen(
                                     showMoreMenu = false
                                     onForwardClick()
                                 },
-                                leadingIcon = { Icon(Icons.Default.Forward, null) }
+                                leadingIcon = { Icon(AppIcons.Forward, null) }
                             )
                             DropdownMenuItem(
                                 text = { Text(Strings.markUnread) },
@@ -420,7 +421,7 @@ fun EmailDetailScreen(
                                     showMoreMenu = false
                                     scope.launch { mailRepo.markAsRead(emailId, false) }
                                 },
-                                leadingIcon = { Icon(Icons.Default.MarkEmailUnread, null) }
+                                leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
                             )
                             // Избранное только если НЕ в корзине
                             if (!isInTrash) {
@@ -432,7 +433,7 @@ fun EmailDetailScreen(
                                     },
                                     leadingIcon = { 
                                         Icon(
-                                            if (email?.flagged == true) Icons.Default.Star else Icons.Default.StarOutline, 
+                                            if (email?.flagged == true) AppIcons.Star else AppIcons.StarOutline, 
                                             null
                                         ) 
                                     }
@@ -447,7 +448,7 @@ fun EmailDetailScreen(
                                         showMoreMenu = false
                                         showMoveDialog = true
                                     },
-                                    leadingIcon = { Icon(Icons.Default.DriveFileMove, null) }
+                                    leadingIcon = { Icon(AppIcons.DriveFileMove, null) }
                                 )
                             }
                         }
@@ -469,7 +470,11 @@ fun EmailDetailScreen(
                 onClick = onReplyClick,
                 containerColor = LocalColorTheme.current.gradientStart
             ) {
-                Icon(Icons.Default.Reply, Strings.reply, tint = Color.White)
+                Icon(
+                    if (isInSent) AppIcons.Edit else AppIcons.Reply, 
+                    if (isInSent) Strings.writeMore else Strings.reply, 
+                    tint = Color.White
+                )
             }
         }
     ) { padding ->
@@ -548,7 +553,7 @@ fun EmailDetailScreen(
                             scope.launch { mailRepo.toggleFlag(emailId) }
                         }) {
                             Icon(
-                                imageVector = if (email!!.flagged) Icons.Default.Star else Icons.Default.StarOutline,
+                                imageVector = if (email!!.flagged) AppIcons.Star else AppIcons.StarOutline,
                                 contentDescription = Strings.favorites,
                                 tint = if (email!!.flagged) MaterialTheme.colorScheme.primary 
                                        else MaterialTheme.colorScheme.onSurfaceVariant
@@ -569,12 +574,12 @@ fun EmailDetailScreen(
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                text = "${Strings.to}: ${email!!.to}",
+                                text = "${Strings.to}: ${formatRecipients(email!!.to)}",
                                 style = MaterialTheme.typography.bodySmall
                             )
                             if (email!!.cc.isNotEmpty()) {
                                 Text(
-                                    text = "${Strings.cc}: ${email!!.cc}",
+                                    text = "${Strings.cc}: ${formatRecipients(email!!.cc)}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -878,14 +883,14 @@ private fun AttachmentsSection(
                         }
                         attachment.downloaded -> {
                             Icon(
-                                Icons.Default.CheckCircle,
+                                AppIcons.CheckCircle,
                                 "Скачано",
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
                         else -> {
                             Icon(
-                                Icons.Default.Download,
+                                AppIcons.Download,
                                 "Скачать",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -979,5 +984,29 @@ private fun extractEmailAddress(email: String): String {
     }
     
     return ""
+}
+
+/**
+ * Форматирует строку получателей для отображения
+ * Убирает дублирование имени и email, показывает только имя или email
+ */
+private fun formatRecipients(recipients: String): String {
+    if (recipients.isBlank()) return ""
+    
+    // Разбиваем по запятой (может быть несколько получателей)
+    return recipients.split(",").joinToString(", ") { recipient ->
+        val trimmed = recipient.trim()
+        val name = extractDisplayName(trimmed)
+        val email = extractEmailAddress(trimmed)
+        
+        // Если имя совпадает с email (или его частью) - показываем только email
+        if (name.isBlank() || name.equals(email, ignoreCase = true) || 
+            name.equals(email.substringBefore("@"), ignoreCase = true)) {
+            email.ifEmpty { trimmed }
+        } else {
+            // Показываем имя, а email в скобках только если отличается
+            if (email.isNotEmpty()) "$name <$email>" else name
+        }
+    }
 }
 

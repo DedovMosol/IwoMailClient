@@ -17,8 +17,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
@@ -180,6 +180,7 @@ fun EmailListScreen(
     val isSpamFolder = folder?.type == 11 // type 11 = Spam/Junk
     val isTrashFolder = folder?.type == 4 // type 4 = Deleted Items
     val isDraftsFolder = folder?.type == 3 // type 3 = Drafts
+    val isSentFolder = folder?.type == 5 // type 5 = Sent Items
     
     // Для папки Черновики загружаем письма напрямую из базы (не через Flow)
     var draftsEmails by remember { mutableStateOf<List<EmailEntity>>(emptyList()) }
@@ -406,7 +407,7 @@ fun EmailListScreen(
         val count = selectedIds.size
         com.iwo.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            icon = { Icon(Icons.Default.Delete, null) },
+            icon = { Icon(AppIcons.Delete, null) },
             title = { Text(if (count == 1) Strings.deleteEmail else Strings.deleteEmails) },
             text = { 
                 Text(
@@ -436,7 +437,7 @@ fun EmailListScreen(
         val count = selectedIds.size
         com.iwo.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeletePermanentlyDialog = false },
-            icon = { Icon(Icons.Default.DeleteForever, null) },
+            icon = { Icon(AppIcons.DeleteForever, null) },
             title = { Text(Strings.deleteForever) },
             text = { 
                 Text(
@@ -469,7 +470,7 @@ fun EmailListScreen(
         
         com.iwo.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { showEmptyTrashDialog = false },
-            icon = { Icon(Icons.Default.DeleteForever, null) },
+            icon = { Icon(AppIcons.DeleteForever, null) },
             title = { Text(Strings.emptyTrash) },
             text = { Text(Strings.emptyTrashConfirm) },
             confirmButton = {
@@ -628,7 +629,14 @@ fun EmailListScreen(
                             selectedIds = emptySet()
                         }
                     },
-                    onDelete = { showDeleteDialog = true },
+                    onDelete = { 
+                        // Для черновиков и удалённых - окончательное удаление
+                        if (isDraftsFolder || isTrashFolder) {
+                            showDeletePermanentlyDialog = true
+                        } else {
+                            showDeleteDialog = true
+                        }
+                    },
                     onMarkRead = { markSelectedAsRead(true) },
                     onStar = { starSelected() },
                     onMarkUnread = { markSelectedAsRead(false) },
@@ -667,7 +675,7 @@ fun EmailListScreen(
                     },
                     navigationIcon = {
                         IconButton(onClick = onBackClick) {
-                            Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                            Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                         }
                     },
                     actions = {
@@ -677,11 +685,11 @@ fun EmailListScreen(
                                 onClick = { showEmptyTrashDialog = true },
                                 enabled = displayEmails.isNotEmpty()
                             ) {
-                                Icon(Icons.Default.DeleteForever, Strings.emptyTrash, tint = Color.White)
+                                Icon(AppIcons.DeleteForever, Strings.emptyTrash, tint = Color.White)
                             }
                         } else {
                             IconButton(onClick = onSearchClick) {
-                                Icon(Icons.Default.Search, Strings.search, tint = Color.White)
+                                Icon(AppIcons.Search, Strings.search, tint = Color.White)
                             }
                         }
                         if (!isFavorites) {
@@ -689,7 +697,7 @@ fun EmailListScreen(
                                 if (isRefreshing) {
                                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
                                 } else {
-                                    Icon(Icons.Default.Refresh, Strings.refresh, tint = Color.White)
+                                    Icon(AppIcons.Refresh, Strings.refresh, tint = Color.White)
                                 }
                             }
                         }
@@ -712,7 +720,7 @@ fun EmailListScreen(
                     onClick = onComposeClick,
                     containerColor = LocalColorTheme.current.gradientStart
                 ) {
-                    Icon(Icons.Default.Edit, Strings.compose, tint = Color.White)
+                    Icon(AppIcons.Edit, Strings.compose, tint = Color.White)
                 }
             }
         }
@@ -746,6 +754,7 @@ fun EmailListScreen(
                 isFavorites = isFavorites,
                 isTrashOrSpam = isTrashFolder || isSpamFolder,
                 isDrafts = isDraftsFolder,
+                isSent = isSentFolder,
                 onEmailClick = { email ->
                     if (isSelectionMode) {
                         selectedIds = if (email.id in selectedIds) selectedIds - email.id else selectedIds + email.id
@@ -798,7 +807,7 @@ private fun FilterPanel(
             
             TextButton(onClick = onToggleFilters) {
                 Icon(
-                    Icons.Default.FilterList,
+                    AppIcons.FilterList,
                     null,
                     modifier = Modifier.size(18.dp)
                 )
@@ -846,7 +855,7 @@ private fun FilterPanel(
                             onClick = { onDateFilterChange(if (dateFilter == filter) EmailDateFilter.ALL else filter) },
                             label = { Text(filter.label()) },
                             leadingIcon = if (filter != EmailDateFilter.ALL) {
-                                { Icon(Icons.Default.DateRange, null, modifier = Modifier.size(16.dp)) }
+                                { Icon(AppIcons.DateRange, null, modifier = Modifier.size(16.dp)) }
                             } else null
                         )
                     }
@@ -866,11 +875,11 @@ private fun FilterPanel(
                             label = { Text(Strings.sender) },
                             placeholder = { Text(Strings.nameOrEmail) },
                             singleLine = true,
-                            leadingIcon = { Icon(Icons.Default.Person, null) },
+                            leadingIcon = { Icon(AppIcons.Person, null) },
                             trailingIcon = {
                                 if (fromFilter.isNotEmpty()) {
                                     IconButton(onClick = { onFromFilterChange("") }) {
-                                        Icon(Icons.Default.Clear, Strings.close)
+                                        Icon(AppIcons.Clear, Strings.close)
                                     }
                                 }
                             },
@@ -885,11 +894,11 @@ private fun FilterPanel(
                             label = { Text(Strings.to) },
                             placeholder = { Text(Strings.nameOrEmail) },
                             singleLine = true,
-                            leadingIcon = { Icon(Icons.Default.PersonOutline, null) },
+                            leadingIcon = { Icon(AppIcons.PersonOutline, null) },
                             trailingIcon = {
                                 if (toFilter.isNotEmpty()) {
                                     IconButton(onClick = { onToFilterChange("") }) {
-                                        Icon(Icons.Default.Clear, Strings.close)
+                                        Icon(AppIcons.Clear, Strings.close)
                                     }
                                 }
                             },
@@ -902,7 +911,7 @@ private fun FilterPanel(
                                 onClick = onClearFilters,
                                 modifier = Modifier.align(Alignment.End)
                             ) {
-                                Icon(Icons.Default.Clear, null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.Clear, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(Strings.resetAll)
                             }
@@ -938,20 +947,20 @@ private fun SelectionTopBar(
         title = { Text("$selectedCount") },
         navigationIcon = {
             IconButton(onClick = onClearSelection) {
-                Icon(Icons.Default.ArrowBack, Strings.cancelSelection)
+                Icon(AppIcons.ArrowBack, Strings.cancelSelection)
             }
         },
         actions = {
             // В корзине - кнопка Восстановить, иначе - Переместить
             if (isTrashFolder) {
-                IconButton(onClick = onRestore) { Icon(Icons.Default.Restore, Strings.restore) }
+                IconButton(onClick = onRestore) { Icon(AppIcons.Restore, Strings.restore) }
             } else {
-                IconButton(onClick = onMove) { Icon(Icons.Default.DriveFileMove, Strings.moveTo) }
+                IconButton(onClick = onMove) { Icon(AppIcons.DriveFileMove, Strings.moveTo) }
             }
-            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, Strings.delete) }
+            IconButton(onClick = onDelete) { Icon(AppIcons.Delete, Strings.delete) }
             Box {
                 IconButton(onClick = { onToggleMoreMenu(true) }) {
-                    Icon(Icons.Default.MoreVert, Strings.more)
+                    Icon(AppIcons.MoreVert, Strings.more)
                 }
                 DropdownMenu(expanded = showMoreMenu, onDismissRequest = { onToggleMoreMenu(false) }) {
                     // Пометить и Непрочитанное только если НЕ в корзине и НЕ в спаме
@@ -959,17 +968,17 @@ private fun SelectionTopBar(
                         DropdownMenuItem(
                             text = { Text(Strings.star) },
                             onClick = { onToggleMoreMenu(false); onStar() },
-                            leadingIcon = { Icon(Icons.Default.Star, null) }
+                            leadingIcon = { Icon(AppIcons.Star, null) }
                         )
                         DropdownMenuItem(
                             text = { Text(Strings.read) },
                             onClick = { onToggleMoreMenu(false); onMarkRead() },
-                            leadingIcon = { Icon(Icons.Default.MarkEmailRead, null) }
+                            leadingIcon = { Icon(AppIcons.MarkEmailRead, null) }
                         )
                         DropdownMenuItem(
                             text = { Text(Strings.unreadAction) },
                             onClick = { onToggleMoreMenu(false); onMarkUnread() },
-                            leadingIcon = { Icon(Icons.Default.MarkEmailUnread, null) }
+                            leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
                         )
                     }
                     // В спаме - "Удалить окончательно", в корзине и обычных папках - "В спам"
@@ -977,13 +986,13 @@ private fun SelectionTopBar(
                         DropdownMenuItem(
                             text = { Text(Strings.deletePermanently) },
                             onClick = { onToggleMoreMenu(false); onDeletePermanently() },
-                            leadingIcon = { Icon(Icons.Default.DeleteForever, null) }
+                            leadingIcon = { Icon(AppIcons.DeleteForever, null) }
                         )
                     } else {
                         DropdownMenuItem(
                             text = { Text(Strings.toSpam) },
                             onClick = { onToggleMoreMenu(false); onSpam() },
-                            leadingIcon = { Icon(Icons.Default.Report, null) }
+                            leadingIcon = { Icon(AppIcons.Report, null) }
                         )
                     }
                 }
@@ -1004,6 +1013,7 @@ private fun EmailList(
     isFavorites: Boolean,
     isTrashOrSpam: Boolean = false,
     isDrafts: Boolean = false,
+    isSent: Boolean = false,
     onEmailClick: (EmailEntity) -> Unit,
     onLongClick: (EmailEntity) -> Unit,
     onStarClick: (EmailEntity) -> Unit,
@@ -1046,6 +1056,7 @@ private fun EmailList(
                         isSelectionMode = isSelectionMode,
                         isTrashOrSpam = isTrashOrSpam,
                         isDrafts = isDrafts,
+                        isSent = isSent,
                         listState = listState,
                         errorMessage = errorMessage,
                         onEmailClick = onEmailClick,
@@ -1078,7 +1089,7 @@ private fun EmailList(
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     ) {
                         Icon(
-                            imageVector = if (isAtTop) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                            imageVector = if (isAtTop) AppIcons.KeyboardArrowDown else AppIcons.KeyboardArrowUp,
                             contentDescription = if (isAtTop) Strings.toOld else Strings.toNew
                         )
                     }
@@ -1178,7 +1189,7 @@ private fun EnvelopeRefreshIndicator(
         
         // Конвертик
         Icon(
-            imageVector = Icons.Default.Email,
+            imageVector = AppIcons.Email,
             contentDescription = null,
             tint = colorTheme.gradientStart,
             modifier = Modifier
@@ -1208,6 +1219,7 @@ private fun EmailListContent(
     isSelectionMode: Boolean,
     isTrashOrSpam: Boolean,
     isDrafts: Boolean = false,
+    isSent: Boolean = false,
     listState: androidx.compose.foundation.lazy.LazyListState,
     errorMessage: String?,
     onEmailClick: (EmailEntity) -> Unit,
@@ -1255,7 +1267,7 @@ private fun EmailListContent(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        Icons.Default.PhoneAndroid,
+                        AppIcons.PhoneAndroid,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(14.dp)
@@ -1294,6 +1306,7 @@ private fun EmailListContent(
                 isSelected = email.id in selectedIds,
                 isSelectionMode = isSelectionMode,
                 showStar = !isTrashOrSpam,
+                isSent = isSent,
                 imagePreviewPath = imagePreviewCache[email.id],
                 onClick = { onEmailClick(email) },
                 onLongClick = { onLongClick(email) },
@@ -1310,6 +1323,7 @@ private fun EmailListItem(
     isSelected: Boolean,
     isSelectionMode: Boolean,
     showStar: Boolean = true,
+    isSent: Boolean = false,
     imagePreviewPath: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -1341,9 +1355,23 @@ private fun EmailListItem(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // Аватар с цветом на основе имени отправителя (как в Gmail)
-            val senderName = email.fromName.ifEmpty { email.from }
-            val avatarColor = getAvatarColor(senderName)
+            // Для папки Отправленные показываем получателя, иначе отправителя
+            val displayName = if (isSent) {
+                // Извлекаем имя получателя из поля to
+                val toField = email.to
+                val recipientName = when {
+                    toField.contains("<") -> toField.substringBefore("<").trim().trim('"')
+                    toField.contains("@") -> toField.substringBefore("@")
+                    else -> toField
+                }.ifEmpty { toField }
+                "${Strings.toPrefix} $recipientName"
+            } else {
+                email.fromName.ifEmpty { email.from }
+            }
+            
+            // Аватар с цветом на основе имени (получателя для Отправленных, отправителя для остальных)
+            val avatarName = if (isSent) email.to else (email.fromName.ifEmpty { email.from })
+            val avatarColor = getAvatarColor(avatarName)
             
             Box(
                 modifier = Modifier
@@ -1364,10 +1392,10 @@ private fun EmailListItem(
                 contentAlignment = Alignment.Center
             ) {
                 if (isSelected) {
-                    Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    Icon(AppIcons.Check, null, tint = Color.White, modifier = Modifier.size(24.dp))
                 } else {
                     Text(
-                        text = senderName.firstOrNull()?.uppercase() ?: "?",
+                        text = avatarName.firstOrNull()?.uppercase() ?: "?",
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
@@ -1379,7 +1407,7 @@ private fun EmailListItem(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = email.fromName.ifEmpty { email.from },
+                        text = displayName,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = if (email.read) FontWeight.Normal else FontWeight.Bold,
                         maxLines = 1,
@@ -1387,7 +1415,7 @@ private fun EmailListItem(
                         modifier = Modifier.weight(1f)
                     )
                     if (email.hasAttachments) {
-                        Icon(Icons.Default.Attachment, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(AppIcons.Attachment, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     Text(
@@ -1442,7 +1470,7 @@ private fun EmailListItem(
             if (showStar) {
                 IconButton(onClick = onStarClick, modifier = Modifier.size(40.dp)) {
                     Icon(
-                        imageVector = if (email.flagged) Icons.Default.Star else Icons.Default.StarOutline,
+                        imageVector = if (email.flagged) AppIcons.Star else AppIcons.StarOutline,
                         contentDescription = Strings.favorites,
                         tint = if (email.flagged) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp)
@@ -1457,7 +1485,7 @@ private fun EmailListItem(
 @Composable
 private fun ErrorContent(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(Icons.Default.ErrorOutline, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
+        Icon(AppIcons.ErrorOutline, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
         Spacer(modifier = Modifier.height(16.dp))
         Text(message, color = MaterialTheme.colorScheme.error)
         Spacer(modifier = Modifier.height(16.dp))
@@ -1469,7 +1497,7 @@ private fun ErrorContent(message: String, onRetry: () -> Unit, modifier: Modifie
 private fun EmptyContent(message: String, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.Inbox, null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+            Icon(AppIcons.Inbox, null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
             Spacer(modifier = Modifier.height(16.dp))
             Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -1485,18 +1513,19 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(text = message, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
             IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
+                Icon(AppIcons.Close, null, modifier = Modifier.size(16.dp))
             }
         }
     }
 }
 
+@Composable
 private fun getFolderIcon(type: Int) = when (type) {
-    2 -> Icons.Default.Inbox
-    3 -> Icons.Default.Drafts
-    4 -> Icons.Default.Delete
-    5 -> Icons.Default.Send
-    else -> Icons.Default.Folder
+    2 -> AppIcons.Inbox
+    3 -> AppIcons.Drafts
+    4 -> AppIcons.Delete
+    5 -> AppIcons.Send
+    else -> AppIcons.Folder
 }
 
 private fun formatDate(timestamp: Long): String {

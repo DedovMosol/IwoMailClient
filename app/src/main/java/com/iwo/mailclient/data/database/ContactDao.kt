@@ -11,6 +11,12 @@ interface ContactDao {
     @Query("SELECT * FROM contacts WHERE accountId = :accountId ORDER BY displayName COLLATE NOCASE")
     fun getContactsByAccount(accountId: Long): Flow<List<ContactEntity>>
     
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND source = 'LOCAL' ORDER BY displayName COLLATE NOCASE")
+    fun getLocalContacts(accountId: Long): Flow<List<ContactEntity>>
+    
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND source = 'EXCHANGE' ORDER BY displayName COLLATE NOCASE")
+    fun getExchangeContacts(accountId: Long): Flow<List<ContactEntity>>
+    
     @Query("SELECT * FROM contacts WHERE accountId = :accountId ORDER BY displayName COLLATE NOCASE")
     suspend fun getContactsByAccountList(accountId: Long): List<ContactEntity>
     
@@ -81,6 +87,9 @@ interface ContactDao {
     
     @Query("DELETE FROM contacts WHERE accountId = :accountId AND source = :source")
     suspend fun deleteByAccountAndSource(accountId: Long, source: ContactSource)
+    
+    @Query("DELETE FROM contacts WHERE accountId = :accountId AND source = 'EXCHANGE'")
+    suspend fun deleteExchangeContacts(accountId: Long)
     
     // === Группы ===
     

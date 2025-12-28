@@ -50,6 +50,21 @@ interface AccountDao {
     @Query("UPDATE accounts SET certificatePath = :certificatePath WHERE id = :id")
     suspend fun updateCertificatePath(id: Long, certificatePath: String?)
     
+    @Query("UPDATE accounts SET autoCleanupTrashDays = :days WHERE id = :id")
+    suspend fun updateAutoCleanupTrashDays(id: Long, days: Int)
+    
+    @Query("UPDATE accounts SET autoCleanupDraftsDays = :days WHERE id = :id")
+    suspend fun updateAutoCleanupDraftsDays(id: Long, days: Int)
+    
+    @Query("UPDATE accounts SET autoCleanupSpamDays = :days WHERE id = :id")
+    suspend fun updateAutoCleanupSpamDays(id: Long, days: Int)
+    
+    @Query("UPDATE accounts SET contactsSyncIntervalDays = :days WHERE id = :id")
+    suspend fun updateContactsSyncInterval(id: Long, days: Int)
+    
+    @Query("UPDATE accounts SET contactsSyncKey = :syncKey WHERE id = :id")
+    suspend fun updateContactsSyncKey(id: Long, syncKey: String)
+    
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(account: AccountEntity): Long
     

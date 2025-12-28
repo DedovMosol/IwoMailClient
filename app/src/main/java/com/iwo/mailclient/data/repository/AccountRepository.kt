@@ -344,6 +344,41 @@ class AccountRepository(private val context: Context) {
     }
     
     /**
+     * Обновляет настройки автоочистки корзины для аккаунта
+     */
+    suspend fun updateAutoCleanupTrashDays(accountId: Long, days: Int) {
+        accountDao.updateAutoCleanupTrashDays(accountId, days)
+    }
+    
+    /**
+     * Обновляет настройки автоочистки черновиков для аккаунта
+     */
+    suspend fun updateAutoCleanupDraftsDays(accountId: Long, days: Int) {
+        accountDao.updateAutoCleanupDraftsDays(accountId, days)
+    }
+    
+    /**
+     * Обновляет настройки автоочистки спама для аккаунта
+     */
+    suspend fun updateAutoCleanupSpamDays(accountId: Long, days: Int) {
+        accountDao.updateAutoCleanupSpamDays(accountId, days)
+    }
+    
+    /**
+     * Обновляет интервал синхронизации контактов для аккаунта
+     */
+    suspend fun updateContactsSyncInterval(accountId: Long, days: Int) {
+        accountDao.updateContactsSyncInterval(accountId, days)
+    }
+    
+    /**
+     * Обновляет ключ синхронизации контактов для аккаунта
+     */
+    suspend fun updateContactsSyncKey(accountId: Long, syncKey: String) {
+        accountDao.updateContactsSyncKey(accountId, syncKey)
+    }
+    
+    /**
      * Создаёт IMAP клиент для указанного аккаунта
      */
     suspend fun createImapClient(accountId: Long): ImapClient? {

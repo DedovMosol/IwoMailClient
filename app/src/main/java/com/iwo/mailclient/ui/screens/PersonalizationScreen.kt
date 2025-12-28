@@ -5,8 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -86,7 +86,7 @@ private fun DayThemeRow(
         )
         
         Icon(
-            Icons.Default.ArrowDropDown,
+            AppIcons.ArrowDropDown,
             contentDescription = null,
             modifier = Modifier.size(20.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -304,7 +304,7 @@ fun PersonalizationScreen(
                 title = { Text(Strings.interfacePersonalization, color = Color.White) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -329,7 +329,7 @@ fun PersonalizationScreen(
                 ListItem(
                     headlineContent = { Text(Strings.language) },
                     supportingContent = { Text(currentLanguage.displayName) },
-                    leadingContent = { Icon(Icons.Default.Language, null) },
+                    leadingContent = { Icon(AppIcons.Language, null) },
                     modifier = Modifier.clickable { showLanguageDialog = true }
                 )
             }
@@ -339,7 +339,7 @@ fun PersonalizationScreen(
                 ListItem(
                     headlineContent = { Text(Strings.fontSize) },
                     supportingContent = { Text(fontSize.getDisplayName(isRu)) },
-                    leadingContent = { Icon(Icons.Default.TextFields, null) },
+                    leadingContent = { Icon(AppIcons.TextFields, null) },
                     modifier = Modifier.clickable { showFontSizeDialog = true }
                 )
             }
@@ -387,7 +387,7 @@ fun PersonalizationScreen(
                 ListItem(
                     headlineContent = { Text(Strings.dailyThemes) },
                     supportingContent = { Text(Strings.dailyThemesDesc) },
-                    leadingContent = { Icon(Icons.Default.CalendarMonth, null) },
+                    leadingContent = { Icon(AppIcons.CalendarMonth, null) },
                     trailingContent = {
                         Switch(
                             checked = dailyThemesEnabled,
@@ -404,7 +404,7 @@ fun PersonalizationScreen(
                 item {
                     ListItem(
                         headlineContent = { Text(Strings.configureDailyThemes) },
-                        leadingContent = { Icon(Icons.Default.Settings, null) },
+                        leadingContent = { Icon(AppIcons.Settings, null) },
                         modifier = Modifier.clickable { showDailyThemesDialog = true }
                     )
                 }
@@ -419,7 +419,7 @@ fun PersonalizationScreen(
                 ListItem(
                     headlineContent = { Text(Strings.animations) },
                     supportingContent = { Text(Strings.animationsDesc) },
-                    leadingContent = { Icon(Icons.Default.Animation, null) },
+                    leadingContent = { Icon(AppIcons.Animation, null) },
                     trailingContent = {
                         Switch(
                             checked = animationsEnabled,

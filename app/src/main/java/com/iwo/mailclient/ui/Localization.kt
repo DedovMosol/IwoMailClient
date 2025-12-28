@@ -59,6 +59,7 @@ object Strings {
     val trash: String @Composable get() = if (isRussian()) "Удалённые" else "Trash"
     val outbox: String @Composable get() = if (isRussian()) "Исходящие" else "Outbox"
     val spam: String @Composable get() = if (isRussian()) "Спам" else "Spam"
+    val toPrefix: String @Composable get() = if (isRussian()) "Кому:" else "To:"
     val createFolder: String @Composable get() = if (isRussian()) "Создать папку" else "Create folder"
     val folderName: String @Composable get() = if (isRussian()) "Название папки" else "Folder name"
     val folderCreated: String @Composable get() = if (isRussian()) "Папка создана" else "Folder created"
@@ -88,10 +89,20 @@ object Strings {
         "Автоматически удалять старые письма из корзины" 
         else "Automatically delete old emails from trash"
     
+    // Автоматическая очистка
+    val autoCleanup: String @Composable get() = if (isRussian()) "Автоматическая очистка" else "Auto cleanup"
+    val autoCleanupDesc: String @Composable get() = if (isRussian()) 
+        "Настройка автоматической очистки папок" 
+        else "Configure automatic folder cleanup"
+    val autoCleanupTrash: String @Composable get() = if (isRussian()) "Корзина" else "Trash"
+    val autoCleanupDrafts: String @Composable get() = if (isRussian()) "Черновики" else "Drafts"
+    val autoCleanupSpam: String @Composable get() = if (isRussian()) "Спам" else "Spam"
+    
     // Настройки
     val settings: String @Composable get() = if (isRussian()) "Настройки" else "Settings"
     val accounts: String @Composable get() = if (isRussian()) "Аккаунты" else "Accounts"
     val addAccount: String @Composable get() = if (isRussian()) "Добавить аккаунт" else "Add account"
+    val accountSettings: String @Composable get() = if (isRussian()) "Настройки аккаунта" else "Account settings"
     val deleteAccount: String @Composable get() = if (isRussian()) "Удалить аккаунт?" else "Delete account?"
     val deleteAccountConfirm: String @Composable get() = if (isRussian()) 
         "Аккаунт и все связанные данные будут удалены." 
@@ -237,6 +248,7 @@ object Strings {
     val noSubject: String @Composable get() = if (isRussian()) "(Без темы)" else "(No subject)"
     val attachments: String @Composable get() = if (isRussian()) "Вложения" else "Attachments"
     val reply: String @Composable get() = if (isRussian()) "Ответить" else "Reply"
+    val writeMore: String @Composable get() = if (isRussian()) "Написать ещё" else "Write more"
     val replyAll: String @Composable get() = if (isRussian()) "Ответить всем" else "Reply all"
     val forward: String @Composable get() = if (isRussian()) "Переслать" else "Forward"
     val markUnread: String @Composable get() = if (isRussian()) "Отметить непрочитанным" else "Mark as unread"
@@ -414,13 +426,29 @@ object Strings {
     // Диалоги удаления
     val deleteEmail: String @Composable get() = if (isRussian()) "Удалить письмо?" else "Delete email?"
     val deleteEmails: String @Composable get() = if (isRussian()) "Удалить письма?" else "Delete emails?"
-    val emailWillBeMovedToTrash: String @Composable get() = if (isRussian()) "Письмо будет перемещено в корзину." else "Email will be moved to trash."
+    val emailWillBeMovedToTrash: String @Composable get() = if (isRussian()) "Письмо будет перемещено в удалённые." else "Email will be moved to deleted."
     @Composable
-    fun emailsWillBeMovedToTrash(count: Int): String = if (isRussian()) "$count писем будут перемещены в корзину." else "$count emails will be moved to trash."
+    fun emailsWillBeMovedToTrash(count: Int): String = if (isRussian()) {
+        when {
+            count % 10 == 1 && count % 100 != 11 -> "$count письмо будет перемещено в удалённые."
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "$count письма будут перемещены в удалённые."
+            else -> "$count писем будут перемещены в удалённые."
+        }
+    } else {
+        if (count == 1) "Email will be moved to deleted." else "$count emails will be moved to deleted."
+    }
     val deleteForever: String @Composable get() = if (isRussian()) "Удалить навсегда?" else "Delete forever?"
-    val emailWillBeDeletedPermanently: String @Composable get() = if (isRussian()) "Письмо будет удалено безвозвратно." else "Email will be deleted permanently."
+    val emailWillBeDeletedPermanently: String @Composable get() = if (isRussian()) "Письмо будет удалено окончательно." else "Email will be deleted permanently."
     @Composable
-    fun emailsWillBeDeletedPermanently(count: Int): String = if (isRussian()) "$count писем будут удалены безвозвратно." else "$count emails will be deleted permanently."
+    fun emailsWillBeDeletedPermanently(count: Int): String = if (isRussian()) {
+        when {
+            count % 10 == 1 && count % 100 != 11 -> "$count письмо будет удалено окончательно."
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "$count письма будут удалены окончательно."
+            else -> "$count писем будут удалены окончательно."
+        }
+    } else {
+        if (count == 1) "Email will be deleted permanently." else "$count emails will be deleted permanently."
+    }
     
     // Ошибка интернета
     val noInternetConnection: String @Composable get() = if (isRussian()) "Нет подключения к интернету. Проверьте сетевое соединение." else "No internet connection. Check your network."
@@ -486,6 +514,7 @@ object Strings {
     // Контакты
     val personalContacts: String @Composable get() = if (isRussian()) "Личные" else "Personal"
     val organization: String @Composable get() = if (isRussian()) "Организация" else "Organization"
+    val selectContacts: String @Composable get() = if (isRussian()) "Выбор контактов" else "Select contacts"
     val addContact: String @Composable get() = if (isRussian()) "Добавить контакт" else "Add contact"
     val editContact: String @Composable get() = if (isRussian()) "Редактировать контакт" else "Edit contact"
     val deleteContact: String @Composable get() = if (isRussian()) "Удалить контакт?" else "Delete contact?"
@@ -548,6 +577,41 @@ object Strings {
         }
     } else {
         if (count == 1) "$count contact" else "$count contacts"
+    }
+    
+    // Синхронизация контактов
+    val contactsSync: String @Composable get() = if (isRussian()) "Синхронизация контактов" else "Contacts sync"
+    val contactsSyncDesc: String @Composable get() = if (isRussian()) "Загрузка контактов с сервера Exchange" else "Download contacts from Exchange server"
+    val contactsSyncNever: String @Composable get() = if (isRussian()) "Никогда" else "Never"
+    val contactsSyncDaily: String @Composable get() = if (isRussian()) "Ежедневно" else "Daily"
+    val contactsSyncWeekly: String @Composable get() = if (isRussian()) "Еженедельно" else "Weekly"
+    val contactsSyncBiweekly: String @Composable get() = if (isRussian()) "Раз в 2 недели" else "Every 2 weeks"
+    val contactsSyncMonthly: String @Composable get() = if (isRussian()) "Ежемесячно" else "Monthly"
+    val syncNow: String @Composable get() = if (isRussian()) "Синхронизировать сейчас" else "Sync now"
+    val syncing: String @Composable get() = if (isRussian()) "Синхронизация..." else "Syncing..."
+    val syncComplete: String @Composable get() = if (isRussian()) "Синхронизация завершена" else "Sync complete"
+    val syncError: String @Composable get() = if (isRussian()) "Ошибка синхронизации" else "Sync error"
+    val exchangeContacts: String @Composable get() = if (isRussian()) "Контакты Exchange" else "Exchange contacts"
+    val exchangeContactsDesc: String @Composable get() = if (isRussian()) "Контакты с сервера (только чтение)" else "Server contacts (read-only)"
+    @Composable
+    fun contactsSyncedCount(count: Int): String = if (isRussian()) {
+        when {
+            count % 10 == 1 && count % 100 != 11 -> "Синхронизирован $count контакт"
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "Синхронизировано $count контакта"
+            else -> "Синхронизировано $count контактов"
+        }
+    } else {
+        if (count == 1) "Synced $count contact" else "Synced $count contacts"
+    }
+    @Composable
+    fun days(n: Int): String = if (LocalLanguage.current == AppLanguage.RUSSIAN) {
+        when {
+            n == 1 -> "1 день"
+            n in 2..4 -> "$n дня"
+            else -> "$n дней"
+        }
+    } else {
+        if (n == 1) "1 day" else "$n days"
     }
 }
 
@@ -639,15 +703,29 @@ object NotificationStrings {
         return if (isRussian) "Папка 'Спам' не найдена" else "Spam folder not found"
     }
     
-    // Локализация ошибок из репозитория
+    // Локализация ошибок из репозитория и EasClient
     fun localizeError(errorCode: String, isRussian: Boolean): String {
-        return when (errorCode) {
-            "ALREADY_IN_FOLDER" -> getAlreadyInFolder(isRussian)
-            "Email not found" -> getEmailNotFound(isRussian)
-            "Account not found" -> getAccountNotFound(isRussian)
-            "Trash folder not found" -> getTrashFolderNotFound(isRussian)
-            "Spam folder not found" -> getSpamFolderNotFound(isRussian)
-            "NO_INTERNET" -> getNoInternetConnection(isRussian)
+        return when {
+            errorCode == "ALREADY_IN_FOLDER" -> getAlreadyInFolder(isRussian)
+            errorCode == "Email not found" -> getEmailNotFound(isRussian)
+            errorCode == "Account not found" -> getAccountNotFound(isRussian)
+            errorCode == "Trash folder not found" -> getTrashFolderNotFound(isRussian)
+            errorCode == "Spam folder not found" -> getSpamFolderNotFound(isRussian)
+            errorCode == "NO_INTERNET" -> getNoInternetConnection(isRussian)
+            // EasClient ошибки
+            errorCode.contains("PolicyKey not found") -> if (isRussian) "Ключ политики не найден" else "PolicyKey not found"
+            errorCode.contains("Provision failed") -> if (isRussian) "Ошибка согласования политики безопасности" else "Security policy provisioning failed"
+            errorCode.contains("HTTP 401") || errorCode.contains("(401)") -> if (isRussian) "Ошибка авторизации (401). Проверьте логин и пароль." else "Authorization error (401). Check username and password."
+            errorCode.contains("HTTP 403") -> if (isRussian) "Доступ запрещён (403)" else "Access forbidden (403)"
+            errorCode.contains("HTTP 404") -> if (isRussian) "Сервер не найден (404)" else "Server not found (404)"
+            errorCode.contains("HTTP 500") -> if (isRussian) "Ошибка сервера (500)" else "Server error (500)"
+            errorCode.contains("HTTP 502") -> if (isRussian) "Ошибка шлюза (502)" else "Bad gateway (502)"
+            errorCode.contains("HTTP 503") -> if (isRussian) "Сервер недоступен (503)" else "Service unavailable (503)"
+            errorCode.contains("timeout") || errorCode.contains("Timeout") -> if (isRussian) "Превышено время ожидания" else "Connection timeout"
+            errorCode.contains("Unable to resolve host") -> if (isRussian) "Не удалось найти сервер. Проверьте адрес." else "Unable to resolve host. Check server address."
+            errorCode.contains("Connection refused") -> if (isRussian) "Соединение отклонено сервером" else "Connection refused by server"
+            errorCode.contains("SSL") || errorCode.contains("Certificate") -> if (isRussian) "Ошибка сертификата SSL. Попробуйте включить 'Принимать все сертификаты' или добавить сертификат сервера." else "SSL certificate error. Try enabling 'Accept all certificates' or add server certificate."
+            errorCode.contains("No address associated") -> if (isRussian) "Неверный адрес сервера" else "Invalid server address"
             else -> errorCode
         }
     }

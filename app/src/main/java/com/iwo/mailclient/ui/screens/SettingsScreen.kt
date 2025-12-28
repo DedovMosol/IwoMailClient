@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,7 +41,8 @@ fun SettingsScreen(
     onBackClick: () -> Unit,
     onEditAccount: (Long) -> Unit,
     onAddAccount: () -> Unit = {},
-    onNavigateToPersonalization: () -> Unit = {}
+    onNavigateToPersonalization: () -> Unit = {},
+    onNavigateToAccountSettings: (Long) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -65,7 +66,7 @@ fun SettingsScreen(
     accountToDelete?.let { account ->
         com.iwo.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { accountToDelete = null },
-            icon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.deleteAccount) },
             text = { 
                 Column {
@@ -104,7 +105,7 @@ fun SettingsScreen(
                 title = { Text(Strings.settings, color = Color.White) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -134,39 +135,11 @@ fun SettingsScreen(
             }
             
             items(accounts) { account ->
-                AccountSettingsItem(
+                AccountCard(
                     account = account,
                     onEditClick = { onEditAccount(account.id) },
                     onDeleteClick = { accountToDelete = account },
-                    onSyncModeChange = { mode ->
-                        scope.launch {
-                            accountRepo.updateSyncMode(account.id, mode)
-                            // Перезапускаем сервисы
-                            if (mode == SyncMode.PUSH) {
-                                com.iwo.mailclient.sync.PushService.start(context)
-                            } else {
-                                // При смене на SCHEDULED останавливаем PushService
-                                com.iwo.mailclient.sync.PushService.stop(context)
-                            }
-                            SyncWorker.scheduleWithNightMode(context)
-                        }
-                    },
-                    onSyncIntervalChange = { minutes ->
-                        scope.launch {
-                            accountRepo.updateSyncInterval(account.id, minutes)
-                            SyncWorker.scheduleWithNightMode(context)
-                        }
-                    },
-                    onSignatureChange = { signature ->
-                        scope.launch {
-                            accountRepo.updateSignature(account.id, signature)
-                        }
-                    },
-                    onCertificateChange = { newPath ->
-                        scope.launch {
-                            accountRepo.updateCertificatePath(account.id, newPath)
-                        }
-                    }
+                    onSettingsClick = { onNavigateToAccountSettings(account.id) }
                 )
             }
             
@@ -183,7 +156,7 @@ fun SettingsScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                Icons.Default.Add,
+                                AppIcons.Add,
                                 null,
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer
                             )
@@ -212,9 +185,9 @@ fun SettingsScreen(
                 ListItem(
                     headlineContent = { Text(Strings.interfacePersonalization) },
                     supportingContent = { Text(Strings.interfacePersonalizationDesc) },
-                    leadingContent = { Icon(Icons.Default.Palette, null) },
+                    leadingContent = { Icon(AppIcons.Palette, null) },
                     trailingContent = {
-                        Icon(Icons.Default.ChevronRight, null)
+                        Icon(AppIcons.ChevronRight, null)
                     },
                     modifier = Modifier.clickable { onNavigateToPersonalization() }
                 )
@@ -240,7 +213,7 @@ fun SettingsScreen(
                     supportingContent = { 
                         Text(if (syncOnWifiOnly) Strings.wifiOnlyDesc else Strings.anyNetwork) 
                     },
-                    leadingContent = { Icon(Icons.Default.Wifi, null) },
+                    leadingContent = { Icon(AppIcons.Wifi, null) },
                     trailingContent = {
                         Switch(
                             checked = syncOnWifiOnly,
@@ -259,7 +232,7 @@ fun SettingsScreen(
                 ListItem(
                     headlineContent = { Text(Strings.nightMode) },
                     supportingContent = { Text(Strings.nightModeDesc) },
-                    leadingContent = { Icon(Icons.Default.NightsStay, null) },
+                    leadingContent = { Icon(AppIcons.NightsStay, null) },
                     trailingContent = {
                         Switch(
                             checked = nightModeEnabled,
@@ -277,7 +250,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text(Strings.ignoreBatterySaver) },
-                    leadingContent = { Icon(Icons.Default.BatterySaver, null) },
+                    leadingContent = { Icon(AppIcons.BatterySaver, null) },
                     trailingContent = {
                         Switch(
                             checked = ignoreBatterySaver,
@@ -296,7 +269,7 @@ fun SettingsScreen(
                 ListItem(
                     headlineContent = { Text(Strings.notifications) },
                     supportingContent = { Text(if (notificationsEnabled) Strings.enabled else Strings.disabled) },
-                    leadingContent = { Icon(Icons.Default.Notifications, null) },
+                    leadingContent = { Icon(AppIcons.Notifications, null) },
                     trailingContent = {
                         Switch(
                             checked = notificationsEnabled,
@@ -307,57 +280,6 @@ fun SettingsScreen(
                             }
                         )
                     }
-                )
-            }
-            
-            // Автоочистка корзины
-            item {
-                val autoEmptyDays by settingsRepo.autoEmptyTrashDays.collectAsState(initial = 30)
-                var showAutoEmptyDialog by remember { mutableStateOf(false) }
-                val currentOption = SettingsRepository.AutoEmptyTrashDays.fromDays(autoEmptyDays)
-                
-                if (showAutoEmptyDialog) {
-                    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
-                        onDismissRequest = { showAutoEmptyDialog = false },
-                        title = { Text(Strings.autoEmptyTrash) },
-                        text = {
-                            Column {
-                                SettingsRepository.AutoEmptyTrashDays.entries.forEach { option ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                scope.launch {
-                                                    settingsRepo.setAutoEmptyTrashDays(option.days)
-                                                }
-                                                showAutoEmptyDialog = false
-                                            }
-                                            .padding(vertical = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        RadioButton(
-                                            selected = autoEmptyDays == option.days,
-                                            onClick = null
-                                        )
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Text(option.getDisplayName(isRu))
-                                    }
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = { showAutoEmptyDialog = false }) {
-                                Text(Strings.cancel)
-                            }
-                        }
-                    )
-                }
-                
-                ListItem(
-                    headlineContent = { Text(Strings.autoEmptyTrash) },
-                    supportingContent = { Text(currentOption.getDisplayName(isRu)) },
-                    leadingContent = { Icon(Icons.Default.AutoDelete, null) },
-                    modifier = Modifier.clickable { showAutoEmptyDialog = true }
                 )
             }
             
@@ -377,8 +299,8 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("iwo Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.1.2") },
-                    leadingContent = { Icon(Icons.Default.Info, null) }
+                    supportingContent = { Text("${Strings.version} 1.2.0") },
+                    leadingContent = { Icon(AppIcons.Info, null) }
                 )
             }
             
@@ -387,8 +309,8 @@ fun SettingsScreen(
                 ListItem(
                     headlineContent = { Text(Strings.developer) },
                     supportingContent = { Text("DedovMosol") },
-                    leadingContent = { Icon(Icons.Default.Person, null) },
-                    trailingContent = { Icon(Icons.Default.OpenInNew, null, modifier = Modifier.size(18.dp)) },
+                    leadingContent = { Icon(AppIcons.Person, null) },
+                    trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.clickable {
                         uriHandler.openUri("https://github.com/DedovMosol/")
                     }
@@ -399,7 +321,7 @@ fun SettingsScreen(
                 ListItem(
                     headlineContent = { Text(Strings.supportedProtocols) },
                     supportingContent = { Text("Exchange (EAS), IMAP, POP3") },
-                    leadingContent = { Icon(Icons.Default.Business, null) }
+                    leadingContent = { Icon(AppIcons.Business, null) }
                 )
             }
             
@@ -408,13 +330,119 @@ fun SettingsScreen(
                 val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
                 ListItem(
                     headlineContent = { Text(Strings.privacyPolicy) },
-                    leadingContent = { Icon(Icons.Default.Policy, null) },
-                    trailingContent = { Icon(Icons.Default.OpenInNew, null, modifier = Modifier.size(18.dp)) },
+                    leadingContent = { Icon(AppIcons.Policy, null) },
+                    trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.clickable {
                         uriHandler.openUri("https://github.com/DedovMosol/IwoMailClient/blob/main/PRIVACY_POLICY.md")
                     }
                 )
             }
+        }
+    }
+}
+
+/**
+ * Компактная карточка аккаунта с кнопкой настроек
+ */
+@Composable
+private fun AccountCard(
+    account: AccountEntity,
+    onEditClick: () -> Unit,
+    onDeleteClick: () -> Unit,
+    onSettingsClick: () -> Unit
+) {
+    val accountType = try {
+        AccountType.valueOf(account.accountType)
+    } catch (_: Exception) {
+        AccountType.EXCHANGE
+    }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column {
+            // Заголовок аккаунта
+            ListItem(
+                headlineContent = { 
+                    Text(
+                        account.displayName,
+                        fontWeight = if (account.isActive) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                supportingContent = { 
+                    Column {
+                        Text(account.email)
+                        // Показываем сертификат если есть
+                        if (!account.certificatePath.isNullOrBlank()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Icon(
+                                    AppIcons.Lock,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = Strings.serverCertificate,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Text(
+                            accountType.displayName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                },
+                leadingContent = {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color(account.color)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = account.displayName.firstOrNull()?.uppercase() ?: "?",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                },
+                trailingContent = {
+                    Row {
+                        IconButton(onClick = onEditClick) {
+                            Icon(AppIcons.Edit, Strings.edit)
+                        }
+                        IconButton(onClick = onDeleteClick) {
+                            Icon(
+                                AppIcons.Delete, 
+                                Strings.delete,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            )
+            
+            // Кнопка настроек аккаунта
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            ListItem(
+                headlineContent = { Text(Strings.accountSettings, style = MaterialTheme.typography.bodyMedium) },
+                leadingContent = { Icon(AppIcons.Settings, null, modifier = Modifier.size(20.dp)) },
+                trailingContent = { Icon(AppIcons.ChevronRight, null, modifier = Modifier.size(18.dp)) },
+                modifier = Modifier.clickable(onClick = onSettingsClick)
+            )
         }
     }
 }
@@ -427,7 +455,11 @@ private fun AccountSettingsItem(
     onSyncModeChange: (SyncMode) -> Unit,
     onSyncIntervalChange: (Int) -> Unit,
     onSignatureChange: (String) -> Unit,
-    onCertificateChange: (String?) -> Unit = {}
+    onCertificateChange: (String?) -> Unit = {},
+    onAutoCleanupTrashChange: (Int) -> Unit = {},
+    onAutoCleanupDraftsChange: (Int) -> Unit = {},
+    onAutoCleanupSpamChange: (Int) -> Unit = {},
+    onContactsSyncIntervalChange: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -559,7 +591,7 @@ private fun AccountSettingsItem(
         
         com.iwo.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { showCertificateDialog = false },
-            icon = { Icon(Icons.Default.Lock, null) },
+            icon = { Icon(AppIcons.Lock, null) },
             title = { Text(Strings.serverCertificate) },
             text = {
                 Column {
@@ -592,7 +624,7 @@ private fun AccountSettingsItem(
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.Download, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(if (isRu) "Экспортировать" else "Export")
                         }
@@ -605,30 +637,59 @@ private fun AccountSettingsItem(
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.SwapHoriz, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(if (isRu) "Заменить" else "Replace")
                         }
                         
                         // Удалить
+                        var showDeleteConfirm by remember { mutableStateOf(false) }
+                        
+                        if (showDeleteConfirm) {
+                            com.iwo.mailclient.ui.theme.StyledAlertDialog(
+                                onDismissRequest = { showDeleteConfirm = false },
+                                icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
+                                title = { Text(if (isRu) "Удалить сертификат?" else "Remove certificate?") },
+                                text = {
+                                    Text(
+                                        if (isRu) "Без сертификата подключение к серверу может не работать. Вы уверены?"
+                                        else "Connection to server may fail without certificate. Are you sure?"
+                                    )
+                                },
+                                confirmButton = {
+                                    TextButton(
+                                        onClick = {
+                                            showDeleteConfirm = false
+                                            showCertificateDialog = false
+                                            // Удаляем файл
+                                            try { certFile.delete() } catch (_: Exception) {}
+                                            onCertificateChange(null)
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                if (isRu) "Сертификат удалён" else "Certificate removed",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    ) {
+                                        Text(if (isRu) "Удалить" else "Remove", color = MaterialTheme.colorScheme.error)
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showDeleteConfirm = false }) {
+                                        Text(Strings.cancel)
+                                    }
+                                }
+                            )
+                        }
+                        
                         OutlinedButton(
-                            onClick = {
-                                showCertificateDialog = false
-                                // Удаляем файл
-                                try { certFile.delete() } catch (_: Exception) {}
-                                onCertificateChange(null)
-                                android.widget.Toast.makeText(
-                                    context,
-                                    if (isRu) "Сертификат удалён" else "Certificate removed",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            },
+                            onClick = { showDeleteConfirm = true },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = MaterialTheme.colorScheme.error
                             )
                         ) {
-                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
+                            Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(if (isRu) "Удалить" else "Remove")
                         }
@@ -791,7 +852,7 @@ private fun AccountSettingsItem(
                                     .clickable { showCertificateDialog = true }
                             ) {
                                 Icon(
-                                    Icons.Default.Lock,
+                                    AppIcons.Lock,
                                     contentDescription = null,
                                     modifier = Modifier.size(14.dp),
                                     tint = MaterialTheme.colorScheme.primary
@@ -804,7 +865,7 @@ private fun AccountSettingsItem(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
-                                    Icons.Default.ChevronRight,
+                                    AppIcons.ChevronRight,
                                     contentDescription = null,
                                     modifier = Modifier.size(14.dp),
                                     tint = MaterialTheme.colorScheme.primary
@@ -836,11 +897,11 @@ private fun AccountSettingsItem(
                 trailingContent = {
                     Row {
                         IconButton(onClick = onEditClick) {
-                            Icon(Icons.Default.Edit, Strings.edit)
+                            Icon(AppIcons.Edit, Strings.edit)
                         }
                         IconButton(onClick = onDeleteClick) {
                             Icon(
-                                Icons.Default.Delete, 
+                                AppIcons.Delete, 
                                 Strings.delete,
                                 tint = MaterialTheme.colorScheme.error
                             )
@@ -857,7 +918,7 @@ private fun AccountSettingsItem(
                 ListItem(
                     headlineContent = { Text(Strings.syncMode, style = MaterialTheme.typography.bodyMedium) },
                     supportingContent = { Text(syncMode.getDisplayName(isRu), style = MaterialTheme.typography.bodySmall) },
-                    leadingContent = { Icon(Icons.Default.Sync, null, modifier = Modifier.size(20.dp)) },
+                    leadingContent = { Icon(AppIcons.Sync, null, modifier = Modifier.size(20.dp)) },
                     modifier = Modifier.clickable { showSyncModeDialog = true }
                 )
                 
@@ -866,7 +927,7 @@ private fun AccountSettingsItem(
                     ListItem(
                         headlineContent = { Text(Strings.syncInterval, style = MaterialTheme.typography.bodyMedium) },
                         supportingContent = { Text(Strings.minutes(account.syncIntervalMinutes), style = MaterialTheme.typography.bodySmall) },
-                        leadingContent = { Icon(Icons.Default.Schedule, null, modifier = Modifier.size(20.dp)) },
+                        leadingContent = { Icon(AppIcons.Schedule, null, modifier = Modifier.size(20.dp)) },
                         modifier = Modifier.clickable { showSyncIntervalDialog = true }
                     )
                 }
@@ -876,27 +937,177 @@ private fun AccountSettingsItem(
                 ListItem(
                     headlineContent = { Text(Strings.syncInterval, style = MaterialTheme.typography.bodyMedium) },
                     supportingContent = { Text(Strings.minutes(account.syncIntervalMinutes), style = MaterialTheme.typography.bodySmall) },
-                    leadingContent = { Icon(Icons.Default.Schedule, null, modifier = Modifier.size(20.dp)) },
+                    leadingContent = { Icon(AppIcons.Schedule, null, modifier = Modifier.size(20.dp)) },
                     modifier = Modifier.clickable { showSyncIntervalDialog = true }
                 )
             }
             
-            // Подпись (для всех типов аккаунтов)
+            // Подписи (несколько для каждого аккаунта)
+            var showSignaturesDialog by remember { mutableStateOf(false) }
+            var signatures by remember { mutableStateOf<List<com.iwo.mailclient.data.database.SignatureEntity>>(emptyList()) }
+            val database = com.iwo.mailclient.data.database.MailDatabase.getInstance(context)
+            
+            // Загружаем подписи
+            LaunchedEffect(account.id) {
+                signatures = database.signatureDao().getSignaturesByAccountList(account.id)
+            }
+            
+            if (showSignaturesDialog) {
+                SignaturesManagementDialog(
+                    isRu = isRu,
+                    accountId = account.id,
+                    signatures = signatures,
+                    onSignaturesChanged = { newSignatures ->
+                        signatures = newSignatures
+                    },
+                    onDismiss = { showSignaturesDialog = false }
+                )
+            }
+            
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             ListItem(
                 headlineContent = { Text(Strings.signature, style = MaterialTheme.typography.bodyMedium) },
                 supportingContent = { 
                     Text(
-                        if (account.signature.isBlank()) Strings.noSignature else account.signature.take(50) + if (account.signature.length > 50) "..." else "",
+                        if (signatures.isEmpty()) Strings.noSignature 
+                        else if (isRu) "${signatures.size} подпис${if (signatures.size == 1) "ь" else if (signatures.size in 2..4) "и" else "ей"}"
+                        else "${signatures.size} signature${if (signatures.size > 1) "s" else ""}",
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1
                     ) 
                 },
-                leadingContent = { Icon(Icons.Default.Draw, null, modifier = Modifier.size(20.dp)) },
-                modifier = Modifier.clickable { showSignatureDialog = true }
+                leadingContent = { Icon(AppIcons.Draw, null, modifier = Modifier.size(20.dp)) },
+                trailingContent = { Icon(AppIcons.ChevronRight, null, modifier = Modifier.size(18.dp)) },
+                modifier = Modifier.clickable { showSignaturesDialog = true }
             )
+            
+            // Автоматическая очистка
+            var showAutoCleanupDialog by remember { mutableStateOf(false) }
+            
+            if (showAutoCleanupDialog) {
+                AutoCleanupDialog(
+                    isRu = isRu,
+                    trashDays = account.autoCleanupTrashDays,
+                    draftsDays = account.autoCleanupDraftsDays,
+                    spamDays = account.autoCleanupSpamDays,
+                    onTrashDaysChange = onAutoCleanupTrashChange,
+                    onDraftsDaysChange = onAutoCleanupDraftsChange,
+                    onSpamDaysChange = onAutoCleanupSpamChange,
+                    onDismiss = { showAutoCleanupDialog = false }
+                )
+            }
+            
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            ListItem(
+                headlineContent = { Text(Strings.autoCleanup, style = MaterialTheme.typography.bodyMedium) },
+                supportingContent = { Text(Strings.autoCleanupDesc, style = MaterialTheme.typography.bodySmall) },
+                leadingContent = { Icon(AppIcons.AutoDelete, null, modifier = Modifier.size(20.dp)) },
+                trailingContent = { Icon(AppIcons.ChevronRight, null, modifier = Modifier.size(18.dp)) },
+                modifier = Modifier.clickable { showAutoCleanupDialog = true }
+            )
+            
+            // Синхронизация контактов (только для Exchange)
+            if (accountType == AccountType.EXCHANGE) {
+                var showContactsSyncDialog by remember { mutableStateOf(false) }
+                
+                if (showContactsSyncDialog) {
+                    ContactsSyncDialog(
+                        isRu = isRu,
+                        currentDays = account.contactsSyncIntervalDays,
+                        onDaysChange = onContactsSyncIntervalChange,
+                        onDismiss = { showContactsSyncDialog = false }
+                    )
+                }
+                
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                ListItem(
+                    headlineContent = { Text(Strings.contactsSync, style = MaterialTheme.typography.bodyMedium) },
+                    supportingContent = { 
+                        Text(
+                            getContactsSyncIntervalText(account.contactsSyncIntervalDays, isRu),
+                            style = MaterialTheme.typography.bodySmall
+                        ) 
+                    },
+                    leadingContent = { Icon(AppIcons.ContactPhone, null, modifier = Modifier.size(20.dp)) },
+                    trailingContent = { Icon(AppIcons.ChevronRight, null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.clickable { showContactsSyncDialog = true }
+                )
+            }
         }
     }
+}
+
+/**
+ * Получить текст интервала синхронизации контактов
+ */
+fun getContactsSyncIntervalText(days: Int, isRu: Boolean): String {
+    return when (days) {
+        0 -> if (isRu) "Никогда" else "Never"
+        1 -> if (isRu) "Ежедневно" else "Daily"
+        7 -> if (isRu) "Еженедельно" else "Weekly"
+        14 -> if (isRu) "Раз в 2 недели" else "Every 2 weeks"
+        30 -> if (isRu) "Ежемесячно" else "Monthly"
+        else -> if (isRu) "Каждые $days дней" else "Every $days days"
+    }
+}
+
+/**
+ * Диалог настройки синхронизации контактов
+ */
+@Composable
+fun ContactsSyncDialog(
+    isRu: Boolean,
+    currentDays: Int,
+    onDaysChange: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val options = listOf(
+        0 to (if (isRu) "Никогда" else "Never"),
+        1 to (if (isRu) "Ежедневно" else "Daily"),
+        7 to (if (isRu) "Еженедельно" else "Weekly"),
+        14 to (if (isRu) "Раз в 2 недели" else "Every 2 weeks"),
+        30 to (if (isRu) "Ежемесячно" else "Monthly")
+    )
+    
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(Strings.contactsSync) },
+        text = {
+            Column {
+                Text(
+                    Strings.contactsSyncDesc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                
+                options.forEach { (days, label) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDaysChange(days)
+                                onDismiss()
+                            }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = currentDays == days,
+                            onClick = null
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(Strings.cancel)
+            }
+        }
+    )
 }
 
 /**
@@ -963,7 +1174,7 @@ private fun DayThemeRow(
         )
         
         Icon(
-            Icons.Default.ArrowDropDown,
+            AppIcons.ArrowDropDown,
             contentDescription = null,
             modifier = Modifier.size(20.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -997,3 +1208,408 @@ private fun DayThemeRow(
     }
 }
 
+/**
+ * Диалог настройки автоматической очистки папок
+ */
+@Composable
+fun AutoCleanupDialog(
+    isRu: Boolean,
+    trashDays: Int,
+    draftsDays: Int,
+    spamDays: Int,
+    onTrashDaysChange: (Int) -> Unit,
+    onDraftsDaysChange: (Int) -> Unit,
+    onSpamDaysChange: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedFolder by remember { mutableStateOf<String?>(null) }
+    
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(Strings.autoCleanup) },
+        text = {
+            Column {
+                // Корзина
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Delete,
+                    title = Strings.autoCleanupTrash,
+                    currentDays = trashDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "trash",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "trash") null else "trash" },
+                    onDaysChange = onTrashDaysChange
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Черновики
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Drafts,
+                    title = Strings.autoCleanupDrafts,
+                    currentDays = draftsDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "drafts",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "drafts") null else "drafts" },
+                    onDaysChange = onDraftsDaysChange
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Спам
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Report,
+                    title = Strings.autoCleanupSpam,
+                    currentDays = spamDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "spam",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "spam") null else "spam" },
+                    onDaysChange = onSpamDaysChange
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(Strings.close)
+            }
+        }
+    )
+}
+
+@Composable
+private fun AutoCleanupFolderItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    currentDays: Int,
+    isRu: Boolean,
+    isExpanded: Boolean,
+    onExpandClick: () -> Unit,
+    onDaysChange: (Int) -> Unit
+) {
+    val currentOption = SettingsRepository.AutoCleanupDays.fromDays(currentDays)
+    
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onExpandClick() }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = currentOption.getDisplayName(isRu),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                if (isExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        
+        if (isExpanded) {
+            Column(modifier = Modifier.padding(start = 36.dp)) {
+                SettingsRepository.AutoCleanupDays.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onDaysChange(option.days) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = currentDays == option.days,
+                            onClick = null
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = option.getDisplayName(isRu),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * Диалог управления подписями аккаунта
+ */
+@Composable
+fun SignaturesManagementDialog(
+    isRu: Boolean,
+    accountId: Long,
+    signatures: List<com.iwo.mailclient.data.database.SignatureEntity>,
+    onSignaturesChanged: (List<com.iwo.mailclient.data.database.SignatureEntity>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val database = remember { com.iwo.mailclient.data.database.MailDatabase.getInstance(context) }
+    
+    var showAddDialog by remember { mutableStateOf(false) }
+    var editingSignature by remember { mutableStateOf<com.iwo.mailclient.data.database.SignatureEntity?>(null) }
+    var signatureToDelete by remember { mutableStateOf<com.iwo.mailclient.data.database.SignatureEntity?>(null) }
+    
+    // Диалог добавления/редактирования подписи
+    if (showAddDialog || editingSignature != null) {
+        // Первая подпись всегда default
+        val isFirstSignature = signatures.isEmpty() && editingSignature == null
+        // Если редактируем единственную подпись — она тоже всегда default
+        val isOnlySignature = signatures.size == 1 && editingSignature != null
+        val forceDefault = isFirstSignature || isOnlySignature
+        
+        SignatureEditDialog(
+            isRu = isRu,
+            signature = editingSignature,
+            forceDefault = forceDefault,
+            currentIsDefault = editingSignature?.isDefault ?: false,
+            onSave = { name, text, isDefault ->
+                scope.launch {
+                    // Если ставим новый default — сбрасываем старый
+                    val actualIsDefault = if (forceDefault) true else isDefault
+                    if (actualIsDefault) {
+                        database.signatureDao().clearDefaultForAccount(accountId)
+                    }
+                    
+                    val newSignature = editingSignature?.copy(
+                        name = name,
+                        text = text,
+                        isDefault = actualIsDefault
+                    ) ?: com.iwo.mailclient.data.database.SignatureEntity(
+                        accountId = accountId,
+                        name = name,
+                        text = text,
+                        isDefault = actualIsDefault,
+                        sortOrder = signatures.size
+                    )
+                    
+                    database.signatureDao().insert(newSignature)
+                    onSignaturesChanged(database.signatureDao().getSignaturesByAccountList(accountId))
+                }
+                showAddDialog = false
+                editingSignature = null
+            },
+            onDismiss = {
+                showAddDialog = false
+                editingSignature = null
+            }
+        )
+    }
+    
+    // Диалог подтверждения удаления
+    signatureToDelete?.let { signature ->
+        com.iwo.mailclient.ui.theme.StyledAlertDialog(
+            onDismissRequest = { signatureToDelete = null },
+            icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text(if (isRu) "Удалить подпись?" else "Delete signature?") },
+            text = { Text(signature.name) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            val wasDefault = signature.isDefault
+                            database.signatureDao().delete(signature.id)
+                            
+                            // Если удалили default подпись — назначить следующую по createdAt
+                            if (wasDefault) {
+                                val remaining = database.signatureDao().getSignaturesByAccountList(accountId)
+                                if (remaining.isNotEmpty()) {
+                                    // Сортируем по createdAt и берём первую
+                                    val nextDefault = remaining.minByOrNull { it.createdAt }
+                                    nextDefault?.let {
+                                        database.signatureDao().setDefault(it.id)
+                                    }
+                                }
+                            }
+                            
+                            onSignaturesChanged(database.signatureDao().getSignaturesByAccountList(accountId))
+                        }
+                        signatureToDelete = null
+                    }
+                ) {
+                    Text(Strings.delete, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { signatureToDelete = null }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
+    }
+    
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isRu) "Подписи" else "Signatures") },
+        text = {
+            Column {
+                if (signatures.isEmpty()) {
+                    Text(
+                        if (isRu) "Нет подписей. Добавьте первую!" else "No signatures. Add your first!",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    signatures.forEach { signature ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { editingSignature = signature }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        signature.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = if (signature.isDefault) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    if (signature.isDefault) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            if (isRu) "(по умолч.)" else "(default)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                Text(
+                                    signature.text.take(40) + if (signature.text.length > 40) "..." else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            IconButton(onClick = { signatureToDelete = signature }) {
+                                Icon(
+                                    AppIcons.Delete,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                }
+                
+                // Кнопка добавления (максимум 5 подписей)
+                if (signatures.size < 5) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showAddDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(AppIcons.Add, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (isRu) "Добавить подпись" else "Add signature")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(Strings.close)
+            }
+        }
+    )
+}
+
+/**
+ * Диалог редактирования подписи
+ */
+@Composable
+private fun SignatureEditDialog(
+    isRu: Boolean,
+    signature: com.iwo.mailclient.data.database.SignatureEntity?,
+    forceDefault: Boolean = false,
+    currentIsDefault: Boolean = false,
+    onSave: (name: String, text: String, isDefault: Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf(signature?.name ?: "") }
+    var text by remember { mutableStateOf(signature?.text ?: "") }
+    var isDefault by remember { mutableStateOf(if (forceDefault) true else (signature?.isDefault ?: false)) }
+    
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (signature != null) (if (isRu) "Редактировать" else "Edit") else (if (isRu) "Новая подпись" else "New signature")) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(if (isRu) "Название" else "Name") },
+                    placeholder = { Text(if (isRu) "Рабочая, Личная..." else "Work, Personal...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(if (isRu) "Текст подписи" else "Signature text") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 100.dp),
+                    maxLines = 6
+                )
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Галочка "По умолчанию" — нельзя снять если это единственная/первая подпись или уже default
+                val canToggleDefault = !forceDefault && !currentIsDefault
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (canToggleDefault) Modifier.clickable { isDefault = !isDefault } else Modifier),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = isDefault,
+                        onCheckedChange = if (canToggleDefault) { { isDefault = it } } else null,
+                        enabled = canToggleDefault
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        if (isRu) "По умолчанию" else "Default",
+                        color = if (canToggleDefault) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(name, text, isDefault) },
+                enabled = name.isNotBlank() && text.isNotBlank()
+            ) {
+                Text(Strings.save)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(Strings.cancel)
+            }
+        }
+    )
+}

@@ -4,7 +4,7 @@
 
 Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
 
-**Version:** 1.1.2  
+**Version:** 1.2.0  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -13,6 +13,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 
 - 📧 **Exchange ActiveSync** — full EAS 12.0-14.1 support (Exchange 2007+)
 - 📬 **IMAP/POP3** — works with any mail server (beta)
+- 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
 - 🔒 **Exchange 2007 compatibility** — TLS 1.0/1.1 support via Conscrypt
 - 🔐 **Server certificates** — self-signed certificate support for corporate servers
 - 🌍 **Two languages** — 🇷🇺 Russian / 🇬🇧 English
@@ -44,12 +45,12 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Account signature | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 
-## 🆕 What's New in v1.1.2
+## 🆕 What's New in v1.2.0
 
-- **Personalization screen** — appearance settings moved to separate screen
-- **Account avatar** — uses selected color everywhere in the app
-- **Drafts** — saved locally and deleted immediately
-- **Bug fixes** — contact export, dialogs on screen rotation
+- **Rebranding** — app renamed to "iwo Mail Client"
+- **Auto cleanup** — configure periodic cleanup for trash, drafts and spam
+- **Sent folder** — now shows recipient with "To:" prefix
+- **Bug fixes** — avatar colors, drafts list refresh
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 

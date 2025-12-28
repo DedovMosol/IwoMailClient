@@ -14,9 +14,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material3.*
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -104,7 +103,7 @@ private fun PermissionDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.BatteryChargingFull,
+                            AppIcons.BatteryChargingFull,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.size(28.dp)

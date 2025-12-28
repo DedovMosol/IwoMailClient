@@ -86,11 +86,12 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                     settingsRepo.setLastSyncTime(System.currentTimeMillis())
                     settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
                     
-                    // Пытаемся перезапустить PushService
-                    val hasExchangeAccounts = accounts.any { 
-                        it.accountType == AccountType.EXCHANGE.name 
+                    // Пытаемся перезапустить PushService только если есть аккаунты с режимом PUSH
+                    val hasExchangePushAccounts = accounts.any { 
+                        it.accountType == AccountType.EXCHANGE.name &&
+                        it.syncMode == com.iwo.mailclient.data.database.SyncMode.PUSH.name
                     }
-                    if (hasExchangeAccounts) {
+                    if (hasExchangePushAccounts) {
                         try {
                             PushService.start(context)
                         } catch (_: Exception) { }

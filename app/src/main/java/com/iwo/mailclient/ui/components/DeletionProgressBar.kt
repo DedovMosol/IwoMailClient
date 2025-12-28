@@ -1,9 +1,8 @@
 package com.iwo.mailclient.ui.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -181,7 +180,7 @@ fun DeletionProgressBar(
                             )
                         ) {
                             Icon(
-                                Icons.Default.Close,
+                                AppIcons.Close,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )

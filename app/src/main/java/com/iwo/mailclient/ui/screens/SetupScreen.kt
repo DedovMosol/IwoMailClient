@@ -15,8 +15,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -44,6 +44,7 @@ import com.iwo.mailclient.eas.EasClient
 import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.LocalLanguage
+import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.isRussian
 import com.iwo.mailclient.ui.theme.LocalColorTheme
@@ -363,14 +364,14 @@ fun SetupScreen(
                     navigationIcon = {
                         onBackClick?.let {
                             IconButton(onClick = it) {
-                                Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                                Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                             }
                         }
                     },
                     actions = {
                         // Кнопка выбора языка
                         IconButton(onClick = { showLanguageDialog = true }) {
-                            Icon(Icons.Default.Language, Strings.language, tint = Color.White)
+                            Icon(AppIcons.Language, Strings.language, tint = Color.White)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -438,7 +439,7 @@ fun SetupScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                Icons.Default.Email,
+                                AppIcons.Email,
                                 contentDescription = null,
                                 modifier = Modifier.size(40.dp),
                                 tint = Color.White
@@ -497,7 +498,7 @@ fun SetupScreen(
                             ) {
                                 if (color == selectedColor) {
                                     Icon(
-                                        Icons.Default.Check,
+                                        AppIcons.Check,
                                         contentDescription = null,
                                         tint = Color.White,
                                         modifier = Modifier.size(20.dp)
@@ -634,7 +635,7 @@ fun SetupScreen(
                                 )
                             }
                             Icon(
-                                Icons.Default.Bolt,
+                                AppIcons.Bolt,
                                 null,
                                 tint = if (syncMode == SyncMode.PUSH) 
                                     MaterialTheme.colorScheme.primary 
@@ -676,7 +677,7 @@ fun SetupScreen(
                                 )
                             }
                             Icon(
-                                Icons.Default.BatteryChargingFull,
+                                AppIcons.BatteryChargingFull,
                                 null,
                                 tint = if (syncMode == SyncMode.SCHEDULED) 
                                     MaterialTheme.colorScheme.primary 
@@ -915,7 +916,7 @@ fun SetupScreen(
                     IconButton(onClick = { passwordVisible = !passwordVisible }) {
                         Icon(
                             imageVector = if (passwordVisible) 
-                                Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                AppIcons.VisibilityOff else AppIcons.Visibility,
                             contentDescription = null
                         )
                     }
@@ -953,7 +954,7 @@ fun SetupScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                Icons.Default.Security,
+                                AppIcons.Security,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary
                             )
@@ -997,7 +998,7 @@ fun SetupScreen(
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.FileOpen, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(if (isRussian()) "Выбрать" else "Select")
                             }
@@ -1016,7 +1017,7 @@ fun SetupScreen(
                                         contentColor = MaterialTheme.colorScheme.error
                                     )
                                 ) {
-                                    Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
+                                    Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(if (isRussian()) "Удалить" else "Remove")
                                 }
@@ -1043,7 +1044,7 @@ fun SetupScreen(
                     )
                 ) {
                     Text(
-                        text = it,
+                        text = NotificationStrings.localizeError(it, isRussianLang),
                         modifier = Modifier.padding(16.dp),
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )

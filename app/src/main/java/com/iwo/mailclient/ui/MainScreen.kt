@@ -1,4 +1,4 @@
-Ôªøpackage com.iwo.mailclient.ui
+package com.iwo.mailclient.ui
 
 import android.content.Context
 import androidx.compose.animation.*
@@ -18,9 +18,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -44,8 +43,8 @@ import com.iwo.mailclient.data.repository.SettingsRepository
 import kotlinx.coroutines.*
 
 /**
- * ‚ï®–£‚ï®‚ïó‚ï®‚ïõ‚ï®‚ñí‚ï®‚ñë‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï§–ê‚ï®‚ïõ‚ï®‚ïó‚ï®‚ïó‚ï®‚ï°‚ï§–ê ‚ï®‚ïú‚ï®‚ñë‚ï§–ó‚ï®‚ñë‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï®‚ïõ‚ï®‚ï£ ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï
- * ‚ï®–®‚ï§–ë‚ï®‚îê‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïñ‚ï§–ì‚ï®‚ï°‚ï§–í ‚ï§–ë‚ï®‚ïõ‚ï®‚ñí‚ï§–ë‚ï§–í‚ï®‚ñì‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ scope ‚ï§–ó‚ï§–í‚ï®‚ïõ‚ï®‚ñí‚ï§–õ ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚ïú‚ï®‚ï° ‚ï®‚îê‚ï§–ê‚ï®‚ï°‚ï§–ê‚ï§–õ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïó‚ï®‚ñë‚ï§–ë‚ï§–ú ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚îê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïõ‚ï§–ê‚ï®‚ïõ‚ï§–í‚ï®‚ï° ‚ï§–ù‚ï®‚ïë‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ñë
+ * ¶”¶¨¶-¶-¶-¶¨TÃ¶-TÀ¶¶ ¶¶¶-¶-T¬T¿¶-¶¨¶¨¶¶T¿ ¶-¶-T«¶-¶¨TÃ¶-¶-¶¶ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨¶¨
+ * ¶ÿT¡¶¨¶-¶¨TÃ¶¨T√¶¶T¬ T¡¶-¶-T¡T¬¶-¶¶¶-¶-TÀ¶¶ scope T«T¬¶-¶-TÀ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨Tœ ¶-¶¶ ¶¨T¿¶¶T¿TÀ¶-¶-¶¨¶-T¡TÃ ¶¨T¿¶¨ ¶¨¶-¶-¶-T¿¶-T¬¶¶ TÕ¶¶T¿¶-¶-¶-
  */
 object InitialSyncController {
     var isSyncing by mutableStateOf(false)
@@ -63,7 +62,7 @@ object InitialSyncController {
         mailRepo: MailRepository,
         settingsRepo: SettingsRepository
     ) {
-        // ‚ï®–•‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï§–ì‚ï®‚ï¢‚ï®‚ï° ‚ï®‚ñí‚ï§–õ‚ï®‚ïó‚ï®‚ñë ‚ï®‚ïï‚ï®‚ïó‚ï®‚ïï ‚ï§–ì‚ï®‚ï¢‚ï®‚ï° ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îê‚ï§–ì‚ï§–ô‚ï®‚ï°‚ï®‚ïú‚ï®‚ñë —Ç–ê–§ ‚ï®‚îê‚ï§–ê‚ï®‚ïõ‚ï®‚îê‚ï§–ì‚ï§–ë‚ï®‚ïë‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù
+        // ¶’T¡¶¨¶¨ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨Tœ T√¶¶¶¶ ¶-TÀ¶¨¶- ¶¨¶¨¶¨ T√¶¶¶¶ ¶¨¶-¶¨T√T…¶¶¶-¶- Ú¿‘ ¶¨T¿¶-¶¨T√T¡¶¶¶-¶¶¶-
         if (syncDone || syncStarted) {
             return
         }
@@ -73,16 +72,16 @@ object InitialSyncController {
         
         syncJob = syncScope.launch {
             try {
-                delay(100) // ‚ï®–≠‚ï®‚ï°‚ï®‚ñí‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï§–ò‚ï®‚ñë‚ï§–ü ‚ï®‚ïñ‚ï®‚ñë‚ï®‚î§‚ï®‚ï°‚ï§–ê‚ï®‚ï¢‚ï®‚ïë‚ï®‚ñë ‚ï§–ó‚ï§–í‚ï®‚ïõ‚ï®‚ñí‚ï§–õ UI ‚ï§–ì‚ï§–ë‚ï®‚îê‚ï®‚ï°‚ï®‚ïó ‚ï®‚ïõ‚ï§–í‚ï§–ê‚ï®‚ïï‚ï§–ë‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï§–í‚ï§–ú‚ï§–ë‚ï§–ü
+                delay(100) // ¶›¶¶¶-¶-¶¨TÃT»¶-Tœ ¶¨¶-¶+¶¶T¿¶¶¶¶¶- T«T¬¶-¶-TÀ UI T√T¡¶¨¶¶¶¨ ¶-T¬T¿¶¨T¡¶-¶-¶-T¬TÃT¡Tœ
                 
-                // ‚ï®–≤‚ï®‚ñë‚ï®‚ï£‚ï®‚ïù‚ï®‚ñë‚ï§–ì‚ï§–í ‚ï®‚ïú‚ï®‚ñë ‚ï®‚ñì‚ï§–ë‚ï§–û ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–û - 5 ‚ï®‚ïù‚ï®‚ïï‚ï®‚ïú‚ï§–ì‚ï§–í
+                // ¶‚¶-¶¶¶-¶-T√T¬ ¶-¶- ¶-T¡TŒ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨TŒ - 5 ¶-¶¨¶-T√T¬
                 withTimeoutOrNull(300_000L) {
-                    // ‚ï®–±‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+                    // ¶·¶¨¶-T≈T¿¶-¶-¶¨¶¨¶¨T¿T√¶¶¶- ¶¨¶-¶¨¶¶¶¨
                     withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
                     
                     delay(200)
                     
-                    // ‚ï®–±‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®–¢‚ï®–±‚ï®–• ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï ‚ï§–ë ‚ï®‚îê‚ï®‚ïï‚ï§–ë‚ï§–ú‚ï®‚ïù‚ï®‚ñë‚ï®‚ïù‚ï®‚ïï ‚ï®–Ø‚ï®–†‚ï®–∞‚ï®–†‚ï®–´‚ï®–´‚ï®–•‚ï®–´‚ï®–º‚ï®–≠‚ï®–Æ
+                    // ¶·¶¨¶-T≈T¿¶-¶-¶¨¶¨¶¨T¿T√¶¶¶- ¶“¶·¶’ ¶¨¶-¶¨¶¶¶¨ T¡ ¶¨¶¨T¡TÃ¶-¶-¶-¶¨ ¶ﬂ¶–¶‡¶–¶€¶€¶’¶€¶Ï¶›¶ﬁ
                     val emailFolderTypes = listOf(1, 2, 3, 4, 5, 6, 11, 12)
                     val currentFolders = withContext(Dispatchers.IO) {
                         com.iwo.mailclient.data.database.MailDatabase.getInstance(context)
@@ -114,7 +113,7 @@ object InitialSyncController {
     }
     
     /**
-     * ‚ï®–±‚ï®‚ñí‚ï§–ê‚ï®‚ïõ‚ï§–ë ‚ï§–ë‚ï®‚ïõ‚ï§–ë‚ï§–í‚ï®‚ïõ‚ï§–ü‚ï®‚ïú‚ï®‚ïï‚ï§–ü (‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï§–í‚ï®‚ï°‚ï§–ë‚ï§–í‚ï®‚ïõ‚ï®‚ñì ‚ï®‚ïï‚ï®‚ïó‚ï®‚ïï ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï§–ë‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ï° ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï®‚ñë)
+     * ¶·¶-T¿¶-T¡ T¡¶-T¡T¬¶-Tœ¶-¶¨Tœ (¶+¶¨Tœ T¬¶¶T¡T¬¶-¶- ¶¨¶¨¶¨ ¶¨T¿¶¨ T¡¶-¶¶¶-¶¶ ¶-¶¶¶¶¶-T√¶-T¬¶-)
      */
     fun reset() {
         syncJob?.cancel()
@@ -152,34 +151,34 @@ fun MainScreen(
     var isLoading by remember { mutableStateOf(false) }
     var showAccountPicker by remember { mutableStateOf(false) }
     var accountsLoaded by remember { mutableStateOf(false) }
-    // ‚ï®–¥‚ï®‚ïó‚ï®‚ñë‚ï®‚îÇ ‚ï§–ó‚ï§–í‚ï®‚ïõ ‚ï®‚î§‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï° ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ï¢‚ï®‚ï°‚ï®‚ïú‚ï§–õ (‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï®‚îê‚ï§–ê‚ï®‚ï°‚ï®‚î§‚ï®‚ïõ‚ï§–í‚ï®‚ñì‚ï§–ê‚ï®‚ñë‚ï§–ô‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚ïù‚ï®‚ï°‚ï§–ê‚ï§–ñ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ü)
+    // ¶‰¶¨¶-¶¶ T«T¬¶- ¶+¶-¶-¶-TÀ¶¶ ¶¨¶-¶¶T¿T√¶¶¶¶¶-TÀ (¶+¶¨Tœ ¶¨T¿¶¶¶+¶-T¬¶-T¿¶-T…¶¶¶-¶¨Tœ ¶-¶¶T¿T∆¶-¶-¶¨Tœ)
     var dataLoaded by remember { mutableStateOf(false) }
     
-    // ‚ï®–±‚ï®‚ïõ‚ï§–ë‚ï§–í‚ï®‚ïõ‚ï§–ü‚ï®‚ïú‚ï®‚ïï‚ï®‚ï° ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ïï‚ï®‚ïñ ‚ï®‚îÇ‚ï®‚ïó‚ï®‚ïõ‚ï®‚ñí‚ï®‚ñë‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï®‚ïõ‚ï®‚îÇ‚ï®‚ïõ ‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï§–ê‚ï®‚ïõ‚ï®‚ïó‚ï®‚ïó‚ï®‚ï°‚ï§–ê‚ï®‚ñë
+    // ¶·¶-T¡T¬¶-Tœ¶-¶¨¶¶ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨¶¨ ¶¨¶¨ ¶¶¶¨¶-¶-¶-¶¨TÃ¶-¶-¶¶¶- ¶¶¶-¶-T¬T¿¶-¶¨¶¨¶¶T¿¶-
     val isSyncing = InitialSyncController.isSyncing
     val initialSyncDone = InitialSyncController.syncDone
     
-    // ‚ï®–§‚ï®‚ïï‚ï®‚ñë‚ï®‚ïó‚ï®‚ïõ‚ï®‚îÇ ‚ï§–ë‚ï®‚ïõ‚ï®‚ïñ‚ï®‚î§‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+    // ¶‘¶¨¶-¶¨¶-¶¶ T¡¶-¶¨¶+¶-¶-¶¨Tœ ¶¨¶-¶¨¶¶¶¨
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
     var isCreatingFolder by remember { mutableStateOf(false) }
     
-    // ‚ï®–§‚ï®‚ïï‚ï®‚ñë‚ï®‚ïó‚ï®‚ïõ‚ï®‚îÇ ‚ï§–ì‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+    // ¶‘¶¨¶-¶¨¶-¶¶ T√¶+¶-¶¨¶¶¶-¶¨Tœ ¶¨¶-¶¨¶¶¶¨
     var folderToDelete by remember { mutableStateOf<FolderEntity?>(null) }
     var isDeletingFolder by remember { mutableStateOf(false) }
     
-    // ‚ï®–§‚ï®‚ïï‚ï®‚ñë‚ï®‚ïó‚ï®‚ïõ‚ï®‚îÇ ‚ï®‚îê‚ï®‚ï°‚ï§–ê‚ï®‚ï°‚ï®‚ïï‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+    // ¶‘¶¨¶-¶¨¶-¶¶ ¶¨¶¶T¿¶¶¶¨¶-¶¶¶-¶-¶-¶-¶-¶¨Tœ ¶¨¶-¶¨¶¶¶¨
     var folderToRename by remember { mutableStateOf<FolderEntity?>(null) }
     var renameNewName by remember { mutableStateOf("") }
     var isRenamingFolder by remember { mutableStateOf(false) }
     
-    // ‚ï®–¨‚ï®‚ï°‚ï®‚ïú‚ï§–û ‚ï®‚î§‚ï®‚ï°‚ï®‚ï£‚ï§–ë‚ï§–í‚ï®‚ñì‚ï®‚ïï‚ï®‚ï£ ‚ï§–ë ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïõ‚ï®‚ï£ (‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚î§‚ï®‚ïõ‚ï®‚ïó‚ï®‚îÇ‚ï®‚ïõ‚ï®‚ïù ‚ï®‚ïú‚ï®‚ñë‚ï®‚ï¢‚ï®‚ñë‚ï§–í‚ï®‚ïï‚ï®‚ïï)
+    // ¶‹¶¶¶-TŒ ¶+¶¶¶¶T¡T¬¶-¶¨¶¶ T¡ ¶¨¶-¶¨¶¶¶-¶¶ (¶¨T¿¶¨ ¶+¶-¶¨¶¶¶-¶- ¶-¶-¶¶¶-T¬¶¨¶¨)
     var folderForMenu by remember { mutableStateOf<FolderEntity?>(null) }
     
-    // ‚ï®–¥‚ï®‚ïó‚ï®‚ñë‚ï®‚îÇ ‚ï§–ó‚ï§–í‚ï®‚ïõ ‚ï®‚îê‚ï®‚ï°‚ï§–ê‚ï®‚ñì‚ï§–õ‚ï®‚ï£ ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í ‚ï§–ì‚ï®‚ï¢‚ï®‚ï° ‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï®‚ïï‚ï®‚ñì‚ï®‚ïï‚ï§–ê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú
+    // ¶‰¶¨¶-¶¶ T«T¬¶- ¶¨¶¶T¿¶-TÀ¶¶ ¶-¶¶¶¶¶-T√¶-T¬ T√¶¶¶¶ ¶-¶¶T¬¶¨¶-¶¨T¿¶-¶-¶-¶-
     var firstAccountActivated by rememberSaveable { mutableStateOf(false) }
     
-    // ‚ï®–•‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ïú‚ï®‚ï°‚ï§–í ‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï®‚ïï‚ï®‚ñì‚ï®‚ïú‚ï®‚ïõ‚ï®‚îÇ‚ï®‚ïõ ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï®‚ñë ‚ï®‚ïú‚ï®‚ïõ ‚ï®‚ï°‚ï§–ë‚ï§–í‚ï§–ú ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï§–õ - ‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï®‚ïï‚ï®‚ñì‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚îê‚ï®‚ï°‚ï§–ê‚ï®‚ñì‚ï§–õ‚ï®‚ï£ (‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚ïõ‚ï®‚î§‚ï®‚ïï‚ï®‚ïú ‚ï§–ê‚ï®‚ñë‚ï®‚ïñ)
+    // ¶’T¡¶¨¶¨ ¶-¶¶T¬ ¶-¶¶T¬¶¨¶-¶-¶-¶¶¶- ¶-¶¶¶¶¶-T√¶-T¬¶- ¶-¶- ¶¶T¡T¬TÃ ¶-¶¶¶¶¶-T√¶-T¬TÀ - ¶-¶¶T¬¶¨¶-¶¨T¿T√¶¶¶- ¶¨¶¶T¿¶-TÀ¶¶ (T¬¶-¶¨TÃ¶¶¶- ¶-¶+¶¨¶- T¿¶-¶¨)
     LaunchedEffect(accounts.isNotEmpty(), activeAccount == null) {
         if (activeAccount == null && accounts.isNotEmpty() && !firstAccountActivated) {
             firstAccountActivated = true
@@ -187,7 +186,7 @@ fun MainScreen(
         }
     }
     
-    // ‚ï®–ß‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ï¢‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï§–ë‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ï° ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï®‚ñë
+    // ¶◊¶-¶¶T¿T√¶¶¶-¶¶¶- ¶¨¶-¶¨¶¶¶¨ ¶¨T¿¶¨ T¡¶-¶¶¶-¶¶ ¶-¶¶¶¶¶-T√¶-T¬¶-
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
         mailRepo.getFolders(accountId).collect { 
@@ -196,20 +195,20 @@ fun MainScreen(
         }
     }
     
-    // ‚ï®–ß‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ï¢‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù ‚ï§–ë‚ï§–ó‚ï§–°‚ï§–í‚ï§–ó‚ï®‚ïï‚ï®‚ïë ‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñí‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï®‚ïõ‚ï®‚îÇ‚ï®‚ïõ
+    // ¶◊¶-¶¶T¿T√¶¶¶-¶¶¶- T¡T«T—T¬T«¶¨¶¶ ¶¨¶¨¶-T¿¶-¶-¶-¶-¶¶¶-
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
         mailRepo.getFlaggedCount(accountId).collect { flaggedCount = it }
     }
     
-    // ‚ï®–†‚ï®‚ñì‚ï§–í‚ï®‚ïõ‚ï®‚ïù‚ï®‚ñë‚ï§–í‚ï®‚ïï‚ï§–ó‚ï®‚ï°‚ï§–ë‚ï®‚ïë‚ï®‚ñë‚ï§–ü ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü —Ç–ê–§ ‚ï®–Æ‚ï®–§‚ï®–®‚ï®–≠ ‚ï®–∞‚ï®–†‚ï®–ß ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îê‚ï§–ì‚ï§–ë‚ï®‚ïë‚ï®‚ï° ‚ï®‚îê‚ï§–ê‚ï®‚ïï‚ï®‚ïó‚ï®‚ïõ‚ï®‚ï¢‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï§–ü
-    // ‚ï®–®‚ï§–ë‚ï®‚îê‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïñ‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚îÇ‚ï®‚ïó‚ï®‚ïõ‚ï®‚ñí‚ï®‚ñë‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï§–ê‚ï®‚ïõ‚ï®‚ïó‚ï®‚ïó‚ï®‚ï°‚ï§–ê ‚ï§–ó‚ï§–í‚ï®‚ïõ‚ï®‚ñí‚ï§–õ ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚ïú‚ï®‚ï° ‚ï®‚îê‚ï§–ê‚ï®‚ï°‚ï§–ê‚ï§–õ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïó‚ï®‚ñë‚ï§–ë‚ï§–ú ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚îê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïõ‚ï§–ê‚ï®‚ïõ‚ï§–í‚ï®‚ï° ‚ï§–ù‚ï®‚ïë‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ñë
+    // ¶–¶-T¬¶-¶-¶-T¬¶¨T«¶¶T¡¶¶¶-Tœ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨Tœ Ú¿‘ ¶ﬁ¶‘¶ÿ¶› ¶‡¶–¶◊ ¶¨T¿¶¨ ¶¨¶-¶¨T√T¡¶¶¶¶ ¶¨T¿¶¨¶¨¶-¶¶¶¶¶-¶¨Tœ
+    // ¶ÿT¡¶¨¶-¶¨TÃ¶¨T√¶¶¶- ¶¶¶¨¶-¶-¶-¶¨TÃ¶-TÀ¶¶ ¶¶¶-¶-T¬T¿¶-¶¨¶¨¶¶T¿ T«T¬¶-¶-TÀ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨Tœ ¶-¶¶ ¶¨T¿¶¶T¿TÀ¶-¶-¶¨¶-T¡TÃ ¶¨T¿¶¨ ¶¨¶-¶-¶-T¿¶-T¬¶¶ TÕ¶¶T¿¶-¶-¶-
     LaunchedEffect(activeAccount?.id) {
         val account = activeAccount ?: return@LaunchedEffect
         InitialSyncController.startSyncIfNeeded(context, account.id, mailRepo, settingsRepo)
     }
     
-    // ‚ï®–Ø‚ï®‚ï°‚ï§–ê‚ï®‚ñì‚ï®‚ïï‚ï§–ó‚ï®‚ïú‚ï®‚ñë‚ï§–ü ‚ï®‚îê‚ï§–ê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ï°‚ï§–ê‚ï®‚ïë‚ï®‚ñë - ‚ï®‚ï°‚ï§–ë‚ï§–í‚ï§–ú ‚ï®‚ïó‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï§–õ (‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚ïõ‚ï®‚î§‚ï®‚ïï‚ï®‚ïú ‚ï§–ê‚ï®‚ñë‚ï®‚ïñ)
+    // ¶ﬂ¶¶T¿¶-¶¨T«¶-¶-Tœ ¶¨T¿¶-¶-¶¶T¿¶¶¶- - ¶¶T¡T¬TÃ ¶¨¶¨ ¶-¶¶¶¶¶-T√¶-T¬TÀ (T¬¶-¶¨TÃ¶¶¶- ¶-¶+¶¨¶- T¿¶-¶¨)
     var initialCheckDone by rememberSaveable { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
@@ -223,22 +222,22 @@ fun MainScreen(
         initialCheckDone = true
     }
     
-    // ‚ï®–Æ‚ï§–í‚ï§–ë‚ï®‚ïó‚ï®‚ï°‚ï®‚ï¢‚ï®‚ïï‚ï®‚ñì‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù ‚ï§–ì‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï®‚ï° ‚ï®‚ñì‚ï§–ë‚ï®‚ï°‚ï§–ï ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï®‚ïõ‚ï®‚ñì (‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚îê‚ï®‚ïõ‚ï§–ë‚ï®‚ïó‚ï®‚ï° ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ïñ‚ï®‚ïë‚ï®‚ïï ‚ï®‚î§‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï§–ï ‚ï®‚ïï‚ï®‚ïñ Flow)
+    // ¶ﬁT¬T¡¶¨¶¶¶¶¶¨¶-¶-¶¶¶- T√¶+¶-¶¨¶¶¶-¶¨¶¶ ¶-T¡¶¶T≈ ¶-¶¶¶¶¶-T√¶-T¬¶-¶- (T¬¶-¶¨TÃ¶¶¶- ¶¨¶-T¡¶¨¶¶ ¶¨¶-¶¶T¿T√¶¨¶¶¶¨ ¶+¶-¶-¶-TÀT≈ ¶¨¶¨ Flow)
     LaunchedEffect(accounts) {
-        // ‚ï®–¶‚ï®‚î§‚ï§–°‚ï®‚ïù ‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë Flow ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ïñ‚ï®‚ïï‚ï§–í ‚ï®‚î§‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï° (‚ï®‚ïú‚ï®‚ï° ‚ï§–ê‚ï®‚ï°‚ï®‚ñë‚ï®‚îÇ‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚ïú‚ï®‚ñë ‚ï®‚ïú‚ï®‚ñë‚ï§–ó‚ï®‚ñë‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ emptyList)
+        // ¶÷¶+T—¶- ¶¨¶-¶¶¶- Flow ¶¨¶-¶¶T¿T√¶¨¶¨T¬ ¶+¶-¶-¶-TÀ¶¶ (¶-¶¶ T¿¶¶¶-¶¶¶¨T¿T√¶¶¶- ¶-¶- ¶-¶-T«¶-¶¨TÃ¶-TÀ¶¶ emptyList)
         if (!accountsLoaded || !initialCheckDone) return@LaunchedEffect
         
-        // ‚ï®–§‚ï®‚ñë‚ï§–°‚ï®‚ïù ‚ï®‚ñì‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï§–ü Flow ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ïñ‚ï®‚ïï‚ï§–í‚ï§–ú ‚ï®‚î§‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°
+        // ¶‘¶-T—¶- ¶-T¿¶¶¶-Tœ Flow ¶¨¶-¶¶T¿T√¶¨¶¨T¬TÃ ¶+¶-¶-¶-TÀ¶¶
         kotlinx.coroutines.delay(500)
         
-        // ‚ï®–Ø‚ï§–ê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ï°‚ï§–ê‚ï§–ü‚ï®‚ï°‚ï®‚ïù ‚ï®‚ï°‚ï§–ô‚ï§–° ‚ï§–ê‚ï®‚ñë‚ï®‚ïñ ‚ï®‚ïú‚ï®‚ñë‚ï®‚îê‚ï§–ê‚ï§–ü‚ï®‚ïù‚ï§–ì‚ï§–û ‚ï®‚ïï‚ï®‚ïñ ‚ï®–°‚ï®–§
+        // ¶ﬂT¿¶-¶-¶¶T¿Tœ¶¶¶- ¶¶T…T— T¿¶-¶¨ ¶-¶-¶¨T¿Tœ¶-T√TŒ ¶¨¶¨ ¶—¶‘
         val actualCount = accountRepo.getAccountCount()
         if (actualCount == 0) {
             onNavigateToSetup()
         }
     }
     
-    // ‚ï®–≠‚ï®‚ï°‚ï®‚ïñ‚ï®‚ñë‚ï®‚ñì‚ï®‚ïï‚ï§–ë‚ï®‚ïï‚ï®‚ïù‚ï§–õ‚ï®‚ï£ scope ‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï (‚ï®‚ïú‚ï®‚ï° ‚ï®‚ïõ‚ï§–í‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï§–ü‚ï®‚ï°‚ï§–í‚ï§–ë‚ï§–ü ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚ïú‚ï®‚ñë‚ï®‚ñì‚ï®‚ïï‚ï®‚îÇ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï)
+    // ¶›¶¶¶¨¶-¶-¶¨T¡¶¨¶-TÀ¶¶ scope ¶+¶¨Tœ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨¶¨ (¶-¶¶ ¶-T¬¶-¶¶¶-Tœ¶¶T¬T¡Tœ ¶¨T¿¶¨ ¶-¶-¶-¶¨¶¶¶-T∆¶¨¶¨)
     val syncScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
     
     fun syncFolders() {
@@ -247,16 +246,16 @@ fun MainScreen(
                 isLoading = true
                 
                 try {
-                    // ‚ï®–≤‚ï®‚ñë‚ï®‚ï£‚ï®‚ïù‚ï®‚ñë‚ï§–ì‚ï§–í ‚ï®‚ïú‚ï®‚ñë ‚ï®‚ñì‚ï§–ë‚ï§–û ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–û - 60 ‚ï§–ë‚ï®‚ï°‚ï®‚ïë‚ï§–ì‚ï®‚ïú‚ï®‚î§
+                    // ¶‚¶-¶¶¶-¶-T√T¬ ¶-¶- ¶-T¡TŒ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨TŒ - 60 T¡¶¶¶¶T√¶-¶+
                     kotlinx.coroutines.withTimeoutOrNull(60_000L) {
-                        // ‚ï®–±‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+                        // ¶·¶¨¶-T≈T¿¶-¶-¶¨¶¨¶¨T¿T√¶¶¶- ¶¨¶-¶¨¶¶¶¨
                         val result = withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                         
                         if (result is com.iwo.mailclient.eas.EasResult.Error) {
                             return@withTimeoutOrNull
                         }
                         
-                        // ‚ï®–±‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚îê‚ï®‚ïï‚ï§–ë‚ï§–ú‚ï®‚ïù‚ï®‚ñë ‚ï®‚ñì‚ï®‚ïõ ‚ï®–¢‚ï®–±‚ï®–•‚ï®–µ ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ñë‚ï§–ï ‚ï§–ë ‚ï®‚îê‚ï®‚ïï‚ï§–ë‚ï§–ú‚ï®‚ïù‚ï®‚ñë‚ï®‚ïù‚ï®‚ïï
+                        // ¶·¶¨¶-T≈T¿¶-¶-¶¨¶¨¶¨T¿T√¶¶¶- ¶¨¶¨T¡TÃ¶-¶- ¶-¶- ¶“¶·¶’¶Â ¶¨¶-¶¨¶¶¶-T≈ T¡ ¶¨¶¨T¡TÃ¶-¶-¶-¶¨
                         val emailFolderTypes = listOf(1, 2, 3, 4, 5, 6, 11, 12)
                         val currentFolders = withContext(Dispatchers.IO) {
                             com.iwo.mailclient.data.database.MailDatabase.getInstance(context)
@@ -264,7 +263,7 @@ fun MainScreen(
                         }
                         val foldersToSync = currentFolders.filter { it.type in emailFolderTypes }
                         
-                        // ‚ï®–±‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚îê‚ï®‚ñë‚ï§–ê‚ï®‚ñë‚ï®‚ïó‚ï®‚ïó‚ï®‚ï°‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï®‚ïõ ‚ï§–ë ‚ï§–í‚ï®‚ñë‚ï®‚ï£‚ï®‚ïù‚ï®‚ñë‚ï§–ì‚ï§–í‚ï®‚ïõ‚ï®‚ïù ‚ï®‚ïú‚ï®‚ñë ‚ï®‚ïë‚ï®‚ñë‚ï®‚ï¢‚ï®‚î§‚ï§–ì‚ï§–û ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï§–ì
+                        // ¶·¶¨¶-T≈T¿¶-¶-¶¨¶¨¶¨T¿T√¶¶¶- ¶¨¶-T¿¶-¶¨¶¨¶¶¶¨TÃ¶-¶- T¡ T¬¶-¶¶¶-¶-T√T¬¶-¶- ¶-¶- ¶¶¶-¶¶¶+T√TŒ ¶¨¶-¶¨¶¶T√
                         withContext(Dispatchers.IO) {
                             kotlinx.coroutines.supervisorScope {
                                 foldersToSync.map { folder ->
@@ -279,7 +278,7 @@ fun MainScreen(
                             }
                         }
                         
-                        // ‚ï®–±‚ï®‚ïõ‚ï§–ï‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï§–ü‚ï®‚ï°‚ï®‚ïù ‚ï®‚ñì‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï§–ü ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï
+                        // ¶·¶-T≈T¿¶-¶-Tœ¶¶¶- ¶-T¿¶¶¶-Tœ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨¶¨
                         settingsRepo.setLastSyncTime(System.currentTimeMillis())
                     }
                 } catch (_: Exception) { }
@@ -289,7 +288,7 @@ fun MainScreen(
         }
     }
     
-    // ‚ï®–§‚ï®‚ïï‚ï®‚ñë‚ï®‚ïó‚ï®‚ïõ‚ï®‚îÇ ‚ï§–ë‚ï®‚ïõ‚ï®‚ïñ‚ï®‚î§‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+    // ¶‘¶¨¶-¶¨¶-¶¶ T¡¶-¶¨¶+¶-¶-¶¨Tœ ¶¨¶-¶¨¶¶¶¨
     if (showCreateFolderDialog) {
         val folderCreatedMsg = Strings.folderCreated
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
@@ -358,7 +357,7 @@ fun MainScreen(
         )
     }
     
-    // ‚ï®–§‚ï®‚ïï‚ï®‚ñë‚ï®‚ïó‚ï®‚ïõ‚ï®‚îÇ ‚ï§–ì‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+    // ¶‘¶¨¶-¶¨¶-¶¶ T√¶+¶-¶¨¶¶¶-¶¨Tœ ¶¨¶-¶¨¶¶¶¨
     folderToDelete?.let { folder ->
         val folderDeletedMsg = Strings.folderDeleted
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
@@ -385,7 +384,7 @@ fun MainScreen(
                                             folderDeletedMsg, 
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
-                                        // ‚ï®–Æ‚ï®‚ñí‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïó‚ï§–ü‚ï®‚ï°‚ï®‚ïù ‚ï§–ë‚ï®‚îê‚ï®‚ïï‚ï§–ë‚ï®‚ïõ‚ï®‚ïë ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë
+                                        // ¶ﬁ¶-¶-¶-¶-¶¨Tœ¶¶¶- T¡¶¨¶¨T¡¶-¶¶ ¶¨¶-¶¨¶-¶¶
                                         withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                                     }
                                     is com.iwo.mailclient.eas.EasResult.Error -> {
@@ -417,27 +416,27 @@ fun MainScreen(
         )
     }
     
-    // ‚ï®–¨‚ï®‚ï°‚ï®‚ïú‚ï§–û ‚ï®‚î§‚ï®‚ï°‚ï®‚ï£‚ï§–ë‚ï§–í‚ï®‚ñì‚ï®‚ïï‚ï®‚ï£ ‚ï§–ë ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïõ‚ï®‚ï£ (‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚î§‚ï®‚ïõ‚ï®‚ïó‚ï®‚îÇ‚ï®‚ïõ‚ï®‚ïù ‚ï®‚ïú‚ï®‚ñë‚ï®‚ï¢‚ï®‚ñë‚ï§–í‚ï®‚ïï‚ï®‚ïï)
+    // ¶‹¶¶¶-TŒ ¶+¶¶¶¶T¡T¬¶-¶¨¶¶ T¡ ¶¨¶-¶¨¶¶¶-¶¶ (¶¨T¿¶¨ ¶+¶-¶¨¶¶¶-¶- ¶-¶-¶¶¶-T¬¶¨¶¨)
     folderForMenu?.let { folder ->
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { folderForMenu = null },
             title = { Text(folder.displayName) },
             text = {
                 Column {
-                    // ‚ï®–Ø‚ï®‚ï°‚ï§–ê‚ï®‚ï°‚ï®‚ïï‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï§–í‚ï§–ú
+                    // ¶ﬂ¶¶T¿¶¶¶¨¶-¶¶¶-¶-¶-¶-T¬TÃ
                     ListItem(
                         headlineContent = { Text(Strings.rename) },
-                        leadingContent = { Icon(Icons.Default.Edit, null) },
+                        leadingContent = { Icon(AppIcons.Edit, null) },
                         modifier = Modifier.clickable {
                             folderForMenu = null
                             renameNewName = folder.displayName
                             folderToRename = folder
                         }
                     )
-                    // ‚ï®–≥‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï®‚ïï‚ï§–í‚ï§–ú
+                    // ¶„¶+¶-¶¨¶¨T¬TÃ
                     ListItem(
                         headlineContent = { Text(Strings.delete, color = MaterialTheme.colorScheme.error) },
-                        leadingContent = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                        leadingContent = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
                         modifier = Modifier.clickable {
                             folderForMenu = null
                             folderToDelete = folder
@@ -454,7 +453,7 @@ fun MainScreen(
         )
     }
     
-    // ‚ï®–§‚ï®‚ïï‚ï®‚ñë‚ï®‚ïó‚ï®‚ïõ‚ï®‚îÇ ‚ï®‚îê‚ï®‚ï°‚ï§–ê‚ï®‚ï°‚ï®‚ïï‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+    // ¶‘¶¨¶-¶¨¶-¶¶ ¶¨¶¶T¿¶¶¶¨¶-¶¶¶-¶-¶-¶-¶-¶¨Tœ ¶¨¶-¶¨¶¶¶¨
     folderToRename?.let { folder ->
         val folderRenamedMsg = Strings.folderRenamed
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
@@ -489,7 +488,7 @@ fun MainScreen(
                                             folderRenamedMsg, 
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
-                                        // ‚ï®–Æ‚ï®‚ñí‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïó‚ï§–ü‚ï®‚ï°‚ï®‚ïù ‚ï§–ë‚ï®‚îê‚ï®‚ïï‚ï§–ë‚ï®‚ïõ‚ï®‚ïë ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë
+                                        // ¶ﬁ¶-¶-¶-¶-¶¨Tœ¶¶¶- T¡¶¨¶¨T¡¶-¶¶ ¶¨¶-¶¨¶-¶¶
                                         withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                                     }
                                     is com.iwo.mailclient.eas.EasResult.Error -> {
@@ -554,7 +553,7 @@ fun MainScreen(
                     },
                     onFavoritesClick = {
                         scope.launch { drawerState.close() }
-                        // ‚ï®–Ø‚ï®‚ï°‚ï§–ê‚ï®‚ï°‚ï§–ï‚ï®‚ïõ‚ï®‚î§‚ï®‚ïï‚ï®‚ïù ‚ï®‚ïú‚ï®‚ñë ‚ï§–ù‚ï®‚ïë‚ï§–ê‚ï®‚ñë‚ï®‚ïú ‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñí‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï§–ï (‚ï®‚ïï‚ï§–ë‚ï®‚îê‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïñ‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï§–ë‚ï®‚îê‚ï®‚ï°‚ï§–ñ‚ï®‚ïï‚ï®‚ñë‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ID)
+                        // ¶ﬂ¶¶T¿¶¶T≈¶-¶+¶¨¶- ¶-¶- TÕ¶¶T¿¶-¶- ¶¨¶¨¶-T¿¶-¶-¶-TÀT≈ (¶¨T¡¶¨¶-¶¨TÃ¶¨T√¶¶¶- T¡¶¨¶¶T∆¶¨¶-¶¨TÃ¶-TÀ¶¶ ID)
                         onNavigateToEmailList("favorites")
                     },
                     onSettingsClick = {
@@ -577,7 +576,7 @@ fun MainScreen(
             }
         }
     ) {
-        // ‚ï®–Ø‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïñ‚ï§–õ‚ï®‚ñì‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ïñ‚ï®‚ïë‚ï§–ì ‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í ‚ï®‚ïú‚ï®‚ï° ‚ï®‚ïñ‚ï®‚ñë‚ï®‚îÇ‚ï§–ê‚ï§–ì‚ï®‚ï¢‚ï®‚ï°‚ï®‚ïú
+        // ¶ﬂ¶-¶¶¶-¶¨TÀ¶-¶-¶¶¶- ¶¨¶-¶¶T¿T√¶¨¶¶T√ ¶¨¶-¶¶¶- ¶-¶¶¶¶¶-T√¶-T¬ ¶-¶¶ ¶¨¶-¶¶T¿T√¶¶¶¶¶-
         if (activeAccount == null) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -614,11 +613,11 @@ fun MainScreen(
                     containerColor = colorTheme.gradientStart,
                     contentColor = Color.White
                 ) {
-                    Icon(Icons.Default.Edit, Strings.compose)
+                    Icon(AppIcons.Edit, Strings.compose)
                 }
             }
         ) { padding ->
-            // ‚ï®–™‚ï§–ê‚ï®‚ñë‚ï§–ë‚ï®‚ïï‚ï®‚ñì‚ï®‚ñë‚ï§–ü ‚ï®‚îÇ‚ï®‚ïó‚ï®‚ñë‚ï®‚ñì‚ï®‚ïú‚ï®‚ñë‚ï§–ü ‚ï§–ë‚ï§–í‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ñ‚ï®‚ñë ‚ï§–ë ‚ï®‚ïï‚ï®‚ïú‚ï§–î‚ï®‚ïõ‚ï§–ê‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ï°‚ï®‚ï£ ‚ï®‚ïõ ‚ï®‚îê‚ï§–ê‚ï®‚ïï‚ï®‚ïó‚ï®‚ïõ‚ï®‚ï¢‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï®‚ïï
+            // ¶⁄T¿¶-T¡¶¨¶-¶-Tœ ¶¶¶¨¶-¶-¶-¶-Tœ T¡T¬T¿¶-¶-¶¨T∆¶- T¡ ¶¨¶-Tƒ¶-T¿¶-¶-T∆¶¨¶¶¶¶ ¶- ¶¨T¿¶¨¶¨¶-¶¶¶¶¶-¶¨¶¨
             HomeContent(
                 activeAccount = activeAccount,
                 folders = folders,
@@ -653,19 +652,19 @@ private fun HomeContent(
     var aboutExpanded by rememberSaveable { mutableStateOf(false) }
     var tipsExpanded by rememberSaveable { mutableStateOf(false) }
     
-    // ‚ï®–¢‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï§–ü ‚ï®‚îê‚ï®‚ïõ‚ï§–ë‚ï®‚ïó‚ï®‚ï°‚ï®‚î§‚ï®‚ïú‚ï®‚ï°‚ï®‚ï£ ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï
+    // ¶“T¿¶¶¶-Tœ ¶¨¶-T¡¶¨¶¶¶+¶-¶¶¶¶ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨¶¨
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val lastSyncTime by settingsRepo.lastSyncTime.collectAsState(initial = 0L)
     
-    // ‚ï®–Ø‚ï§–ê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ï°‚ï§–ê‚ï§–ü‚ï®‚ï°‚ï®‚ïù ‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï®‚ïï‚ï®‚ñì‚ï®‚ï°‚ï®‚ïú ‚ï®‚ïó‚ï®‚ïï Battery Saver
+    // ¶ﬂT¿¶-¶-¶¶T¿Tœ¶¶¶- ¶-¶¶T¬¶¨¶-¶¶¶- ¶¨¶¨ Battery Saver
     val isBatterySaverActive = remember { settingsRepo.isBatterySaverActive() }
     val ignoreBatterySaver by settingsRepo.ignoreBatterySaver.collectAsState(initial = false)
     val showBatterySaverWarning = isBatterySaverActive && !ignoreBatterySaver
     
-    // ‚ï®–±‚ï®‚ïõ‚ï§–ë‚ï§–í‚ï®‚ïõ‚ï§–ü‚ï®‚ïú‚ï®‚ïï‚ï®‚ï° ‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï§–ë‚ï®‚ïë‚ï§–ê‚ï§–õ‚ï§–í‚ï®‚ïï‚ï§–ü ‚ï§–ê‚ï®‚ï°‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚î§‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï (‚ï§–ë‚ï®‚ïõ‚ï§–ï‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï§–ü‚ï®‚ï°‚ï§–í‚ï§–ë‚ï§–ü ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚ïú‚ï®‚ñë‚ï®‚ñì‚ï®‚ïï‚ï®‚îÇ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï, ‚ï§–ë‚ï®‚ñí‚ï§–ê‚ï®‚ñë‚ï§–ë‚ï§–õ‚ï®‚ñì‚ï®‚ñë‚ï®‚ï°‚ï§–í‚ï§–ë‚ï§–ü ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚îê‚ï®‚ï°‚ï§–ê‚ï®‚ï°‚ï®‚ïñ‚ï®‚ñë‚ï®‚îê‚ï§–ì‚ï§–ë‚ï®‚ïë‚ï®‚ï° ‚ï®‚îê‚ï§–ê‚ï®‚ïï‚ï®‚ïó‚ï®‚ïõ‚ï®‚ï¢‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï§–ü)
+    // ¶·¶-T¡T¬¶-Tœ¶-¶¨¶¶ ¶+¶¨Tœ T¡¶¶T¿TÀT¬¶¨Tœ T¿¶¶¶¶¶-¶-¶¶¶-¶+¶-T∆¶¨¶¨ (T¡¶-T≈T¿¶-¶-Tœ¶¶T¬T¡Tœ ¶¨T¿¶¨ ¶-¶-¶-¶¨¶¶¶-T∆¶¨¶¨, T¡¶-T¿¶-T¡TÀ¶-¶-¶¶T¬T¡Tœ ¶¨T¿¶¨ ¶¨¶¶T¿¶¶¶¨¶-¶¨T√T¡¶¶¶¶ ¶¨T¿¶¨¶¨¶-¶¶¶¶¶-¶¨Tœ)
     var isRecommendationDismissed by rememberSaveable { mutableStateOf(false) }
     
-    // ‚ï®–´‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïó‚ï®‚ïï‚ï®‚ïñ‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï° ‚ï®‚ïú‚ï®‚ñë‚ï®‚ïñ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë (‚ï®‚ñì‚ï§–õ‚ï®‚ïú‚ï®‚ï°‚ï§–ë‚ï®‚ï°‚ï®‚ïú‚ï§–õ ‚ï®‚î§‚ï®‚ïõ LazyColumn)
+    // ¶€¶-¶¶¶-¶¨¶¨¶¨¶-¶-¶-¶-¶-TÀ¶¶ ¶-¶-¶¨¶-¶-¶-¶¨Tœ ¶¨¶-¶¨¶-¶¶ (¶-TÀ¶-¶¶T¡¶¶¶-TÀ ¶+¶- LazyColumn)
     val inboxName = Strings.inbox
     val draftsName = Strings.drafts
     val trashName = Strings.trash
@@ -682,7 +681,7 @@ private fun HomeContent(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ‚ï®–±‚ï§–í‚ï®‚ñë‚ï§–í‚ï§–ì‚ï§–ë ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï —Ç–ê–§ ‚ï§–ë‚ï®‚ïõ‚ï®‚ñì‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï®‚ñì‚ï®‚ïï‚ï®‚î§
+        // ¶·T¬¶-T¬T√T¡ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨¶¨ Ú¿‘ T¡¶-¶-T¿¶¶¶-¶¶¶-¶-TÀ¶¶ ¶-¶¨¶+
         if (isSyncing || isLoading) {
             item {
                 Card(
@@ -715,7 +714,7 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–®‚ï®‚ïú‚ï®‚î§‚ï®‚ïï‚ï®‚ïë‚ï®‚ñë‚ï§–í‚ï®‚ïõ‚ï§–ê Battery Saver
+        // ¶ÿ¶-¶+¶¨¶¶¶-T¬¶-T¿ Battery Saver
         if (showBatterySaverWarning) {
             item {
                 Card(
@@ -734,7 +733,7 @@ private fun HomeContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            Icons.Default.BatterySaver,
+                            AppIcons.BatterySaver,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.size(20.dp)
@@ -750,7 +749,7 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–Ø‚ï§–ê‚ï®‚ïï‚ï®‚ñì‚ï®‚ï°‚ï§–í‚ï§–ë‚ï§–í‚ï®‚ñì‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï®‚ñë‚ï§–ü ‚ï®‚ïë‚ï®‚ñë‚ï§–ê‚ï§–í‚ï®‚ïõ‚ï§–ó‚ï®‚ïë‚ï®‚ñë —Ç–ê–§ ‚ï§–ë‚ï®‚ïõ‚ï®‚ñì‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï®‚îÇ‚ï§–ê‚ï®‚ñë‚ï®‚î§‚ï®‚ïï‚ï®‚ï°‚ï®‚ïú‚ï§–í‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï§–ë‚ï§–í‚ï®‚ïï‚ï®‚ïó‚ï§–ú ‚ï§–ë ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ï°‚ï®‚ï£
+        // ¶ﬂT¿¶¨¶-¶¶T¬T¡T¬¶-¶¶¶-¶-¶-Tœ ¶¶¶-T¿T¬¶-T«¶¶¶- Ú¿‘ T¡¶-¶-T¿¶¶¶-¶¶¶-¶-TÀ¶¶ ¶¶T¿¶-¶+¶¨¶¶¶-T¬¶-TÀ¶¶ T¡T¬¶¨¶¨TÃ T¡ ¶-¶-¶¨¶-¶-T∆¶¨¶¶¶¶
         item {
             val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
             var welcomeVisible by remember { mutableStateOf(!animationsEnabled) }
@@ -782,7 +781,7 @@ private fun HomeContent(
                             Row(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // ‚ï®–†‚ï®‚ñì‚ï®‚ñë‚ï§–í‚ï®‚ñë‚ï§–ê ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï®‚ñë
+                                // ¶–¶-¶-T¬¶-T¿ ¶-¶¶¶¶¶-T√¶-T¬¶-
                                 Box(
                                     modifier = Modifier
                                         .size(56.dp)
@@ -791,7 +790,7 @@ private fun HomeContent(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = activeAccount?.displayName?.firstOrNull()?.uppercase() ?: "–Å–Ø–£–∑",
+                                        text = activeAccount?.displayName?.firstOrNull()?.uppercase() ?: "®ﬂ”Á",
                                         style = MaterialTheme.typography.headlineMedium,
                                         color = Color.White
                                     )
@@ -812,7 +811,7 @@ private fun HomeContent(
                                 }
                             }
                             
-                            // ‚ï®–¢‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï§–ü ‚ï®‚îê‚ï®‚ïõ‚ï§–ë‚ï®‚ïó‚ï®‚ï°‚ï®‚î§‚ï®‚ïú‚ï®‚ï°‚ï®‚ï£ ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï - ‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïñ‚ï§–õ‚ï®‚ñì‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù ‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚ïë‚ï®‚ïõ‚ï®‚îÇ‚ï®‚î§‚ï®‚ñë ‚ï®‚ïú‚ï®‚ï° ‚ï®‚ïï‚ï®‚î§‚ï§–°‚ï§–í ‚ï§–ë‚ï®‚ïï‚ï®‚ïú‚ï§–ï‚ï§–ê‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü
+                            // ¶“T¿¶¶¶-Tœ ¶¨¶-T¡¶¨¶¶¶+¶-¶¶¶¶ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨¶¨ - ¶¨¶-¶¶¶-¶¨TÀ¶-¶-¶¶¶- T¬¶-¶¨TÃ¶¶¶- ¶¶¶-¶¶¶+¶- ¶-¶¶ ¶¨¶+T—T¬ T¡¶¨¶-T≈T¿¶-¶-¶¨¶¨¶-T∆¶¨Tœ
                             if (!isSyncing && !isLoading && lastSyncTime > 0) {
                                 Spacer(modifier = Modifier.height(16.dp))
                                 
@@ -847,7 +846,7 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–∞‚ï®‚ï°‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚î§‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚î§‚ï®‚ïú‚ï§–ü - ‚ï®‚ï°‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ï°‚ï§–ë‚ï§–í‚ï§–ú ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï ‚ï§–ë > 1000 ‚ï®‚îê‚ï®‚ïï‚ï§–ë‚ï®‚ï°‚ï®‚ïù
+        // ¶‡¶¶¶¶¶-¶-¶¶¶-¶+¶-T∆¶¨Tœ ¶+¶-Tœ - ¶¶T¡¶¨¶¨ ¶¶T¡T¬TÃ ¶¨¶-¶¨¶¶¶¨ T¡ > 1000 ¶¨¶¨T¡¶¶¶-
         val foldersOver1000 = folders.filter { 
             it.type in listOf(2, 3, 4, 5) && it.totalCount > 1000 
         }
@@ -865,7 +864,7 @@ private fun HomeContent(
                 val recommendationText = if (folderNames.size == 1) {
                     Strings.cleanupFolderRecommendation(folderNames.first())
                 } else {
-                    Strings.cleanupFoldersRecommendation(folderNames.joinToString(" ‚ï®‚ïï "))
+                    Strings.cleanupFoldersRecommendation(folderNames.joinToString(" ¶¨ "))
                 }
                 
                 Card(
@@ -896,7 +895,7 @@ private fun HomeContent(
                         }
                         IconButton(onClick = { isRecommendationDismissed = true }) {
                             Icon(
-                                Icons.Default.Close,
+                                AppIcons.Close,
                                 contentDescription = Strings.close,
                                 tint = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f)
                             )
@@ -906,7 +905,7 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–°‚ï§–õ‚ï§–ë‚ï§–í‚ï§–ê‚ï§–õ‚ï®‚ï£ ‚ï®‚î§‚ï®‚ïõ‚ï§–ë‚ï§–í‚ï§–ì‚ï®‚îê ‚ï®‚ïë ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ñë‚ï®‚ïù
+        // ¶—TÀT¡T¬T¿TÀ¶¶ ¶+¶-T¡T¬T√¶¨ ¶¶ ¶¨¶-¶¨¶¶¶-¶-
         if (folders.isNotEmpty()) {
             item {
                 Row(
@@ -920,40 +919,40 @@ private fun HomeContent(
                         fontWeight = FontWeight.SemiBold
                     )
                     TextButton(onClick = onSyncFolders) {
-                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                        Icon(AppIcons.Refresh, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(refreshText)
                     }
                 }
             }
             
-            // ‚ï®–Æ‚ï§–ë‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïú‚ï§–õ‚ï®‚ï° ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï ‚ï®‚ñì ‚ï§–ë‚ï®‚ï°‚ï§–í‚ï®‚ïë‚ï®‚ï°
+            // ¶ﬁT¡¶-¶-¶-¶-TÀ¶¶ ¶¨¶-¶¨¶¶¶¨ ¶- T¡¶¶T¬¶¶¶¶
             val mainFolders = folders.filter { it.type in listOf(2, 3, 4, 5) }
             
             data class FolderDisplay(val id: String, val name: String, val count: Int, val unreadCount: Int, val type: Int)
             
-            // ‚ï®–Ø‚ï®‚ïõ‚ï§–ê‚ï§–ü‚ï®‚î§‚ï®‚ïõ‚ï®‚ïë: ‚ï®–¢‚ï§–ï‚ï®‚ïõ‚ï®‚î§‚ï§–ü‚ï§–ô‚ï®‚ïï‚ï®‚ï°, ‚ï®–Æ‚ï§–í‚ï®‚îê‚ï§–ê‚ï®‚ñë‚ï®‚ñì‚ï®‚ïó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°, ‚ï®–∑‚ï®‚ï°‚ï§–ê‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïï‚ï®‚ïë‚ï®‚ïï, ‚ï®–≥‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï§–°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°, ‚ï®–®‚ï®‚ïñ‚ï®‚ñí‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°, ‚ï®–™‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï§–õ
+            // ¶ﬂ¶-T¿Tœ¶+¶-¶¶: ¶“T≈¶-¶+TœT…¶¨¶¶, ¶ﬁT¬¶¨T¿¶-¶-¶¨¶¶¶-¶-TÀ¶¶, ¶Á¶¶T¿¶-¶-¶-¶¨¶¶¶¨, ¶„¶+¶-¶¨T—¶-¶-TÀ¶¶, ¶ÿ¶¨¶-T¿¶-¶-¶-TÀ¶¶, ¶⁄¶-¶-T¬¶-¶¶T¬TÀ
             val orderedFolders = mutableListOf<FolderDisplay>()
             
-            // ‚ï®–¢‚ï§–ï‚ï®‚ïõ‚ï®‚î§‚ï§–ü‚ï§–ô‚ï®‚ïï‚ï®‚ï° (type 2)
+            // ¶“T≈¶-¶+TœT…¶¨¶¶ (type 2)
             mainFolders.find { it.type == 2 }?.let { folder ->
                 orderedFolders.add(FolderDisplay(folder.id, inboxName, folder.totalCount, folder.unreadCount, folder.type))
             }
-            // ‚ï®–Æ‚ï§–í‚ï®‚îê‚ï§–ê‚ï®‚ñë‚ï®‚ñì‚ï®‚ïó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï° (type 5)
+            // ¶ﬁT¬¶¨T¿¶-¶-¶¨¶¶¶-¶-TÀ¶¶ (type 5)
             mainFolders.find { it.type == 5 }?.let { folder ->
                 orderedFolders.add(FolderDisplay(folder.id, sentName, folder.totalCount, folder.unreadCount, folder.type))
             }
-            // ‚ï®–∑‚ï®‚ï°‚ï§–ê‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïï‚ï®‚ïë‚ï®‚ïï (type 3)
+            // ¶Á¶¶T¿¶-¶-¶-¶¨¶¶¶¨ (type 3)
             mainFolders.find { it.type == 3 }?.let { folder ->
                 orderedFolders.add(FolderDisplay(folder.id, draftsName, folder.totalCount, folder.unreadCount, folder.type))
             }
-            // ‚ï®–≥‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï§–°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï° (type 4)
+            // ¶„¶+¶-¶¨T—¶-¶-TÀ¶¶ (type 4)
             mainFolders.find { it.type == 4 }?.let { folder ->
                 orderedFolders.add(FolderDisplay(folder.id, trashName, folder.totalCount, folder.unreadCount, folder.type))
             }
-            // ‚ï®–®‚ï®‚ïñ‚ï®‚ñí‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°
+            // ¶ÿ¶¨¶-T¿¶-¶-¶-TÀ¶¶
             orderedFolders.add(FolderDisplay("favorites", favoritesName, flaggedCount, 0, -1))
-            // ‚ï®–™‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï§–õ
+            // ¶⁄¶-¶-T¬¶-¶¶T¬TÀ
             orderedFolders.add(FolderDisplay("contacts", contactsName, 0, 0, -2))
             
             val displayFolders = orderedFolders.toList()
@@ -961,7 +960,7 @@ private fun HomeContent(
             val chunkedFolders = displayFolders.chunked(2)
             itemsIndexed(chunkedFolders) { index, rowFolders ->
                 val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
-                // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï®‚ïõ‚ï§–ü‚ï®‚ñì‚ï®‚ïó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï§–ë ‚ï®‚ïñ‚ï®‚ñë‚ï®‚î§‚ï®‚ï°‚ï§–ê‚ï®‚ï¢‚ï®‚ïë‚ï®‚ïõ‚ï®‚ï£ ‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï®‚ïë‚ï®‚ñë‚ï®‚ï¢‚ï®‚î§‚ï®‚ïõ‚ï®‚ï£ ‚ï§–ë‚ï§–í‚ï§–ê‚ï®‚ïõ‚ï®‚ïë‚ï®‚ïï (‚ï®‚ï°‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ñì‚ï®‚ïë‚ï®‚ïó‚ï§–û‚ï§–ó‚ï®‚ï°‚ï®‚ïú‚ï§–õ)
+                // ¶–¶-¶¨¶-¶-T∆¶¨Tœ ¶¨¶-Tœ¶-¶¨¶¶¶-¶¨Tœ T¡ ¶¨¶-¶+¶¶T¿¶¶¶¶¶-¶¶ ¶+¶¨Tœ ¶¶¶-¶¶¶+¶-¶¶ T¡T¬T¿¶-¶¶¶¨ (¶¶T¡¶¨¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¨ ¶-¶¶¶¨TŒT«¶¶¶-TÀ)
                 var visible by remember { mutableStateOf(!animationsEnabled) }
                 LaunchedEffect(animationsEnabled) {
                     if (animationsEnabled) {
@@ -1006,7 +1005,7 @@ private fun HomeContent(
                         }
                     }
                 } else {
-                    // ‚ï®–°‚ï®‚ï°‚ï®‚ïñ ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï —Ç–ê–§ ‚ï®‚îê‚ï§–ê‚ï®‚ïõ‚ï§–ë‚ï§–í‚ï®‚ïõ ‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïñ‚ï§–õ‚ï®‚ñì‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù
+                    // ¶—¶¶¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¨ Ú¿‘ ¶¨T¿¶-T¡T¬¶- ¶¨¶-¶¶¶-¶¨TÀ¶-¶-¶¶¶-
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = if (rowFolders.size == 1) Arrangement.Center else Arrangement.spacedBy(12.dp)
@@ -1067,7 +1066,7 @@ private fun HomeContent(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            Icons.Default.FolderOff,
+                            AppIcons.FolderOff,
                             null,
                             modifier = Modifier.size(64.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
@@ -1085,7 +1084,7 @@ private fun HomeContent(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         FilledTonalButton(onClick = onSyncFolders) {
-                            Icon(Icons.Default.Sync, null)
+                            Icon(AppIcons.Sync, null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(Strings.synchronize)
                         }
@@ -1094,7 +1093,7 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–±‚ï®‚ïõ‚ï®‚ñì‚ï®‚ï°‚ï§–í‚ï§–õ ‚ï®‚îê‚ï®‚ïõ ‚ï§–ê‚ï®‚ñë‚ï®‚ñí‚ï®‚ïõ‚ï§–í‚ï®‚ï° ‚ï§–ë ‚ï®‚îê‚ï§–ê‚ï®‚ïï‚ï®‚ïó‚ï®‚ïõ‚ï®‚ï¢‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï®‚ï°‚ï®‚ïù
+        // ¶·¶-¶-¶¶T¬TÀ ¶¨¶- T¿¶-¶-¶-T¬¶¶ T¡ ¶¨T¿¶¨¶¨¶-¶¶¶¶¶-¶¨¶¶¶-
         item {
             Spacer(modifier = Modifier.height(8.dp))
             Card(
@@ -1112,7 +1111,7 @@ private fun HomeContent(
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ïï‚ï§–ê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï®‚ñë‚ï§–ü ‚ï®‚ïó‚ï®‚ñë‚ï®‚ïù‚ï®‚îê‚ï®‚ïõ‚ï§–ó‚ï®‚ïë‚ï®‚ñë
+                        // ¶–¶-¶¨¶-¶¨T¿¶-¶-¶-¶-¶-¶-Tœ ¶¨¶-¶-¶¨¶-T«¶¶¶-
                         val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
                         
                         val bulbScale: Float
@@ -1144,7 +1143,7 @@ private fun HomeContent(
                         }
                         
                         Icon(
-                            imageVector = Icons.Default.Lightbulb,
+                            imageVector = AppIcons.Lightbulb,
                             contentDescription = null,
                             tint = Color(0xFFFFB300).copy(alpha = bulbAlpha),
                             modifier = Modifier
@@ -1159,7 +1158,7 @@ private fun HomeContent(
                             modifier = Modifier.weight(1f)
                         )
                         Icon(
-                            imageVector = if (tipsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            imageVector = if (tipsExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1177,25 +1176,25 @@ private fun HomeContent(
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             TipItem(
-                                icon = Icons.Default.Notifications,
+                                icon = AppIcons.Notifications,
                                 text = Strings.tipNotification,
                                 iconColor = Color(0xFFFF9800),
                                 iconBackgroundColor = Color(0xFFFFF3E0)
                             )
                             TipItem(
-                                icon = Icons.Default.BatteryChargingFull,
+                                icon = AppIcons.BatteryChargingFull,
                                 text = Strings.tipBattery,
                                 iconColor = Color(0xFF4CAF50),
                                 iconBackgroundColor = Color(0xFFE8F5E9)
                             )
                             TipItem(
-                                icon = Icons.Default.Lock,
+                                icon = AppIcons.Lock,
                                 text = Strings.tipCertificate,
                                 iconColor = Color(0xFF9C27B0),
                                 iconBackgroundColor = Color(0xFFF3E5F5)
                             )
                             TipItem(
-                                icon = Icons.Default.Info,
+                                icon = AppIcons.Info,
                                 text = Strings.tipBeta,
                                 iconColor = Color(0xFF2196F3),
                                 iconBackgroundColor = Color(0xFFE3F2FD)
@@ -1206,7 +1205,7 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–Æ ‚ï®‚îê‚ï§–ê‚ï®‚ïï‚ï®‚ïó‚ï®‚ïõ‚ï®‚ï¢‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï®‚ïï —Ç–ê–§ ‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïù‚ï®‚îê‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï§–ë‚ï®‚ïõ‚ï®‚ñì‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï®‚ñì‚ï®‚ïï‚ï®‚î§
+        // ¶ﬁ ¶¨T¿¶¨¶¨¶-¶¶¶¶¶-¶¨¶¨ Ú¿‘ ¶¶¶-¶-¶¨¶-¶¶T¬¶-TÀ¶¶ T¡¶-¶-T¿¶¶¶-¶¶¶-¶-TÀ¶¶ ¶-¶¨¶+
         item {
             Spacer(modifier = Modifier.height(8.dp))
             Card(
@@ -1224,7 +1223,7 @@ private fun HomeContent(
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ïï‚ï§–ê‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï®‚ñì‚ï®‚ï°‚ï§–ê‚ï§–í‚ï®‚ïï‚ï®‚ïë ‚ï§–ë ‚ï®‚îÇ‚ï§–ê‚ï®‚ñë‚ï®‚î§‚ï®‚ïï‚ï®‚ï°‚ï®‚ïú‚ï§–í‚ï®‚ïõ‚ï®‚ïù
+                        // ¶–¶-¶¨¶-¶¨T¿¶-¶-¶-¶-¶-TÀ¶¶ ¶¶¶-¶-¶-¶¶T¿T¬¶¨¶¶ T¡ ¶¶T¿¶-¶+¶¨¶¶¶-T¬¶-¶-
                         val colorTheme = com.iwo.mailclient.ui.theme.LocalColorTheme.current
                         val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
                         
@@ -1278,7 +1277,7 @@ private fun HomeContent(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                Icons.Default.Email,
+                                AppIcons.Email,
                                 null,
                                 tint = Color.White,
                                 modifier = Modifier
@@ -1294,13 +1293,13 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.1.2",
+                                text = "v1.2.0",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Icon(
-                            imageVector = if (aboutExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            imageVector = if (aboutExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1329,7 +1328,7 @@ private fun HomeContent(
                             
                             Spacer(modifier = Modifier.height(12.dp))
                             
-                            // ‚ï®–¢‚ï®‚ïõ‚ï®‚ïñ‚ï®‚ïù‚ï®‚ïõ‚ï®‚ï¢‚ï®‚ïú‚ï®‚ïõ‚ï§–ë‚ï§–í‚ï®‚ïï ‚ï®‚ñì ‚ï®‚ñì‚ï®‚ïï‚ï®‚î§‚ï®‚ï° ‚ï§–ó‚ï®‚ïï‚ï®‚îê‚ï®‚ïõ‚ï®‚ñì
+                            // ¶“¶-¶¨¶-¶-¶¶¶-¶-T¡T¬¶¨ ¶- ¶-¶¨¶+¶¶ T«¶¨¶¨¶-¶-
                             androidx.compose.foundation.layout.FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1345,13 +1344,13 @@ private fun HomeContent(
                             HorizontalDivider()
                             Spacer(modifier = Modifier.height(12.dp))
                             
-                            // ‚ï®–∞‚ï®‚ñë‚ï®‚ïñ‚ï§–ê‚ï®‚ñë‚ï®‚ñí‚ï®‚ïõ‚ï§–í‚ï§–ó‚ï®‚ïï‚ï®‚ïë
+                            // ¶‡¶-¶¨T¿¶-¶-¶-T¬T«¶¨¶¶
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    Icons.Default.Person,
+                                    AppIcons.Person,
                                     null,
                                     modifier = Modifier.size(16.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1373,7 +1372,7 @@ private fun HomeContent(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    Icons.Default.Email,
+                                    AppIcons.Email,
                                     null,
                                     modifier = Modifier.size(16.dp),
                                     tint = MaterialTheme.colorScheme.primary
@@ -1388,7 +1387,7 @@ private fun HomeContent(
                             
                             Spacer(modifier = Modifier.height(4.dp))
                             
-                            // Telegram ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïú‚ï®‚ñë‚ï®‚ïó
+                            // Telegram ¶¶¶-¶-¶-¶¨
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1396,7 +1395,7 @@ private fun HomeContent(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    Icons.Default.Send,
+                                    AppIcons.Send,
                                     null,
                                     modifier = Modifier.size(16.dp),
                                     tint = MaterialTheme.colorScheme.primary
@@ -1412,7 +1411,7 @@ private fun HomeContent(
                             Spacer(modifier = Modifier.height(8.dp))
                             
                             Text(
-                                text = "‚î¨–π 2025",
+                                text = "© 2025",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1422,7 +1421,7 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–™‚ï®‚ïú‚ï®‚ïõ‚ï®‚îê‚ï®‚ïë‚ï®‚ñë "‚ï®–Æ‚ï®‚ïñ‚ï®‚ïú‚ï®‚ñë‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïù‚ï®‚ïï‚ï§–í‚ï§–ú‚ï§–ë‚ï§–ü ‚ï§–ë ‚ï§–ê‚ï®‚ñë‚ï®‚ïñ‚ï®‚ñì‚ï®‚ïï‚ï§–í‚ï®‚ïï‚ï®‚ï°‚ï®‚ïù ‚ï®‚îê‚ï§–ê‚ï®‚ïõ‚ï®‚îÇ‚ï§–ê‚ï®‚ñë‚ï®‚ïù‚ï®‚ïù‚ï§–õ" ‚ï§–ë ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ï°‚ï®‚ï£
+        // ¶⁄¶-¶-¶¨¶¶¶- "¶ﬁ¶¨¶-¶-¶¶¶-¶-¶¨T¬TÃT¡Tœ T¡ T¿¶-¶¨¶-¶¨T¬¶¨¶¶¶- ¶¨T¿¶-¶¶T¿¶-¶-¶-TÀ" T¡ ¶-¶-¶¨¶-¶-T∆¶¨¶¶¶¶
         item {
             val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
             val isRu = LocalLanguage.current == AppLanguage.RUSSIAN
@@ -1432,7 +1431,7 @@ private fun HomeContent(
             else 
                 "https://github.com/DedovMosol/IwoMailClient/blob/main/CHANGELOG_EN.md"
             
-            // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï§–ì‚ï®‚ïó‚ï§–ú‚ï§–ë‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï (‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚ï°‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ñì‚ï®‚ïë‚ï®‚ïó‚ï§–û‚ï§–ó‚ï®‚ï°‚ï®‚ïú‚ï§–õ)
+            // ¶–¶-¶¨¶-¶-T∆¶¨Tœ ¶¨T√¶¨TÃT¡¶-T∆¶¨¶¨ (T¬¶-¶¨TÃ¶¶¶- ¶¶T¡¶¨¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¨ ¶-¶¶¶¨TŒT«¶¶¶-TÀ)
             val pulseScale: Float = if (animationsEnabled) {
                 val infiniteTransition = rememberInfiniteTransition(label = "changelogPulse")
                 infiniteTransition.animateFloat(
@@ -1448,7 +1447,7 @@ private fun HomeContent(
                 1f
             }
             
-            // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï§–ë‚ï®‚ñì‚ï®‚ï°‚ï§–ó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï‚ï§–ü ‚ï®‚îÇ‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï§–ñ‚ï§–õ
+            // ¶–¶-¶¨¶-¶-T∆¶¨Tœ T¡¶-¶¶T«¶¶¶-¶¨Tœ ¶¶T¿¶-¶-¶¨T∆TÀ
             val borderAlpha: Float = if (animationsEnabled) {
                 val infiniteTransition = rememberInfiniteTransition(label = "changelogBorder")
                 infiniteTransition.animateFloat(
@@ -1479,7 +1478,7 @@ private fun HomeContent(
                 )
             ) {
                 Icon(
-                    Icons.Default.History,
+                    AppIcons.History,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
@@ -1488,14 +1487,14 @@ private fun HomeContent(
             }
         }
         
-        // ‚ï®–™‚ï®‚ïú‚ï®‚ïõ‚ï®‚îê‚ï®‚ïë‚ï®‚ñë ‚ï®‚îê‚ï®‚ïõ‚ï®‚ï¢‚ï®‚ï°‚ï§–ê‚ï§–í‚ï®‚ñì‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ï£ ‚ï§–ë ‚ï®‚îê‚ï§–ì‚ï®‚ïó‚ï§–ú‚ï§–ë‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï§–û‚ï§–ô‚ï®‚ï°‚ï®‚ï£ ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ï°‚ï®‚ï£
+        // ¶⁄¶-¶-¶¨¶¶¶- ¶¨¶-¶¶¶¶T¿T¬¶-¶-¶-¶-¶-¶¨¶¶ T¡ ¶¨T√¶¨TÃT¡¶¨T¿T√TŒT…¶¶¶¶ ¶-¶-¶¨¶-¶-T∆¶¨¶¶¶¶
         item {
             var showDonateDialog by remember { mutableStateOf(false) }
             val context = LocalContext.current
             val accountCopiedText = Strings.accountCopied
             val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
             
-            // ‚ï®–Ø‚ï§–ì‚ï®‚ïó‚ï§–ú‚ï§–ë‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï§–û‚ï§–ô‚ï®‚ñë‚ï§–ü ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü (‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚ï°‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ñì‚ï®‚ïë‚ï®‚ïó‚ï§–û‚ï§–ó‚ï®‚ï°‚ï®‚ïú‚ï§–õ)
+            // ¶ﬂT√¶¨TÃT¡¶¨T¿T√TŒT…¶-Tœ ¶-¶-¶¨¶-¶-T∆¶¨Tœ (T¬¶-¶¨TÃ¶¶¶- ¶¶T¡¶¨¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¨ ¶-¶¶¶¨TŒT«¶¶¶-TÀ)
             val pulseScale: Float = if (animationsEnabled) {
                 val infiniteTransition = rememberInfiniteTransition(label = "pulse")
                 infiniteTransition.animateFloat(
@@ -1514,7 +1513,7 @@ private fun HomeContent(
             if (showDonateDialog) {
                 com.iwo.mailclient.ui.theme.ScaledAlertDialog(
                     onDismissRequest = { showDonateDialog = false },
-                    icon = { Icon(Icons.Default.Favorite, null, tint = Color(0xFFE91E63)) },
+                    icon = { Icon(AppIcons.Favorite, null, tint = Color(0xFFE91E63)) },
                     title = { 
                         Text(
                             Strings.supportDeveloper,
@@ -1535,8 +1534,8 @@ private fun HomeContent(
                                 )
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
-                                    DonateInfoRow(Strings.recipient, "‚ï®–§‚ï®‚ïõ‚ï®‚î§‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì ‚ï®–†‚ï®‚ïú‚ï®‚î§‚ï§–ê‚ï®‚ï°‚ï®‚ï£ ‚ï®–®‚ï®‚îÇ‚ï®‚ïõ‚ï§–ê‚ï®‚ï°‚ï®‚ñì‚ï®‚ïï‚ï§–ó")
-                                    // ‚ï®–≠‚ï®‚ïõ‚ï®‚ïù‚ï®‚ï°‚ï§–ê ‚ï§–ë‚ï§–ó‚ï§–°‚ï§–í‚ï®‚ñë ‚ï§–ë ‚ï®‚îê‚ï®‚ï°‚ï§–ê‚ï®‚ï°‚ï®‚ïú‚ï®‚ïõ‚ï§–ë‚ï®‚ïõ‚ï®‚ïù
+                                    DonateInfoRow(Strings.recipient, "¶‘¶-¶+¶-¶-¶-¶- ¶–¶-¶+T¿¶¶¶¶ ¶ÿ¶¶¶-T¿¶¶¶-¶¨T«")
+                                    // ¶›¶-¶-¶¶T¿ T¡T«T—T¬¶- T¡ ¶¨¶¶T¿¶¶¶-¶-T¡¶-¶-
                                     Row(modifier = Modifier.padding(vertical = 2.dp)) {
                                         Text(
                                             Strings.accountNumber,
@@ -1554,7 +1553,7 @@ private fun HomeContent(
                                             )
                                         }
                                     }
-                                    DonateInfoRow(Strings.bank, "‚ï®–Ø‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïõ‚ï®‚ïó‚ï®‚ï¢‚ï§–ë‚ï®‚ïë‚ï®‚ïï‚ï®‚ï£ ‚ï®‚ñí‚ï®‚ñë‚ï®‚ïú‚ï®‚ïë ‚ï®–Ø‚ï®–†‚ï®–Æ ‚ï®–±‚ï®‚ñí‚ï®‚ï°‚ï§–ê‚ï®‚ñí‚ï®‚ñë‚ï®‚ïú‚ï®‚ïë")
+                                    DonateInfoRow(Strings.bank, "¶ﬂ¶-¶-¶-¶¨¶¶T¡¶¶¶¨¶¶ ¶-¶-¶-¶¶ ¶ﬂ¶–¶ﬁ ¶·¶-¶¶T¿¶-¶-¶-¶¶")
                                 }
                             }
                         }
@@ -1569,14 +1568,14 @@ private fun HomeContent(
                             }
                             TextButton(
                                 onClick = {
-                                    // ‚ï®–™‚ï®‚ïõ‚ï®‚îê‚ï®‚ïï‚ï§–ê‚ï§–ì‚ï®‚ï°‚ï®‚ïù ‚ï®‚ïú‚ï®‚ïõ‚ï®‚ïù‚ï®‚ï°‚ï§–ê ‚ï§–ë‚ï§–ó‚ï§–°‚ï§–í‚ï®‚ñë
+                                    // ¶⁄¶-¶¨¶¨T¿T√¶¶¶- ¶-¶-¶-¶¶T¿ T¡T«T—T¬¶-
                                     val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                     val clip = android.content.ClipData.newPlainText("Account", "40817810354405296071")
                                     clipboard.setPrimaryClip(clip)
                                     android.widget.Toast.makeText(context, accountCopiedText, android.widget.Toast.LENGTH_SHORT).show()
                                 }
                             ) {
-                                Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
+                                Icon(AppIcons.ContentCopy, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(Strings.copyAccount)
                             }
@@ -1597,13 +1596,13 @@ private fun HomeContent(
                 ),
                 shape = MaterialTheme.shapes.large
             ) {
-                Icon(Icons.Default.Favorite, null)
+                Icon(AppIcons.Favorite, null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(Strings.supportDeveloper, fontWeight = FontWeight.SemiBold)
             }
         }
         
-        // ‚ï®–Æ‚ï§–í‚ï§–ë‚ï§–í‚ï§–ì‚ï®‚îê ‚ï§–ë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïñ‚ï§–ì ‚ï®‚î§‚ï®‚ïó‚ï§–ü FAB
+        // ¶ﬁT¬T¡T¬T√¶¨ T¡¶-¶¨¶¨T√ ¶+¶¨Tœ FAB
         item {
             Spacer(modifier = Modifier.height(80.dp))
         }
@@ -1698,7 +1697,7 @@ private fun FolderCardDisplay(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     
-    // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚ïù‚ï®‚ñë‚ï§–ë‚ï§–ò‚ï§–í‚ï®‚ñë‚ï®‚ñí‚ï®‚ñë ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚ïú‚ï®‚ñë‚ï®‚ï¢‚ï®‚ñë‚ï§–í‚ï®‚ïï‚ï®‚ïï (‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚ï°‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ñì‚ï®‚ïë‚ï®‚ïó‚ï§–û‚ï§–ó‚ï®‚ï°‚ï®‚ïú‚ï§–õ)
+    // ¶–¶-¶¨¶-¶-T∆¶¨Tœ ¶-¶-T¡T»T¬¶-¶-¶- ¶¨T¿¶¨ ¶-¶-¶¶¶-T¬¶¨¶¨ (T¬¶-¶¨TÃ¶¶¶- ¶¶T¡¶¨¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¨ ¶-¶¶¶¨TŒT«¶¶¶-TÀ)
     val scale by animateFloatAsState(
         targetValue = if (animationsEnabled && isPressed) 0.96f else 1f,
         animationSpec = if (animationsEnabled) {
@@ -1712,14 +1711,14 @@ private fun FolderCardDisplay(
         label = "scale"
     )
     
-    // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï§–í‚ï®‚ï°‚ï®‚ïú‚ï®‚ïï ‚ï®‚îê‚ï§–ê‚ï®‚ïï ‚ï®‚ïú‚ï®‚ñë‚ï®‚ï¢‚ï®‚ñë‚ï§–í‚ï®‚ïï‚ï®‚ïï
+    // ¶–¶-¶¨¶-¶-T∆¶¨Tœ T¬¶¶¶-¶¨ ¶¨T¿¶¨ ¶-¶-¶¶¶-T¬¶¨¶¨
     val elevation by animateDpAsState(
         targetValue = if (animationsEnabled && isPressed) 1.dp else 4.dp,
         animationSpec = if (animationsEnabled) tween(150) else snap(),
         label = "elevation"
     )
     
-    // ‚ï®–Ø‚ï§–ì‚ï®‚ïó‚ï§–ú‚ï§–ë‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚ïï ‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë‚ï§–ó‚ï®‚ïï‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ï° ‚ï®‚ïï‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïë‚ï®‚ïï (‚ï§–í‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïë‚ï®‚ïõ ‚ï®‚ï°‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ñì‚ï®‚ïë‚ï®‚ïó‚ï§–û‚ï§–ó‚ï®‚ï°‚ï®‚ïú‚ï§–õ)
+    // ¶ﬂT√¶¨TÃT¡¶-T∆¶¨Tœ ¶¨ ¶¨¶-¶¶¶-T«¶¨¶-¶-¶-¶¨¶¶ ¶¨¶¶¶-¶-¶¶¶¨ (T¬¶-¶¨TÃ¶¶¶- ¶¶T¡¶¨¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¨ ¶-¶¶¶¨TŒT«¶¶¶-TÀ)
     val iconScale: Float
     val iconRotation: Float
     
@@ -1749,7 +1748,7 @@ private fun FolderCardDisplay(
         iconRotation = 0f
     }
     
-    // ‚ï®–Æ‚ï®‚îê‚ï§–ê‚ï®‚ï°‚ï®‚î§‚ï®‚ï°‚ï®‚ïó‚ï§–ü‚ï®‚ï°‚ï®‚ïù ‚ï§–ñ‚ï®‚ñì‚ï®‚ï°‚ï§–í‚ï®‚ñë ‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï®‚ïë‚ï®‚ñë‚ï®‚ï¢‚ï®‚î§‚ï®‚ïõ‚ï®‚îÇ‚ï®‚ïõ ‚ï§–í‚ï®‚ïï‚ï®‚îê‚ï®‚ñë ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï —Ç–ê–§ ‚ï®‚ï°‚ï®‚î§‚ï®‚ïï‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï§–ë‚ï®‚ïõ‚ï®‚ñì‚ï§–ê‚ï®‚ï°‚ï®‚ïù‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï§–ë‚ï§–í‚ï®‚ïï‚ï®‚ïó‚ï§–ú
+    // ¶ﬁ¶¨T¿¶¶¶+¶¶¶¨Tœ¶¶¶- T∆¶-¶¶T¬¶- ¶+¶¨Tœ ¶¶¶-¶¶¶+¶-¶¶¶- T¬¶¨¶¨¶- ¶¨¶-¶¨¶¶¶¨ Ú¿‘ ¶¶¶+¶¨¶-TÀ¶¶ T¡¶-¶-T¿¶¶¶-¶¶¶-¶-TÀ¶¶ T¡T¬¶¨¶¨TÃ
     data class FolderColors(
         val icon: ImageVector,
         val gradientColors: List<Color>
@@ -1757,35 +1756,35 @@ private fun FolderCardDisplay(
     
     val folderColors = when (type) {
         2 -> FolderColors(
-            Icons.Default.Inbox, 
+            AppIcons.Inbox, 
             listOf(Color(0xFF5C6BC0), Color(0xFF3949AB)) // Indigo
         )
         3 -> FolderColors(
-            Icons.Default.Drafts, 
+            AppIcons.Drafts, 
             listOf(Color(0xFF78909C), Color(0xFF546E7A)) // Blue Grey
         )
         4 -> FolderColors(
-            Icons.Default.Delete, 
+            AppIcons.Delete, 
             listOf(Color(0xFFEF5350), Color(0xFFE53935)) // Red
         )
         5 -> FolderColors(
-            Icons.Default.Send, 
+            AppIcons.Send, 
             listOf(Color(0xFF7E57C2), Color(0xFF5E35B1)) // Deep Purple
         )
         6 -> FolderColors(
-            Icons.Default.Outbox, 
+            AppIcons.Outbox, 
             listOf(Color(0xFF26A69A), Color(0xFF00897B)) // Teal
         )
         -1 -> FolderColors(
-            Icons.Default.Star, 
+            AppIcons.Star, 
             listOf(Color(0xFFFFCA28), Color(0xFFFFA000)) // Amber
         )
         -2 -> FolderColors(
-            Icons.Default.Contacts, 
+            AppIcons.Contacts, 
             listOf(Color(0xFF4FC3F7), Color(0xFF29B6F6)) // Light Blue
         )
         else -> FolderColors(
-            Icons.Default.Folder, 
+            AppIcons.Folder, 
             listOf(Color(0xFF90A4AE), Color(0xFF78909C)) // Blue Grey Light
         )
     }
@@ -1815,7 +1814,7 @@ private fun FolderCardDisplay(
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ‚ï®–®‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïë‚ï®‚ñë ‚ï§–ë ‚ï®‚îê‚ï®‚ïõ‚ï®‚ïó‚ï§–ì‚ï®‚îê‚ï§–ê‚ï®‚ïõ‚ï®‚ïñ‚ï§–ê‚ï®‚ñë‚ï§–ó‚ï®‚ïú‚ï§–õ‚ï®‚ïù ‚ï§–î‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïõ‚ï®‚ïù ‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ï°‚ï®‚ï£
+                // ¶ÿ¶¶¶-¶-¶¶¶- T¡ ¶¨¶-¶¨T√¶¨T¿¶-¶¨T¿¶-T«¶-TÀ¶- Tƒ¶-¶-¶-¶- ¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¶¶¶
                 Box(
                     modifier = Modifier
                         .size(44.dp)
@@ -1845,7 +1844,7 @@ private fun FolderCardDisplay(
                         color = Color.White
                     )
                     Spacer(modifier = Modifier.height(2.dp))
-                    // ‚ï®–§‚ï®‚ïó‚ï§–ü ‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï®‚ïõ‚ï®‚ñì ‚ï®‚ïú‚ï®‚ï° ‚ï®‚îê‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïñ‚ï§–õ‚ï®‚ñì‚ï®‚ñë‚ï®‚ï°‚ï®‚ïù "‚ï®‚îê‚ï®‚ïï‚ï§–ë‚ï®‚ï°‚ï®‚ïù"
+                    // ¶‘¶¨Tœ ¶¶¶-¶-T¬¶-¶¶T¬¶-¶- ¶-¶¶ ¶¨¶-¶¶¶-¶¨TÀ¶-¶-¶¶¶- "¶¨¶¨T¡¶¶¶-"
                     if (type != -2) {
                         Text(
                             text = when {
@@ -1858,7 +1857,7 @@ private fun FolderCardDisplay(
                     }
                 }
                 
-                // Badge ‚ï§–ë ‚ï®‚ïú‚ï®‚ï°‚ï®‚îê‚ï§–ê‚ï®‚ïõ‚ï§–ó‚ï®‚ïï‚ï§–í‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ïù‚ï®‚ïï —Ç–ê–§ ‚ï§–ë ‚ï®‚îê‚ï§–ì‚ï®‚ïó‚ï§–ú‚ï§–ë‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ï°‚ï®‚ï£ (‚ï®‚ï°‚ï§–ë‚ï®‚ïó‚ï®‚ïï ‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ñì‚ï®‚ïë‚ï®‚ïó‚ï§–û‚ï§–ó‚ï®‚ï°‚ï®‚ïú‚ï§–õ)
+                // Badge T¡ ¶-¶¶¶¨T¿¶-T«¶¨T¬¶-¶-¶-TÀ¶-¶¨ Ú¿‘ T¡ ¶¨T√¶¨TÃT¡¶-T∆¶¨¶¶¶¶ (¶¶T¡¶¨¶¨ ¶-¶-¶¨¶-¶-T∆¶¨¶¨ ¶-¶¶¶¨TŒT«¶¶¶-TÀ)
                 if (unreadCount > 0) {
                     val badgeScale: Float = if (animationsEnabled) {
                         val badgeTransition = rememberInfiniteTransition(label = "badge")
@@ -1910,7 +1909,7 @@ private fun SearchTopBar(
     onSearchClick: () -> Unit
 ) {
     val colorTheme = com.iwo.mailclient.ui.theme.LocalColorTheme.current
-    // ‚ï®–£‚ï§–ê‚ï®‚ñë‚ï®‚î§‚ï®‚ïï‚ï®‚ï°‚ï®‚ïú‚ï§–í‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï§–î‚ï®‚ïõ‚ï®‚ïú ‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï§–í‚ï®‚ïõ‚ï®‚îê‚ï®‚ñí‚ï®‚ñë‚ï§–ê‚ï®‚ñë
+    // ¶”T¿¶-¶+¶¨¶¶¶-T¬¶-TÀ¶¶ Tƒ¶-¶- ¶+¶¨Tœ T¬¶-¶¨¶-¶-T¿¶-
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1939,7 +1938,7 @@ private fun SearchTopBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onMenuClick) {
-                    Icon(Icons.Default.Menu, Strings.menu, tint = colorTheme.primaryLight)
+                    Icon(AppIcons.Menu, Strings.menu, tint = colorTheme.primaryLight)
                 }
                 
                 Text(
@@ -1987,7 +1986,7 @@ private fun DrawerContent(
     onFolderLongClick: (FolderEntity) -> Unit = {}
 ) {
     LazyColumn {
-        // ‚ï®–ß‚ï®‚ñë‚ï®‚îÇ‚ï®‚ïõ‚ï®‚ïó‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïõ‚ï®‚ïë ‚ï§–ë ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï®‚ïõ‚ï®‚ïù
+        // ¶◊¶-¶¶¶-¶¨¶-¶-¶-¶¶ T¡ ¶-¶¶¶¶¶-T√¶-T¬¶-¶-
         item {
             DrawerHeader(
                 account = activeAccount,
@@ -1996,7 +1995,7 @@ private fun DrawerContent(
             )
         }
         
-        // ‚ï®–¢‚ï§–õ‚ï®‚ñí‚ï®‚ïõ‚ï§–ê ‚ï®‚ñë‚ï®‚ïë‚ï®‚ïë‚ï®‚ñë‚ï§–ì‚ï®‚ïú‚ï§–í‚ï®‚ñë
+        // ¶“TÀ¶-¶-T¿ ¶-¶¶¶¶¶-T√¶-T¬¶-
         if (showAccountPicker) {
             items(accounts) { account ->
                 AccountItem(
@@ -2009,14 +2008,14 @@ private fun DrawerContent(
             item {
                 ListItem(
                     headlineContent = { Text(Strings.addAccount) },
-                    leadingContent = { Icon(Icons.Default.Add, null) },
+                    leadingContent = { Icon(AppIcons.Add, null) },
                     modifier = Modifier.clickable(onClick = onAddAccount)
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
         }
         
-        // ‚ï®–Ø‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï - ‚ï§–ë‚ï®‚ïú‚ï®‚ñë‚ï§–ó‚ï®‚ñë‚ï®‚ïó‚ï®‚ñë ‚ï®‚ïõ‚ï§–ë‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïú‚ï§–õ‚ï®‚ï° (‚ï®–¢‚ï§–ï‚ï®‚ïõ‚ï®‚î§‚ï§–ü‚ï§–ô‚ï®‚ïï‚ï®‚ï°, ‚ï®–∑‚ï®‚ï°‚ï§–ê‚ï®‚ïú‚ï®‚ïõ‚ï®‚ñì‚ï®‚ïï‚ï®‚ïë‚ï®‚ïï, ‚ï®–≥‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï§–°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°, ‚ï®–Æ‚ï§–í‚ï®‚îê‚ï§–ê‚ï®‚ñë‚ï®‚ñì‚ï®‚ïó‚ï®‚ï°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°, ‚ï®–®‚ï§–ë‚ï§–ï‚ï®‚ïõ‚ï®‚î§‚ï§–ü‚ï§–ô‚ï®‚ïï‚ï®‚ï°, ‚ï®–±‚ï®‚îê‚ï®‚ñë‚ï®‚ïù)
+        // ¶ﬂ¶-¶¨¶¶¶¨ - T¡¶-¶-T«¶-¶¨¶- ¶-T¡¶-¶-¶-¶-TÀ¶¶ (¶“T≈¶-¶+TœT…¶¨¶¶, ¶Á¶¶T¿¶-¶-¶-¶¨¶¶¶¨, ¶„¶+¶-¶¨T—¶-¶-TÀ¶¶, ¶ﬁT¬¶¨T¿¶-¶-¶¨¶¶¶-¶-TÀ¶¶, ¶ÿT¡T≈¶-¶+TœT…¶¨¶¶, ¶·¶¨¶-¶-)
         val mainFolderTypes = listOf(2, 3, 4, 5, 6, 11)
         val mainFolders = folders.filter { it.type in mainFolderTypes }
             .sortedBy { mainFolderTypes.indexOf(it.type) }
@@ -2028,7 +2027,7 @@ private fun DrawerContent(
             )
         }
         
-        // ‚ï®–®‚ï®‚ïñ‚ï®‚ñí‚ï§–ê‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï° - ‚ï®‚îê‚ï®‚ïõ‚ï§–ë‚ï®‚ïó‚ï®‚ï° ‚ï®–®‚ï§–ë‚ï§–ï‚ï®‚ïõ‚ï®‚î§‚ï§–ü‚ï§–ô‚ï®‚ïï‚ï§–ï
+        // ¶ÿ¶¨¶-T¿¶-¶-¶-TÀ¶¶ - ¶¨¶-T¡¶¨¶¶ ¶ÿT¡T≈¶-¶+TœT…¶¨T≈
         item {
             Surface(
                 modifier = Modifier
@@ -2042,7 +2041,7 @@ private fun DrawerContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Star, null, tint = Color(0xFFFFB300))
+                    Icon(AppIcons.Star, null, tint = Color(0xFFFFB300))
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.favorites,
@@ -2060,7 +2059,7 @@ private fun DrawerContent(
             }
         }
         
-        // ‚ï®–Æ‚ï§–ë‚ï§–í‚ï®‚ñë‚ï®‚ïó‚ï§–ú‚ï®‚ïú‚ï§–õ‚ï®‚ï° ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï (‚ï®‚ïë‚ï§–ê‚ï®‚ïõ‚ï®‚ïù‚ï®‚ï° Contacts - type 9, ‚ï§–ì ‚ï®‚ïú‚ï®‚ñë‚ï§–ë ‚ï§–ë‚ï®‚ñì‚ï®‚ïõ‚ï®‚ï£ ‚ï§–ù‚ï®‚ïë‚ï§–ê‚ï®‚ñë‚ï®‚ïú ‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï®‚ïõ‚ï®‚ñì)
+        // ¶ﬁT¡T¬¶-¶¨TÃ¶-TÀ¶¶ ¶¨¶-¶¨¶¶¶¨ (¶¶T¿¶-¶-¶¶ Contacts - type 9, T√ ¶-¶-T¡ T¡¶-¶-¶¶ TÕ¶¶T¿¶-¶- ¶¶¶-¶-T¬¶-¶¶T¬¶-¶-)
         val hiddenFolderTypes = listOf(9) // Contacts
         val otherFolders = folders.filter { it.type !in mainFolderTypes && it.type !in hiddenFolderTypes }
         if (otherFolders.isNotEmpty()) {
@@ -2076,30 +2075,30 @@ private fun DrawerContent(
             }
         }
         
-        // ‚ï®–±‚ï®‚ïõ‚ï®‚ïñ‚ï®‚î§‚ï®‚ñë‚ï§–í‚ï§–ú ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï§–ì
+        // ¶·¶-¶¨¶+¶-T¬TÃ ¶¨¶-¶¨¶¶T√
         item {
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             ListItem(
                 headlineContent = { Text(Strings.createFolder) },
-                leadingContent = { Icon(Icons.Default.CreateNewFolder, null) },
+                leadingContent = { Icon(AppIcons.CreateNewFolder, null) },
                 modifier = Modifier.clickable(onClick = onCreateFolder)
             )
         }
         
-        // ‚ï®–™‚ï®‚ïõ‚ï®‚ïú‚ï§–í‚ï®‚ñë‚ï®‚ïë‚ï§–í‚ï§–õ
+        // ¶⁄¶-¶-T¬¶-¶¶T¬TÀ
         item {
             ListItem(
                 headlineContent = { Text(Strings.contacts) },
-                leadingContent = { Icon(Icons.Default.People, null) },
+                leadingContent = { Icon(AppIcons.People, null) },
                 modifier = Modifier.clickable(onClick = onContactsClick)
             )
         }
         
-        // ‚ï®–≠‚ï®‚ñë‚ï§–ë‚ï§–í‚ï§–ê‚ï®‚ïõ‚ï®‚ï£‚ï®‚ïë‚ï®‚ïï
+        // ¶›¶-T¡T¬T¿¶-¶¶¶¶¶¨
         item {
             ListItem(
                 headlineContent = { Text(Strings.settings) },
-                leadingContent = { Icon(Icons.Default.Settings, null) },
+                leadingContent = { Icon(AppIcons.Settings, null) },
                 modifier = Modifier.clickable(onClick = onSettingsClick)
             )
         }
@@ -2113,7 +2112,7 @@ private fun DrawerHeader(
     onToggle: () -> Unit
 ) {
     val colorTheme = com.iwo.mailclient.ui.theme.LocalColorTheme.current
-    // ‚ï®–£‚ï§–ê‚ï®‚ñë‚ï®‚î§‚ï®‚ïï‚ï®‚ï°‚ï®‚ïú‚ï§–í‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï§–ï‚ï®‚ï°‚ï®‚î§‚ï®‚ï°‚ï§–ê ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïë ‚ï®‚ñì SetupScreen
+    // ¶”T¿¶-¶+¶¨¶¶¶-T¬¶-TÀ¶¶ T≈¶¶¶+¶¶T¿ ¶¶¶-¶¶ ¶- SetupScreen
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -2167,8 +2166,8 @@ private fun DrawerHeader(
                     )
                 }
                 Icon(
-                    imageVector = if (showPicker) Icons.Default.KeyboardArrowUp 
-                                  else Icons.Default.KeyboardArrowDown,
+                    imageVector = if (showPicker) AppIcons.KeyboardArrowUp 
+                                  else AppIcons.KeyboardArrowDown,
                     contentDescription = null,
                     tint = Color.White
                 )
@@ -2203,7 +2202,7 @@ private fun AccountItem(
         },
         trailingContent = {
             if (isActive) {
-                Icon(Icons.Default.Check, "‚ï®–†‚ï®‚ïë‚ï§–í‚ï®‚ïï‚ï®‚ñì‚ï®‚ïú‚ï§–õ‚ï®‚ï£", tint = MaterialTheme.colorScheme.primary)
+                Icon(AppIcons.Check, "¶–¶¶T¬¶¨¶-¶-TÀ¶¶", tint = MaterialTheme.colorScheme.primary)
             }
         },
         modifier = Modifier.clickable(onClick = onClick)
@@ -2218,32 +2217,32 @@ private fun FolderItem(
     onLongClick: (() -> Unit)? = null
 ) {
     val icon = when (folder.type) {
-        2 -> Icons.Default.Inbox
-        3 -> Icons.Default.Drafts
-        4 -> Icons.Default.Delete
-        5 -> Icons.Default.Send
-        6 -> Icons.Default.Outbox
-        7 -> Icons.Default.Task
-        8 -> Icons.Default.CalendarMonth
-        9 -> Icons.Default.Contacts
-        11 -> Icons.Default.Report // Junk/Spam
-        else -> Icons.Default.Folder
+        2 -> AppIcons.Inbox
+        3 -> AppIcons.Drafts
+        4 -> AppIcons.Delete
+        5 -> AppIcons.Send
+        6 -> AppIcons.Outbox
+        7 -> AppIcons.Task
+        8 -> AppIcons.CalendarMonth
+        9 -> AppIcons.Contacts
+        11 -> AppIcons.Report // Junk/Spam
+        else -> AppIcons.Folder
     }
     
-    // ‚ï®–∂‚ï®‚ñì‚ï®‚ï°‚ï§–í ‚ï®‚ïï‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïë‚ï®‚ïï - ‚ï®‚ïë‚ï§–ê‚ï®‚ñë‚ï§–ë‚ï®‚ïú‚ï§–õ‚ï®‚ï£ ‚ï®‚î§‚ï®‚ïó‚ï§–ü ‚ï§–ë‚ï®‚îê‚ï®‚ñë‚ï®‚ïù‚ï®‚ñë ‚ï®‚ïï ‚ï®‚ïë‚ï®‚ïõ‚ï§–ê‚ï®‚ïñ‚ï®‚ïï‚ï®‚ïú‚ï§–õ
+    // ¶Ê¶-¶¶T¬ ¶¨¶¶¶-¶-¶¶¶¨ - ¶¶T¿¶-T¡¶-TÀ¶¶ ¶+¶¨Tœ T¡¶¨¶-¶-¶- ¶¨ ¶¶¶-T¿¶¨¶¨¶-TÀ
     val iconTint = when (folder.type) {
-        4 -> MaterialTheme.colorScheme.error // ‚ï®–≥‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï§–°‚ï®‚ïú‚ï®‚ïú‚ï§–õ‚ï®‚ï°
-        11 -> Color(0xFFE53935) // ‚ï®–±‚ï®‚îê‚ï®‚ñë‚ï®‚ïù - ‚ï®‚ïë‚ï§–ê‚ï®‚ñë‚ï§–ë‚ï®‚ïú‚ï§–õ‚ï®‚ï£
+        4 -> MaterialTheme.colorScheme.error // ¶„¶+¶-¶¨T—¶-¶-TÀ¶¶
+        11 -> Color(0xFFE53935) // ¶·¶¨¶-¶- - ¶¶T¿¶-T¡¶-TÀ¶¶
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     
-    // ‚ï®–´‚ï®‚ïõ‚ï®‚ïë‚ï®‚ñë‚ï®‚ïó‚ï®‚ïï‚ï®‚ïñ‚ï®‚ïõ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïú‚ï®‚ïõ‚ï®‚ï° ‚ï®‚ïú‚ï®‚ñë‚ï®‚ïñ‚ï®‚ñì‚ï®‚ñë‚ï®‚ïú‚ï®‚ïï‚ï®‚ï° ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï
+    // ¶€¶-¶¶¶-¶¨¶¨¶¨¶-¶-¶-¶-¶-¶-¶¶ ¶-¶-¶¨¶-¶-¶-¶¨¶¶ ¶¨¶-¶¨¶¶¶¨
     val displayName = Strings.getFolderName(folder.type, folder.displayName)
     
-    // ‚ï®–±‚ï®‚ïï‚ï§–ë‚ï§–í‚ï®‚ï°‚ï®‚ïù‚ï®‚ïú‚ï§–õ‚ï®‚ï° ‚ï®‚îê‚ï®‚ñë‚ï®‚îê‚ï®‚ïë‚ï®‚ïï ‚ï®‚ïú‚ï®‚ï°‚ï®‚ïó‚ï§–ú‚ï®‚ïñ‚ï§–ü ‚ï§–ì‚ï®‚î§‚ï®‚ñë‚ï®‚ïó‚ï§–ü‚ï§–í‚ï§–ú (‚ï®‚ñì‚ï®‚ïë‚ï®‚ïó‚ï§–û‚ï§–ó‚ï®‚ñë‚ï§–ü ‚ï®–±‚ï®‚îê‚ï®‚ñë‚ï®‚ïù)
+    // ¶·¶¨T¡T¬¶¶¶-¶-TÀ¶¶ ¶¨¶-¶¨¶¶¶¨ ¶-¶¶¶¨TÃ¶¨Tœ T√¶+¶-¶¨TœT¬TÃ (¶-¶¶¶¨TŒT«¶-Tœ ¶·¶¨¶-¶-)
     val isSystemFolder = folder.type in listOf(2, 3, 4, 5, 6, 11)
     
-    // ‚ï®–®‚ï§–ë‚ï®‚îê‚ï®‚ïõ‚ï®‚ïó‚ï§–ú‚ï®‚ïñ‚ï§–ì‚ï®‚ï°‚ï®‚ïù Surface ‚ï§–ë combinedClickable ‚ï®‚ñì‚ï®‚ïù‚ï®‚ï°‚ï§–ë‚ï§–í‚ï®‚ïõ NavigationDrawerItem
+    // ¶ÿT¡¶¨¶-¶¨TÃ¶¨T√¶¶¶- Surface T¡ combinedClickable ¶-¶-¶¶T¡T¬¶- NavigationDrawerItem
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -2287,7 +2286,7 @@ private fun TipItem(
 ) {
     val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
     
-    // ‚ï®–†‚ï®‚ïú‚ï®‚ïï‚ï®‚ïù‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï§–ü ‚ï®‚îê‚ï§–ì‚ï®‚ïó‚ï§–ú‚ï§–ë‚ï®‚ñë‚ï§–ñ‚ï®‚ïï‚ï®‚ïï ‚ï®‚ïï‚ï®‚ïë‚ï®‚ïõ‚ï®‚ïú‚ï®‚ïë‚ï®‚ïï
+    // ¶–¶-¶¨¶-¶-T∆¶¨Tœ ¶¨T√¶¨TÃT¡¶-T∆¶¨¶¨ ¶¨¶¶¶-¶-¶¶¶¨
     val iconScale: Float
     if (animationsEnabled) {
         val infiniteTransition = rememberInfiniteTransition(label = "tipIcon")

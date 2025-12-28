@@ -25,6 +25,20 @@ class ContactRepository(context: Context) {
         return contactDao.getContactsByAccount(accountId)
     }
     
+    /**
+     * Получить только локальные контакты
+     */
+    fun getLocalContacts(accountId: Long): Flow<List<ContactEntity>> {
+        return contactDao.getLocalContacts(accountId)
+    }
+    
+    /**
+     * Получить только Exchange контакты (синхронизированные с сервера)
+     */
+    fun getExchangeContacts(accountId: Long): Flow<List<ContactEntity>> {
+        return contactDao.getExchangeContacts(accountId)
+    }
+    
     suspend fun getContactsList(accountId: Long): List<ContactEntity> {
         return contactDao.getContactsByAccountList(accountId)
     }
@@ -51,17 +65,155 @@ class ContactRepository(context: Context) {
     
     /**
      * Поиск в глобальной адресной книге (GAL)
+     * @param query Строка поиска. "*" или пустая строка вернёт все контакты
+     * @param maxResults Максимальное количество результатов
      */
-    suspend fun searchGAL(accountId: Long, query: String): EasResult<List<GalContact>> {
-        if (query.length < 2) {
-            return EasResult.Success(emptyList())
-        }
-        
+    suspend fun searchGAL(accountId: Long, query: String, maxResults: Int = 100): EasResult<List<GalContact>> {
         return withContext(Dispatchers.IO) {
             val easClient = accountRepo.createEasClient(accountId)
                 ?: return@withContext EasResult.Error("Не удалось создать клиент")
             
-            easClient.searchGAL(query)
+            easClient.searchGAL(query, maxResults)
+        }
+    }
+    
+    /**
+     * Синхронизация контактов с Exchange сервера
+     * Загружает контакты из папки Contacts на сервере
+     */
+    suspend fun syncExchangeContacts(accountId: Long): EasResult<Int> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val easClient = accountRepo.createEasClient(accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                // Получаем контакты с сервера
+                val result = easClient.syncContacts()
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        val serverContacts = result.data
+                        
+                        // Удаляем старые Exchange контакты для этого аккаунта
+                        contactDao.deleteExchangeContacts(accountId)
+                        
+                        // Добавляем новые
+                        val contactEntities = serverContacts.map { galContact ->
+                            ContactEntity(
+                                id = "${accountId}_exchange_${galContact.email.hashCode()}",
+                                accountId = accountId,
+                                serverId = galContact.email, // Используем email как serverId
+                                displayName = galContact.displayName.ifBlank { 
+                                    "${galContact.firstName} ${galContact.lastName}".trim().ifBlank { galContact.email }
+                                },
+                                firstName = galContact.firstName,
+                                lastName = galContact.lastName,
+                                email = galContact.email,
+                                phone = galContact.phone,
+                                mobilePhone = galContact.mobilePhone,
+                                company = galContact.company,
+                                department = galContact.department,
+                                jobTitle = galContact.jobTitle,
+                                source = ContactSource.EXCHANGE
+                            )
+                        }
+                        
+                        if (contactEntities.isNotEmpty()) {
+                            contactDao.insertAll(contactEntities)
+                        }
+                        
+                        EasResult.Success(contactEntities.size)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка синхронизации контактов")
+            }
+        }
+    }
+    
+    /**
+     * Синхронизация контактов из GAL в локальную БД
+     * Загружает все контакты из глобальной адресной книги и сохраняет как EXCHANGE контакты
+     */
+    suspend fun syncGalContactsToDb(accountId: Long): EasResult<Int> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val easClient = accountRepo.createEasClient(accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val allContacts = mutableListOf<GalContact>()
+                val seenEmails = mutableSetOf<String>()
+                
+                // Сначала пробуем "*" (работает на новых серверах)
+                when (val result = easClient.searchGAL("*", 500)) {
+                    is EasResult.Success -> {
+                        if (result.data.isNotEmpty()) {
+                            allContacts.addAll(result.data)
+                            result.data.forEach { seenEmails.add(it.email.lowercase()) }
+                        }
+                    }
+                    is EasResult.Error -> { /* попробуем по буквам */ }
+                }
+                
+                // Если "*" не дал результатов — загружаем по буквам
+                if (allContacts.isEmpty()) {
+                    val letters = ('a'..'z').toList() + ('а'..'я').toList()
+                    for (letter in letters) {
+                        try {
+                            when (val result = easClient.searchGAL(letter.toString(), 100)) {
+                                is EasResult.Success -> {
+                                    result.data.forEach { contact ->
+                                        val emailLower = contact.email.lowercase()
+                                        if (emailLower !in seenEmails && emailLower.isNotBlank()) {
+                                            seenEmails.add(emailLower)
+                                            allContacts.add(contact)
+                                        }
+                                    }
+                                }
+                                is EasResult.Error -> { /* продолжаем */ }
+                            }
+                        } catch (e: Exception) { /* игнорируем */ }
+                    }
+                }
+                
+                if (allContacts.isEmpty()) {
+                    return@withContext EasResult.Success(0)
+                }
+                
+                // Удаляем старые Exchange контакты
+                contactDao.deleteExchangeContacts(accountId)
+                
+                // Сохраняем новые
+                val contactEntities = allContacts.mapNotNull { galContact ->
+                    if (galContact.email.isBlank()) return@mapNotNull null
+                    ContactEntity(
+                        id = "${accountId}_gal_${galContact.email.lowercase().hashCode()}",
+                        accountId = accountId,
+                        serverId = galContact.email,
+                        displayName = galContact.displayName.ifBlank { 
+                            "${galContact.firstName} ${galContact.lastName}".trim().ifBlank { galContact.email }
+                        },
+                        firstName = galContact.firstName,
+                        lastName = galContact.lastName,
+                        email = galContact.email,
+                        phone = galContact.phone,
+                        mobilePhone = galContact.mobilePhone,
+                        company = galContact.company,
+                        department = galContact.department,
+                        jobTitle = galContact.jobTitle,
+                        source = ContactSource.EXCHANGE
+                    )
+                }
+                
+                if (contactEntities.isNotEmpty()) {
+                    contactDao.insertAll(contactEntities)
+                }
+                
+                EasResult.Success(contactEntities.size)
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка синхронизации GAL")
+            }
         }
     }
     

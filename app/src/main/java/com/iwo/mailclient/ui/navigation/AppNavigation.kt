@@ -177,6 +177,9 @@ sealed class Screen(val route: String) {
         }
     }
     object Settings : Screen("settings")
+    object AccountSettings : Screen("accountSettings/{accountId}") {
+        fun createRoute(accountId: Long): String = "accountSettings/$accountId"
+    }
     object Personalization : Screen("personalization")
     object Search : Screen("search")
     object Contacts : Screen("contacts")
@@ -540,7 +543,21 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                 },
                 onNavigateToPersonalization = {
                     navController.navigate(Screen.Personalization.route)
+                },
+                onNavigateToAccountSettings = { accountId ->
+                    navController.navigate(Screen.AccountSettings.createRoute(accountId))
                 }
+            )
+        }
+        
+        composable(
+            route = Screen.AccountSettings.route,
+            arguments = listOf(navArgument("accountId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val accountId = backStackEntry.arguments?.getLong("accountId") ?: 0L
+            AccountSettingsScreen(
+                accountId = accountId,
+                onBackClick = { navController.popBackStack() }
             )
         }
         

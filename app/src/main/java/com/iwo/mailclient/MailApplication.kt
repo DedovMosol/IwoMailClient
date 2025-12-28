@@ -102,11 +102,13 @@ class MailApplication : Application() {
                 
                 if (accounts.isEmpty()) return@launch
                 
-                val hasExchangeAccounts = accounts.any { 
-                    it.accountType == AccountType.EXCHANGE.name 
+                // Запускаем PushService только если есть Exchange аккаунты с режимом PUSH
+                val hasExchangePushAccounts = accounts.any { 
+                    it.accountType == AccountType.EXCHANGE.name &&
+                    it.syncMode == com.iwo.mailclient.data.database.SyncMode.PUSH.name
                 }
                 
-                if (hasExchangeAccounts) {
+                if (hasExchangePushAccounts) {
                     PushService.start(this@MailApplication)
                     val minInterval = SyncWorker.getMinSyncInterval(this@MailApplication)
                     val intervalMinutes = if (minInterval > 0) minInterval else 5

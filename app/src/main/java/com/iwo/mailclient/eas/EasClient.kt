@@ -2387,21 +2387,197 @@ $foldersXml
     }
     
     /**
+     * Синхронизация контактов из папки Contacts на сервере Exchange
+     * Возвращает список контактов
+     */
+    suspend fun syncContacts(): EasResult<List<GalContact>> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Сначала получаем список папок чтобы найти папку Contacts (type = 9)
+        val foldersResult = folderSync("0")
+        val contactsFolderId = when (foldersResult) {
+            is EasResult.Success -> {
+                foldersResult.data.folders.find { it.type == 9 }?.serverId
+            }
+            is EasResult.Error -> return EasResult.Error(foldersResult.message)
+        }
+        
+        if (contactsFolderId == null) {
+            return EasResult.Error("Папка контактов не найдена")
+        }
+        
+        // Шаг 1: Получаем начальный SyncKey для папки контактов
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$contactsFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Success(emptyList())
+        }
+        
+        // Шаг 2: Запрашиваем контакты
+        // Для Exchange 2003 (EAS 2.5) используем Truncation вместо BodyPreference
+        // Для Exchange 2007+ (EAS 12.x+) используем BodyPreference
+        val syncXml = if (easVersion.startsWith("2.")) {
+            // EAS 2.5 (Exchange 2003)
+            """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Sync xmlns="AirSync">
+                    <Collections>
+                        <Collection>
+                            <SyncKey>$syncKey</SyncKey>
+                            <CollectionId>$contactsFolderId</CollectionId>
+                            <DeletesAsMoves/>
+                            <GetChanges/>
+                            <WindowSize>100</WindowSize>
+                            <Options>
+                                <Truncation>7</Truncation>
+                            </Options>
+                        </Collection>
+                    </Collections>
+                </Sync>
+            """.trimIndent()
+        } else if (easVersion.startsWith("12")) {
+            // EAS 12.x (Exchange 2007/2007 SP1/SP2)
+            """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                    <Collections>
+                        <Collection>
+                            <SyncKey>$syncKey</SyncKey>
+                            <CollectionId>$contactsFolderId</CollectionId>
+                            <DeletesAsMoves/>
+                            <GetChanges/>
+                            <WindowSize>100</WindowSize>
+                            <Options>
+                                <airsyncbase:BodyPreference>
+                                    <airsyncbase:Type>1</airsyncbase:Type>
+                                    <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                                </airsyncbase:BodyPreference>
+                            </Options>
+                        </Collection>
+                    </Collections>
+                </Sync>
+            """.trimIndent()
+        } else {
+            // EAS 14.x+ (Exchange 2010+)
+            """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                    <Collections>
+                        <Collection>
+                            <SyncKey>$syncKey</SyncKey>
+                            <CollectionId>$contactsFolderId</CollectionId>
+                            <DeletesAsMoves/>
+                            <GetChanges/>
+                            <WindowSize>100</WindowSize>
+                            <Options>
+                                <airsyncbase:BodyPreference>
+                                    <airsyncbase:Type>1</airsyncbase:Type>
+                                    <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                                </airsyncbase:BodyPreference>
+                            </Options>
+                        </Collection>
+                    </Collections>
+                </Sync>
+            """.trimIndent()
+        }
+        
+        return executeEasCommand("Sync", syncXml) { responseXml ->
+            parseContactsSyncResponse(responseXml)
+        }
+    }
+    
+    private fun parseContactsSyncResponse(xml: String): List<GalContact> {
+        val contacts = mutableListOf<GalContact>()
+        
+        // Парсим Add элементы
+        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        addPattern.findAll(xml).forEach { match ->
+            val addXml = match.groupValues[1]
+            
+            // Извлекаем ApplicationData
+            val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val dataMatch = dataPattern.find(addXml)
+            if (dataMatch != null) {
+                val dataXml = dataMatch.groupValues[1]
+                
+                val displayName = extractContactValue(dataXml, "FileAs") 
+                    ?: extractContactValue(dataXml, "DisplayName")
+                    ?: ""
+                val email = extractContactValue(dataXml, "Email1Address") ?: ""
+                
+                if (displayName.isNotEmpty() || email.isNotEmpty()) {
+                    contacts.add(GalContact(
+                        displayName = displayName,
+                        email = email,
+                        firstName = extractContactValue(dataXml, "FirstName") ?: "",
+                        lastName = extractContactValue(dataXml, "LastName") ?: "",
+                        company = extractContactValue(dataXml, "CompanyName") ?: "",
+                        department = extractContactValue(dataXml, "Department") ?: "",
+                        jobTitle = extractContactValue(dataXml, "JobTitle") ?: "",
+                        phone = extractContactValue(dataXml, "BusinessPhoneNumber") 
+                            ?: extractContactValue(dataXml, "HomePhoneNumber") ?: "",
+                        mobilePhone = extractContactValue(dataXml, "MobilePhoneNumber") ?: ""
+                    ))
+                }
+            }
+        }
+        
+        return contacts
+    }
+    
+    private fun extractContactValue(xml: String, tag: String): String? {
+        // Контакты используют namespace contacts:
+        val patterns = listOf(
+            "<contacts:$tag>(.*?)</contacts:$tag>",
+            "<$tag>(.*?)</$tag>"
+        )
+        for (pattern in patterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1]
+            }
+        }
+        return null
+    }
+    
+    /**
      * Поиск в глобальной адресной книге (GAL)
-     * @param query Строка поиска (имя или email)
+     * @param query Строка поиска (имя или email). Пустая строка или "*" вернёт все контакты
      * @param maxResults Максимальное количество результатов (по умолчанию 100)
      */
     suspend fun searchGAL(query: String, maxResults: Int = 100): EasResult<List<GalContact>> {
-        if (query.length < 2) {
-            return EasResult.Success(emptyList())
-        }
+        // Для получения всех контактов используем "*" или пустой запрос
+        val searchQuery = if (query.isBlank() || query == "*") "*" else query
         
         val xml = """
             <?xml version="1.0" encoding="UTF-8"?>
             <Search xmlns="Search" xmlns:gal="Gal">
                 <Store>
                     <Name>GAL</Name>
-                    <Query>$query</Query>
+                    <Query>$searchQuery</Query>
                     <Options>
                         <Range>0-${maxResults - 1}</Range>
                     </Options>

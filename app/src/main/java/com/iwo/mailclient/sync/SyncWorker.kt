@@ -114,6 +114,9 @@ class SyncWorker(
         // Автоочистка корзины
         performAutoTrashCleanup()
         
+        // Синхронизация контактов GAL (для Exchange аккаунтов)
+        syncGalContacts()
+        
         // Перепланируем с учётом ночного режима (интервал может измениться)
         scheduleWithNightMode(applicationContext)
         
@@ -189,36 +192,97 @@ class SyncWorker(
     }
     
     /**
-     * Автоматическая очистка корзины — удаляет письма старше N дней
+     * Автоматическая очистка папок — удаляет письма старше N дней
+     * Настройки берутся из каждого аккаунта индивидуально
      */
     private suspend fun performAutoTrashCleanup() {
-        val autoEmptyDays = settingsRepo.getAutoEmptyTrashDaysSync()
-        if (autoEmptyDays <= 0) return // Выключено
+        val oneDayMs = 24 * 60 * 60 * 1000L
         
         // Проверяем раз в день
         val lastCleanup = settingsRepo.getLastTrashCleanupTimeSync()
-        val oneDayMs = 24 * 60 * 60 * 1000L
         if (System.currentTimeMillis() - lastCleanup < oneDayMs) return
         
-        val cutoffTime = System.currentTimeMillis() - (autoEmptyDays * oneDayMs)
-        
-        // Получаем все папки корзины (type = 4)
         val accounts = database.accountDao().getAllAccountsList()
+        
         for (account in accounts) {
-            val trashFolders = database.folderDao().getFoldersByAccountList(account.id)
-                .filter { it.type == 4 } // Deleted Items
+            // Очистка корзины (type = 4)
+            if (account.autoCleanupTrashDays > 0) {
+                val cutoffTime = System.currentTimeMillis() - (account.autoCleanupTrashDays * oneDayMs)
+                val trashFolders = database.folderDao().getFoldersByAccountList(account.id)
+                    .filter { it.type == 4 } // Deleted Items
+                
+                for (trashFolder in trashFolders) {
+                    val oldEmails = database.emailDao().getEmailsOlderThan(trashFolder.id, cutoffTime)
+                    if (oldEmails.isNotEmpty()) {
+                        val emailIds = oldEmails.map { it.id }
+                        mailRepo.deleteEmailsPermanently(emailIds)
+                    }
+                }
+            }
             
-            for (trashFolder in trashFolders) {
-                // Получаем старые письма из корзины
-                val oldEmails = database.emailDao().getEmailsOlderThan(trashFolder.id, cutoffTime)
-                if (oldEmails.isNotEmpty()) {
-                    val emailIds = oldEmails.map { it.id }
-                    mailRepo.deleteEmailsPermanently(emailIds)
+            // Очистка локальных черновиков (serverId LIKE 'local_draft_%')
+            if (account.autoCleanupDraftsDays > 0) {
+                val cutoffTime = System.currentTimeMillis() - (account.autoCleanupDraftsDays * oneDayMs)
+                val localDrafts = database.emailDao().getLocalDraftEmails(account.id)
+                val oldDrafts = localDrafts.filter { it.dateReceived < cutoffTime }
+                for (draft in oldDrafts) {
+                    // Удаляем вложения
+                    database.attachmentDao().deleteByEmail(draft.id)
+                    // Удаляем черновик
+                    database.emailDao().delete(draft.id)
+                }
+            }
+            
+            // Очистка спама (type = 11)
+            if (account.autoCleanupSpamDays > 0) {
+                val cutoffTime = System.currentTimeMillis() - (account.autoCleanupSpamDays * oneDayMs)
+                val spamFolders = database.folderDao().getFoldersByAccountList(account.id)
+                    .filter { it.type == 11 } // Junk Email / Spam
+                
+                for (spamFolder in spamFolders) {
+                    val oldEmails = database.emailDao().getEmailsOlderThan(spamFolder.id, cutoffTime)
+                    if (oldEmails.isNotEmpty()) {
+                        val emailIds = oldEmails.map { it.id }
+                        mailRepo.deleteEmailsPermanently(emailIds)
+                    }
                 }
             }
         }
         
         settingsRepo.setLastTrashCleanupTime(System.currentTimeMillis())
+    }
+    
+    /**
+     * Синхронизация контактов из GAL для Exchange аккаунтов
+     * Загружает контакты и сохраняет в локальную БД
+     */
+    private suspend fun syncGalContacts() {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val accounts = database.accountDao().getAllAccountsList()
+        val contactRepo = com.iwo.mailclient.data.repository.ContactRepository(applicationContext)
+        
+        for (account in accounts) {
+            // Только для Exchange аккаунтов
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            
+            // Проверяем интервал синхронизации контактов (0 = отключено)
+            if (account.contactsSyncIntervalDays <= 0) continue
+            
+            // Проверяем когда была последняя синхронизация
+            val lastSync = settingsRepo.getLastContactsSyncTimeSync(account.id)
+            val intervalMs = account.contactsSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            // Синхронизируем контакты
+            try {
+                val result = contactRepo.syncGalContactsToDb(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastContactsSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (e: Exception) {
+                // Игнорируем ошибки синхронизации контактов
+            }
+        }
     }
     
     companion object {

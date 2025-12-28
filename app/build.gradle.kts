@@ -12,8 +12,8 @@ android {
         applicationId = "com.iwo.mailclient"
         minSdk = 26  // Android 8.0
         targetSdk = 35  // Android 15
-        versionCode = 12
-        versionName = "1.1.2"
+        versionCode = 14
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -92,7 +92,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material") // для pullRefresh
-    implementation("androidx.compose.material:material-icons-extended")
+    // material-icons-extended убран для уменьшения размера APK
+    // Иконки теперь в drawable ресурсах, доступны через AppIcons
     
     // Coil для загрузки изображений
     implementation("io.coil-kt:coil-compose:2.5.0")

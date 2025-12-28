@@ -14,8 +14,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -36,6 +36,7 @@ import androidx.work.*
 import com.iwo.mailclient.data.database.AccountEntity
 import com.iwo.mailclient.data.database.ContactEntity
 import com.iwo.mailclient.data.database.MailDatabase
+import com.iwo.mailclient.data.database.SignatureEntity
 import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.ContactRepository
 import com.iwo.mailclient.data.repository.MailRepository
@@ -45,6 +46,7 @@ import com.iwo.mailclient.ui.LocalLanguage
 import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.ui.Strings
+import com.iwo.mailclient.ui.components.ContactPickerDialog
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -107,6 +109,11 @@ fun ComposeScreen(
     var requestReadReceipt by rememberSaveable { mutableStateOf(false) }
     var requestDeliveryReceipt by rememberSaveable { mutableStateOf(false) }
     
+    // Подписи
+    var signatures by remember { mutableStateOf<List<SignatureEntity>>(emptyList()) }
+    var selectedSignature by remember { mutableStateOf<SignatureEntity?>(null) }
+    var showSignaturePicker by remember { mutableStateOf(false) }
+    
     // FocusRequester для полей ввода
     val toFocusRequester = remember { FocusRequester() }
     val ccFocusRequester = remember { FocusRequester() }
@@ -136,6 +143,10 @@ fun ComposeScreen(
     var showScheduleDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
     var isSavingDraft by remember { mutableStateOf(false) }
+    
+    // Диалог выбора контактов
+    var showContactPicker by remember { mutableStateOf(false) }
+    var contactPickerTarget by remember { mutableStateOf("to") } // "to", "cc", "bcc"
     
     // Автодополнение email
     val database = remember { MailDatabase.getInstance(context) }
@@ -219,9 +230,18 @@ fun ComposeScreen(
     // Загружаем активный аккаунт и все аккаунты
     LaunchedEffect(Unit) {
         activeAccount = accountRepo.getActiveAccountSync()
+        // Загружаем подписи для аккаунта
+        activeAccount?.let { account ->
+            signatures = database.signatureDao().getSignaturesByAccountList(account.id)
+            // Выбираем подпись по умолчанию или первую
+            selectedSignature = signatures.find { it.isDefault } ?: signatures.firstOrNull()
+        }
         // Подставляем подпись для нового письма (если нет ответа/пересылки)
         if (replyToEmailId == null && forwardEmailId == null) {
-            activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { sig ->
+            selectedSignature?.text?.takeIf { it.isNotBlank() }?.let { sig ->
+                body = "\n\n--\n$sig"
+            } ?: activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { sig ->
+                // Fallback на старую подпись из аккаунта
                 body = "\n\n--\n$sig"
             }
         }
@@ -254,18 +274,29 @@ fun ComposeScreen(
     LaunchedEffect(replyToEmailId) {
         replyToEmailId?.let { emailId ->
             mailRepo.getEmailSync(emailId)?.let { email ->
-                to = email.from
+                // Проверяем, из какой папки письмо
+                val folder = withContext(Dispatchers.IO) {
+                    database.folderDao().getFolder(email.folderId)
+                }
+                val isSentFolder = folder?.type == 5 // type 5 = Sent Items
+                
+                // Если из Отправленных — отвечаем получателю, иначе отправителю
+                to = if (isSentFolder) email.to else email.from
+                
                 subject = if (email.subject.startsWith("Re:", ignoreCase = true)) {
                     email.subject
                 } else {
                     "Re: ${email.subject}"
                 }
-                val signature = activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
+                val signature = selectedSignature?.text?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" }
+                    ?: activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
+                // Очищаем HTML из тела письма для цитаты
+                val plainBody = stripHtml(email.body)
                 body = "$signature\n\n--- Исходное сообщение ---\n" +
                        "От: ${email.from}\n" +
                        "Дата: ${formatDate(email.dateReceived)}\n" +
                        "Тема: ${email.subject}\n\n" +
-                       email.body
+                       plainBody
             }
         }
     }
@@ -282,13 +313,16 @@ fun ComposeScreen(
                 } else {
                     "Fwd: ${email.subject}"
                 }
-                val signature = activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
+                val signature = selectedSignature?.text?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" }
+                    ?: activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
+                // Очищаем HTML из тела письма для пересылки
+                val plainBody = stripHtml(email.body)
                 body = "$signature\n\n---------- Пересылаемое сообщение ----------\n" +
                        "От: ${email.from}\n" +
                        "Дата: ${formatDate(email.dateReceived)}\n" +
                        "Тема: ${email.subject}\n" +
                        "Кому: ${email.to}\n\n" +
-                       email.body
+                       plainBody
             }
         }
     }
@@ -418,7 +452,7 @@ fun ComposeScreen(
     if (showDiscardDialog) {
         com.iwo.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDiscardDialog = false },
-            icon = { Icon(Icons.Default.Edit, null) },
+            icon = { Icon(AppIcons.Edit, null) },
             title = { Text(Strings.discardDraftQuestion) },
             text = { Text(Strings.draftWillBeDeleted) },
             confirmButton = {
@@ -452,6 +486,69 @@ fun ComposeScreen(
             onSchedule = { time ->
                 showScheduleDialog = false
                 sendEmail(time)
+            }
+        )
+    }
+    
+    // Диалог выбора подписи
+    if (showSignaturePicker) {
+        val isRu = currentLanguage == AppLanguage.RUSSIAN
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
+            onDismissRequest = { showSignaturePicker = false },
+            title = { Text(if (isRu) "Выбрать подпись" else "Select signature") },
+            text = {
+                Column {
+                    // Список подписей (без опции "Без подписи" — всегда должна быть выбрана одна)
+                    signatures.forEach { signature ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val oldSignature = selectedSignature
+                                    selectedSignature = signature
+                                    // Заменяем подпись в body
+                                    val signaturePattern = "\n\n--\n.*".toRegex(RegexOption.DOT_MATCHES_ALL)
+                                    body = if (oldSignature != null || body.contains("\n\n--\n")) {
+                                        body.replace(signaturePattern, "\n\n--\n${signature.text}")
+                                    } else {
+                                        body + "\n\n--\n${signature.text}"
+                                    }
+                                    showSignaturePicker = false
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                AppIcons.Draw,
+                                null,
+                                modifier = Modifier.size(24.dp),
+                                tint = if (signature.isDefault) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    signature.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (selectedSignature?.id == signature.id) FontWeight.Bold else FontWeight.Normal
+                                )
+                                Text(
+                                    signature.text.take(50) + if (signature.text.length > 50) "..." else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            if (selectedSignature?.id == signature.id) {
+                                Icon(AppIcons.Check, null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSignaturePicker = false }) {
+                    Text(Strings.cancel)
+                }
             }
         )
     }
@@ -503,7 +600,7 @@ fun ComposeScreen(
                             }
                             if (account.id == activeAccount?.id) {
                                 Icon(
-                                    Icons.Default.Check,
+                                    AppIcons.Check,
                                     null,
                                     tint = MaterialTheme.colorScheme.primary
                                 )
@@ -518,6 +615,35 @@ fun ComposeScreen(
                 }
             }
         )
+    }
+    
+    // Диалог выбора контактов
+    if (showContactPicker) {
+        activeAccount?.id?.let { accountId ->
+            ContactPickerDialog(
+                accountId = accountId,
+                database = database,
+                onDismiss = { showContactPicker = false },
+                onContactsSelected = { emails ->
+                    // Добавляем выбранные email к соответствующему полю
+                    val newEmails = emails.joinToString(", ")
+                    when (contactPickerTarget) {
+                        "to" -> {
+                            to = if (to.isBlank()) newEmails 
+                                  else "${to.trimEnd(',', ' ')}, $newEmails"
+                        }
+                        "cc" -> {
+                            cc = if (cc.isBlank()) newEmails 
+                                  else "${cc.trimEnd(',', ' ')}, $newEmails"
+                        }
+                        "bcc" -> {
+                            bcc = if (bcc.isBlank()) newEmails 
+                                   else "${bcc.trimEnd(',', ' ')}, $newEmails"
+                        }
+                    }
+                }
+            )
+        }
     }
     
     // Перехват системного жеста "назад" (свайп)
@@ -544,12 +670,18 @@ fun ComposeScreen(
                             onBackClick()
                         }
                     }) {
-                        Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
                 actions = {
+                    // Кнопка выбора подписи (только если больше 1 подписи)
+                    if (signatures.size > 1) {
+                        IconButton(onClick = { showSignaturePicker = true }) {
+                            Icon(AppIcons.Draw, contentDescription = if (currentLanguage == AppLanguage.RUSSIAN) "Подпись" else "Signature", tint = Color.White)
+                        }
+                    }
                     IconButton(onClick = { filePickerLauncher.launch(arrayOf("*/*")) }) {
-                        Icon(Icons.Default.Attachment, Strings.attach, tint = Color.White)
+                        Icon(AppIcons.Attachment, Strings.attach, tint = Color.White)
                     }
                     IconButton(
                         onClick = { sendEmail() },
@@ -558,12 +690,12 @@ fun ComposeScreen(
                         if (isSending) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
                         } else {
-                            Icon(Icons.Default.Send, Strings.send, tint = Color.White)
+                            Icon(AppIcons.Send, Strings.send, tint = Color.White)
                         }
                     }
                     Box {
                         IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, Strings.more, tint = Color.White)
+                            Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
                         }
                         DropdownMenu(
                             expanded = showMenu,
@@ -598,7 +730,7 @@ fun ComposeScreen(
                                     showMenu = false
                                     showScheduleDialog = true
                                 },
-                                leadingIcon = { Icon(Icons.Default.Schedule, null) }
+                                leadingIcon = { Icon(AppIcons.Schedule, null) }
                             )
                         }
                     }
@@ -637,7 +769,7 @@ fun ComposeScreen(
                 )
                 if (allAccounts.size > 1) {
                     Icon(
-                        Icons.Default.ExpandMore,
+                        AppIcons.ExpandMore,
                         contentDescription = Strings.selectAccount,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -679,11 +811,22 @@ fun ComposeScreen(
                             unfocusedIndicatorColor = MaterialTheme.colorScheme.surface,
                             focusedIndicatorColor = MaterialTheme.colorScheme.surface
                         ),
-                        singleLine = true
+                        singleLine = false,
+                        maxLines = 3
                     )
+                    // Кнопка выбора контактов
+                    IconButton(onClick = { 
+                        contactPickerTarget = "to"
+                        showContactPicker = true 
+                    }) {
+                        Icon(
+                            AppIcons.PersonAdd,
+                            contentDescription = if (currentLanguage == AppLanguage.RUSSIAN) "Выбрать контакты" else "Select contacts"
+                        )
+                    }
                     IconButton(onClick = { showCcBcc = !showCcBcc }) {
                         Icon(
-                            if (showCcBcc) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            if (showCcBcc) AppIcons.ExpandLess else AppIcons.ExpandMore,
                             Strings.showCopy
                         )
                     }
@@ -733,9 +876,9 @@ fun ComposeScreen(
                             leadingIcon = {
                                 Icon(
                                     when (suggestion.source) {
-                                        SuggestionSource.CONTACT -> Icons.Default.Person
-                                        SuggestionSource.HISTORY -> Icons.Default.History
-                                        SuggestionSource.GAL -> Icons.Default.Business
+                                        SuggestionSource.CONTACT -> AppIcons.Person
+                                        SuggestionSource.HISTORY -> AppIcons.History
+                                        SuggestionSource.GAL -> AppIcons.Business
                                     },
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -770,8 +913,19 @@ fun ComposeScreen(
                             unfocusedIndicatorColor = MaterialTheme.colorScheme.surface,
                             focusedIndicatorColor = MaterialTheme.colorScheme.surface
                         ),
-                        singleLine = true
+                        singleLine = false,
+                        maxLines = 3
                     )
+                    // Кнопка выбора контактов для Cc
+                    IconButton(onClick = { 
+                        contactPickerTarget = "cc"
+                        showContactPicker = true 
+                    }) {
+                        Icon(
+                            AppIcons.PersonAdd,
+                            contentDescription = if (currentLanguage == AppLanguage.RUSSIAN) "Выбрать контакты" else "Select contacts"
+                        )
+                    }
                 }
                 HorizontalDivider()
                 
@@ -796,8 +950,19 @@ fun ComposeScreen(
                             unfocusedIndicatorColor = MaterialTheme.colorScheme.surface,
                             focusedIndicatorColor = MaterialTheme.colorScheme.surface
                         ),
-                        singleLine = true
+                        singleLine = false,
+                        maxLines = 3
                     )
+                    // Кнопка выбора контактов для Bcc
+                    IconButton(onClick = { 
+                        contactPickerTarget = "bcc"
+                        showContactPicker = true 
+                    }) {
+                        Icon(
+                            AppIcons.PersonAdd,
+                            contentDescription = if (currentLanguage == AppLanguage.RUSSIAN) "Выбрать контакты" else "Select contacts"
+                        )
+                    }
                 }
                 HorizontalDivider()
             }
@@ -861,7 +1026,7 @@ fun ComposeScreen(
                                 modifier = Modifier.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.InsertDriveFile, null, modifier = Modifier.size(24.dp))
+                                Icon(AppIcons.InsertDriveFile, null, modifier = Modifier.size(24.dp))
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(att.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
@@ -869,7 +1034,7 @@ fun ComposeScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 IconButton(onClick = { attachments = attachments - att }) {
-                                    Icon(Icons.Default.Close, Strings.delete, modifier = Modifier.size(20.dp))
+                                    Icon(AppIcons.Close, Strings.delete, modifier = Modifier.size(20.dp))
                                 }
                             }
                         }
@@ -958,7 +1123,7 @@ private fun ScheduleSendDialog(
                                     customDate.get(Calendar.DAY_OF_MONTH)
                                 ).show()
                             }) {
-                                Icon(Icons.Default.DateRange, Strings.selectDate)
+                                Icon(AppIcons.DateRange, Strings.selectDate)
                             }
                         }
                     )
@@ -1063,7 +1228,7 @@ private fun ScheduleSendDialog(
                 Column {
                     // Завтра утром
                     ScheduleOption(
-                        icon = Icons.Default.WbSunny,
+                        icon = AppIcons.WbSunny,
                         title = Strings.tomorrowMorning,
                         subtitle = dateFormat.format(tomorrowMorning.time),
                         onClick = { onSchedule(tomorrowMorning.timeInMillis) }
@@ -1071,7 +1236,7 @@ private fun ScheduleSendDialog(
                     
                     // Завтра днём
                     ScheduleOption(
-                        icon = Icons.Default.LightMode,
+                        icon = AppIcons.LightMode,
                         title = Strings.tomorrowAfternoon,
                         subtitle = dateFormat.format(tomorrowAfternoon.time),
                         onClick = { onSchedule(tomorrowAfternoon.timeInMillis) }
@@ -1079,7 +1244,7 @@ private fun ScheduleSendDialog(
                     
                     // В понедельник утром
                     ScheduleOption(
-                        icon = Icons.Default.DateRange,
+                        icon = AppIcons.DateRange,
                         title = Strings.mondayMorning,
                         subtitle = dateFormat.format(mondayMorning.time),
                         onClick = { onSchedule(mondayMorning.timeInMillis) }
@@ -1089,7 +1254,7 @@ private fun ScheduleSendDialog(
                     
                     // Выбрать дату и время
                     ScheduleOption(
-                        icon = Icons.Default.EditCalendar,
+                        icon = AppIcons.EditCalendar,
                         title = Strings.selectDateTime,
                         subtitle = Strings.specifyExactTime,
                         onClick = { showCustomPicker = true }
@@ -1242,4 +1407,41 @@ class ScheduledEmailWorker(
         applicationContext.getSystemService(android.app.NotificationManager::class.java)
             .notify(System.currentTimeMillis().toInt(), notification)
     }
+}
+
+/**
+ * Очищает HTML теги из текста, оставляя только plain text
+ */
+private fun stripHtml(html: String): String {
+    if (html.isBlank()) return ""
+    
+    return html
+        // Заменяем <br>, <br/>, <br /> на переносы строк
+        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+        // Заменяем </p>, </div>, </li> на переносы строк
+        .replace(Regex("</(?:p|div|li|tr)>", RegexOption.IGNORE_CASE), "\n")
+        // Заменяем </td> на табуляцию
+        .replace(Regex("</td>", RegexOption.IGNORE_CASE), "\t")
+        // Удаляем <style>...</style> и <script>...</script> блоки
+        .replace(Regex("<style[^>]*>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+        .replace(Regex("<script[^>]*>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+        // Удаляем HTML комментарии
+        .replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        // Удаляем все оставшиеся HTML теги
+        .replace(Regex("<[^>]+>"), "")
+        // Декодируем HTML entities
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        // Убираем множественные пробелы
+        .replace(Regex("[ \\t]+"), " ")
+        // Убираем множественные переносы строк (больше 2 подряд)
+        .replace(Regex("\\n{3,}"), "\n\n")
+        // Убираем пробелы в начале и конце строк
+        .lines().joinToString("\n") { it.trim() }
+        .trim()
 }

@@ -13,8 +13,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.graphicsLayer
@@ -35,18 +35,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iwo.mailclient.data.database.ContactEntity
 import com.iwo.mailclient.data.database.ContactGroupEntity
-import com.iwo.mailclient.data.database.ContactSource
 import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.ContactRepository
 import com.iwo.mailclient.eas.EasResult
-import com.iwo.mailclient.eas.GalContact
 import com.iwo.mailclient.ui.LocalLanguage
 import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.theme.LocalColorTheme
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 // Цвета для аватаров
 private val avatarColors = listOf(
@@ -94,11 +90,24 @@ fun ContactsScreen(
     var groupToDelete by remember { mutableStateOf<ContactGroupEntity?>(null) }
     var showMoveToGroupDialog by remember { mutableStateOf<ContactEntity?>(null) }
     
-    // GAL контакты
-    var galSearchQuery by rememberSaveable { mutableStateOf("") }
-    var galContacts by remember { mutableStateOf<List<GalContact>>(emptyList()) }
-    var isSearchingGal by remember { mutableStateOf(false) }
-    var galError by remember { mutableStateOf<String?>(null) }
+    // Exchange контакты из БД (синхронизированные в фоне)
+    val exchangeContacts by remember(accountId) { contactRepo.getExchangeContacts(accountId) }.collectAsState(initial = emptyList())
+    var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
+    var isSyncing by remember { mutableStateOf(false) }
+    var syncError by remember { mutableStateOf<String?>(null) }
+    
+    // Фильтрация Exchange контактов по поиску
+    val filteredExchangeContacts = remember(exchangeContacts, exchangeSearchQuery) {
+        if (exchangeSearchQuery.isBlank()) {
+            exchangeContacts
+        } else {
+            exchangeContacts.filter { contact ->
+                contact.displayName.contains(exchangeSearchQuery, ignoreCase = true) ||
+                contact.email.contains(exchangeSearchQuery, ignoreCase = true) ||
+                contact.company.contains(exchangeSearchQuery, ignoreCase = true)
+            }
+        }
+    }
     
     // Диалоги - используем rememberSaveable для сохранения при повороте
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
@@ -111,8 +120,8 @@ fun ContactsScreen(
     // Получаем объекты контактов по ID
     val editingContact = editingContactId?.let { id -> localContacts.find { it.id == id } }
     val showDeleteDialog = showDeleteDialogId?.let { id -> localContacts.find { it.id == id } }
-    val showContactDetails: Any? = showContactDetailsId?.let { id -> 
-        localContacts.find { it.id == id } ?: galContacts.find { it.email == id }
+    val showContactDetails: ContactEntity? = showContactDetailsId?.let { id -> 
+        localContacts.find { it.id == id } ?: exchangeContacts.find { it.id == id }
     }
     
     // Импорт
@@ -177,29 +186,6 @@ fun ContactsScreen(
         }
     }
     
-    // Поиск в GAL с debounce
-    LaunchedEffect(galSearchQuery, accountId) {
-        // Не ищем если accountId ещё не загружен
-        if (accountId == 0L) {
-            galContacts = emptyList()
-            galError = null
-            return@LaunchedEffect
-        }
-        
-        if (galSearchQuery.length >= 2) {
-            kotlinx.coroutines.delay(500) // debounce
-            isSearchingGal = true
-            galError = null
-            when (val result = contactRepo.searchGAL(accountId, galSearchQuery)) {
-                is EasResult.Success -> galContacts = result.data
-                is EasResult.Error -> galError = result.message
-            }
-            isSearchingGal = false
-        } else {
-            galContacts = emptyList()
-        }
-    }
-    
     // Группировка по алфавиту
     val groupedContacts = remember(filteredLocalContacts) {
         filteredLocalContacts
@@ -260,7 +246,7 @@ fun ContactsScreen(
     showDeleteDialog?.let { contact ->
         AlertDialog(
             onDismissRequest = { showDeleteDialogId = null },
-            icon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.deleteContact) },
             text = { Text(Strings.deleteContactConfirm) },
             confirmButton = {
@@ -300,36 +286,31 @@ fun ContactsScreen(
                 context.startActivity(intent)
             },
             onEdit = {
-                if (contact is ContactEntity) {
-                    showContactDetailsId = null
-                    editingContactId = contact.id
-                }
+                showContactDetailsId = null
+                editingContactId = contact.id
             },
             onDelete = {
-                if (contact is ContactEntity) {
-                    showContactDetailsId = null
-                    showDeleteDialogId = contact.id
-                }
+                showContactDetailsId = null
+                showDeleteDialogId = contact.id
             },
             onAddToContacts = {
-                if (contact is GalContact) {
-                    scope.launch {
-                        contactRepo.addContact(
-                            accountId = accountId,
-                            displayName = contact.displayName,
-                            email = contact.email,
-                            firstName = contact.firstName,
-                            lastName = contact.lastName,
-                            phone = contact.phone,
-                            mobilePhone = contact.mobilePhone,
-                            company = contact.company,
-                            department = contact.department,
-                            jobTitle = contact.jobTitle
-                        )
-                        Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
-                    }
-                    showContactDetailsId = null
+                // Для Exchange контактов — добавляем как локальный контакт
+                scope.launch {
+                    contactRepo.addContact(
+                        accountId = accountId,
+                        displayName = contact.displayName,
+                        email = contact.email,
+                        firstName = contact.firstName,
+                        lastName = contact.lastName,
+                        phone = contact.phone,
+                        mobilePhone = contact.mobilePhone,
+                        company = contact.company,
+                        department = contact.department,
+                        jobTitle = contact.jobTitle
+                    )
+                    Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
                 }
+                showContactDetailsId = null
             }
         )
     }
@@ -340,32 +321,24 @@ fun ContactsScreen(
             onDismiss = { showExportDialog = false },
             onExportVCard = {
                 scope.launch {
-                    val contacts = if (selectedTab == 0) filteredLocalContacts else emptyList()
-                    if (contacts.isEmpty() && selectedTab == 0) {
+                    val contacts = if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts
+                    if (contacts.isEmpty()) {
                         Toast.makeText(context, noContactsToExportMsg, Toast.LENGTH_SHORT).show()
                         return@launch
                     }
-                    val vcardData = if (selectedTab == 0) {
-                        contactRepo.exportToVCard(contacts)
-                    } else {
-                        contactRepo.exportGalToVCard(galContacts)
-                    }
+                    val vcardData = contactRepo.exportToVCard(contacts)
                     shareFile(context, vcardData, "contacts.vcf", "text/vcard")
                 }
                 showExportDialog = false
             },
             onExportCSV = {
                 scope.launch {
-                    val contacts = if (selectedTab == 0) filteredLocalContacts else emptyList()
-                    if (contacts.isEmpty() && selectedTab == 0) {
+                    val contacts = if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts
+                    if (contacts.isEmpty()) {
                         Toast.makeText(context, noContactsToExportMsg, Toast.LENGTH_SHORT).show()
                         return@launch
                     }
-                    val csvData = if (selectedTab == 0) {
-                        contactRepo.exportToCSV(contacts)
-                    } else {
-                        contactRepo.exportGalToCSV(galContacts)
-                    }
+                    val csvData = contactRepo.exportToCSV(contacts)
                     shareFile(context, csvData, "contacts.csv", "text/csv")
                 }
                 showExportDialog = false
@@ -382,7 +355,7 @@ fun ContactsScreen(
             onDismissRequest = { showCreateGroupDialog = false },
             icon = { 
                 Icon(
-                    Icons.Default.CreateNewFolder, 
+                    AppIcons.CreateNewFolder, 
                     null,
                     tint = Color(0xFFFFB300),
                     modifier = Modifier.size(48.dp)
@@ -437,7 +410,7 @@ fun ContactsScreen(
             onDismissRequest = { groupToRename = null },
             icon = { 
                 Icon(
-                    Icons.Default.Edit, 
+                    AppIcons.Edit, 
                     null,
                     tint = Color(0xFFFFB300),
                     modifier = Modifier.size(48.dp)
@@ -489,7 +462,7 @@ fun ContactsScreen(
         
         AlertDialog(
             onDismissRequest = { groupToDelete = null },
-            icon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.deleteGroup) },
             text = { Text(Strings.deleteGroupConfirm) },
             confirmButton = {
@@ -518,7 +491,7 @@ fun ContactsScreen(
     showMoveToGroupDialog?.let { contact ->
         AlertDialog(
             onDismissRequest = { showMoveToGroupDialog = null },
-            icon = { Icon(Icons.Default.Folder, null) },
+            icon = { Icon(AppIcons.Folder, null) },
             title = { Text(Strings.moveToGroup) },
             text = {
                 LazyColumn {
@@ -528,7 +501,7 @@ fun ContactsScreen(
                             headlineContent = { Text(Strings.withoutGroup) },
                             leadingContent = { 
                                 Icon(
-                                    Icons.Default.FolderOff, 
+                                    AppIcons.FolderOff, 
                                     null,
                                     tint = if (contact.groupId == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 ) 
@@ -547,7 +520,7 @@ fun ContactsScreen(
                             headlineContent = { Text(group.name) },
                             leadingContent = { 
                                 Icon(
-                                    Icons.Default.Folder, 
+                                    AppIcons.Folder, 
                                     null,
                                     tint = if (contact.groupId == group.id) MaterialTheme.colorScheme.primary else Color(group.color)
                                 ) 
@@ -578,20 +551,20 @@ fun ContactsScreen(
                 title = { Text(Strings.contacts, color = Color.White) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
                 actions = {
                     // Добавить контакт (только для личных)
                     if (selectedTab == 0) {
                         IconButton(onClick = { showAddDialog = true }) {
-                            Icon(Icons.Default.PersonAdd, Strings.addContact, tint = Color.White)
+                            Icon(AppIcons.PersonAdd, Strings.addContact, tint = Color.White)
                         }
                     }
                     // Меню
                     Box {
                         IconButton(onClick = { showMoreMenu = true }) {
-                            Icon(Icons.Default.MoreVert, null, tint = Color.White)
+                            Icon(AppIcons.MoreVert, null, tint = Color.White)
                         }
                         DropdownMenu(
                             expanded = showMoreMenu,
@@ -604,7 +577,7 @@ fun ContactsScreen(
                                         showMoreMenu = false
                                         showCreateGroupDialog = true
                                     },
-                                    leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }
+                                    leadingIcon = { Icon(AppIcons.CreateNewFolder, null) }
                                 )
                                 HorizontalDivider()
                             }
@@ -614,7 +587,7 @@ fun ContactsScreen(
                                     showMoreMenu = false
                                     showExportDialog = true
                                 },
-                                leadingIcon = { Icon(Icons.Default.Upload, null) }
+                                leadingIcon = { Icon(AppIcons.Upload, null) }
                             )
                             if (selectedTab == 0) {
                                 DropdownMenuItem(
@@ -623,7 +596,7 @@ fun ContactsScreen(
                                         showMoreMenu = false
                                         importVCardLauncher.launch("text/vcard")
                                     },
-                                    leadingIcon = { Icon(Icons.Default.Download, null) }
+                                    leadingIcon = { Icon(AppIcons.Download, null) }
                                 )
                                 DropdownMenuItem(
                                     text = { Text(Strings.importFromCSV) },
@@ -631,7 +604,7 @@ fun ContactsScreen(
                                         showMoreMenu = false
                                         importCSVLauncher.launch("text/*")
                                     },
-                                    leadingIcon = { Icon(Icons.Default.Download, null) }
+                                    leadingIcon = { Icon(AppIcons.Download, null) }
                                 )
                             }
                         }
@@ -667,22 +640,22 @@ fun ContactsScreen(
             
             // Поле поиска
             OutlinedTextField(
-                value = if (selectedTab == 0) localSearchQuery else galSearchQuery,
+                value = if (selectedTab == 0) localSearchQuery else exchangeSearchQuery,
                 onValueChange = {
-                    if (selectedTab == 0) localSearchQuery = it else galSearchQuery = it
+                    if (selectedTab == 0) localSearchQuery = it else exchangeSearchQuery = it
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
                 placeholder = { Text(Strings.searchContacts) },
-                leadingIcon = { Icon(Icons.Default.Search, null) },
+                leadingIcon = { Icon(AppIcons.Search, null) },
                 trailingIcon = {
-                    val query = if (selectedTab == 0) localSearchQuery else galSearchQuery
+                    val query = if (selectedTab == 0) localSearchQuery else exchangeSearchQuery
                     if (query.isNotEmpty()) {
                         IconButton(onClick = {
-                            if (selectedTab == 0) localSearchQuery = "" else galSearchQuery = ""
+                            if (selectedTab == 0) localSearchQuery = "" else exchangeSearchQuery = ""
                         }) {
-                            Icon(Icons.Default.Clear, null)
+                            Icon(AppIcons.Clear, null)
                         }
                     }
                 },
@@ -704,11 +677,26 @@ fun ContactsScreen(
                     onContactDelete = { showDeleteDialogId = it.id }
                 )
                 1 -> OrganizationContactsList(
-                    query = galSearchQuery,
-                    contacts = galContacts,
-                    isSearching = isSearchingGal,
-                    error = galError,
-                    onContactClick = { showContactDetailsId = it.email }
+                    contacts = filteredExchangeContacts,
+                    isSyncing = isSyncing,
+                    syncError = syncError,
+                    onContactClick = { showContactDetailsId = it.id },
+                    onSyncClick = {
+                        scope.launch {
+                            isSyncing = true
+                            syncError = null
+                            when (val result = contactRepo.syncGalContactsToDb(accountId)) {
+                                is EasResult.Success -> {
+                                    val msg = if (isRussian) "Синхронизировано: ${result.data}" else "Synced: ${result.data}"
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                                is EasResult.Error -> {
+                                    syncError = result.message
+                                }
+                            }
+                            isSyncing = false
+                        }
+                    }
                 )
             }
         }
@@ -747,7 +735,7 @@ private fun PersonalContactsList(
                         onClick = { onGroupSelected(null) },
                         label = { Text(Strings.allMail) },
                         leadingIcon = if (selectedGroupId == null) {
-                            { Icon(Icons.Default.Check, null, modifier = Modifier.size(18.dp)) }
+                            { Icon(AppIcons.Check, null, modifier = Modifier.size(18.dp)) }
                         } else null
                     )
                 }
@@ -760,7 +748,7 @@ private fun PersonalContactsList(
                             label = { Text(group.name) },
                             leadingIcon = {
                                 Icon(
-                                    Icons.Default.Folder,
+                                    AppIcons.Folder,
                                     null,
                                     modifier = Modifier.size(18.dp),
                                     tint = Color(group.color)
@@ -771,7 +759,7 @@ private fun PersonalContactsList(
                                     onClick = { expandedGroupMenu = group.id },
                                     modifier = Modifier.size(18.dp)
                                 ) {
-                                    Icon(Icons.Default.MoreVert, null, modifier = Modifier.size(14.dp))
+                                    Icon(AppIcons.MoreVert, null, modifier = Modifier.size(14.dp))
                                 }
                             }
                         )
@@ -785,7 +773,7 @@ private fun PersonalContactsList(
                                     expandedGroupMenu = null
                                     onGroupRename(group)
                                 },
-                                leadingIcon = { Icon(Icons.Default.Edit, null) }
+                                leadingIcon = { Icon(AppIcons.Edit, null) }
                             )
                             DropdownMenuItem(
                                 text = { Text(Strings.delete, color = MaterialTheme.colorScheme.error) },
@@ -793,7 +781,7 @@ private fun PersonalContactsList(
                                     expandedGroupMenu = null
                                     onGroupDelete(group)
                                 },
-                                leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
+                                leadingIcon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) }
                             )
                         }
                     }
@@ -806,7 +794,7 @@ private fun PersonalContactsList(
                         label = { Text(Strings.withoutGroup) },
                         leadingIcon = {
                             Icon(
-                                Icons.Default.FolderOff,
+                                AppIcons.FolderOff,
                                 null,
                                 modifier = Modifier.size(18.dp)
                             )
@@ -827,7 +815,7 @@ private fun PersonalContactsList(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            Icons.Default.People,
+                            AppIcons.People,
                             null,
                             modifier = Modifier.size(64.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
@@ -867,70 +855,203 @@ private fun PersonalContactsList(
 
 @Composable
 private fun OrganizationContactsList(
-    query: String,
-    contacts: List<GalContact>,
-    isSearching: Boolean,
-    error: String?,
-    onContactClick: (GalContact) -> Unit
+    contacts: List<ContactEntity>,
+    isSyncing: Boolean,
+    syncError: String?,
+    onContactClick: (ContactEntity) -> Unit,
+    onSyncClick: () -> Unit
 ) {
-    when {
-        query.length < 2 -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+    val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
+    
+    // Группировка контактов по алфавиту
+    val groupedContacts = remember(contacts) {
+        contacts
+            .sortedBy { it.displayName.lowercase() }
+            .groupBy { it.displayName.firstOrNull()?.uppercaseChar() ?: '#' }
+    }
+    
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Заголовок с кнопкой синхронизации
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (isRussian) "Адресная книга организации" else "Organization Address Book",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    if (contacts.isNotEmpty()) 
+                        "${if (isRussian) "Контактов:" else "Contacts:"} ${contacts.size}"
+                    else 
+                        if (isRussian) "Глобальная адресная книга (GAL)" else "Global Address List (GAL)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            // Кнопка синхронизации
+            IconButton(
+                onClick = onSyncClick,
+                enabled = !isSyncing
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.Business,
-                        null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                if (isSyncing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        Strings.enterNameToSearch,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    Icon(
+                        AppIcons.Sync,
+                        contentDescription = if (isRussian) "Синхронизировать" else "Sync",
+                        tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }
         }
-        isSearching -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
+        
+        // Ошибка
+        syncError?.let { error ->
+            Text(
+                error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            )
         }
-        error != null -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(error, color = MaterialTheme.colorScheme.error)
+        
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        
+        // Контент
+        when {
+            isSyncing && contacts.isEmpty() -> {
+                // Загрузка (ещё нет контактов)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            if (isRussian) "Загрузка контактов..." else "Loading contacts...",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
-        }
-        contacts.isEmpty() -> {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(Strings.noContacts, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            contacts.isEmpty() && syncError == null && !isSyncing -> {
+                // Нет контактов
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            AppIcons.Business,
+                            null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            if (isRussian) "Нажмите для загрузки контактов" else "Tap to load contacts",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        OutlinedButton(onClick = onSyncClick) {
+                            Icon(AppIcons.Sync, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (isRussian) "Загрузить" else "Load")
+                        }
+                    }
+                }
             }
-        }
-        else -> {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(contacts) { contact ->
-                    ContactItem(
-                        name = contact.displayName,
-                        email = contact.email,
-                        company = contact.company,
-                        onClick = { onContactClick(contact) }
-                    )
+            else -> {
+                // Показываем контакты
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f)
+                ) {
+                    groupedContacts.forEach { (letter, letterContacts) ->
+                        item {
+                            Text(
+                                text = letter.toString(),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
+                        }
+                        items(letterContacts, key = { it.id }) { contact ->
+                            ExchangeContactItem(
+                                contact = contact,
+                                onClick = { onContactClick(contact) }
+                            )
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ExchangeContactItem(
+    contact: ContactEntity,
+    onClick: () -> Unit
+) {
+    ListItem(
+        headlineContent = {
+            Text(contact.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        supportingContent = {
+            Column {
+                if (contact.email.isNotBlank()) {
+                    Text(contact.email, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (contact.company.isNotBlank() || contact.department.isNotBlank()) {
+                    Text(
+                        listOfNotNull(
+                            contact.company.takeIf { it.isNotBlank() },
+                            contact.department.takeIf { it.isNotBlank() }
+                        ).joinToString(" • "),
+                        maxLines = 1, 
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        leadingContent = {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(getAvatarColor(contact.displayName)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        modifier = Modifier.clickable(onClick = onClick)
+    )
 }
 
 @Composable
@@ -1017,7 +1138,7 @@ private fun ContactItemWithGroup(
         trailingContent = {
             Box {
                 IconButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Default.MoreVert, null)
+                    Icon(AppIcons.MoreVert, null)
                 }
                 DropdownMenu(
                     expanded = showMenu,
@@ -1029,7 +1150,7 @@ private fun ContactItemWithGroup(
                             showMenu = false
                             onMoveToGroup()
                         },
-                        leadingIcon = { Icon(Icons.Default.Folder, null) }
+                        leadingIcon = { Icon(AppIcons.Folder, null) }
                     )
                     DropdownMenuItem(
                         text = { Text(Strings.edit) },
@@ -1037,7 +1158,7 @@ private fun ContactItemWithGroup(
                             showMenu = false
                             onEdit()
                         },
-                        leadingIcon = { Icon(Icons.Default.Edit, null) }
+                        leadingIcon = { Icon(AppIcons.Edit, null) }
                     )
                     DropdownMenuItem(
                         text = { Text(Strings.delete, color = MaterialTheme.colorScheme.error) },
@@ -1045,7 +1166,7 @@ private fun ContactItemWithGroup(
                             showMenu = false
                             onDelete()
                         },
-                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
+                        leadingIcon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) }
                     )
                 }
             }
@@ -1263,7 +1384,7 @@ private fun ContactEditDialog(
 
 @Composable
 private fun ContactDetailsDialog(
-    contact: Any, // ContactEntity или GalContact
+    contact: ContactEntity,
     onDismiss: () -> Unit,
     onWriteEmail: (String) -> Unit,
     onCopyEmail: (String) -> Unit,
@@ -1276,44 +1397,16 @@ private fun ContactDetailsDialog(
     val settingsRepo = remember { com.iwo.mailclient.data.repository.SettingsRepository.getInstance(context) }
     val animationsEnabled by settingsRepo.animationsEnabled.collectAsState(initial = true)
     
-    val isLocal = contact is ContactEntity
-    val name = when (contact) {
-        is ContactEntity -> contact.displayName
-        is GalContact -> contact.displayName
-        else -> ""
-    }
-    val email = when (contact) {
-        is ContactEntity -> contact.email
-        is GalContact -> contact.email
-        else -> ""
-    }
-    val phone = when (contact) {
-        is ContactEntity -> contact.phone
-        is GalContact -> contact.phone
-        else -> ""
-    }
-    val mobilePhone = when (contact) {
-        is ContactEntity -> contact.mobilePhone
-        is GalContact -> contact.mobilePhone
-        else -> ""
-    }
-    val workPhone = if (contact is ContactEntity) contact.workPhone else ""
-    val company = when (contact) {
-        is ContactEntity -> contact.company
-        is GalContact -> contact.company
-        else -> ""
-    }
-    val department = when (contact) {
-        is ContactEntity -> contact.department
-        is GalContact -> contact.department
-        else -> ""
-    }
-    val jobTitle = when (contact) {
-        is ContactEntity -> contact.jobTitle
-        is GalContact -> contact.jobTitle
-        else -> ""
-    }
-    val notes = if (contact is ContactEntity) contact.notes else ""
+    val isLocal = contact.source == com.iwo.mailclient.data.database.ContactSource.LOCAL
+    val name = contact.displayName
+    val email = contact.email
+    val phone = contact.phone
+    val mobilePhone = contact.mobilePhone
+    val workPhone = contact.workPhone
+    val company = contact.company
+    val department = contact.department
+    val jobTitle = contact.jobTitle
+    val notes = contact.notes
     
     val avatarColor = getAvatarColor(name)
     
@@ -1332,344 +1425,192 @@ private fun ContactDetailsDialog(
         }
     }
     
-    // Для GAL контактов - компактный диалог
-    if (!isLocal) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        scaleX = scale.value
-                        scaleY = scale.value
-                        alpha = animatedAlpha.value
-                    },
-                shape = MaterialTheme.shapes.extraLarge,
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    // Крестик закрытия
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(4.dp)
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    scaleX = scale.value
+                    scaleY = scale.value
+                    alpha = animatedAlpha.value
+                },
+            shape = MaterialTheme.shapes.extraLarge,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                // Крестик закрытия
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                ) {
+                    Icon(
+                        AppIcons.Close, 
+                        contentDescription = Strings.close,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Аватар + имя в одну строку
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 32.dp) // место для крестика
                     ) {
-                        Icon(
-                            Icons.Default.Close, 
-                            contentDescription = Strings.close,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(avatarColor),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = name.firstOrNull()?.uppercase() ?: "?",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.headlineSmall
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Аватар + имя в одну строку
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    // Email с зелёной иконкой
+                    if (email.isNotBlank()) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(end = 32.dp) // место для крестика
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(avatarColor),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = name.firstOrNull()?.uppercase() ?: "?",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.headlineSmall
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = name,
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.height(20.dp))
-                        
-                        // Email с зелёной иконкой
-                        if (email.isNotBlank()) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.Email, 
-                                    null, 
-                                    tint = Color(0xFF4CAF50), // ярко-зелёный/салатовый
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = email,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            
-                            Spacer(modifier = Modifier.height(20.dp))
-                            
-                            // Две кнопки в ряд
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                // Написать письмо - текст голубой
-                                OutlinedButton(
-                                    onClick = { onWriteEmail(email) },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
-                                ) {
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Send, 
-                                            null, 
-                                            modifier = Modifier.size(18.dp),
-                                            tint = Color(0xFF2196F3) // синяя иконка
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            Strings.writeEmail, 
-                                            color = Color(0xFF03A9F4), // голубой текст
-                                            maxLines = 2,
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
-                                }
-                                // Копировать email - текст фиолетовый
-                                OutlinedButton(
-                                    onClick = { onCopyEmail(email) },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
-                                ) {
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Icon(
-                                            Icons.Default.ContentCopy, 
-                                            null, 
-                                            modifier = Modifier.size(18.dp),
-                                            tint = Color(0xFF9C27B0)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            Strings.copyEmail, 
-                                            color = Color(0xFF9C27B0), // фиолетовый текст
-                                            maxLines = 2,
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(20.dp))
-                        
-                        // Иконка "Добавить в контакты" - цвет как у аватара
-                        IconButton(
-                            onClick = onAddToContacts,
-                            modifier = Modifier.size(48.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                Icons.Default.PersonAdd,
-                                contentDescription = Strings.addToContacts,
-                                tint = avatarColor,
-                                modifier = Modifier.size(32.dp)
+                                AppIcons.Email, 
+                                null, 
+                                tint = Color(0xFF4CAF50),
+                                modifier = Modifier.size(22.dp)
                             )
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        // Для локальных контактов - компактный диалог как для GAL, но с кнопками редактирования/удаления
-        androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        scaleX = scale.value
-                        scaleY = scale.value
-                        alpha = animatedAlpha.value
-                    },
-                shape = MaterialTheme.shapes.extraLarge,
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    // Крестик закрытия
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(4.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = Strings.close,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Аватар + имя в одну строку
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(end = 32.dp) // место для крестика
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(avatarColor),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = name.firstOrNull()?.uppercase() ?: "?",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.headlineSmall
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = name,
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = email,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
-
+                        
                         Spacer(modifier = Modifier.height(20.dp))
-
-                        // Email с зелёной иконкой
-                        if (email.isNotBlank()) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center
+                        
+                        // Две кнопки в ряд
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Написать письмо
+                            OutlinedButton(
+                                onClick = { onWriteEmail(email) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.Email,
-                                    null,
-                                    tint = Color(0xFF4CAF50), // ярко-зелёный/салатовый
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = email,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(20.dp))
-
-                            // Две кнопки в ряд
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                // Написать письмо - текст голубой
-                                OutlinedButton(
-                                    onClick = { onWriteEmail(email) },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Send,
-                                            null,
-                                            modifier = Modifier.size(18.dp),
-                                            tint = Color(0xFF2196F3) // синяя иконка
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            Strings.writeEmail,
-                                            color = Color(0xFF03A9F4), // голубой текст
-                                            maxLines = 2,
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
+                                    Icon(
+                                        AppIcons.Send, 
+                                        null, 
+                                        modifier = Modifier.size(18.dp),
+                                        tint = Color(0xFF2196F3)
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        Strings.writeEmail, 
+                                        color = Color(0xFF03A9F4),
+                                        maxLines = 2,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
                                 }
-                                // Копировать email - текст фиолетовый
-                                OutlinedButton(
-                                    onClick = { onCopyEmail(email) },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                            }
+                            // Копировать email
+                            OutlinedButton(
+                                onClick = { onCopyEmail(email) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Icon(
-                                            Icons.Default.ContentCopy,
-                                            null,
-                                            modifier = Modifier.size(18.dp),
-                                            tint = Color(0xFF9C27B0)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            Strings.copyEmail,
-                                            color = Color(0xFF9C27B0), // фиолетовый текст
-                                            maxLines = 2,
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
+                                    Icon(
+                                        AppIcons.ContentCopy, 
+                                        null, 
+                                        modifier = Modifier.size(18.dp),
+                                        tint = Color(0xFF9C27B0)
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        Strings.copyEmail, 
+                                        color = Color(0xFF9C27B0),
+                                        maxLines = 2,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
                                 }
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        // Кнопки редактирования и удаления - цвет как у аватара
+                    }
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    // Кнопки действий в зависимости от типа контакта
+                    if (isLocal) {
+                        // Для локальных контактов - редактирование и удаление
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(24.dp)
                         ) {
-                            // Редактировать
                             IconButton(
                                 onClick = onEdit,
                                 modifier = Modifier.size(48.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.Edit,
+                                    AppIcons.Edit,
                                     contentDescription = Strings.edit,
                                     tint = avatarColor,
                                     modifier = Modifier.size(32.dp)
                                 )
                             }
-                            // Удалить
                             IconButton(
                                 onClick = onDelete,
                                 modifier = Modifier.size(48.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.Delete,
+                                    AppIcons.Delete,
                                     contentDescription = Strings.delete,
                                     tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(32.dp)
                                 )
                             }
+                        }
+                    } else {
+                        // Для Exchange контактов - добавить в личные контакты
+                        IconButton(
+                            onClick = onAddToContacts,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                AppIcons.PersonAdd,
+                                contentDescription = Strings.addToContacts,
+                                tint = avatarColor,
+                                modifier = Modifier.size(32.dp)
+                            )
                         }
                     }
                 }
@@ -1711,7 +1652,7 @@ private fun ContactDetailRow(
         if (onAction != null) {
             IconButton(onClick = onAction, modifier = Modifier.size(36.dp)) {
                 Icon(
-                    Icons.Default.Call, 
+                    AppIcons.Call, 
                     Strings.callPhone, 
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
@@ -1753,12 +1694,12 @@ private fun ExportDialog(
             Column {
                 ListItem(
                     headlineContent = { Text(Strings.exportToVCard) },
-                    leadingContent = { Icon(Icons.Default.ContactPage, null) },
+                    leadingContent = { Icon(AppIcons.ContactPage, null) },
                     modifier = Modifier.clickable(onClick = onExportVCard)
                 )
                 ListItem(
                     headlineContent = { Text(Strings.exportToCSV) },
-                    leadingContent = { Icon(Icons.Default.TableChart, null) },
+                    leadingContent = { Icon(AppIcons.TableChart, null) },
                     modifier = Modifier.clickable(onClick = onExportCSV)
                 )
             }

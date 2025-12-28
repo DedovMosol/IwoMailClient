@@ -13,8 +13,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+
+import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -215,7 +215,7 @@ fun SearchScreen(
     if (showDeleteDialog) {
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            icon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(if (selectedIds.size == 1) Strings.deleteEmail else Strings.deleteEmails) },
             text = { Text(Strings.emailsWillBeMovedToTrash(selectedIds.size)) },
             confirmButton = {
@@ -238,18 +238,18 @@ fun SearchScreen(
                     title = { Text("${selectedIds.size}") },
                     navigationIcon = {
                         IconButton(onClick = { selectedIds = emptySet() }) {
-                            Icon(Icons.Default.Close, Strings.close)
+                            Icon(AppIcons.Close, Strings.close)
                         }
                     },
                     actions = {
                         IconButton(onClick = { markSelectedAsRead(true) }) {
-                            Icon(Icons.Default.MarkEmailRead, Strings.markRead)
+                            Icon(AppIcons.MarkEmailRead, Strings.markRead)
                         }
                         IconButton(onClick = { starSelected() }) {
-                            Icon(Icons.Default.Star, Strings.favorites)
+                            Icon(AppIcons.Star, Strings.favorites)
                         }
                         IconButton(onClick = { showDeleteDialog = true }) {
-                            Icon(Icons.Default.Delete, Strings.delete)
+                            Icon(AppIcons.Delete, Strings.delete)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -287,7 +287,7 @@ fun SearchScreen(
                                         searchResultIds = emptyList()
                                         selectedIds = emptySet()
                                     }) {
-                                        Icon(Icons.Default.Clear, Strings.close, tint = Color.White)
+                                        Icon(AppIcons.Clear, Strings.close, tint = Color.White)
                                     }
                                 }
                             },
@@ -296,7 +296,7 @@ fun SearchScreen(
                     },
                     navigationIcon = {
                         IconButton(onClick = onBackClick) {
-                            Icon(Icons.Default.ArrowBack, Strings.back, tint = Color.White)
+                            Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -581,7 +581,7 @@ private fun SearchResultItem(
             ) {
                 if (isSelected) {
                     Icon(
-                        Icons.Default.Check, null,
+                        AppIcons.Check, null,
                         tint = Color.White,
                         modifier = Modifier.size(24.dp)
                     )
@@ -608,7 +608,7 @@ private fun SearchResultItem(
                     }
                     if (email.hasAttachments) {
                         Icon(
-                            Icons.Default.Attachment, null,
+                            AppIcons.Attachment, null,
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -642,7 +642,7 @@ private fun SearchResultItem(
             if (email.flagged) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Icon(
-                    Icons.Default.Star, Strings.favorites,
+                    AppIcons.Star, Strings.favorites,
                     tint = Color(0xFFFFB300),
                     modifier = Modifier.size(20.dp)
                 )
