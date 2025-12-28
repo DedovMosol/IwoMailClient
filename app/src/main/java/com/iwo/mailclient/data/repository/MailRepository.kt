@@ -1084,7 +1084,7 @@ class MailRepository(context: Context) {
         val client = accountRepo.createEasClient(firstEmail.accountId)
             ?: return EasResult.Error("Failed to create client")
         
-        for (emailId in serverEmails) {
+        for ((index, emailId) in serverEmails.withIndex()) {
             val email = emailDao.getEmail(emailId) ?: continue
             affectedFolderIds.add(email.folderId)
             
@@ -1098,7 +1098,7 @@ class MailRepository(context: Context) {
             val syncKey = folder?.syncKey ?: "0"
             
             if (syncKey == "0") {
-                onProgress(index + 1, total)
+                onProgress(deletedCount + index + 1, total)
                 continue
             }
             
@@ -1111,7 +1111,7 @@ class MailRepository(context: Context) {
                 }
                 is EasResult.Error -> { }
             }
-            onProgress(index + 1, total)
+            onProgress(deletedCount, total)
         }
         
         // Обновляем счётчики затронутых папок
