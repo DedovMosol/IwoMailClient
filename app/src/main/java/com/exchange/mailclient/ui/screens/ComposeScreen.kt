@@ -134,7 +134,7 @@ fun ComposeScreen(
     // Меню и диалоги
     var showMenu by remember { mutableStateOf(false) }
     var showScheduleDialog by remember { mutableStateOf(false) }
-    var showDiscardDialog by remember { mutableStateOf(false) }
+    var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
     var isSavingDraft by remember { mutableStateOf(false) }
     
     // Автодополнение email
@@ -314,50 +314,25 @@ fun ComposeScreen(
             }
             
             try {
-                // Получаем папку Drafts
-                val draftsFolder = withContext(Dispatchers.IO) {
-                    database.folderDao().getFolderByType(account.id, 3) // type 3 = Drafts
+                val success = withContext(Dispatchers.IO) {
+                    mailRepo.saveDraft(
+                        accountId = account.id,
+                        to = to,
+                        cc = cc,
+                        subject = subject,
+                        body = body,
+                        fromEmail = account.email,
+                        fromName = account.displayName,
+                        hasAttachments = attachments.isNotEmpty()
+                    )
                 }
                 
-                if (draftsFolder == null) {
+                if (success) {
+                    Toast.makeText(context, draftSavedMsg, Toast.LENGTH_SHORT).show()
+                    onBackClick()
+                } else {
                     Toast.makeText(context, draftSaveErrorMsg, Toast.LENGTH_SHORT).show()
-                    isSavingDraft = false
-                    return@launch
                 }
-                
-                // Создаём локальный черновик
-                val draftId = "draft_${account.id}_${System.currentTimeMillis()}"
-                val draftServerId = "local_draft_${System.currentTimeMillis()}"
-                
-                val draftEmail = com.exchange.mailclient.data.database.EmailEntity(
-                    id = draftId,
-                    accountId = account.id,
-                    folderId = draftsFolder.id,
-                    serverId = draftServerId,
-                    from = account.email,
-                    fromName = account.displayName,
-                    to = to,
-                    cc = cc,
-                    subject = subject.ifBlank { "(Без темы)" },
-                    preview = body.take(100),
-                    body = body,
-                    bodyType = 1,
-                    dateReceived = System.currentTimeMillis(),
-                    read = true,
-                    flagged = false,
-                    importance = 1,
-                    hasAttachments = attachments.isNotEmpty()
-                )
-                
-                withContext(Dispatchers.IO) {
-                    database.emailDao().insert(draftEmail)
-                    // Обновляем счётчик папки Черновики
-                    val newCount = database.emailDao().getCountByFolder(draftsFolder.id)
-                    database.folderDao().updateTotalCount(draftsFolder.id, newCount)
-                }
-                
-                Toast.makeText(context, draftSavedMsg, Toast.LENGTH_SHORT).show()
-                onBackClick()
             } catch (e: Exception) {
                 Toast.makeText(context, "${draftSaveErrorMsg}: ${e.message}", Toast.LENGTH_LONG).show()
             }
@@ -441,24 +416,20 @@ fun ComposeScreen(
     
     // Диалог подтверждения выхода — сохранить или нет
     if (showDiscardDialog) {
-        com.exchange.mailclient.ui.theme.ScaledAlertDialog(
+        com.exchange.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDiscardDialog = false },
+            icon = { Icon(Icons.Default.Edit, null) },
             title = { Text(Strings.discardDraftQuestion) },
             text = { Text(Strings.draftWillBeDeleted) },
             confirmButton = {
-                TextButton(
+                com.exchange.mailclient.ui.theme.GradientDialogButton(
                     onClick = { 
                         showDiscardDialog = false
                         saveDraft()
                     },
+                    text = Strings.saveDraft,
                     enabled = !isSavingDraft
-                ) {
-                    if (isSavingDraft) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(Strings.saveDraft)
-                    }
-                }
+                )
             },
             dismissButton = {
                 TextButton(
@@ -468,7 +439,7 @@ fun ComposeScreen(
                     },
                     enabled = !isSavingDraft
                 ) {
-                    Text(Strings.doNotSave, color = MaterialTheme.colorScheme.error)
+                    Text(Strings.doNotSave)
                 }
             }
         )

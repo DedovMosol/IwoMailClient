@@ -501,17 +501,19 @@ fun EmailDetailScreen(
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Используем цвет аккаунта для аватара
+                    val accountColor = activeAccount?.color ?: 0xFF1976D2.toInt()
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
+                            .background(Color(accountColor)),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = email!!.fromName.firstOrNull()?.uppercase() ?: "?",
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = Color.White
                         )
                     }
                     

@@ -449,8 +449,8 @@ object Strings {
     val selectAccount: String @Composable get() = if (isRussian()) "Выбрать аккаунт" else "Select account"
     val sendScheduled: String @Composable get() = if (isRussian()) "Отправка запланирована" else "Send scheduled"
     val localDraftsNotice: String @Composable get() = if (isRussian()) 
-        "Черновики сохраняются только на этом устройстве" 
-        else "Drafts are saved only on this device"
+        "Черновики сохраняются локально и удаляются сразу" 
+        else "Drafts are saved locally and deleted immediately"
     val authError: String @Composable get() = if (isRussian()) "Ошибка авторизации" else "Authorization error"
     
     // ScheduleSendDialog

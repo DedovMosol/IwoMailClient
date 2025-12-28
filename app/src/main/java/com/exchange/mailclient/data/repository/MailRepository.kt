@@ -21,6 +21,30 @@ class MailRepository(context: Context) {
     private val attachmentDao = database.attachmentDao()
     private val accountDao = database.accountDao()
     
+    /**
+     * Безопасное обновление папки без удаления связанных писем
+     * Использует INSERT IGNORE + UPDATE вместо REPLACE
+     */
+    private suspend fun upsertFolder(folder: FolderEntity) {
+        folderDao.insert(folder)
+        // Если папка уже существует, обновляем её поля
+        folderDao.updateCounts(folder.id, folder.unreadCount, folder.totalCount)
+    }
+    
+    /**
+     * Безопасное обновление списка папок без удаления связанных писем
+     */
+    private suspend fun upsertFolders(folders: List<FolderEntity>) {
+        for (folder in folders) {
+            folderDao.insert(folder)
+            // Обновляем существующие папки
+            val existing = folderDao.getFolder(folder.id)
+            if (existing != null) {
+                folderDao.updateFolder(folder.id, folder.displayName, folder.parentId, folder.type)
+            }
+        }
+    }
+    
     fun getFolders(accountId: Long): Flow<List<FolderEntity>> {
         return folderDao.getFoldersByAccount(accountId)
     }
@@ -51,6 +75,55 @@ class MailRepository(context: Context) {
     
     suspend fun getAttachmentsSync(emailId: String): List<AttachmentEntity> {
         return attachmentDao.getAttachmentsList(emailId)
+    }
+    
+    /**
+     * Сохранение локального черновика
+     */
+    suspend fun saveDraft(
+        accountId: Long,
+        to: String,
+        cc: String,
+        subject: String,
+        body: String,
+        fromEmail: String,
+        fromName: String,
+        hasAttachments: Boolean
+    ): Boolean {
+        val draftsFolder = folderDao.getFolderByType(accountId, 3) // type 3 = Drafts
+            ?: return false
+        
+        val draftId = "draft_${accountId}_${System.currentTimeMillis()}"
+        val draftServerId = "local_draft_${System.currentTimeMillis()}"
+        
+        val draftEmail = EmailEntity(
+            id = draftId,
+            accountId = accountId,
+            folderId = draftsFolder.id,
+            serverId = draftServerId,
+            from = fromEmail,
+            fromName = fromName,
+            to = to,
+            cc = cc,
+            subject = subject.ifBlank { "(Без темы)" },
+            preview = body.take(100),
+            body = body,
+            bodyType = 1,
+            dateReceived = System.currentTimeMillis(),
+            read = true,
+            flagged = false,
+            importance = 1,
+            hasAttachments = hasAttachments
+        )
+        
+        emailDao.insert(draftEmail)
+        
+        // Обновляем счётчик папки - считаем локальные черновики по serverId
+        val newCount = emailDao.getLocalDraftCount(accountId)
+        val updatedFolder = draftsFolder.copy(totalCount = newCount)
+        upsertFolder(updatedFolder)
+        
+        return true
     }
     
     /**
@@ -96,7 +169,7 @@ class MailRepository(context: Context) {
                     parentId = "0",
                     type = 12 // User-created folder
                 )
-                folderDao.insertAll(listOf(newFolder))
+                upsertFolder(newFolder)
                 EasResult.Success(Unit)
             }
             is EasResult.Error -> result
@@ -219,16 +292,30 @@ class MailRepository(context: Context) {
                 // Если папки пришли - сохраняем
                 if (result.data.folders.isNotEmpty()) {
                     val entities = result.data.folders.map { folder ->
-                        FolderEntity(
-                            id = "${accountId}_${folder.serverId}",
-                            accountId = accountId,
-                            serverId = folder.serverId,
-                            displayName = folder.displayName,
-                            parentId = folder.parentId,
-                            type = folder.type
-                        )
+                        val folderId = "${accountId}_${folder.serverId}"
+                        // Для папки Черновики (type 3) сохраняем локальные данные
+                        val existingFolder = folderDao.getFolder(folderId)
+                        if (folder.type == 3 && existingFolder != null) {
+                            // Сохраняем все локальные данные для Черновиков
+                            existingFolder.copy(
+                                displayName = folder.displayName,
+                                parentId = folder.parentId
+                            )
+                        } else {
+                            FolderEntity(
+                                id = folderId,
+                                accountId = accountId,
+                                serverId = folder.serverId,
+                                displayName = folder.displayName,
+                                parentId = folder.parentId,
+                                type = folder.type,
+                                syncKey = existingFolder?.syncKey ?: "0",
+                                totalCount = existingFolder?.totalCount ?: 0,
+                                unreadCount = existingFolder?.unreadCount ?: 0
+                            )
+                        }
                     }
-                    folderDao.insertAll(entities)
+                    upsertFolders(entities)
                 } else if (syncKey == "0") {
                     // Первая синхронизация но папок нет - странно, но не ошибка
                 }
@@ -274,7 +361,16 @@ class MailRepository(context: Context) {
             
             result.fold(
                 onSuccess = { folders ->
-                    folderDao.insertAll(folders)
+                    // Сохраняем локальный счётчик для папки Черновики
+                    val updatedFolders = folders.map { folder ->
+                        if (folder.type == 3) {
+                            val existingFolder = folderDao.getFolder(folder.id)
+                            if (existingFolder != null) {
+                                folder.copy(totalCount = existingFolder.totalCount)
+                            } else folder
+                        } else folder
+                    }
+                    upsertFolders(updatedFolders)
                     EasResult.Success(Unit)
                 },
                 onFailure = { 
@@ -294,7 +390,16 @@ class MailRepository(context: Context) {
             val result = client.getFolders()
             result.fold(
                 onSuccess = { folders ->
-                    folderDao.insertAll(folders)
+                    // Сохраняем локальный счётчик для папки Черновики
+                    val updatedFolders = folders.map { folder ->
+                        if (folder.type == 3) {
+                            val existingFolder = folderDao.getFolder(folder.id)
+                            if (existingFolder != null) {
+                                folder.copy(totalCount = existingFolder.totalCount)
+                            } else folder
+                        } else folder
+                    }
+                    upsertFolders(updatedFolders)
                     EasResult.Success(Unit)
                 },
                 onFailure = { EasResult.Error(it.message ?: "Ошибка получения папок") }
@@ -310,6 +415,12 @@ class MailRepository(context: Context) {
     suspend fun syncEmails(accountId: Long, folderId: String): EasResult<Int> {
         val account = accountRepo.getAccount(accountId) 
             ?: return EasResult.Error("Аккаунт не найден")
+        
+        // Не синхронизируем папку Черновики - используем только локальные черновики
+        val folder = folderDao.getFolder(folderId)
+        if (folder?.type == 3) { // type 3 = Drafts
+            return EasResult.Success(0)
+        }
         
         return when (AccountType.valueOf(account.accountType)) {
             AccountType.EXCHANGE -> syncEmailsEas(accountId, folderId)
@@ -711,15 +822,53 @@ class MailRepository(context: Context) {
             }
         }
         
-        // Сохраняем исходную папку перед перемещением в корзину
+        // Разделяем локальные черновики и серверные письма
+        val localDrafts = mutableListOf<String>()
+        val serverEmails = mutableListOf<String>()
+        
         for (emailId in emailIds) {
+            val email = emailDao.getEmail(emailId) ?: continue
+            if (email.serverId.startsWith("local_draft_")) {
+                localDrafts.add(emailId)
+            } else {
+                serverEmails.add(emailId)
+            }
+        }
+        
+        // Локальные черновики просто удаляем (они не существуют на сервере)
+        if (localDrafts.isNotEmpty()) {
+            val sourceFolderIds = mutableSetOf<String>()
+            for (emailId in localDrafts) {
+                val email = emailDao.getEmail(emailId)
+                if (email != null) {
+                    sourceFolderIds.add(email.folderId)
+                }
+                attachmentDao.deleteByEmail(emailId)
+                emailDao.delete(emailId)
+            }
+            // Обновляем счётчики папок
+            for (folderId in sourceFolderIds) {
+                val folder = folderDao.getFolder(folderId) ?: continue
+                val totalCount = emailDao.getCountByFolder(folderId)
+                val unreadCount = emailDao.getUnreadCount(folderId)
+                folderDao.updateCounts(folderId, unreadCount, totalCount)
+            }
+        }
+        
+        // Если нет серверных писем - возвращаем 0 (удалено окончательно, не перемещено в корзину)
+        if (serverEmails.isEmpty()) {
+            return EasResult.Success(0)
+        }
+        
+        // Сохраняем исходную папку перед перемещением в корзину
+        for (emailId in serverEmails) {
             val email = emailDao.getEmail(emailId) ?: continue
             // Всегда обновляем originalFolderId на текущую папку перед удалением
             emailDao.updateOriginalFolderId(emailId, email.folderId)
         }
         
-        // Перемещаем в корзину БЕЗ обновления originalFolderId (чтобы сохранить исходную папку)
-        return moveEmails(emailIds, trashFolder.id, updateOriginalFolder = false)
+        // Перемещаем серверные письма в корзину БЕЗ обновления originalFolderId (чтобы сохранить исходную папку)
+        return moveEmails(serverEmails, trashFolder.id, updateOriginalFolder = false)
     }
     
     /**

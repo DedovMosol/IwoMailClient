@@ -144,6 +144,9 @@ fun SettingsScreen(
                             // Перезапускаем сервисы
                             if (mode == SyncMode.PUSH) {
                                 com.exchange.mailclient.sync.PushService.start(context)
+                            } else {
+                                // При смене на SCHEDULED останавливаем PushService
+                                com.exchange.mailclient.sync.PushService.stop(context)
                             }
                             SyncWorker.scheduleWithNightMode(context)
                         }

@@ -238,9 +238,12 @@ fun MainScreen(
         }
     }
     
+    // Независимый scope для синхронизации (не отменяется при навигации)
+    val syncScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
+    
     fun syncFolders() {
         activeAccount?.let { account ->
-            scope.launch {
+            syncScope.launch {
                 isLoading = true
                 
                 try {
@@ -784,7 +787,7 @@ private fun HomeContent(
                                     modifier = Modifier
                                         .size(56.dp)
                                         .clip(CircleShape)
-                                        .background(Color.White.copy(alpha = 0.2f)),
+                                        .background(Color(activeAccount?.color ?: 0xFF1976D2.toInt())),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
@@ -2132,7 +2135,7 @@ private fun DrawerHeader(
                 modifier = Modifier
                     .size(64.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.2f)),
+                    .background(Color(account?.color ?: 0xFF1976D2.toInt())),
                 contentAlignment = Alignment.Center
             ) {
                 Text(

@@ -92,8 +92,14 @@ interface FolderDao {
     @Query("UPDATE folders SET unreadCount = :unread, totalCount = :total WHERE id = :id")
     suspend fun updateCounts(id: String, unread: Int, total: Int)
     
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(folders: List<FolderEntity>)
+    
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(folder: FolderEntity)
+    
+    @Query("UPDATE folders SET displayName = :displayName, parentId = :parentId, type = :type WHERE id = :id")
+    suspend fun updateFolder(id: String, displayName: String, parentId: String, type: Int)
     
     @Query("DELETE FROM folders WHERE id = :id")
     suspend fun delete(id: String)
@@ -164,6 +170,9 @@ interface EmailDao {
     @Query("SELECT COUNT(*) FROM emails WHERE folderId = :folderId")
     suspend fun getCountByFolder(folderId: String): Int
     
+    @Query("SELECT COUNT(*) FROM emails WHERE accountId = :accountId AND serverId LIKE 'local_draft_%'")
+    suspend fun getLocalDraftCount(accountId: Long): Int
+    
     @Query("SELECT COUNT(*) FROM emails WHERE accountId = :accountId AND read = 0")
     suspend fun getUnreadCountByAccount(accountId: Long): Int
     
@@ -215,6 +224,24 @@ interface EmailDao {
         ORDER BY e.dateReceived DESC
     """)
     suspend fun getUnreadInboxEmails(accountId: Long): List<EmailEntity>
+    
+    /**
+     * Получает все черновики для аккаунта (из папки с type = 3)
+     */
+    @Query("""
+        SELECT e.* FROM emails e 
+        INNER JOIN folders f ON e.folderId = f.id 
+        WHERE e.accountId = :accountId 
+        AND f.type = 3 
+        ORDER BY e.dateReceived DESC
+    """)
+    suspend fun getDraftEmails(accountId: Long): List<EmailEntity>
+    
+    /**
+     * Получает все локальные черновики для аккаунта (по serverId)
+     */
+    @Query("SELECT * FROM emails WHERE accountId = :accountId AND serverId LIKE 'local_draft_%' ORDER BY dateReceived DESC")
+    suspend fun getLocalDraftEmails(accountId: Long): List<EmailEntity>
     
     /**
      * Получает письма из папки, полученные раньше указанного времени

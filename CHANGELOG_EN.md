@@ -4,7 +4,6 @@
 
 ### New Features
 - Interface personalization screen
-- Save drafts to server
 
 ### Bug Fixes
 - Contact export (FileProvider)
@@ -14,11 +13,19 @@
 - GAL search when returning to contacts screen
 - Back swipe in compose shows save dialog
 - Focus preserved on screen rotation
+- Drafts counter updates immediately after saving
+- Local drafts deletion works correctly
+- Save draft dialog preserved on screen rotation
+- Sync not interrupted on navigation
 
 ### Improvements
 - Dialogs — compact design, animations
 - Sync time — date+time format, only after completion
 - Updated "Tips" section
+- User avatar uses account color from settings
+- Drafts saved locally and deleted immediately (not to trash)
+- Drafts folder not synced with server
+- Save draft dialog in Material Design style
 ---
 
 ## v1.1.1 (27.12.2025)
