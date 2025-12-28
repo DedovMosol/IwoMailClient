@@ -896,24 +896,59 @@ class MailRepository(context: Context) {
     suspend fun deleteEmailsPermanently(emailIds: List<String>): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
         
-        val firstEmail = emailDao.getEmail(emailIds.first())
-            ?: return EasResult.Error("Email not found")
+        // Разделяем локальные черновики и серверные письма
+        val localDrafts = mutableListOf<String>()
+        val serverEmails = mutableListOf<String>()
+        
+        for (emailId in emailIds) {
+            val email = emailDao.getEmail(emailId) ?: continue
+            if (email.serverId.startsWith("local_draft_")) {
+                localDrafts.add(emailId)
+            } else {
+                serverEmails.add(emailId)
+            }
+        }
+        
+        var deletedCount = 0
+        val affectedFolderIds = mutableSetOf<String>()
+        
+        // Локальные черновики просто удаляем из БД
+        for (emailId in localDrafts) {
+            val email = emailDao.getEmail(emailId)
+            if (email != null) {
+                affectedFolderIds.add(email.folderId)
+            }
+            attachmentDao.deleteByEmail(emailId)
+            emailDao.delete(emailId)
+            deletedCount++
+        }
+        
+        // Если нет серверных писем — обновляем счётчики и выходим
+        if (serverEmails.isEmpty()) {
+            for (folderId in affectedFolderIds) {
+                val totalCount = emailDao.getCountByFolder(folderId)
+                val unreadCount = emailDao.getUnreadCount(folderId)
+                folderDao.updateCounts(folderId, unreadCount, totalCount)
+            }
+            return EasResult.Success(deletedCount)
+        }
+        
+        val firstEmail = emailDao.getEmail(serverEmails.first())
+            ?: return EasResult.Success(deletedCount) // Уже удалили локальные
         
         val account = accountRepo.getAccount(firstEmail.accountId)
             ?: return EasResult.Error("Account not found")
         
-        // Запоминаем папки для обновления счётчиков
-        val affectedFolderIds = mutableSetOf<String>()
-        
         if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
             // Для не-Exchange просто удаляем локально
-            emailIds.forEach { emailId ->
+            serverEmails.forEach { emailId ->
                 val email = emailDao.getEmail(emailId)
                 if (email != null) {
                     affectedFolderIds.add(email.folderId)
                 }
                 attachmentDao.deleteByEmail(emailId)
                 emailDao.delete(emailId)
+                deletedCount++
             }
             // Обновляем счётчики
             for (folderId in affectedFolderIds) {
@@ -921,15 +956,13 @@ class MailRepository(context: Context) {
                 val unreadCount = emailDao.getUnreadCount(folderId)
                 folderDao.updateCounts(folderId, unreadCount, totalCount)
             }
-            return EasResult.Success(emailIds.size)
+            return EasResult.Success(deletedCount)
         }
         
         val client = accountRepo.createEasClient(firstEmail.accountId)
             ?: return EasResult.Error("Failed to create client")
         
-        var deletedCount = 0
-        
-        for (emailId in emailIds) {
+        for (emailId in serverEmails) {
             val email = emailDao.getEmail(emailId) ?: continue
             affectedFolderIds.add(email.folderId)
             
@@ -982,19 +1015,54 @@ class MailRepository(context: Context) {
     ): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
         
-        val firstEmail = emailDao.getEmail(emailIds.first())
-            ?: return EasResult.Error("Email not found")
+        // Разделяем локальные черновики и серверные письма
+        val localDrafts = mutableListOf<String>()
+        val serverEmails = mutableListOf<String>()
         
-        val account = accountRepo.getAccount(firstEmail.accountId)
-            ?: return EasResult.Error("Account not found")
+        for (emailId in emailIds) {
+            val email = emailDao.getEmail(emailId) ?: continue
+            if (email.serverId.startsWith("local_draft_")) {
+                localDrafts.add(emailId)
+            } else {
+                serverEmails.add(emailId)
+            }
+        }
         
         val affectedFolderIds = mutableSetOf<String>()
         val total = emailIds.size
         var deletedCount = 0
         
+        // Сначала удаляем локальные черновики
+        for (emailId in localDrafts) {
+            val email = emailDao.getEmail(emailId)
+            if (email != null) {
+                affectedFolderIds.add(email.folderId)
+            }
+            attachmentDao.deleteByEmail(emailId)
+            emailDao.delete(emailId)
+            deletedCount++
+            onProgress(deletedCount, total)
+        }
+        
+        // Если нет серверных писем — обновляем счётчики и выходим
+        if (serverEmails.isEmpty()) {
+            for (folderId in affectedFolderIds) {
+                val totalCount = emailDao.getCountByFolder(folderId)
+                val unreadCount = emailDao.getUnreadCount(folderId)
+                folderDao.updateCounts(folderId, unreadCount, totalCount)
+            }
+            return EasResult.Success(deletedCount)
+        }
+        
+        val firstEmail = emailDao.getEmail(serverEmails.first())
+            ?: return EasResult.Success(deletedCount)
+        
+        val account = accountRepo.getAccount(firstEmail.accountId)
+            ?: return EasResult.Error("Account not found")
+        
         if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
             // Для не-Exchange просто удаляем локально
-            emailIds.forEachIndexed { index, emailId ->
+            serverEmails.forEach { emailId ->
                 val email = emailDao.getEmail(emailId)
                 if (email != null) {
                     affectedFolderIds.add(email.folderId)
@@ -1016,7 +1084,7 @@ class MailRepository(context: Context) {
         val client = accountRepo.createEasClient(firstEmail.accountId)
             ?: return EasResult.Error("Failed to create client")
         
-        for ((index, emailId) in emailIds.withIndex()) {
+        for (emailId in serverEmails) {
             val email = emailDao.getEmail(emailId) ?: continue
             affectedFolderIds.add(email.folderId)
             
