@@ -78,7 +78,7 @@ fun ContactsScreen(
     val tabs = listOf(Strings.personalContacts, Strings.organization)
     
     // Личные контакты - используем key чтобы пересоздавать Flow при смене accountId
-    val localContacts by remember(accountId) { contactRepo.getContacts(accountId) }.collectAsState(initial = emptyList())
+    val localContacts by remember(accountId) { contactRepo.getLocalContacts(accountId) }.collectAsState(initial = emptyList())
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
     var filteredLocalContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
     
