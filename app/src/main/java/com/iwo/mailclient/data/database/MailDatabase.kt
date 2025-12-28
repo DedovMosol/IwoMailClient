@@ -5,7 +5,7 @@ import androidx.room.*
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class],
-    version = 16,
+    version = 17,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -42,6 +42,12 @@ class Converters {
     
     @TypeConverter
     fun dateToTimestamp(date: java.util.Date?): Long? = date?.time
+    
+    @TypeConverter
+    fun fromContactSource(source: ContactSource): String = source.name
+    
+    @TypeConverter
+    fun toContactSource(value: String): ContactSource = ContactSource.valueOf(value)
 }
 
 // === ENTITIES ===
