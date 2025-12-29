@@ -62,7 +62,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 
 | Parameter | Minimum | Recommended |
 |-----------|---------|-------------|
-| Android | 8.0 (API 26) | 12+ (API 31+) |
+| Android | 8.0+ (API 26) | — |
 | RAM | 2 GB | 4+ GB |
 | Storage | 50 MB | 100+ MB |
 | CPU | ARMv7 / x86 | ARM64 / x86_64 |
