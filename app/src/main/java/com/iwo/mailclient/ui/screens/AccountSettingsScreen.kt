@@ -74,6 +74,8 @@ fun AccountSettingsScreen(
     var showSignaturesDialog by remember { mutableStateOf(false) }
     var showAutoCleanupDialog by remember { mutableStateOf(false) }
     var showContactsSyncDialog by remember { mutableStateOf(false) }
+    var showNotesSyncDialog by remember { mutableStateOf(false) }
+    var showCalendarSyncDialog by remember { mutableStateOf(false) }
     var showCertificateDialog by remember { mutableStateOf(false) }
     
     // Пикеры для сертификата
@@ -309,6 +311,38 @@ fun AccountSettingsScreen(
                 }
             },
             onDismiss = { showContactsSyncDialog = false }
+        )
+    }
+    
+    // Диалог синхронизации заметок
+    if (showNotesSyncDialog) {
+        SyncIntervalDialog(
+            isRu = isRu,
+            title = if (isRu) "Синхронизация заметок" else "Notes sync",
+            currentDays = currentAccount.notesSyncIntervalDays,
+            onDaysChange = { days ->
+                scope.launch {
+                    accountRepo.updateNotesSyncInterval(accountId, days)
+                    account = accountRepo.getAccount(accountId)
+                }
+            },
+            onDismiss = { showNotesSyncDialog = false }
+        )
+    }
+    
+    // Диалог синхронизации календаря
+    if (showCalendarSyncDialog) {
+        SyncIntervalDialog(
+            isRu = isRu,
+            title = if (isRu) "Синхронизация календаря" else "Calendar sync",
+            currentDays = currentAccount.calendarSyncIntervalDays,
+            onDaysChange = { days ->
+                scope.launch {
+                    accountRepo.updateCalendarSyncInterval(accountId, days)
+                    account = accountRepo.getAccount(accountId)
+                }
+            },
+            onDismiss = { showCalendarSyncDialog = false }
         )
     }
 
@@ -552,9 +586,81 @@ fun AccountSettingsScreen(
                         modifier = Modifier.clickable { showContactsSyncDialog = true }
                     )
                 }
+                
+                // Синхронизация заметок
+                item {
+                    ListItem(
+                        headlineContent = { Text(if (isRu) "Синхронизация заметок" else "Notes sync") },
+                        supportingContent = { Text(getContactsSyncIntervalText(currentAccount.notesSyncIntervalDays, isRu)) },
+                        leadingContent = { Icon(AppIcons.StickyNote, null) },
+                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
+                        modifier = Modifier.clickable { showNotesSyncDialog = true }
+                    )
+                }
+                
+                // Синхронизация календаря
+                item {
+                    ListItem(
+                        headlineContent = { Text(if (isRu) "Синхронизация календаря" else "Calendar sync") },
+                        supportingContent = { Text(getContactsSyncIntervalText(currentAccount.calendarSyncIntervalDays, isRu)) },
+                        leadingContent = { Icon(AppIcons.CalendarMonth, null) },
+                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
+                        modifier = Modifier.clickable { showCalendarSyncDialog = true }
+                    )
+                }
             }
         }
     }
+}
+
+/**
+ * Универсальный диалог выбора интервала синхронизации
+ */
+@Composable
+private fun SyncIntervalDialog(
+    isRu: Boolean,
+    title: String,
+    currentDays: Int,
+    onDaysChange: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val intervals = listOf(
+        0 to (if (isRu) "Никогда" else "Never"),
+        1 to (if (isRu) "Ежедневно" else "Daily"),
+        7 to (if (isRu) "Еженедельно" else "Weekly"),
+        14 to (if (isRu) "Раз в 2 недели" else "Every 2 weeks"),
+        30 to (if (isRu) "Ежемесячно" else "Monthly")
+    )
+    
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                intervals.forEach { (days, label) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDaysChange(days)
+                                onDismiss()
+                            }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = currentDays == days, onClick = null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(Strings.cancel)
+            }
+        }
+    )
 }
 
 

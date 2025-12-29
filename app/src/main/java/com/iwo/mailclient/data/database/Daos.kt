@@ -65,6 +65,18 @@ interface AccountDao {
     @Query("UPDATE accounts SET contactsSyncKey = :syncKey WHERE id = :id")
     suspend fun updateContactsSyncKey(id: Long, syncKey: String)
     
+    @Query("UPDATE accounts SET notesSyncIntervalDays = :days WHERE id = :id")
+    suspend fun updateNotesSyncInterval(id: Long, days: Int)
+    
+    @Query("UPDATE accounts SET notesSyncKey = :syncKey WHERE id = :id")
+    suspend fun updateNotesSyncKey(id: Long, syncKey: String)
+    
+    @Query("UPDATE accounts SET calendarSyncIntervalDays = :days WHERE id = :id")
+    suspend fun updateCalendarSyncInterval(id: Long, days: Int)
+    
+    @Query("UPDATE accounts SET calendarSyncKey = :syncKey WHERE id = :id")
+    suspend fun updateCalendarSyncKey(id: Long, syncKey: String)
+    
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(account: AccountEntity): Long
     

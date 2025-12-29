@@ -133,7 +133,9 @@ fun MainScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToSearch: () -> Unit = {},
     onNavigateToEmailDetail: (String) -> Unit = {},
-    onNavigateToContacts: () -> Unit = {}
+    onNavigateToContacts: () -> Unit = {},
+    onNavigateToNotes: () -> Unit = {},
+    onNavigateToCalendar: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -195,13 +197,29 @@ fun MainScreen(
         }
     }
     
-    // �צ-��T�Tæ��-���- T�T�T�T�TǦ��� �����-T��-�-�-�-���-
+    // Загружаем счётчик избранных
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
         mailRepo.getFlaggedCount(accountId).collect { flaggedCount = it }
     }
     
-    // �Ц-T¦-�-�-T¦�TǦ�T����-T� T����-T�T��-�-�����-TƦ�T� ��� �ަԦئ� ��Ц� ��T��� ���-��T�T����� ��T������-�����-��T�
+    // Счётчики заметок и календаря
+    var notesCount by remember { mutableStateOf(0) }
+    var eventsCount by remember { mutableStateOf(0) }
+    
+    LaunchedEffect(activeAccount?.id) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        val noteRepo = com.iwo.mailclient.data.repository.NoteRepository(context)
+        noteRepo.getNotesCount(accountId).collect { notesCount = it }
+    }
+    
+    LaunchedEffect(activeAccount?.id) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        val calendarRepo = com.iwo.mailclient.data.repository.CalendarRepository(context)
+        calendarRepo.getEventsCount(accountId).collect { eventsCount = it }
+    }
+    
+    // Первоначальная синхронизация при PUSH или после загрузки приложения
     // ��T����-��Ț�Tæ��- �����-�-�-��Ț-T˦� ���-�-T�T��-������T� T�T¦-�-T� T����-T�T��-�-�����-TƦ�T� �-�� ��T���T�T˦-�-���-T�T� ��T��� ���-�-�-T��-T¦� Tͦ�T��-�-�-
     LaunchedEffect(activeAccount?.id) {
         val account = activeAccount ?: return@LaunchedEffect
@@ -617,16 +635,20 @@ fun MainScreen(
                 }
             }
         ) { padding ->
-            // ��T��-T����-�-T� �����-�-�-�-T� T�T�T��-�-��TƦ- T� ���-TĦ-T��-�-TƦ����� �- ��T������-�����-����
+            // Основное содержимое с карточками и папками
             HomeContent(
                 activeAccount = activeAccount,
                 folders = folders,
                 flaggedCount = flaggedCount,
+                notesCount = notesCount,
+                eventsCount = eventsCount,
                 isLoading = isLoading,
                 isSyncing = isSyncing,
                 onSyncFolders = { syncFolders() },
                 onFolderClick = onNavigateToEmailList,
                 onContactsClick = onNavigateToContacts,
+                onNotesClick = onNavigateToNotes,
+                onCalendarClick = onNavigateToCalendar,
                 onSettingsClick = onNavigateToSettings,
                 modifier = Modifier.padding(padding)
             )
@@ -640,11 +662,15 @@ private fun HomeContent(
     activeAccount: AccountEntity?,
     folders: List<FolderEntity>,
     flaggedCount: Int,
+    notesCount: Int = 0,
+    eventsCount: Int = 0,
     isLoading: Boolean,
     isSyncing: Boolean = false,
     onSyncFolders: () -> Unit,
     onFolderClick: (String) -> Unit,
     onContactsClick: () -> Unit,
+    onNotesClick: () -> Unit = {},
+    onCalendarClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -664,12 +690,14 @@ private fun HomeContent(
     // ��-T�T¦-TϦ-���� �+��T� T���T�T�T¦�T� T������-�-���-�+�-TƦ��� (T��-T�T��-�-TϦ�T�T�T� ��T��� �-�-�-�����-TƦ���, T��-T��-T�T˦-�-��T�T�T� ��T��� ����T������-��T�T����� ��T������-�����-��T�)
     var isRecommendationDismissed by rememberSaveable { mutableStateOf(false) }
     
-    // �ۦ-���-�������-�-�-�-�-T˦� �-�-���-�-�-��T� ���-���-�� (�-T˦-��T����-T� �+�- LazyColumn)
+    // Локализованные названия папок (вычисляем вне LazyColumn)
     val inboxName = Strings.inbox
     val draftsName = Strings.drafts
     val trashName = Strings.trash
     val sentName = Strings.sent
     val favoritesName = Strings.favorites
+    val notesName = Strings.notes
+    val calendarName = Strings.calendar
     val foldersTitle = Strings.folders
     val refreshText = Strings.refresh
     val emailsCountText = Strings.emailsCount
@@ -950,10 +978,14 @@ private fun HomeContent(
             mainFolders.find { it.type == 4 }?.let { folder ->
                 orderedFolders.add(FolderDisplay(folder.id, trashName, folder.totalCount, folder.unreadCount, folder.type))
             }
-            // �ئ��-T��-�-�-T˦�
+            // Избранные
             orderedFolders.add(FolderDisplay("favorites", favoritesName, flaggedCount, 0, -1))
-            // �ڦ-�-T¦-��T�T�
+            // Контакты
             orderedFolders.add(FolderDisplay("contacts", contactsName, 0, 0, -2))
+            // Заметки
+            orderedFolders.add(FolderDisplay("notes", notesName, notesCount, 0, -3))
+            // Календарь
+            orderedFolders.add(FolderDisplay("calendar", calendarName, eventsCount, 0, -4))
             
             val displayFolders = orderedFolders.toList()
             
@@ -992,8 +1024,12 @@ private fun HomeContent(
                                     unreadCount = folder.unreadCount,
                                     type = folder.type,
                                     onClick = { 
-                                        if (folder.id == "contacts") onContactsClick() 
-                                        else onFolderClick(folder.id) 
+                                        when (folder.id) {
+                                            "contacts" -> onContactsClick()
+                                            "notes" -> onNotesClick()
+                                            "calendar" -> onCalendarClick()
+                                            else -> onFolderClick(folder.id)
+                                        }
                                     },
                                     modifier = if (rowFolders.size == 1) {
                                         Modifier.fillMaxWidth(0.48f)
@@ -1018,8 +1054,12 @@ private fun HomeContent(
                                 unreadCount = folder.unreadCount,
                                 type = folder.type,
                                 onClick = { 
-                                    if (folder.id == "contacts") onContactsClick() 
-                                    else onFolderClick(folder.id) 
+                                    when (folder.id) {
+                                        "contacts" -> onContactsClick()
+                                        "notes" -> onNotesClick()
+                                        "calendar" -> onCalendarClick()
+                                        else -> onFolderClick(folder.id)
+                                    }
                                 },
                                 modifier = if (rowFolders.size == 1) {
                                     Modifier.fillMaxWidth(0.48f)
@@ -1293,7 +1333,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.2.0",
+                                text = "v1.3.0",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1328,7 +1368,7 @@ private fun HomeContent(
                             
                             Spacer(modifier = Modifier.height(12.dp))
                             
-                            // �Ҧ-���-�-���-�-T�T¦� �- �-���+�� TǦ����-�-
+                            // Возможности в виде чипов
                             androidx.compose.foundation.layout.FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1338,6 +1378,9 @@ private fun HomeContent(
                                 FeatureChip(Strings.featureSend)
                                 FeatureChip(Strings.featureSearch)
                                 FeatureChip(Strings.featureFolders)
+                                FeatureChip(Strings.featureContacts)
+                                FeatureChip(Strings.featureNotes)
+                                FeatureChip(Strings.featureCalendar)
                             }
                             
                             Spacer(modifier = Modifier.height(12.dp))
@@ -1534,8 +1577,8 @@ private fun HomeContent(
                                 )
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
-                                    DonateInfoRow(Strings.recipient, "�Ԧ-�+�-�-�-�- �Ц-�+T����� �ئ��-T����-��T�")
-                                    // �ݦ-�-��T� T�T�T�T¦- T� ����T����-�-T��-�-
+                                    DonateInfoRow(Strings.recipient, "Додонов Андрей Игоревич")
+                                    // Номер счёта с выделением
                                     Row(modifier = Modifier.padding(vertical = 2.dp)) {
                                         Text(
                                             Strings.accountNumber,
@@ -1553,7 +1596,7 @@ private fun HomeContent(
                                             )
                                         }
                                     }
-                                    DonateInfoRow(Strings.bank, "�ߦ-�-�-����T������� �-�-�-�� �ߦЦ� ��-��T��-�-�-��")
+                                    DonateInfoRow(Strings.bank, "Поволжский Банк ПАО Сбербанк")
                                 }
                             }
                         }
@@ -1568,7 +1611,7 @@ private fun HomeContent(
                             }
                             TextButton(
                                 onClick = {
-                                    // �ڦ-����T�Tæ��- �-�-�-��T� T�T�T�T¦-
+                                    // Копируем номер счёта
                                     val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                     val clip = android.content.ClipData.newPlainText("Account", "40817810354405296071")
                                     clipboard.setPrimaryClip(clip)
@@ -1783,6 +1826,14 @@ private fun FolderCardDisplay(
             AppIcons.Contacts, 
             listOf(Color(0xFF4FC3F7), Color(0xFF29B6F6)) // Light Blue
         )
+        -3 -> FolderColors(
+            AppIcons.StickyNote, 
+            listOf(Color(0xFF81C784), Color(0xFF66BB6A)) // Green
+        )
+        -4 -> FolderColors(
+            AppIcons.Calendar, 
+            listOf(Color(0xFF42A5F5), Color(0xFF1E88E5)) // Blue
+        )
         else -> FolderColors(
             AppIcons.Folder, 
             listOf(Color(0xFF90A4AE), Color(0xFF78909C)) // Blue Grey Light
@@ -1844,11 +1895,15 @@ private fun FolderCardDisplay(
                         color = Color.White
                     )
                     Spacer(modifier = Modifier.height(2.dp))
-                    // �Ԧ�T� ���-�-T¦-��T¦-�- �-�� ���-���-��T˦-�-���- "����T����-"
+                    // Счётчик элементов
                     if (type != -2) {
                         Text(
                             text = when {
-                                count > 0 -> "$count ${Strings.emailsCount}"
+                                count > 0 -> "$count ${when (type) {
+                                    -3 -> Strings.notesCount  // Заметки
+                                    -4 -> Strings.events      // Календарь
+                                    else -> Strings.emailsCount
+                                }}"
                                 else -> Strings.empty
                             },
                             style = MaterialTheme.typography.bodySmall,

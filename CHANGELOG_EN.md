@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.3.0 (29.12.2025)
+
+### New Features
+- **Exchange Notes** — sync and view notes from Exchange Notes folder
+- **Exchange Calendar** — sync and view calendar events with three display modes:
+  - Agenda — events list grouped by dates
+  - Month — calendar grid with dots on days with events
+  - Year — clicking month header opens view with all 12 months
+- **Notes and Calendar sync settings** — in account settings choose interval: disabled, daily, weekly, biweekly, monthly
+- **Automatic sync** — notes and calendar sync in background together with contacts
+- **Multiple contact selection**
+- **Favorite contacts** — mark contacts with star and filter by favorites
+- "Notes" and "Calendar" cards on home screen
+- Search in notes and events
+- Detailed event view (time, location, organizer, attendees)
+- Contact counters in "Personal" and "Organization" tabs
+- Updated "About" section — added contacts, notes and calendar features
+
+### Improvements
+- **Year in event dates** — group headers show year (Friday, December 25, 2020)
+- **Past events indicator** — green checkmark and muted colors for completed events
+- **Clickable links in events** — URLs in event descriptions are clickable
+- **Images in events** — images from event descriptions are loaded and displayed
+- **Days with events highlighted** — in year view, days with events shown in blue
+- **Improved email scroll** — WebView no longer blocks parent container scroll
+- **Inline images** — not shown in attachments list, displayed in email body
+- **Avatar color palette fixes** — 32 colors everywhere
+
+---
+
 ## v1.2.0 (29.12.2025)
 
 ### New Features

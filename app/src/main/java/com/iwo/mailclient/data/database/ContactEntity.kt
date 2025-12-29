@@ -42,6 +42,7 @@ data class ContactEntity(
     val jobTitle: String = "",
     val notes: String = "",
     val source: ContactSource = ContactSource.LOCAL,
+    val isFavorite: Boolean = false, // Избранный контакт
     val useCount: Int = 0,        // Для сортировки в автодополнении
     val lastUsed: Long = 0,       // Timestamp последнего использования
     val createdAt: Long = System.currentTimeMillis(),

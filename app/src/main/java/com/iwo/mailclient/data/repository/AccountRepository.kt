@@ -379,6 +379,34 @@ class AccountRepository(private val context: Context) {
     }
     
     /**
+     * Обновляет интервал синхронизации заметок для аккаунта
+     */
+    suspend fun updateNotesSyncInterval(accountId: Long, days: Int) {
+        accountDao.updateNotesSyncInterval(accountId, days)
+    }
+    
+    /**
+     * Обновляет ключ синхронизации заметок для аккаунта
+     */
+    suspend fun updateNotesSyncKey(accountId: Long, syncKey: String) {
+        accountDao.updateNotesSyncKey(accountId, syncKey)
+    }
+    
+    /**
+     * Обновляет интервал синхронизации календаря для аккаунта
+     */
+    suspend fun updateCalendarSyncInterval(accountId: Long, days: Int) {
+        accountDao.updateCalendarSyncInterval(accountId, days)
+    }
+    
+    /**
+     * Обновляет ключ синхронизации календаря для аккаунта
+     */
+    suspend fun updateCalendarSyncKey(accountId: Long, syncKey: String) {
+        accountDao.updateCalendarSyncKey(accountId, syncKey)
+    }
+    
+    /**
      * Создаёт IMAP клиент для указанного аккаунта
      */
     suspend fun createImapClient(accountId: Long): ImapClient? {

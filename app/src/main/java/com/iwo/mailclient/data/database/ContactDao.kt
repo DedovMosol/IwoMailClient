@@ -105,6 +105,20 @@ interface ContactDao {
     @Query("UPDATE contacts SET groupId = NULL, updatedAt = :timestamp WHERE groupId = :groupId")
     suspend fun removeAllFromGroup(groupId: String, timestamp: Long = System.currentTimeMillis())
     
+    // === Избранные ===
+    
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND isFavorite = 1 ORDER BY displayName COLLATE NOCASE")
+    fun getFavoriteContacts(accountId: Long): Flow<List<ContactEntity>>
+    
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND isFavorite = 1 ORDER BY displayName COLLATE NOCASE")
+    suspend fun getFavoriteContactsList(accountId: Long): List<ContactEntity>
+    
+    @Query("UPDATE contacts SET isFavorite = :isFavorite, updatedAt = :timestamp WHERE id = :contactId")
+    suspend fun setFavorite(contactId: String, isFavorite: Boolean, timestamp: Long = System.currentTimeMillis())
+    
+    @Query("SELECT COUNT(*) FROM contacts WHERE accountId = :accountId AND isFavorite = 1")
+    suspend fun getFavoriteCount(accountId: Long): Int
+    
     // === Статистика ===
     
     @Query("SELECT COUNT(*) FROM contacts WHERE accountId = :accountId")

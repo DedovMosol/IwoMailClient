@@ -2508,6 +2508,408 @@ $foldersXml
         }
     }
     
+    /**
+     * Синхронизация заметок из папки Notes на сервере Exchange
+     * Возвращает список заметок
+     */
+    suspend fun syncNotes(): EasResult<List<EasNote>> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Сначала получаем список папок чтобы найти папку Notes (type = 10)
+        val foldersResult = folderSync("0")
+        val notesFolderId = when (foldersResult) {
+            is EasResult.Success -> {
+                foldersResult.data.folders.find { it.type == 10 }?.serverId
+            }
+            is EasResult.Error -> return EasResult.Error(foldersResult.message)
+        }
+        
+        if (notesFolderId == null) {
+            return EasResult.Error("Папка заметок не найдена")
+        }
+        
+        // Шаг 1: Получаем начальный SyncKey для папки заметок
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Success(emptyList())
+        }
+        
+        // Шаг 2: Запрашиваем заметки
+        val syncXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                        <DeletesAsMoves/>
+                        <GetChanges/>
+                        <WindowSize>100</WindowSize>
+                        <Options>
+                            <airsyncbase:BodyPreference>
+                                <airsyncbase:Type>1</airsyncbase:Type>
+                                <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                            </airsyncbase:BodyPreference>
+                        </Options>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", syncXml) { responseXml ->
+            parseNotesSyncResponse(responseXml)
+        }
+    }
+    
+    private fun parseNotesSyncResponse(xml: String): List<EasNote> {
+        val notes = mutableListOf<EasNote>()
+        
+        // Парсим Add элементы
+        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        addPattern.findAll(xml).forEach { match ->
+            val addXml = match.groupValues[1]
+            
+            // Извлекаем ServerId
+            val serverId = extractValue(addXml, "ServerId") ?: return@forEach
+            
+            // Извлекаем ApplicationData
+            val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val dataMatch = dataPattern.find(addXml)
+            if (dataMatch != null) {
+                val dataXml = dataMatch.groupValues[1]
+                
+                val subject = extractNoteValue(dataXml, "Subject") ?: ""
+                val body = extractNoteBody(dataXml)
+                val categories = extractNoteCategories(dataXml)
+                val lastModified = parseNoteDate(extractNoteValue(dataXml, "LastModifiedDate"))
+                
+                notes.add(EasNote(
+                    serverId = serverId,
+                    subject = subject,
+                    body = body,
+                    categories = categories,
+                    lastModified = lastModified
+                ))
+            }
+        }
+        
+        return notes
+    }
+    
+    private fun extractNoteValue(xml: String, tag: String): String? {
+        // Заметки используют namespace notes:
+        val patterns = listOf(
+            "<notes:$tag>(.*?)</notes:$tag>",
+            "<$tag>(.*?)</$tag>"
+        )
+        for (pattern in patterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+        }
+        return null
+    }
+    
+    private fun extractNoteBody(xml: String): String {
+        // Тело заметки может быть в airsyncbase:Body/Data или notes:Body
+        val bodyPatterns = listOf(
+            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
+            "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
+            "<notes:Body>(.*?)</notes:Body>"
+        )
+        for (pattern in bodyPatterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+        }
+        return ""
+    }
+    
+    private fun extractNoteCategories(xml: String): List<String> {
+        val categories = mutableListOf<String>()
+        val categoriesPattern = "<notes:Categories>(.*?)</notes:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val categoriesMatch = categoriesPattern.find(xml)
+        if (categoriesMatch != null) {
+            val categoriesXml = categoriesMatch.groupValues[1]
+            val categoryPattern = "<notes:Category>(.*?)</notes:Category>".toRegex()
+            categoryPattern.findAll(categoriesXml).forEach { match ->
+                categories.add(match.groupValues[1].trim())
+            }
+        }
+        return categories
+    }
+    
+    private fun parseNoteDate(dateStr: String?): Long {
+        if (dateStr.isNullOrBlank()) return System.currentTimeMillis()
+        return try {
+            // Формат: 2025-01-15T10:30:00.000Z
+            val cleanDate = dateStr.substringBefore("Z").substringBefore(".")
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                .parse(cleanDate)?.time ?: System.currentTimeMillis()
+        } catch (e: Exception) {
+            System.currentTimeMillis()
+        }
+    }
+    
+    /**
+     * Синхронизация календаря из папки Calendar на сервере Exchange
+     * Возвращает список событий
+     */
+    suspend fun syncCalendar(): EasResult<List<EasCalendarEvent>> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Сначала получаем список папок чтобы найти папку Calendar (type = 8)
+        val foldersResult = folderSync("0")
+        val calendarFolderId = when (foldersResult) {
+            is EasResult.Success -> {
+                foldersResult.data.folders.find { it.type == 8 }?.serverId
+            }
+            is EasResult.Error -> return EasResult.Error(foldersResult.message)
+        }
+        
+        if (calendarFolderId == null) {
+            return EasResult.Error("Папка календаря не найдена")
+        }
+        
+        // Шаг 1: Получаем начальный SyncKey для папки календаря
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Success(emptyList())
+        }
+        
+        // Шаг 2: Запрашиваем события календаря
+        val syncXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                        <DeletesAsMoves/>
+                        <GetChanges/>
+                        <WindowSize>100</WindowSize>
+                        <Options>
+                            <airsyncbase:BodyPreference>
+                                <airsyncbase:Type>1</airsyncbase:Type>
+                                <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                            </airsyncbase:BodyPreference>
+                        </Options>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", syncXml) { responseXml ->
+            parseCalendarSyncResponse(responseXml)
+        }
+    }
+    
+    private fun parseCalendarSyncResponse(xml: String): List<EasCalendarEvent> {
+        val events = mutableListOf<EasCalendarEvent>()
+        
+        // Парсим Add элементы
+        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        addPattern.findAll(xml).forEach { match ->
+            val addXml = match.groupValues[1]
+            
+            // Извлекаем ServerId
+            val serverId = extractValue(addXml, "ServerId") ?: return@forEach
+            
+            // Извлекаем ApplicationData
+            val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val dataMatch = dataPattern.find(addXml)
+            if (dataMatch != null) {
+                val dataXml = dataMatch.groupValues[1]
+                
+                val subject = extractCalendarValue(dataXml, "Subject") ?: ""
+                val location = extractCalendarValue(dataXml, "Location") ?: ""
+                val body = extractCalendarBody(dataXml)
+                val startTime = parseCalendarDate(extractCalendarValue(dataXml, "StartTime"))
+                val endTime = parseCalendarDate(extractCalendarValue(dataXml, "EndTime"))
+                val allDayEvent = extractCalendarValue(dataXml, "AllDayEvent") == "1"
+                val reminder = extractCalendarValue(dataXml, "Reminder")?.toIntOrNull() ?: 0
+                val busyStatus = extractCalendarValue(dataXml, "BusyStatus")?.toIntOrNull() ?: 2
+                val sensitivity = extractCalendarValue(dataXml, "Sensitivity")?.toIntOrNull() ?: 0
+                val organizer = extractCalendarValue(dataXml, "OrganizerEmail") 
+                    ?: extractCalendarValue(dataXml, "Organizer_Email") ?: ""
+                val attendees = parseCalendarAttendees(dataXml)
+                val categories = extractCalendarCategories(dataXml)
+                val lastModified = parseCalendarDate(extractCalendarValue(dataXml, "DtStamp"))
+                
+                // Проверяем повторяющееся событие
+                val isRecurring = dataXml.contains("<calendar:Recurrence>") || dataXml.contains("<Recurrence>")
+                
+                events.add(EasCalendarEvent(
+                    serverId = serverId,
+                    subject = subject,
+                    location = location,
+                    body = body,
+                    startTime = startTime,
+                    endTime = endTime,
+                    allDayEvent = allDayEvent,
+                    reminder = reminder,
+                    busyStatus = busyStatus,
+                    sensitivity = sensitivity,
+                    organizer = organizer,
+                    attendees = attendees,
+                    isRecurring = isRecurring,
+                    categories = categories,
+                    lastModified = lastModified
+                ))
+            }
+        }
+        
+        return events
+    }
+    
+    private fun extractCalendarValue(xml: String, tag: String): String? {
+        val patterns = listOf(
+            "<calendar:$tag>(.*?)</calendar:$tag>",
+            "<$tag>(.*?)</$tag>"
+        )
+        for (pattern in patterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+        }
+        return null
+    }
+    
+    private fun extractCalendarBody(xml: String): String {
+        val bodyPatterns = listOf(
+            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
+            "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
+            "<calendar:Body>(.*?)</calendar:Body>"
+        )
+        for (pattern in bodyPatterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+        }
+        return ""
+    }
+    
+    private fun extractCalendarCategories(xml: String): List<String> {
+        val categories = mutableListOf<String>()
+        val categoriesPattern = "<calendar:Categories>(.*?)</calendar:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val categoriesMatch = categoriesPattern.find(xml)
+        if (categoriesMatch != null) {
+            val categoriesXml = categoriesMatch.groupValues[1]
+            val categoryPattern = "<calendar:Category>(.*?)</calendar:Category>".toRegex()
+            categoryPattern.findAll(categoriesXml).forEach { match ->
+                categories.add(match.groupValues[1].trim())
+            }
+        }
+        return categories
+    }
+    
+    private fun parseCalendarAttendees(xml: String): List<EasAttendee> {
+        val attendees = mutableListOf<EasAttendee>()
+        val attendeesPattern = "<calendar:Attendees>(.*?)</calendar:Attendees>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val attendeesMatch = attendeesPattern.find(xml)
+        if (attendeesMatch != null) {
+            val attendeesXml = attendeesMatch.groupValues[1]
+            val attendeePattern = "<calendar:Attendee>(.*?)</calendar:Attendee>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            attendeePattern.findAll(attendeesXml).forEach { match ->
+                val attendeeXml = match.groupValues[1]
+                val email = extractCalendarValue(attendeeXml, "Email") ?: return@forEach
+                val name = extractCalendarValue(attendeeXml, "Name") ?: ""
+                val status = extractCalendarValue(attendeeXml, "AttendeeStatus")?.toIntOrNull() ?: 0
+                attendees.add(EasAttendee(email, name, status))
+            }
+        }
+        return attendees
+    }
+    
+    private fun parseCalendarDate(dateStr: String?): Long {
+        if (dateStr.isNullOrBlank()) return 0L
+        
+        // Очищаем строку от Z и миллисекунд
+        val cleanDate = dateStr.trim()
+            .replace("Z", "")
+            .substringBefore(".")
+        
+        // Список форматов даты, которые может отправлять Exchange
+        val formats = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss",      // 2020-12-25T14:00:00
+            "yyyyMMdd'T'HHmmss",           // 20201225T140000
+            "yyyy-MM-dd HH:mm:ss",         // 2020-12-25 14:00:00
+            "yyyy-MM-dd",                  // 2020-12-25
+            "yyyyMMdd"                     // 20201225
+        )
+        
+        for (format in formats) {
+            try {
+                val sdf = java.text.SimpleDateFormat(format, java.util.Locale.US)
+                sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                val date = sdf.parse(cleanDate)
+                if (date != null) {
+                    return date.time
+                }
+            } catch (_: Exception) {
+                // Пробуем следующий формат
+            }
+        }
+        
+        // Если ничего не подошло, логируем и возвращаем 0
+        android.util.Log.w("EasClient", "Failed to parse calendar date: $dateStr")
+        return 0L
+    }
+
     private fun parseContactsSyncResponse(xml: String): List<GalContact> {
         val contacts = mutableListOf<GalContact>()
         
@@ -2735,5 +3137,47 @@ data class GalContact(
     val phone: String = "",
     val mobilePhone: String = "",
     val alias: String = ""
+)
+
+/**
+ * Заметка из Exchange Notes
+ */
+data class EasNote(
+    val serverId: String,
+    val subject: String,
+    val body: String,
+    val categories: List<String> = emptyList(),
+    val lastModified: Long = System.currentTimeMillis()
+)
+
+/**
+ * Событие календаря из Exchange
+ */
+data class EasCalendarEvent(
+    val serverId: String,
+    val subject: String,
+    val location: String = "",
+    val body: String = "",
+    val startTime: Long,
+    val endTime: Long,
+    val allDayEvent: Boolean = false,
+    val reminder: Int = 0,
+    val busyStatus: Int = 2,
+    val sensitivity: Int = 0,
+    val organizer: String = "",
+    val attendees: List<EasAttendee> = emptyList(),
+    val isRecurring: Boolean = false,
+    val recurrenceRule: String = "",
+    val categories: List<String> = emptyList(),
+    val lastModified: Long = System.currentTimeMillis()
+)
+
+/**
+ * Участник события календаря
+ */
+data class EasAttendee(
+    val email: String,
+    val name: String = "",
+    val status: Int = 0 // 0=Unknown, 2=Tentative, 3=Accept, 4=Decline, 5=NotResponded
 )
 

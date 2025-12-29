@@ -5,8 +5,10 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -44,11 +46,17 @@ import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.launch
 
-// Цвета для аватаров
+// Цвета для аватаров как в Gmail — стабильные для каждой буквы (32 цвета)
 private val avatarColors = listOf(
-    Color(0xFFE53935), Color(0xFF8E24AA), Color(0xFF3949AB),
-    Color(0xFF1E88E5), Color(0xFF00ACC1), Color(0xFF43A047),
-    Color(0xFFFFB300), Color(0xFFF4511E), Color(0xFF6D4C41)
+    Color(0xFFE53935), Color(0xFFD81B60), Color(0xFFC2185B),
+    Color(0xFF8E24AA), Color(0xFF7B1FA2), Color(0xFF5E35B1), Color(0xFF512DA8),
+    Color(0xFF3949AB), Color(0xFF303F9F), Color(0xFF1E88E5), Color(0xFF1976D2),
+    Color(0xFF039BE5), Color(0xFF0288D1), Color(0xFF00ACC1), Color(0xFF0097A7),
+    Color(0xFF00897B), Color(0xFF00796B), Color(0xFF43A047), Color(0xFF388E3C),
+    Color(0xFF7CB342), Color(0xFF689F38), Color(0xFFC0CA33), Color(0xFFAFB42B),
+    Color(0xFFFDD835), Color(0xFFFBC02D), Color(0xFFFFB300), Color(0xFFFFA000),
+    Color(0xFFFB8C00), Color(0xFFF57C00), Color(0xFFF4511E), Color(0xFFE64A19),
+    Color(0xFF6D4C41), Color(0xFF5D4037), Color(0xFF546E7A), Color(0xFF455A64)
 )
 
 private fun getAvatarColor(name: String): Color {
@@ -90,11 +98,18 @@ fun ContactsScreen(
     var groupToDelete by remember { mutableStateOf<ContactGroupEntity?>(null) }
     var showMoveToGroupDialog by remember { mutableStateOf<ContactEntity?>(null) }
     
+    // Избранные контакты
+    val favoriteContacts by remember(accountId) { contactRepo.getFavoriteContacts(accountId) }.collectAsState(initial = emptyList())
+    
     // Exchange контакты из БД (синхронизированные в фоне)
     val exchangeContacts by remember(accountId) { contactRepo.getExchangeContacts(accountId) }.collectAsState(initial = emptyList())
     var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
     var isSyncing by remember { mutableStateOf(false) }
     var syncError by remember { mutableStateOf<String?>(null) }
+    
+    // Множественный выбор
+    var isSelectionMode by rememberSaveable { mutableStateOf(false) }
+    var selectedContactIds by remember { mutableStateOf(setOf<String>()) }
     
     // Фильтрация Exchange контактов по поиску
     val filteredExchangeContacts = remember(exchangeContacts, exchangeSearchQuery) {
@@ -173,6 +188,7 @@ fun ContactsScreen(
             // Фильтр по группе
             val matchesGroup = when (selectedGroupId) {
                 null -> true // Все контакты
+                "favorites" -> contact.isFavorite // Избранные
                 "ungrouped" -> contact.groupId == null // Без группы
                 else -> contact.groupId == selectedGroupId
             }
@@ -544,82 +560,235 @@ fun ContactsScreen(
         )
     }
 
+    // Получить выбранные контакты
+    val selectedContacts = remember(selectedContactIds, localContacts, exchangeContacts) {
+        val allContacts = localContacts + exchangeContacts
+        allContacts.filter { it.id in selectedContactIds }
+    }
     
+    // Выход из режима выбора при смене вкладки
+    LaunchedEffect(selectedTab) {
+        if (isSelectionMode) {
+            isSelectionMode = false
+            selectedContactIds = emptySet()
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(Strings.contacts, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                actions = {
-                    // Добавить контакт (только для личных)
-                    if (selectedTab == 0) {
-                        IconButton(onClick = { showAddDialog = true }) {
-                            Icon(AppIcons.PersonAdd, Strings.addContact, tint = Color.White)
+            if (isSelectionMode) {
+                // TopAppBar для режима выбора
+                TopAppBar(
+                    title = { Text("${Strings.selected}: ${selectedContactIds.size}", color = Color.White) },
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            isSelectionMode = false
+                            selectedContactIds = emptySet()
+                        }) {
+                            Icon(AppIcons.Close, Strings.cancel, tint = Color.White)
                         }
-                    }
-                    // Меню
-                    Box {
-                        IconButton(onClick = { showMoreMenu = true }) {
-                            Icon(AppIcons.MoreVert, null, tint = Color.White)
-                        }
-                        DropdownMenu(
-                            expanded = showMoreMenu,
-                            onDismissRequest = { showMoreMenu = false }
+                    },
+                    actions = {
+                        // Написать письмо
+                        IconButton(
+                            onClick = {
+                                val emails = selectedContacts.map { it.email }.filter { it.isNotBlank() }
+                                if (emails.isNotEmpty()) {
+                                    onComposeClick(emails.joinToString(", "))
+                                }
+                                isSelectionMode = false
+                                selectedContactIds = emptySet()
+                            },
+                            enabled = selectedContacts.any { it.email.isNotBlank() }
                         ) {
-                            if (selectedTab == 0) {
-                                DropdownMenuItem(
-                                    text = { Text(Strings.createGroup) },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        showCreateGroupDialog = true
-                                    },
-                                    leadingIcon = { Icon(AppIcons.CreateNewFolder, null) }
-                                )
-                                HorizontalDivider()
+                            Icon(AppIcons.Email, Strings.writeEmail, tint = Color.White)
+                        }
+                        // Переместить в группу (только для личных)
+                        if (selectedTab == 0 && selectedContacts.all { it in localContacts }) {
+                            var showGroupMenu by remember { mutableStateOf(false) }
+                            Box {
+                                IconButton(onClick = { showGroupMenu = true }) {
+                                    Icon(AppIcons.Folder, Strings.moveToGroup, tint = Color.White)
+                                }
+                                DropdownMenu(
+                                    expanded = showGroupMenu,
+                                    onDismissRequest = { showGroupMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(Strings.withoutGroup) },
+                                        onClick = {
+                                            scope.launch {
+                                                selectedContactIds.forEach { id ->
+                                                    contactRepo.moveContactToGroup(id, null)
+                                                }
+                                            }
+                                            showGroupMenu = false
+                                            isSelectionMode = false
+                                            selectedContactIds = emptySet()
+                                        },
+                                        leadingIcon = { Icon(AppIcons.FolderOff, null) }
+                                    )
+                                    groups.forEach { group ->
+                                        DropdownMenuItem(
+                                            text = { Text(group.name) },
+                                            onClick = {
+                                                scope.launch {
+                                                    selectedContactIds.forEach { id ->
+                                                        contactRepo.moveContactToGroup(id, group.id)
+                                                    }
+                                                }
+                                                showGroupMenu = false
+                                                isSelectionMode = false
+                                                selectedContactIds = emptySet()
+                                            },
+                                            leadingIcon = { Icon(AppIcons.Folder, null, tint = Color(group.color)) }
+                                        )
+                                    }
+                                }
                             }
-                            DropdownMenuItem(
-                                text = { Text(Strings.exportContacts) },
-                                onClick = {
-                                    showMoreMenu = false
-                                    showExportDialog = true
-                                },
-                                leadingIcon = { Icon(AppIcons.Upload, null) }
-                            )
-                            if (selectedTab == 0) {
-                                DropdownMenuItem(
-                                    text = { Text(Strings.importFromVCard) },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        importVCardLauncher.launch("text/vcard")
+                        }
+                        // Удалить (только для личных)
+                        if (selectedTab == 0 && selectedContacts.all { it in localContacts }) {
+                            var showDeleteConfirm by remember { mutableStateOf(false) }
+                            IconButton(onClick = { showDeleteConfirm = true }) {
+                                Icon(AppIcons.Delete, Strings.delete, tint = Color.White)
+                            }
+                            if (showDeleteConfirm) {
+                                AlertDialog(
+                                    onDismissRequest = { showDeleteConfirm = false },
+                                    icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                                    title = { Text(Strings.deleteContacts) },
+                                    text = { Text("${Strings.deleteContactsConfirm} ${selectedContactIds.size}") },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            scope.launch {
+                                                selectedContactIds.forEach { id ->
+                                                    contactRepo.deleteContact(id)
+                                                }
+                                                Toast.makeText(context, contactDeletedMsg, Toast.LENGTH_SHORT).show()
+                                            }
+                                            showDeleteConfirm = false
+                                            isSelectionMode = false
+                                            selectedContactIds = emptySet()
+                                        }) {
+                                            Text(Strings.delete, color = MaterialTheme.colorScheme.error)
+                                        }
                                     },
-                                    leadingIcon = { Icon(AppIcons.Download, null) }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(Strings.importFromCSV) },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        importCSVLauncher.launch("text/*")
-                                    },
-                                    leadingIcon = { Icon(AppIcons.Download, null) }
+                                    dismissButton = {
+                                        TextButton(onClick = { showDeleteConfirm = false }) {
+                                            Text(Strings.cancel)
+                                        }
+                                    }
                                 )
                             }
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            LocalColorTheme.current.gradientStart,
-                            LocalColorTheme.current.gradientEnd
+                        // Выбрать все
+                        IconButton(onClick = {
+                            val currentContacts = if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts
+                            selectedContactIds = if (selectedContactIds.size == currentContacts.size) {
+                                emptySet()
+                            } else {
+                                currentContacts.map { it.id }.toSet()
+                            }
+                        }) {
+                            Icon(
+                                if (selectedContactIds.size == (if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts).size)
+                                    AppIcons.CheckCircle else AppIcons.Check,
+                                Strings.selectAll,
+                                tint = Color.White
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                    modifier = Modifier.background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.tertiary
+                            )
                         )
                     )
                 )
-            )
+            } else {
+                // Обычный TopAppBar
+                TopAppBar(
+                    title = { Text(Strings.contacts, color = Color.White) },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
+                        }
+                    },
+                    actions = {
+                        // Режим выбора
+                        IconButton(onClick = { isSelectionMode = true }) {
+                            Icon(AppIcons.Check, Strings.select, tint = Color.White)
+                        }
+                        // Добавить контакт (только для личных)
+                        if (selectedTab == 0) {
+                            IconButton(onClick = { showAddDialog = true }) {
+                                Icon(AppIcons.PersonAdd, Strings.addContact, tint = Color.White)
+                            }
+                        }
+                        // Меню
+                        Box {
+                            IconButton(onClick = { showMoreMenu = true }) {
+                                Icon(AppIcons.MoreVert, null, tint = Color.White)
+                            }
+                            DropdownMenu(
+                                expanded = showMoreMenu,
+                                onDismissRequest = { showMoreMenu = false }
+                            ) {
+                                if (selectedTab == 0) {
+                                    DropdownMenuItem(
+                                        text = { Text(Strings.createGroup) },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showCreateGroupDialog = true
+                                        },
+                                        leadingIcon = { Icon(AppIcons.CreateNewFolder, null) }
+                                    )
+                                    HorizontalDivider()
+                                }
+                                DropdownMenuItem(
+                                    text = { Text(Strings.exportContacts) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showExportDialog = true
+                                    },
+                                    leadingIcon = { Icon(AppIcons.Upload, null) }
+                                )
+                                if (selectedTab == 0) {
+                                    DropdownMenuItem(
+                                        text = { Text(Strings.importFromVCard) },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            importVCardLauncher.launch("text/vcard")
+                                        },
+                                        leadingIcon = { Icon(AppIcons.Download, null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(Strings.importFromCSV) },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            importCSVLauncher.launch("text/*")
+                                        },
+                                        leadingIcon = { Icon(AppIcons.Download, null) }
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                    modifier = Modifier.background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                LocalColorTheme.current.gradientStart,
+                                LocalColorTheme.current.gradientEnd
+                            )
+                        )
+                    )
+                )
+            }
         }
     ) { padding ->
         Column(
@@ -629,13 +798,18 @@ fun ContactsScreen(
         ) {
             // Вкладки
             TabRow(selectedTabIndex = selectedTab) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
-                        text = { Text(title) }
-                    )
-                }
+                // Личные
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("${Strings.personalContacts} (${localContacts.size})") }
+                )
+                // Организация
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("${Strings.organization} (${exchangeContacts.size})") }
+                )
             }
             
             // Поле поиска
@@ -666,21 +840,59 @@ fun ContactsScreen(
             when (selectedTab) {
                 0 -> PersonalContactsList(
                     groups = groups,
+                    favoriteCount = favoriteContacts.size,
                     selectedGroupId = selectedGroupId,
                     onGroupSelected = { selectedGroupId = it },
                     onGroupRename = { groupToRename = it },
                     onGroupDelete = { groupToDelete = it },
                     groupedContacts = groupedContacts,
-                    onContactClick = { showContactDetailsId = it.id },
+                    onContactClick = { 
+                        if (isSelectionMode) {
+                            selectedContactIds = if (it.id in selectedContactIds) {
+                                selectedContactIds - it.id
+                            } else {
+                                selectedContactIds + it.id
+                            }
+                        } else {
+                            showContactDetailsId = it.id
+                        }
+                    },
+                    onContactLongClick = {
+                        if (!isSelectionMode) {
+                            isSelectionMode = true
+                            selectedContactIds = setOf(it.id)
+                        }
+                    },
                     onContactMoveToGroup = { showMoveToGroupDialog = it },
                     onContactEdit = { editingContactId = it.id },
-                    onContactDelete = { showDeleteDialogId = it.id }
+                    onContactDelete = { showDeleteDialogId = it.id },
+                    onContactToggleFavorite = { contact ->
+                        scope.launch { contactRepo.toggleFavorite(contact.id) }
+                    },
+                    isSelectionMode = isSelectionMode,
+                    selectedContactIds = selectedContactIds
                 )
                 1 -> OrganizationContactsList(
                     contacts = filteredExchangeContacts,
                     isSyncing = isSyncing,
                     syncError = syncError,
-                    onContactClick = { showContactDetailsId = it.id },
+                    onContactClick = { 
+                        if (isSelectionMode) {
+                            selectedContactIds = if (it.id in selectedContactIds) {
+                                selectedContactIds - it.id
+                            } else {
+                                selectedContactIds + it.id
+                            }
+                        } else {
+                            showContactDetailsId = it.id
+                        }
+                    },
+                    onContactLongClick = {
+                        if (!isSelectionMode) {
+                            isSelectionMode = true
+                            selectedContactIds = setOf(it.id)
+                        }
+                    },
                     onSyncClick = {
                         scope.launch {
                             isSyncing = true
@@ -696,7 +908,9 @@ fun ContactsScreen(
                             }
                             isSyncing = false
                         }
-                    }
+                    },
+                    isSelectionMode = isSelectionMode,
+                    selectedContactIds = selectedContactIds
                 )
             }
         }
@@ -707,15 +921,20 @@ fun ContactsScreen(
 @Composable
 private fun PersonalContactsList(
     groups: List<ContactGroupEntity>,
+    favoriteCount: Int = 0,
     selectedGroupId: String?,
     onGroupSelected: (String?) -> Unit,
     onGroupRename: (ContactGroupEntity) -> Unit,
     onGroupDelete: (ContactGroupEntity) -> Unit,
     groupedContacts: Map<Char, List<ContactEntity>>,
     onContactClick: (ContactEntity) -> Unit,
+    onContactLongClick: (ContactEntity) -> Unit = {},
     onContactMoveToGroup: (ContactEntity) -> Unit,
     onContactEdit: (ContactEntity) -> Unit,
-    onContactDelete: (ContactEntity) -> Unit
+    onContactDelete: (ContactEntity) -> Unit,
+    onContactToggleFavorite: (ContactEntity) -> Unit = {},
+    isSelectionMode: Boolean = false,
+    selectedContactIds: Set<String> = emptySet()
 ) {
     var expandedGroupMenu by remember { mutableStateOf<String?>(null) }
     
@@ -733,10 +952,26 @@ private fun PersonalContactsList(
                     FilterChip(
                         selected = selectedGroupId == null,
                         onClick = { onGroupSelected(null) },
-                        label = { Text(Strings.allMail) },
+                        label = { Text(Strings.filterAll) },
                         leadingIcon = if (selectedGroupId == null) {
                             { Icon(AppIcons.Check, null, modifier = Modifier.size(18.dp)) }
                         } else null
+                    )
+                }
+                // Избранные
+                item {
+                    FilterChip(
+                        selected = selectedGroupId == "favorites",
+                        onClick = { onGroupSelected("favorites") },
+                        label = { Text("${Strings.favoriteContacts} ($favoriteCount)") },
+                        leadingIcon = {
+                            Icon(
+                                AppIcons.Star,
+                                null,
+                                modifier = Modifier.size(18.dp),
+                                tint = Color(0xFFFFB300)
+                            )
+                        }
                     )
                 }
                 // Группы
@@ -843,9 +1078,13 @@ private fun PersonalContactsList(
                     ContactItemWithGroup(
                         contact = contact,
                         onClick = { onContactClick(contact) },
+                        onLongClick = { onContactLongClick(contact) },
                         onMoveToGroup = { onContactMoveToGroup(contact) },
                         onEdit = { onContactEdit(contact) },
-                        onDelete = { onContactDelete(contact) }
+                        onDelete = { onContactDelete(contact) },
+                        onToggleFavorite = { onContactToggleFavorite(contact) },
+                        isSelected = contact.id in selectedContactIds,
+                        isSelectionMode = isSelectionMode
                     )
                 }
             }
@@ -859,7 +1098,10 @@ private fun OrganizationContactsList(
     isSyncing: Boolean,
     syncError: String?,
     onContactClick: (ContactEntity) -> Unit,
-    onSyncClick: () -> Unit
+    onContactLongClick: (ContactEntity) -> Unit = {},
+    onSyncClick: () -> Unit,
+    isSelectionMode: Boolean = false,
+    selectedContactIds: Set<String> = emptySet()
 ) {
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     
@@ -998,7 +1240,10 @@ private fun OrganizationContactsList(
                         items(letterContacts, key = { it.id }) { contact ->
                             ExchangeContactItem(
                                 contact = contact,
-                                onClick = { onContactClick(contact) }
+                                onClick = { onContactClick(contact) },
+                                onLongClick = { onContactLongClick(contact) },
+                                isSelected = contact.id in selectedContactIds,
+                                isSelectionMode = isSelectionMode
                             )
                         }
                     }
@@ -1008,10 +1253,14 @@ private fun OrganizationContactsList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ExchangeContactItem(
     contact: ContactEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
+    isSelected: Boolean = false,
+    isSelectionMode: Boolean = false
 ) {
     ListItem(
         headlineContent = {
@@ -1036,21 +1285,36 @@ private fun ExchangeContactItem(
             }
         },
         leadingContent = {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(getAvatarColor(contact.displayName)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() }
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(getAvatarColor(contact.displayName)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                else Color.Transparent
+            )
     )
 }
 
@@ -1095,19 +1359,34 @@ private fun ContactItem(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ContactItemWithGroup(
     contact: ContactEntity,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
     onMoveToGroup: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onToggleFavorite: () -> Unit = {},
+    isSelected: Boolean = false,
+    isSelectionMode: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
     
     ListItem(
         headlineContent = {
-            Text(contact.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(contact.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (contact.isFavorite) {
+                    Icon(
+                        AppIcons.Star,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = Color(0xFFFFB300)
+                    )
+                }
+            }
         },
         supportingContent = {
             Column {
@@ -1121,57 +1400,88 @@ private fun ContactItemWithGroup(
             }
         },
         leadingContent = {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(getAvatarColor(contact.displayName)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() }
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(getAvatarColor(contact.displayName)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         },
         trailingContent = {
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(AppIcons.MoreVert, null)
-                }
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(Strings.moveToGroup) },
-                        onClick = {
-                            showMenu = false
-                            onMoveToGroup()
-                        },
-                        leadingIcon = { Icon(AppIcons.Folder, null) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(Strings.edit) },
-                        onClick = {
-                            showMenu = false
-                            onEdit()
-                        },
-                        leadingIcon = { Icon(AppIcons.Edit, null) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(Strings.delete, color = MaterialTheme.colorScheme.error) },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        },
-                        leadingIcon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) }
-                    )
+            if (!isSelectionMode) {
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(AppIcons.MoreVert, null)
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (contact.isFavorite) Strings.removeFromFavorites else Strings.addToFavorites) },
+                            onClick = {
+                                showMenu = false
+                                onToggleFavorite()
+                            },
+                            leadingIcon = { 
+                                Icon(
+                                    if (contact.isFavorite) AppIcons.Star else AppIcons.StarOutline, 
+                                    null,
+                                    tint = Color(0xFFFFB300)
+                                ) 
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(Strings.moveToGroup) },
+                            onClick = {
+                                showMenu = false
+                                onMoveToGroup()
+                            },
+                            leadingIcon = { Icon(AppIcons.Folder, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(Strings.edit) },
+                            onClick = {
+                                showMenu = false
+                                onEdit()
+                            },
+                            leadingIcon = { Icon(AppIcons.Edit, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(Strings.delete, color = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            },
+                            leadingIcon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) }
+                        )
+                    }
                 }
             }
         },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                else Color.Transparent
+            )
     )
 }
 

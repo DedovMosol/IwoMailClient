@@ -328,6 +328,36 @@ class SettingsRepository private constructor(private val context: Context) {
             context.dataStore.data.first()[getContactsSyncKey(accountId)] ?: 0L
         }
     }
+    
+    // Время последней синхронизации заметок (для каждого аккаунта отдельно)
+    private fun getNotesSyncKey(accountId: Long) = longPreferencesKey("last_notes_sync_$accountId")
+    
+    suspend fun setLastNotesSyncTime(accountId: Long, timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[getNotesSyncKey(accountId)] = timeMillis
+        }
+    }
+    
+    fun getLastNotesSyncTimeSync(accountId: Long): Long {
+        return runBlocking {
+            context.dataStore.data.first()[getNotesSyncKey(accountId)] ?: 0L
+        }
+    }
+    
+    // Время последней синхронизации календаря (для каждого аккаунта отдельно)
+    private fun getCalendarSyncKey(accountId: Long) = longPreferencesKey("last_calendar_sync_$accountId")
+    
+    suspend fun setLastCalendarSyncTime(accountId: Long, timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[getCalendarSyncKey(accountId)] = timeMillis
+        }
+    }
+    
+    fun getLastCalendarSyncTimeSync(accountId: Long): Long {
+        return runBlocking {
+            context.dataStore.data.first()[getCalendarSyncKey(accountId)] ?: 0L
+        }
+    }
 
     // Получить тему для конкретного дня (1=Воскресенье, 2=Понедельник, ..., 7=Суббота)
     fun getDayTheme(dayOfWeek: Int): Flow<String> = context.dataStore.data.map { prefs ->

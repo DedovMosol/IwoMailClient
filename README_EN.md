@@ -4,7 +4,7 @@
 
 Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
 
-**Version:** 1.2.0  
+**Version:** 1.3.0  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -45,7 +45,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Account signature | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 
-## 🆕 What's New in v1.2.0
+## 🆕 What's New in v1.3.0
 
 - **Rebranding** — app renamed to "iwo Mail Client"
 - **Auto cleanup** — configure periodic cleanup for trash, drafts and spam

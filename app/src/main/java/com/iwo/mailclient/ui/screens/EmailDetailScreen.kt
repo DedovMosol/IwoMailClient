@@ -587,10 +587,11 @@ fun EmailDetailScreen(
                     }
                 }
                 
-                // Вложения
-                if (attachments.isNotEmpty()) {
+                // Вложения (исключаем inline изображения)
+                val visibleAttachments = attachments.filter { !it.isInline }
+                if (visibleAttachments.isNotEmpty()) {
                     AttachmentsSection(
-                        attachments = attachments,
+                        attachments = visibleAttachments,
                         downloadingId = downloadingId,
                         onAttachmentClick = { attachment ->
                             scope.launch {
@@ -703,11 +704,14 @@ fun EmailDetailScreen(
                     if (isHtml) {
                         // HTML контент - используем WebView с белым фоном
                         // key нужен чтобы WebView не пересоздавался при рекомпозиции
+                        var webViewHeight by remember { mutableStateOf(0) }
+                        
                         key(emailId) {
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 8.dp),
+                                    .padding(horizontal = 8.dp)
+                                    .then(if (webViewHeight > 0) Modifier.height(webViewHeight.dp) else Modifier),
                                 colors = CardDefaults.cardColors(
                                     containerColor = androidx.compose.ui.graphics.Color.White
                                 )
@@ -716,7 +720,7 @@ fun EmailDetailScreen(
                                     factory = { ctx ->
                                         WebView(ctx).apply {
                                             settings.apply {
-                                                javaScriptEnabled = false
+                                                javaScriptEnabled = true // Нужен для измерения высоты
                                                 // Масштабирование контента под ширину экрана
                                                 loadWithOverviewMode = true
                                                 useWideViewPort = true
@@ -736,23 +740,25 @@ fun EmailDetailScreen(
                                                 cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
                                             }
                                             setBackgroundColor(android.graphics.Color.WHITE)
-                                            // Включаем скролл
-                                            isVerticalScrollBarEnabled = true
-                                            isHorizontalScrollBarEnabled = true
-                                            // Отключаем перехват touch событий родителем при горизонтальном скролле
-                                            setOnTouchListener { v, event ->
-                                                when (event.action) {
-                                                    android.view.MotionEvent.ACTION_DOWN -> {
-                                                        // Запрещаем родителю перехватывать события
-                                                        v.parent?.requestDisallowInterceptTouchEvent(true)
-                                                    }
-                                                    android.view.MotionEvent.ACTION_UP, 
-                                                    android.view.MotionEvent.ACTION_CANCEL -> {
-                                                        // Разрешаем родителю перехватывать события
-                                                        v.parent?.requestDisallowInterceptTouchEvent(false)
-                                                    }
+                                            // Отключаем скролл внутри WebView - скроллит родитель
+                                            isVerticalScrollBarEnabled = false
+                                            isHorizontalScrollBarEnabled = false
+                                            // Передаём все touch события родителю
+                                            setOnTouchListener { v, _ ->
+                                                v.parent?.requestDisallowInterceptTouchEvent(false)
+                                                false
+                                            }
+                                            // Измеряем высоту контента после загрузки
+                                            webViewClient = object : android.webkit.WebViewClient() {
+                                                override fun onPageFinished(view: WebView?, url: String?) {
+                                                    super.onPageFinished(view, url)
+                                                    view?.postDelayed({
+                                                        val contentHeight = (view.contentHeight * view.scale).toInt()
+                                                        if (contentHeight > 0) {
+                                                            webViewHeight = contentHeight + 32 // +padding
+                                                        }
+                                                    }, 100)
                                                 }
-                                                false // Не потребляем событие, передаём WebView
                                             }
                                         }
                                     },

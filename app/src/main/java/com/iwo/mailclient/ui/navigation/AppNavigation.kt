@@ -183,6 +183,8 @@ sealed class Screen(val route: String) {
     object Personalization : Screen("personalization")
     object Search : Screen("search")
     object Contacts : Screen("contacts")
+    object Notes : Screen("notes")
+    object Calendar : Screen("calendar")
 }
 
 @Composable
@@ -358,6 +360,12 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                 },
                 onNavigateToContacts = {
                     navController.navigate(Screen.Contacts.route)
+                },
+                onNavigateToNotes = {
+                    navController.navigate(Screen.Notes.route)
+                },
+                onNavigateToCalendar = {
+                    navController.navigate(Screen.Calendar.route)
                 }
             )
         }
@@ -583,6 +591,18 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                     // Создаём новое письмо с заполненным получателем
                     navController.navigate(Screen.Compose.createRoute(toEmail = email))
                 }
+            )
+        }
+        
+        composable(Screen.Notes.route) {
+            NotesScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+        
+        composable(Screen.Calendar.route) {
+            CalendarScreen(
+                onBackClick = { navController.popBackStack() }
             )
         }
     }

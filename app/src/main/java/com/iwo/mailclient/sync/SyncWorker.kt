@@ -117,6 +117,12 @@ class SyncWorker(
         // Синхронизация контактов GAL (для Exchange аккаунтов)
         syncGalContacts()
         
+        // Синхронизация заметок (для Exchange аккаунтов)
+        syncNotes()
+        
+        // Синхронизация календаря (для Exchange аккаунтов)
+        syncCalendar()
+        
         // Перепланируем с учётом ночного режима (интервал может измениться)
         scheduleWithNightMode(applicationContext)
         
@@ -281,6 +287,70 @@ class SyncWorker(
                 }
             } catch (e: Exception) {
                 // Игнорируем ошибки синхронизации контактов
+            }
+        }
+    }
+    
+    /**
+     * Синхронизация заметок для Exchange аккаунтов
+     */
+    private suspend fun syncNotes() {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val accounts = database.accountDao().getAllAccountsList()
+        val noteRepo = com.iwo.mailclient.data.repository.NoteRepository(applicationContext)
+        
+        for (account in accounts) {
+            // Только для Exchange аккаунтов
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            
+            // Проверяем интервал синхронизации заметок (0 = отключено)
+            if (account.notesSyncIntervalDays <= 0) continue
+            
+            // Проверяем когда была последняя синхронизация
+            val lastSync = settingsRepo.getLastNotesSyncTimeSync(account.id)
+            val intervalMs = account.notesSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            // Синхронизируем заметки
+            try {
+                val result = noteRepo.syncNotes(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastNotesSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (e: Exception) {
+                // Игнорируем ошибки синхронизации заметок
+            }
+        }
+    }
+    
+    /**
+     * Синхронизация календаря для Exchange аккаунтов
+     */
+    private suspend fun syncCalendar() {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val accounts = database.accountDao().getAllAccountsList()
+        val calendarRepo = com.iwo.mailclient.data.repository.CalendarRepository(applicationContext)
+        
+        for (account in accounts) {
+            // Только для Exchange аккаунтов
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            
+            // Проверяем интервал синхронизации календаря (0 = отключено)
+            if (account.calendarSyncIntervalDays <= 0) continue
+            
+            // Проверяем когда была последняя синхронизация
+            val lastSync = settingsRepo.getLastCalendarSyncTimeSync(account.id)
+            val intervalMs = account.calendarSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            // Синхронизируем календарь
+            try {
+                val result = calendarRepo.syncCalendar(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastCalendarSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (e: Exception) {
+                // Игнорируем ошибки синхронизации календаря
             }
         }
     }

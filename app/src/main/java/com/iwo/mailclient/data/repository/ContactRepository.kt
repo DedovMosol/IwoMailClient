@@ -315,6 +315,25 @@ class ContactRepository(context: Context) {
         contactDao.moveToGroup(contactId, groupId)
     }
     
+    // === Избранные ===
+    
+    fun getFavoriteContacts(accountId: Long): Flow<List<ContactEntity>> {
+        return contactDao.getFavoriteContacts(accountId)
+    }
+    
+    suspend fun getFavoriteContactsList(accountId: Long): List<ContactEntity> {
+        return contactDao.getFavoriteContactsList(accountId)
+    }
+    
+    suspend fun toggleFavorite(contactId: String) {
+        val contact = contactDao.getContact(contactId) ?: return
+        contactDao.setFavorite(contactId, !contact.isFavorite)
+    }
+    
+    suspend fun setFavorite(contactId: String, isFavorite: Boolean) {
+        contactDao.setFavorite(contactId, isFavorite)
+    }
+    
     // === Автодополнение ===
     
     /**

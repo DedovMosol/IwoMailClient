@@ -4,8 +4,8 @@ import android.content.Context
 import androidx.room.*
 
 @Database(
-    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class],
-    version = 17,
+    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class],
+    version = 21,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -17,6 +17,8 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun attachmentDao(): AttachmentDao
     abstract fun contactDao(): ContactDao
     abstract fun contactGroupDao(): ContactGroupDao
+    abstract fun noteDao(): NoteDao
+    abstract fun calendarEventDao(): CalendarEventDao
     
     companion object {
         @Volatile
@@ -106,7 +108,13 @@ data class AccountEntity(
     // Синхронизация контактов Exchange (0 = никогда, иначе интервал в днях)
     val contactsSyncIntervalDays: Int = 1, // По умолчанию каждый день
     // Ключ синхронизации для папки контактов
-    val contactsSyncKey: String = "0"
+    val contactsSyncKey: String = "0",
+    // Синхронизация заметок Exchange (0 = никогда, иначе интервал в днях)
+    val notesSyncIntervalDays: Int = 1,
+    val notesSyncKey: String = "0",
+    // Синхронизация календаря Exchange (0 = никогда, иначе интервал в днях)
+    val calendarSyncIntervalDays: Int = 1,
+    val calendarSyncKey: String = "0"
 )
 
 @Entity(
