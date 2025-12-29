@@ -35,16 +35,18 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Auto-empty trash | ✅ |
 | Create/delete/rename folders | ✅ |
 | Contacts with import/export | ✅ |
+| Contact groups | ✅ |
+| Favorite contacts | ✅ |
 | Exchange Notes | ✅ |
 | Exchange Calendar | ✅ |
 | Email autocomplete | ✅ |
 | Multiple accounts | ✅ |
+| Multiple signatures | ✅ |
 | Push notifications (Direct Push) | ✅ |
 | Background sync | ✅ |
 | Dark theme | ✅ |
 | Color themes (7 colors) | ✅ |
 | Interface personalization | ✅ |
-| Account signature | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 
 ## 🆕 What's New in v1.3.1
