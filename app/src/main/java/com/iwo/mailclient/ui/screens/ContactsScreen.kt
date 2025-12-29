@@ -603,6 +603,37 @@ fun ContactsScreen(
                         ) {
                             Icon(AppIcons.Email, Strings.writeEmail, tint = Color.White)
                         }
+                        // Копировать в локальные (только для организации)
+                        if (selectedTab == 1) {
+                            val copiedToLocalMsg = if (isRussian) "Скопировано в личные контакты" else "Copied to personal contacts"
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        var copied = 0
+                                        selectedContacts.forEach { contact ->
+                                            contactRepo.addContact(
+                                                accountId = accountId,
+                                                displayName = contact.displayName,
+                                                email = contact.email,
+                                                firstName = contact.firstName,
+                                                lastName = contact.lastName,
+                                                phone = contact.phone,
+                                                mobilePhone = contact.mobilePhone,
+                                                company = contact.company,
+                                                department = contact.department,
+                                                jobTitle = contact.jobTitle
+                                            )
+                                            copied++
+                                        }
+                                        Toast.makeText(context, "$copiedToLocalMsg: $copied", Toast.LENGTH_SHORT).show()
+                                    }
+                                    isSelectionMode = false
+                                    selectedContactIds = emptySet()
+                                }
+                            ) {
+                                Icon(AppIcons.PersonAdd, Strings.addToContacts, tint = Color.White)
+                            }
+                        }
                         // Переместить в группу (только для личных)
                         if (selectedTab == 0 && selectedContacts.all { it in localContacts }) {
                             var showGroupMenu by remember { mutableStateOf(false) }
@@ -662,10 +693,8 @@ fun ContactsScreen(
                                     confirmButton = {
                                         TextButton(onClick = {
                                             scope.launch {
-                                                selectedContactIds.forEach { id ->
-                                                    contactRepo.deleteContact(id)
-                                                }
-                                                Toast.makeText(context, contactDeletedMsg, Toast.LENGTH_SHORT).show()
+                                                val deleted = contactRepo.deleteContacts(selectedContactIds.toList())
+                                                Toast.makeText(context, "$contactDeletedMsg: $deleted", Toast.LENGTH_SHORT).show()
                                             }
                                             showDeleteConfirm = false
                                             isSelectionMode = false
@@ -1747,181 +1776,164 @@ private fun ContactDetailsDialog(
             shape = MaterialTheme.shapes.extraLarge,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                // Крестик закрытия
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Аватар + имя в одну строку
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        AppIcons.Close, 
-                        contentDescription = Strings.close,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .background(avatarColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = name.firstOrNull()?.uppercase() ?: "?",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Аватар + имя в одну строку
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Email с зелёной иконкой
+                if (email.isNotBlank()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(end = 32.dp) // место для крестика
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .background(avatarColor),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = name.firstOrNull()?.uppercase() ?: "?",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.headlineSmall
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Icon(
+                            AppIcons.Email, 
+                            null, 
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = name,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = email,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     
                     Spacer(modifier = Modifier.height(20.dp))
                     
-                    // Email с зелёной иконкой
-                    if (email.isNotBlank()) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center
+                    // Две кнопки в ряд
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Написать письмо
+                        OutlinedButton(
+                            onClick = { onWriteEmail(email) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
                         ) {
-                            Icon(
-                                AppIcons.Email, 
-                                null, 
-                                tint = Color(0xFF4CAF50),
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = email,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.height(20.dp))
-                        
-                        // Две кнопки в ряд
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // Написать письмо
-                            OutlinedButton(
-                                onClick = { onWriteEmail(email) },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Icon(
-                                        AppIcons.Send, 
-                                        null, 
-                                        modifier = Modifier.size(18.dp),
-                                        tint = Color(0xFF2196F3)
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        Strings.writeEmail, 
-                                        color = Color(0xFF03A9F4),
-                                        maxLines = 2,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                }
+                                Icon(
+                                    AppIcons.Send, 
+                                    null, 
+                                    modifier = Modifier.size(18.dp),
+                                    tint = Color(0xFF2196F3)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    Strings.writeEmail, 
+                                    color = Color(0xFF03A9F4),
+                                    maxLines = 2,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
                             }
-                            // Копировать email
-                            OutlinedButton(
-                                onClick = { onCopyEmail(email) },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                        }
+                        // Копировать email
+                        OutlinedButton(
+                            onClick = { onCopyEmail(email) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Icon(
-                                        AppIcons.ContentCopy, 
-                                        null, 
-                                        modifier = Modifier.size(18.dp),
-                                        tint = Color(0xFF9C27B0)
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        Strings.copyEmail, 
-                                        color = Color(0xFF9C27B0),
-                                        maxLines = 2,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                }
+                                Icon(
+                                    AppIcons.ContentCopy, 
+                                    null, 
+                                    modifier = Modifier.size(18.dp),
+                                    tint = Color(0xFF9C27B0)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    Strings.copyEmail, 
+                                    color = Color(0xFF9C27B0),
+                                    maxLines = 2,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
                             }
                         }
                     }
-                    
-                    Spacer(modifier = Modifier.height(20.dp))
-                    
-                    // Кнопки действий в зависимости от типа контакта
-                    if (isLocal) {
-                        // Для локальных контактов - редактирование и удаление
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(24.dp)
-                        ) {
-                            IconButton(
-                                onClick = onEdit,
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                Icon(
-                                    AppIcons.Edit,
-                                    contentDescription = Strings.edit,
-                                    tint = avatarColor,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                            IconButton(
-                                onClick = onDelete,
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                Icon(
-                                    AppIcons.Delete,
-                                    contentDescription = Strings.delete,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                        }
-                    } else {
-                        // Для Exchange контактов - добавить в личные контакты
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Кнопки действий в зависимости от типа контакта
+                if (isLocal) {
+                    // Для локальных контактов - редактирование и удаление
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    ) {
                         IconButton(
-                            onClick = onAddToContacts,
+                            onClick = onEdit,
                             modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
-                                AppIcons.PersonAdd,
-                                contentDescription = Strings.addToContacts,
+                                AppIcons.Edit,
+                                contentDescription = Strings.edit,
                                 tint = avatarColor,
                                 modifier = Modifier.size(32.dp)
                             )
                         }
+                        IconButton(
+                            onClick = onDelete,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                AppIcons.Delete,
+                                contentDescription = Strings.delete,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+                } else {
+                    // Для Exchange контактов - добавить в личные контакты
+                    IconButton(
+                        onClick = onAddToContacts,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            AppIcons.PersonAdd,
+                            contentDescription = Strings.addToContacts,
+                            tint = avatarColor,
+                            modifier = Modifier.size(32.dp)
+                        )
                     }
                 }
             }

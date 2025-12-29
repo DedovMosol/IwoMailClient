@@ -43,7 +43,8 @@ import java.util.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarScreen(
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onComposeClick: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -79,7 +80,8 @@ fun CalendarScreen(
         EventDetailDialog(
             event = event,
             calendarRepo = calendarRepo,
-            onDismiss = { selectedEvent = null }
+            onDismiss = { selectedEvent = null },
+            onComposeClick = onComposeClick
         )
     }
     
@@ -716,11 +718,18 @@ private fun DayCell(
 private fun EventDetailDialog(
     event: CalendarEventEntity,
     calendarRepo: CalendarRepository,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onComposeClick: (String) -> Unit = {}
 ) {
     val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
+    
+    // Извлекаем email из строки организатора
+    val organizerEmail = remember(event.organizer) {
+        val emailRegex = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}".toRegex()
+        emailRegex.find(event.organizer)?.value ?: ""
+    }
     
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -757,12 +766,15 @@ private fun EventDetailDialog(
                 
                 if (event.location.isNotBlank()) {
                     item {
+                        val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                        val isUrl = event.location.startsWith("http://") || event.location.startsWith("https://")
+                        
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(bottom = 8.dp)
                         ) {
                             Icon(
-                                AppIcons.Business,
+                                if (isUrl) AppIcons.OpenInNew else AppIcons.Business,
                                 contentDescription = null,
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.primary
@@ -770,7 +782,11 @@ private fun EventDetailDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = event.location,
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isUrl) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = if (isUrl) {
+                                    Modifier.clickable { uriHandler.openUri(event.location) }
+                                } else Modifier
                             )
                         }
                     }
@@ -797,7 +813,14 @@ private fun EventDetailDialog(
                                 )
                                 Text(
                                     text = event.organizer,
-                                    style = MaterialTheme.typography.bodyMedium
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (organizerEmail.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = if (organizerEmail.isNotBlank()) {
+                                        Modifier.clickable { 
+                                            onComposeClick(organizerEmail)
+                                            onDismiss()
+                                        }
+                                    } else Modifier
                                 )
                             }
                         }
@@ -831,7 +854,17 @@ private fun EventDetailDialog(
                                             attendee.email
                                         },
                                         style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.padding(top = 2.dp)
+                                        color = if (attendee.email.contains("@")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier
+                                            .padding(top = 2.dp)
+                                            .then(
+                                                if (attendee.email.contains("@")) {
+                                                    Modifier.clickable { 
+                                                        onComposeClick(attendee.email)
+                                                        onDismiss()
+                                                    }
+                                                } else Modifier
+                                            )
                                     )
                                 }
                             }
@@ -1031,19 +1064,43 @@ private fun MiniMonthCard(
                             val hasEvent = daysWithEvents.contains(day)
                             val isToday = isCurrentMonth && day == currentDay
                             
-                            Text(
-                                text = day.toString(),
-                                modifier = Modifier.weight(1f),
-                                textAlign = TextAlign.Center,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 8.sp,
-                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                                color = when {
-                                    isToday -> MaterialTheme.colorScheme.primary
-                                    hasEvent -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.onSurface
-                                }
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .padding(1.dp)
+                                    .then(
+                                        if (hasEvent) {
+                                            Modifier.border(
+                                                width = 1.dp,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                shape = CircleShape
+                                            )
+                                        } else Modifier
+                                    )
+                                    .then(
+                                        if (isToday) {
+                                            Modifier.background(
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                                shape = CircleShape
+                                            )
+                                        } else Modifier
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = day.toString(),
+                                    textAlign = TextAlign.Center,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 8.sp,
+                                    fontWeight = if (isToday || hasEvent) FontWeight.Bold else FontWeight.Normal,
+                                    color = when {
+                                        isToday -> MaterialTheme.colorScheme.primary
+                                        hasEvent -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                            }
                             dayCounter++
                         }
                     }
@@ -1052,6 +1109,12 @@ private fun MiniMonthCard(
         }
     }
 }
+
+// Паттерны для парсинга ссылок (компилируются один раз)
+private val markdownImageLinkPattern = Regex("\\[([^\\]]+)\\]<([^>]+)>")
+private val hrefPattern = Regex("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([^<]*)</a>", RegexOption.IGNORE_CASE)
+private val urlPattern = Regex("https?://[\\w\\-.]+\\.[a-z]{2,}[\\w\\-._~:/?#\\[\\]@!%&'()*+,;=]*", RegexOption.IGNORE_CASE)
+private val imageExtensions = listOf(".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 /**
  * Текст с кликабельными ссылками (URL и HTML href) и картинками
@@ -1065,17 +1128,6 @@ private fun ClickableHtmlText(
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     val primaryColor = MaterialTheme.colorScheme.primary
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
-    
-    // Расширения картинок
-    val imageExtensions = listOf(".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
-    
-    // Паттерны для разных форматов ссылок
-    // Markdown формат [imageUrl]<linkUrl> - картинка-ссылка
-    val markdownImageLinkPattern = Regex("\\[([^\\]]+)\\]<([^>]+)>")
-    // HTML ссылки <a href="url">text</a>
-    val hrefPattern = Regex("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([^<]*)</a>", RegexOption.IGNORE_CASE)
-    // Обычные URL
-    val urlPattern = Regex("https?://[\\w\\-.]+\\.[a-z]{2,}[\\w\\-._~:/?#\\[\\]@!%&'()*+,;=]*", RegexOption.IGNORE_CASE)
     
     // Типы элементов: 0=text, 1=link, 2=image, 3=clickable image
     data class Part(val content: String, val type: Int, val url: String = "", val linkUrl: String = "")
@@ -1165,16 +1217,29 @@ private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
     var isLoading by remember(url) { mutableStateOf(true) }
     var error by remember(url) { mutableStateOf(false) }
     
+    // Освобождаем Bitmap при выходе из композиции
+    DisposableEffect(url) {
+        onDispose {
+            bitmap?.recycle()
+            bitmap = null
+        }
+    }
+    
     LaunchedEffect(url) {
         isLoading = true
         error = false
         try {
             bitmap = withContext(Dispatchers.IO) {
-                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
-                conn.connect()
-                android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+                var conn: java.net.HttpURLConnection? = null
+                try {
+                    conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 10000
+                    conn.readTimeout = 10000
+                    conn.connect()
+                    android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+                } finally {
+                    conn?.disconnect()
+                }
             }
         } catch (e: Exception) { error = true }
         isLoading = false

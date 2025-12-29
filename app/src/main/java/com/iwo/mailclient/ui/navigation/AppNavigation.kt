@@ -504,7 +504,8 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                 emailId = emailId,
                 onBackClick = { navController.popBackStack() },
                 onReplyClick = { navController.navigate(Screen.Compose.createRoute(replyTo = emailId)) },
-                onForwardClick = { navController.navigate(Screen.Compose.createRoute(forwardId = emailId)) }
+                onForwardClick = { navController.navigate(Screen.Compose.createRoute(forwardId = emailId)) },
+                onComposeToEmail = { toEmail -> navController.navigate(Screen.Compose.createRoute(toEmail = toEmail)) }
             )
         }
         
@@ -602,7 +603,10 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
         
         composable(Screen.Calendar.route) {
             CalendarScreen(
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                onComposeClick = { email ->
+                    navController.navigate(Screen.Compose.createRoute(toEmail = email))
+                }
             )
         }
     }

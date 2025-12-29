@@ -259,7 +259,15 @@ class ContactRepository(context: Context) {
     }
     
     suspend fun deleteContact(id: String) {
-        contactDao.deleteById(id)
+        val contact = contactDao.getContact(id)
+        if (contact != null) {
+            contactDao.delete(contact)
+        }
+    }
+    
+    suspend fun deleteContacts(ids: List<String>): Int {
+        if (ids.isEmpty()) return 0
+        return contactDao.deleteByIds(ids)
     }
     
     // === Группы контактов ===

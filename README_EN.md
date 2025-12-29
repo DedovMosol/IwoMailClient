@@ -4,7 +4,7 @@
 
 Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
 
-**Version:** 1.3.0  
+**Version:** 1.3.1  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -35,6 +35,8 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Auto-empty trash | ✅ |
 | Create/delete/rename folders | ✅ |
 | Contacts with import/export | ✅ |
+| Exchange Notes | ✅ |
+| Exchange Calendar | ✅ |
 | Email autocomplete | ✅ |
 | Multiple accounts | ✅ |
 | Push notifications (Direct Push) | ✅ |
@@ -45,12 +47,14 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Account signature | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 
-## 🆕 What's New in v1.3.0
+## 🆕 What's New in v1.3.1
 
-- **Rebranding** — app renamed to "iwo Mail Client"
-- **Auto cleanup** — configure periodic cleanup for trash, drafts and spam
-- **Sent folder** — now shows recipient with "To:" prefix
-- **Bug fixes** — avatar colors, drafts list refresh
+- **Initial sync** — calendar, notes and contacts sync on first launch
+- **Clickable emails** — organizer and attendee emails in calendar open compose screen
+- **Clickable links** — URLs in event location open in browser
+- **Real-time updates** — emails update automatically during background sync
+- **Navigation drawer** — Contacts, Notes and Calendar moved under Favorites
+- **Bug fixes** — memory leaks, bulk contact deletion, duplicate email display
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 

@@ -53,6 +53,9 @@ class PushService : Service() {
     // Кэшированные EasClient для каждого аккаунта (избегаем создания нового клиента на каждый Ping)
     private val easClientCache = mutableMapOf<Long, com.iwo.mailclient.eas.EasClient>()
     
+    // Сохранённые heartbeat для каждого аккаунта (восстанавливаются между перезапусками)
+    private val accountHeartbeats = mutableMapOf<Long, Int>()
+    
     // Состояние для каждого аккаунта
     private val accountPingJobs = mutableMapOf<Long, Job>()
     
@@ -140,6 +143,42 @@ class PushService : Service() {
             )
             pendingIntent?.let { alarmManager.cancel(it) }
         }
+        
+        /**
+         * Очищает кэш EasClient для указанного аккаунта
+         * Вызывается при удалении аккаунта
+         */
+        fun clearAccountCache(context: Context, accountId: Long) {
+            context.getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
+                .edit().remove("heartbeat_$accountId").apply()
+        }
+    }
+    
+    /**
+     * Загружает сохранённый heartbeat для аккаунта
+     */
+    private fun loadHeartbeat(accountId: Long): Int {
+        return getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
+            .getInt("heartbeat_$accountId", DEFAULT_HEARTBEAT)
+    }
+    
+    /**
+     * Сохраняет heartbeat для аккаунта
+     */
+    private fun saveHeartbeat(accountId: Long, heartbeat: Int) {
+        accountHeartbeats[accountId] = heartbeat
+        getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
+            .edit().putInt("heartbeat_$accountId", heartbeat).apply()
+    }
+    
+    /**
+     * Очищает кэш для удалённого аккаунта
+     */
+    private fun clearCacheForAccount(accountId: Long) {
+        easClientCache.remove(accountId)
+        accountHeartbeats.remove(accountId)
+        accountPingJobs[accountId]?.cancel()
+        accountPingJobs.remove(accountId)
     }
     
     override fun onCreate() {
@@ -360,7 +399,8 @@ class PushService : Service() {
         accountPingJobs[account.id]?.cancel()
         
         accountPingJobs[account.id] = serviceScope.launch {
-            var heartbeat = DEFAULT_HEARTBEAT
+            // Загружаем сохранённый heartbeat или используем дефолтный
+            var heartbeat = loadHeartbeat(account.id)
             var consecutiveErrors = 0
             var consecutiveSuccesses = 0  // Для адаптивного увеличения heartbeat
             var pingNotSupported = false
@@ -415,6 +455,7 @@ class PushService : Service() {
                             // Адаптивное увеличение heartbeat при стабильной работе
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
+                                saveHeartbeat(account.id, heartbeat)
                                 consecutiveSuccesses = 0
                             }
                         }
@@ -425,12 +466,14 @@ class PushService : Service() {
                             // Тоже увеличиваем — это успешный Ping
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
+                                saveHeartbeat(account.id, heartbeat)
                                 consecutiveSuccesses = 0
                             }
                         }
                         STATUS_HEARTBEAT_OUT_OF_BOUNDS -> {
                             // Сервер сказал что heartbeat слишком большой — уменьшаем
                             heartbeat = maxOf(heartbeat / 2, MIN_HEARTBEAT)
+                            saveHeartbeat(account.id, heartbeat)
                             consecutiveSuccesses = 0
                         }
                         STATUS_FOLDER_REFRESH_NEEDED -> {
@@ -443,6 +486,7 @@ class PushService : Service() {
                             // При ошибке уменьшаем heartbeat
                             if (heartbeat > MIN_HEARTBEAT) {
                                 heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
+                                saveHeartbeat(account.id, heartbeat)
                             }
                             if (consecutiveErrors >= 3) {
                                 pingNotSupported = true
@@ -460,6 +504,7 @@ class PushService : Service() {
                     // При исключении тоже уменьшаем heartbeat
                     if (heartbeat > MIN_HEARTBEAT) {
                         heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
+                        saveHeartbeat(account.id, heartbeat)
                     }
                     if (consecutiveErrors >= 3) {
                         pingNotSupported = true

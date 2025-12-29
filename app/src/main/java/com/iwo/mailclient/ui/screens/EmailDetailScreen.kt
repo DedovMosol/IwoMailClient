@@ -47,7 +47,8 @@ fun EmailDetailScreen(
     emailId: String,
     onBackClick: () -> Unit,
     onReplyClick: () -> Unit,
-    onForwardClick: () -> Unit = {}
+    onForwardClick: () -> Unit = {},
+    onComposeToEmail: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -515,8 +516,16 @@ fun EmailDetailScreen(
                             .background(Color(accountColor)),
                         contentAlignment = Alignment.Center
                     ) {
+                        // Берём первую букву из имени или email
+                        val displayName = email!!.fromName.ifEmpty { extractDisplayName(email!!.from) }
+                        val displayEmail = extractEmailAddress(email!!.from)
+                        val avatarLetter = when {
+                            displayName.isNotEmpty() && !displayName.contains("@") -> displayName.first().uppercase()
+                            displayEmail.isNotEmpty() -> displayEmail.first().uppercase()
+                            else -> "?"
+                        }
                         Text(
-                            text = email!!.fromName.firstOrNull()?.uppercase() ?: "?",
+                            text = avatarLetter,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
@@ -525,18 +534,28 @@ fun EmailDetailScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = email!!.fromName.ifEmpty { extractDisplayName(email!!.from) },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        // Показываем email только если это нормальный адрес, не X.500 DN
+                        val displayName = email!!.fromName.ifEmpty { extractDisplayName(email!!.from) }
                         val displayEmail = extractEmailAddress(email!!.from)
+                        
+                        // Показываем имя только если оно отличается от email
+                        val showName = displayName.isNotEmpty() && 
+                            !displayName.equals(displayEmail, ignoreCase = true) &&
+                            !displayName.equals(displayEmail.substringBefore("@"), ignoreCase = true)
+                        
+                        if (showName) {
+                            Text(
+                                text = displayName,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        // Показываем email если это нормальный адрес
                         if (displayEmail.isNotEmpty() && displayEmail.contains("@")) {
                             Text(
-                                text = "<$displayEmail>",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = if (showName) "<$displayEmail>" else displayEmail,
+                                style = if (showName) MaterialTheme.typography.bodySmall else MaterialTheme.typography.titleMedium,
+                                fontWeight = if (showName) FontWeight.Normal else FontWeight.SemiBold,
+                                color = if (showName) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -562,7 +581,7 @@ fun EmailDetailScreen(
                     }
                 }
                 
-                // Получатели
+                // Получатели - кликабельные для написания письма
                 if (email!!.to.isNotEmpty() || email!!.cc.isNotEmpty()) {
                     Card(
                         modifier = Modifier
@@ -573,10 +592,20 @@ fun EmailDetailScreen(
                         )
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = "${Strings.to}: ${formatRecipients(email!!.to)}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                            // Кому - кликабельный
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "${Strings.to}: ",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                val toEmail = extractEmailAddress(email!!.to)
+                                Text(
+                                    text = formatRecipients(email!!.to),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (toEmail.contains("@")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = if (toEmail.contains("@")) Modifier.clickable { onComposeToEmail(toEmail) } else Modifier
+                                )
+                            }
                             if (email!!.cc.isNotEmpty()) {
                                 Text(
                                     text = "${Strings.cc}: ${formatRecipients(email!!.cc)}",

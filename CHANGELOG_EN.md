@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.3.1 (29.12.2025)
+
+### Bug Fixes
+- **Bitmap memory leak** — images in event descriptions now released when leaving screen
+- **Unclosed HTTP connections** — connections when loading images now properly closed
+- **Regex optimization** — link parsing patterns compiled once instead of on every call
+- **SoundPlayer race condition** — added synchronization to prevent race conditions
+- **Cache cleanup on account deletion** — EasClient and heartbeat now cleared when deleting account
+- **Heartbeat persistence** — adaptive heartbeat saved between PushService restarts
+- **Local contacts deletion** — fixed contact deletion (list now updates properly)
+- **Avatars in Sent folder** — now shows first letter/digit of recipient name
+- **Duplicate sender email** — if name equals email, shows only email without duplication
+- **Bulk contacts deletion** — fixed deleting multiple contacts at once
+- **Initial sync** — calendar, notes and contacts now sync on first launch
+- **Pull-to-refresh in empty folder** — animated envelope now displays at top center
+- **Email list updates** — fixed automatic list updates during background sync
+
+### Improvements
+- **Copy contacts from organization** — added button to bulk copy selected contacts to personal
+- **Settings text** — clarified "Ignore battery saver when syncing" text
+- **Clickable recipient** — "To" field in email is now clickable, opens compose with pre-filled address
+- **FAB icon in Sent folder** — changed from pencil to email icon
+- **Expanded sections reset** — "Tips" and "About" sections collapse when navigating to folder
+- **Navigation drawer** — Contacts, Notes and Calendar moved to side menu under Favorites
+- **Real-time list updates** — emails in folder update automatically during background sync
+- **Clickable emails in calendar** — organizer and attendee emails are clickable, open compose screen
+- **Clickable location URLs** — if event location contains URL, it's clickable and opens in browser
+- **Contact dialog** — removed close button, dialog closes by tapping outside
+
+---
+
 ## v1.3.0 (29.12.2025)
 
 ### New Features

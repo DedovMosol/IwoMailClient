@@ -80,7 +80,10 @@ interface ContactDao {
     suspend fun delete(contact: ContactEntity)
     
     @Query("DELETE FROM contacts WHERE id = :id")
-    suspend fun deleteById(id: String)
+    suspend fun deleteById(id: String): Int  // Возвращает количество удалённых строк
+    
+    @Query("DELETE FROM contacts WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>): Int  // Массовое удаление по списку ID
     
     @Query("DELETE FROM contacts WHERE accountId = :accountId")
     suspend fun deleteByAccount(accountId: Long)

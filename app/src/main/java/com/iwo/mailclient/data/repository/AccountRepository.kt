@@ -215,6 +215,9 @@ class AccountRepository(private val context: Context) {
         // Очищаем кэшированный клиент
         clearEasClientCache(accountId)
         
+        // Очищаем кэш PushService (heartbeat и EasClient)
+        com.iwo.mailclient.sync.PushService.clearAccountCache(context, accountId)
+        
         // Удаляем файлы вложений с диска (до каскадного удаления из БД)
         withContext(Dispatchers.IO) {
             try {

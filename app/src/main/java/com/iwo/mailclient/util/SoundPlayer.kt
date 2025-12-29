@@ -10,6 +10,7 @@ import com.iwo.mailclient.R
 object SoundPlayer {
     
     private var mediaPlayer: MediaPlayer? = null
+    private val lock = Any()
     
     /**
      * Воспроизводит звук отправки письма
@@ -33,21 +34,35 @@ object SoundPlayer {
     }
     
     private fun playSound(context: Context, resId: Int) {
-        try {
-            // Освобождаем предыдущий плеер
-            mediaPlayer?.release()
-            
-            mediaPlayer = MediaPlayer.create(context, resId)?.apply {
-                setOnCompletionListener { mp ->
-                    mp.release()
-                    if (mediaPlayer == mp) {
-                        mediaPlayer = null
+        synchronized(lock) {
+            try {
+                // Освобождаем предыдущий плеер
+                mediaPlayer?.release()
+                mediaPlayer = null
+                
+                mediaPlayer = MediaPlayer.create(context, resId)?.apply {
+                    setOnCompletionListener { mp ->
+                        synchronized(lock) {
+                            mp.release()
+                            if (mediaPlayer == mp) {
+                                mediaPlayer = null
+                            }
+                        }
                     }
+                    setOnErrorListener { mp, _, _ ->
+                        synchronized(lock) {
+                            mp.release()
+                            if (mediaPlayer == mp) {
+                                mediaPlayer = null
+                            }
+                        }
+                        true
+                    }
+                    start()
                 }
-                start()
+            } catch (e: Exception) {
+                // Игнорируем ошибки воспроизведения
             }
-        } catch (e: Exception) {
-            // Игнорируем ошибки воспроизведения
         }
     }
     
@@ -55,7 +70,9 @@ object SoundPlayer {
      * Освобождает ресурсы
      */
     fun release() {
-        mediaPlayer?.release()
-        mediaPlayer = null
+        synchronized(lock) {
+            mediaPlayer?.release()
+            mediaPlayer = null
+        }
     }
 }

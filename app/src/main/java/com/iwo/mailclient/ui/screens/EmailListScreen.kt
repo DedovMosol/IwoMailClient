@@ -169,8 +169,14 @@ fun EmailListScreen(
     val isFavorites = folderId == "favorites"
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     
-    val emails by mailRepo.getEmails(folderId).collectAsState(initial = emptyList())
-    val favoriteEmails by mailRepo.getFlaggedEmails(activeAccount?.id ?: 0).collectAsState(initial = emptyList())
+    // Подписываемся на Flow напрямую - Room автоматически обновляет при изменении данных
+    val emails by remember(folderId) { 
+        mailRepo.getEmails(folderId) 
+    }.collectAsState(initial = emptyList())
+    
+    val favoriteEmails by remember(activeAccount?.id) {
+        mailRepo.getFlaggedEmails(activeAccount?.id ?: 0)
+    }.collectAsState(initial = emptyList())
     
     var folder by remember { mutableStateOf<FolderEntity?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -720,7 +726,12 @@ fun EmailListScreen(
                     onClick = onComposeClick,
                     containerColor = LocalColorTheme.current.gradientStart
                 ) {
-                    Icon(AppIcons.Edit, Strings.compose, tint = Color.White)
+                    // В папке Отправленные показываем иконку письма вместо карандаша
+                    Icon(
+                        if (isSentFolder) AppIcons.Email else AppIcons.Edit, 
+                        Strings.compose, 
+                        tint = Color.White
+                    )
                 }
             }
         }
@@ -1040,10 +1051,24 @@ private fun EmailList(
                 ErrorContent(message = errorMessage, onRetry = onRetry, modifier = Modifier.fillMaxSize())
             }
             emails.isEmpty() && !isRefreshing -> {
-                EmptyContent(
-                    message = if (isFavorites) Strings.noFavoriteEmails else Strings.noEmails,
-                    modifier = Modifier.fillMaxSize()
-                )
+                // Pull-to-refresh для пустого состояния
+                Box(
+                    modifier = if (!isFavorites) Modifier.fillMaxSize().pullRefresh(pullRefreshState) else Modifier.fillMaxSize()
+                ) {
+                    EmptyContent(
+                        message = if (isFavorites) Strings.noFavoriteEmails else Strings.noEmails,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    
+                    // Индикатор обновления для пустого состояния
+                    if (!isFavorites) {
+                        EnvelopeRefreshIndicator(
+                            refreshing = isRefreshing,
+                            state = pullRefreshState,
+                            modifier = Modifier.align(Alignment.TopCenter)
+                        )
+                    }
+                }
             }
             else -> {
                 // Pull-to-refresh (только если не Избранное)
@@ -1370,8 +1395,25 @@ private fun EmailListItem(
             }
             
             // Аватар с цветом на основе имени (получателя для Отправленных, отправителя для остальных)
-            val avatarName = if (isSent) email.to else (email.fromName.ifEmpty { email.from })
+            val avatarName = if (isSent) {
+                // Извлекаем чистое имя для аватара
+                val toField = email.to
+                when {
+                    toField.contains("<") -> toField.substringBefore("<").trim().trim('"')
+                    toField.contains("@") -> toField.substringBefore("@")
+                    else -> toField
+                }.ifEmpty { toField }
+            } else {
+                email.fromName.ifEmpty { email.from }
+            }
             val avatarColor = getAvatarColor(avatarName)
+            
+            // Первая буква/цифра для аватара
+            val avatarInitial = avatarName
+                .trim()
+                .firstOrNull { it.isLetterOrDigit() }
+                ?.uppercase()
+                ?: "?"
             
             Box(
                 modifier = Modifier
@@ -1395,7 +1437,7 @@ private fun EmailListItem(
                     Icon(AppIcons.Check, null, tint = Color.White, modifier = Modifier.size(24.dp))
                 } else {
                     Text(
-                        text = avatarName.firstOrNull()?.uppercase() ?: "?",
+                        text = avatarInitial,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )

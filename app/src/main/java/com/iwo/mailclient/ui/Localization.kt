@@ -182,7 +182,7 @@ object Strings {
     // Режим экономии батареи
     val batterySaverMode: String @Composable get() = if (isRussian()) "Режим экономии батареи" else "Battery saver mode"
     val batterySaverActive: String @Composable get() = if (isRussian()) "Экономия батареи" else "Battery saver"
-    val ignoreBatterySaver: String @Composable get() = if (isRussian()) "Игнорировать режим экономии при синхронизации" else "Ignore battery saver when syncing"
+    val ignoreBatterySaver: String @Composable get() = if (isRussian()) "Игнорировать режим экономии аккумулятора при синхронизации" else "Ignore battery saver when syncing"
     
     // Интервалы синхронизации
     val syncOff: String @Composable get() = if (isRussian()) "Выключено" else "Off"

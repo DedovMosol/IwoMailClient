@@ -103,6 +103,41 @@ object InitialSyncController {
                         }
                     }
                     
+                    // Синхронизируем контакты, заметки и календарь параллельно
+                    withContext(Dispatchers.IO) {
+                        supervisorScope {
+                            // Контакты
+                            launch {
+                                try {
+                                    withTimeoutOrNull(60_000L) {
+                                        val contactRepo = com.iwo.mailclient.data.repository.ContactRepository(context)
+                                        contactRepo.syncExchangeContacts(accountId)
+                                    }
+                                } catch (_: Exception) { }
+                            }
+                            
+                            // Заметки
+                            launch {
+                                try {
+                                    withTimeoutOrNull(60_000L) {
+                                        val noteRepo = com.iwo.mailclient.data.repository.NoteRepository(context)
+                                        noteRepo.syncNotes(accountId)
+                                    }
+                                } catch (_: Exception) { }
+                            }
+                            
+                            // Календарь
+                            launch {
+                                try {
+                                    withTimeoutOrNull(60_000L) {
+                                        val calendarRepo = com.iwo.mailclient.data.repository.CalendarRepository(context)
+                                        calendarRepo.syncCalendar(accountId)
+                                    }
+                                } catch (_: Exception) { }
+                            }
+                        }
+                    }
+                    
                     settingsRepo.setLastSyncTime(System.currentTimeMillis())
                 }
             } catch (_: Exception) { }
@@ -582,6 +617,14 @@ fun MainScreen(
                         scope.launch { drawerState.close() }
                         onNavigateToContacts()
                     },
+                    onNotesClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToNotes()
+                    },
+                    onCalendarClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToCalendar()
+                    },
                     onCreateFolder = {
                         scope.launch { drawerState.close() }
                         showCreateFolderDialog = true
@@ -1024,6 +1067,9 @@ private fun HomeContent(
                                     unreadCount = folder.unreadCount,
                                     type = folder.type,
                                     onClick = { 
+                                        // Сбрасываем раскрытые секции при переходе в папку
+                                        tipsExpanded = false
+                                        aboutExpanded = false
                                         when (folder.id) {
                                             "contacts" -> onContactsClick()
                                             "notes" -> onNotesClick()
@@ -1041,7 +1087,7 @@ private fun HomeContent(
                         }
                     }
                 } else {
-                    // �Ѧ��� �-�-���-�-TƦ��� ��� ��T��-T�T¦- ���-���-��T˦-�-���-
+                    // Без анимации для быстрой отрисовки
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = if (rowFolders.size == 1) Arrangement.Center else Arrangement.spacedBy(12.dp)
@@ -1054,6 +1100,9 @@ private fun HomeContent(
                                 unreadCount = folder.unreadCount,
                                 type = folder.type,
                                 onClick = { 
+                                    // Сбрасываем раскрытые секции при переходе в папку
+                                    tipsExpanded = false
+                                    aboutExpanded = false
                                     when (folder.id) {
                                         "contacts" -> onContactsClick()
                                         "notes" -> onNotesClick()
@@ -1333,7 +1382,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.3.0",
+                                text = "v1.3.1",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2037,6 +2086,8 @@ private fun DrawerContent(
     onFavoritesClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onContactsClick: () -> Unit = {},
+    onNotesClick: () -> Unit = {},
+    onCalendarClick: () -> Unit = {},
     onCreateFolder: () -> Unit = {},
     onFolderLongClick: (FolderEntity) -> Unit = {}
 ) {
@@ -2117,6 +2168,80 @@ private fun DrawerContent(
         // ��T�T¦-��Ț-T˦� ���-������ (��T��-�-�� Contacts - type 9, T� �-�-T� T��-�-�� Tͦ�T��-�- ���-�-T¦-��T¦-�-)
         val hiddenFolderTypes = listOf(9) // Contacts
         val otherFolders = folders.filter { it.type !in mainFolderTypes && it.type !in hiddenFolderTypes }
+        
+        // Контакты
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clickable(onClick = onContactsClick),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(AppIcons.People, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = Strings.contacts,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+        }
+        
+        // Заметки
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clickable(onClick = onNotesClick),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(AppIcons.StickyNote, null, tint = Color(0xFFFF9800))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = Strings.notes,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+        }
+        
+        // Календарь
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clickable(onClick = onCalendarClick),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(AppIcons.CalendarMonth, null, tint = Color(0xFF4CAF50))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = Strings.calendar,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+        }
+        
+        // Остальные папки
         if (otherFolders.isNotEmpty()) {
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -2130,7 +2255,7 @@ private fun DrawerContent(
             }
         }
         
-        // ��-���+�-T�T� ���-����T�
+        // Создать папку
         item {
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             ListItem(
@@ -2140,16 +2265,7 @@ private fun DrawerContent(
             )
         }
         
-        // �ڦ-�-T¦-��T�T�
-        item {
-            ListItem(
-                headlineContent = { Text(Strings.contacts) },
-                leadingContent = { Icon(AppIcons.People, null) },
-                modifier = Modifier.clickable(onClick = onContactsClick)
-            )
-        }
-        
-        // �ݦ-T�T�T��-������
+        // Настройки
         item {
             ListItem(
                 headlineContent = { Text(Strings.settings) },
