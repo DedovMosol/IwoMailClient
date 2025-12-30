@@ -1,6 +1,6 @@
 # Privacy Policy / Политика конфиденциальности
 
-**Last updated / Последнее обновление:** December 30, 2025
+**Last updated / Последнее обновление:** December 31, 2025
 
 ---
 
@@ -47,7 +47,7 @@ The App requests the following permissions:
 ### Security
 
 - Account passwords are stored encrypted using Android Keystore
-- All connections to mail servers use TLS/SSL encryption
+- All connections to mail servers use TLS encryption
 - No data is shared with third parties
 
 ### Changes to This Policy
@@ -105,7 +105,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 ### Безопасность
 
 - Пароли аккаунтов хранятся в зашифрованном виде с использованием Android Keystore
-- Все соединения с почтовыми серверами используют шифрование TLS/SSL
+- Все соединения с почтовыми серверами используют шифрование TLS
 - Данные не передаются третьим лицам
 
 ### Изменения политики
