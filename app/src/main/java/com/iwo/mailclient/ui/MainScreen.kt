@@ -53,7 +53,8 @@ object InitialSyncController {
         private set
     
     private var syncJob: Job? = null
-    private var syncStarted = false
+    private val syncedAccounts = mutableSetOf<Long>()
+    private var currentSyncingAccountId: Long? = null
     private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     
     fun startSyncIfNeeded(
@@ -62,23 +63,33 @@ object InitialSyncController {
         mailRepo: MailRepository,
         settingsRepo: SettingsRepository
     ) {
-        // ��T����� T����-T�T��-�-�����-TƦ�T� Tæ��� �-T˦��- ������ Tæ��� ���-��T�Tɦ��-�- ��� ��T��-��T�T����-���-
-        if (syncDone || syncStarted) {
+        // Пропускаем если этот аккаунт уже синхронизирован или синхронизируется
+        if (accountId in syncedAccounts || (isSyncing && currentSyncingAccountId == accountId)) {
             return
         }
         
-        syncStarted = true
+        // Если идёт синхронизация другого аккаунта — отменяем её
+        if (isSyncing && currentSyncingAccountId != accountId) {
+            syncJob?.cancel()
+            syncJob = null
+            isSyncing = false
+        }
+        
+        currentSyncingAccountId = accountId
         isSyncing = true
+        syncDone = false
         
         syncJob = syncScope.launch {
             try {
-                delay(100) // �ݦ��-�-��T�TȦ-T� ���-�+��T������- T�T¦-�-T� UI T�T������� �-T�T���T��-�-�-T�T�T�T�
+                // Проверяем что корутина не отменена перед каждой операцией
+                ensureActive()
+                delay(100)
                 
-                // ��-���-�-T�T� �-�- �-T�T� T����-T�T��-�-�����-TƦ�T� - 5 �-���-T�T�
                 withTimeoutOrNull(300_000L) {
-                    // �᦬�-T�T��-�-������T�Tæ��- ���-������
+                    ensureActive()
                     withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
                     
+                    ensureActive()
                     delay(200)
                     
                     // �᦬�-T�T��-�-������T�Tæ��- �Ҧ�� ���-������ T� ����T�Ț-�-�-�� �ߦЦ�Цۦۦզۦ�ݦ�
@@ -89,6 +100,7 @@ object InitialSyncController {
                     }
                     val foldersToSync = currentFolders.filter { it.type in emailFolderTypes }
                     
+                    ensureActive()
                     withContext(Dispatchers.IO) {
                         supervisorScope {
                             foldersToSync.map { folder ->
@@ -99,10 +111,11 @@ object InitialSyncController {
                                         }
                                     } catch (_: Exception) { }
                                 }
-                            }.forEach { it.join() }
+                            }
                         }
                     }
                     
+                    ensureActive()
                     // Синхронизируем контакты, заметки и календарь параллельно
                     withContext(Dispatchers.IO) {
                         supervisorScope {
@@ -113,17 +126,23 @@ object InitialSyncController {
                                         val contactRepo = com.iwo.mailclient.data.repository.ContactRepository(context)
                                         contactRepo.syncExchangeContacts(accountId)
                                     }
-                                } catch (_: Exception) { }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("InitialSync", "Contacts sync failed: ${e.message}")
+                                }
                             }
                             
                             // Заметки
                             launch {
                                 try {
+                                    android.util.Log.d("InitialSync", "Starting notes sync for account $accountId")
                                     withTimeoutOrNull(60_000L) {
                                         val noteRepo = com.iwo.mailclient.data.repository.NoteRepository(context)
-                                        noteRepo.syncNotes(accountId)
+                                        val result = noteRepo.syncNotes(accountId)
+                                        android.util.Log.d("InitialSync", "Notes sync result: $result")
                                     }
-                                } catch (_: Exception) { }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("InitialSync", "Notes sync failed: ${e.message}", e)
+                                }
                             }
                             
                             // Календарь
@@ -133,29 +152,51 @@ object InitialSyncController {
                                         val calendarRepo = com.iwo.mailclient.data.repository.CalendarRepository(context)
                                         calendarRepo.syncCalendar(accountId)
                                     }
-                                } catch (_: Exception) { }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("InitialSync", "Calendar sync failed: ${e.message}")
+                                }
                             }
                         }
                     }
                     
                     settingsRepo.setLastSyncTime(System.currentTimeMillis())
                 }
-            } catch (_: Exception) { }
-            
-            isSyncing = false
-            syncDone = true
+                
+                // Помечаем аккаунт как синхронизированный только если не отменено
+                syncedAccounts.add(accountId)
+            } catch (_: CancellationException) {
+                // Корутина отменена — не помечаем как синхронизированный
+            } catch (_: Exception) {
+                // Другие ошибки — всё равно помечаем чтобы не зациклиться
+                syncedAccounts.add(accountId)
+            } finally {
+                // Сбрасываем состояние только если это наш аккаунт
+                if (currentSyncingAccountId == accountId) {
+                    isSyncing = false
+                    syncDone = true
+                    currentSyncingAccountId = null
+                }
+            }
         }
     }
     
-    /**
-     * ��-T��-T� T��-T�T¦-TϦ-��T� (�+��T� T¦�T�T¦-�- ������ ��T��� T��-���-�� �-�����-Tæ-T¦-)
-     */
     fun reset() {
         syncJob?.cancel()
         syncJob = null
-        syncStarted = false
+        syncedAccounts.clear()
+        currentSyncingAccountId = null
         syncDone = false
         isSyncing = false
+    }
+    
+    fun resetAccount(accountId: Long) {
+        syncedAccounts.remove(accountId)
+        if (currentSyncingAccountId == accountId) {
+            syncJob?.cancel()
+            syncJob = null
+            currentSyncingAccountId = null
+            isSyncing = false
+        }
     }
 }
 
@@ -1382,7 +1423,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.3.1",
+                                text = "v1.3.2",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

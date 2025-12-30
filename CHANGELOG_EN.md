@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.3.2 (30.12.2025)
+
+### New Features
+- **"Important" filter** — new filter for high priority emails (Importance = High)
+- **Priority icon** — high priority emails marked with red exclamation mark in list
+
+### Bug Fixes
+- **Sync deletions** — emails deleted or moved on server (Outlook) now removed from local database during sync
+- **Email body loading** — added fallback to plain text (Type=1) if HTML returns empty result
+- **Initial sync for multiple accounts** — each account now syncs separately, notification shown for each
+- **Parallel folder sync** — folders now sync in parallel instead of sequentially
+- **Auto-scroll during sync** — email list now auto-scrolls to top when new emails appear during sync
+- **Attachments on screen rotation** — attachments no longer disappear when rotating screen in email detail
+- **Quoted-printable decoding** — fixed Cyrillic decoding in emails with quoted-printable encoding
+- **Sync cancellation on account switch** — when quickly switching accounts, previous sync is properly cancelled
+- **Email body loading timeout** — added 25 sec total timeout for triple fallback (MIME → HTML → Plain)
+- **Delete emails on server error** — if server doesn't respond, emails are deleted locally to avoid getting stuck
+
+### Improvements
+- **Notes for Exchange 2007** — added legacy sync mode for notes via IPM.StickyNote for servers without EAS 14.1+ support
+- **Local drafts notice** — Drafts folder now shows info that drafts are stored locally
+
+---
+
 ## v1.3.1 (29.12.2025)
 
 ### Bug Fixes

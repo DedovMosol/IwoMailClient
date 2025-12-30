@@ -4,7 +4,7 @@
 
 Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
 
-**Version:** 1.3.1  
+**Version:** 1.3.2  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -12,6 +12,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 ## 🌟 Features
 
 - 📧 **Exchange ActiveSync** — full EAS 12.0-14.1 support (Exchange 2007+)
+- 🔄 **EWS for Exchange 2007** — notes sync via EWS with NTLMv2 (fallback for EAS 12.x)
 - 📬 **IMAP/POP3** — works with any mail server (beta)
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
 - 🔒 **Exchange 2007 compatibility** — TLS 1.0/1.1 support via Conscrypt
@@ -49,14 +50,13 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Interface personalization | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 
-## 🆕 What's New in v1.3.1
+## 🆕 What's New in v1.3.2
 
-- **Initial sync** — calendar, notes and contacts sync on first launch
-- **Clickable emails** — organizer and attendee emails in calendar open compose screen
-- **Clickable links** — URLs in event location open in browser
-- **Real-time updates** — emails update automatically during background sync
-- **Navigation drawer** — Contacts, Notes and Calendar moved under Favorites
-- **Bug fixes** — memory leaks, bulk contact deletion, duplicate email display
+- **"Important" filter** — new filter for high priority emails
+- **Priority icon** — high priority emails marked with red exclamation mark
+- **Notes for Exchange 2007** — notes sync via EWS with NTLMv2 for servers without EAS 14.1+
+- **Sync deletions** — emails deleted on server are removed from local database
+- **Parallel sync** — folders sync in parallel
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 

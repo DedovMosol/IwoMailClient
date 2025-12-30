@@ -61,6 +61,9 @@ fun CalendarScreen(
     var selectedEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
     var selectedDate by remember { mutableStateOf(Date()) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var editingEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
+    var isCreating by remember { mutableStateOf(false) }
     
     // Фильтрация по поиску
     val filteredEvents = remember(events, searchQuery) {
@@ -81,7 +84,90 @@ fun CalendarScreen(
             event = event,
             calendarRepo = calendarRepo,
             onDismiss = { selectedEvent = null },
-            onComposeClick = onComposeClick
+            onComposeClick = onComposeClick,
+            onEditClick = { 
+                editingEvent = event
+                selectedEvent = null
+                showCreateDialog = true
+            },
+            onDeleteClick = {
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        calendarRepo.deleteEvent(event)
+                    }
+                    when (result) {
+                        is EasResult.Success -> {
+                            Toast.makeText(context, Strings.eventDeleted, Toast.LENGTH_SHORT).show()
+                        }
+                        is EasResult.Error -> {
+                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    selectedEvent = null
+                }
+            }
+        )
+    }
+    
+    // Диалог создания/редактирования события
+    if (showCreateDialog) {
+        CreateEventDialog(
+            event = editingEvent,
+            initialDate = selectedDate,
+            isCreating = isCreating,
+            onDismiss = { 
+                showCreateDialog = false
+                editingEvent = null
+            },
+            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus ->
+                scope.launch {
+                    isCreating = true
+                    val result = if (editingEvent != null) {
+                        withContext(Dispatchers.IO) {
+                            calendarRepo.updateEvent(
+                                event = editingEvent!!,
+                                subject = subject,
+                                startTime = startTime,
+                                endTime = endTime,
+                                location = location,
+                                body = body,
+                                allDayEvent = allDayEvent,
+                                reminder = reminder,
+                                busyStatus = busyStatus
+                            )
+                        }
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            calendarRepo.createEvent(
+                                accountId = accountId,
+                                subject = subject,
+                                startTime = startTime,
+                                endTime = endTime,
+                                location = location,
+                                body = body,
+                                allDayEvent = allDayEvent,
+                                reminder = reminder,
+                                busyStatus = busyStatus
+                            )
+                        }
+                    }
+                    isCreating = false
+                    when (result) {
+                        is EasResult.Success -> {
+                            Toast.makeText(
+                                context,
+                                if (editingEvent != null) Strings.eventUpdated else Strings.eventCreated,
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            showCreateDialog = false
+                            editingEvent = null
+                        }
+                        is EasResult.Error -> {
+                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
         )
     }
     
@@ -159,6 +245,17 @@ fun CalendarScreen(
                     )
                 )
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { 
+                    editingEvent = null
+                    showCreateDialog = true 
+                },
+                containerColor = LocalColorTheme.current.gradientStart
+            ) {
+                Icon(AppIcons.Add, Strings.newEvent, tint = Color.White)
+            }
         }
     ) { padding ->
         Column(
@@ -719,16 +816,44 @@ private fun EventDetailDialog(
     event: CalendarEventEntity,
     calendarRepo: CalendarRepository,
     onDismiss: () -> Unit,
-    onComposeClick: (String) -> Unit = {}
+    onComposeClick: (String) -> Unit = {},
+    onEditClick: () -> Unit = {},
+    onDeleteClick: () -> Unit = {}
 ) {
     val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
     
     // Извлекаем email из строки организатора
     val organizerEmail = remember(event.organizer) {
         val emailRegex = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}".toRegex()
         emailRegex.find(event.organizer)?.value ?: ""
+    }
+    
+    // Диалог подтверждения удаления
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(Strings.deleteEvent) },
+            text = { Text(Strings.deleteEventConfirm) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDeleteClick()
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text(Strings.delete)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
     }
     
     AlertDialog(
@@ -908,8 +1033,32 @@ private fun EventDetailDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.close)
+            Row {
+                // Кнопка удаления
+                TextButton(
+                    onClick = { showDeleteConfirm = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(Strings.delete)
+                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                // Кнопка редактирования
+                TextButton(onClick = onEditClick) {
+                    Icon(AppIcons.Edit, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(Strings.edit)
+                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                // Кнопка закрытия
+                TextButton(onClick = onDismiss) {
+                    Text(Strings.close)
+                }
             }
         }
     )
@@ -1256,4 +1405,470 @@ private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
             contentScale = androidx.compose.ui.layout.ContentScale.FillWidth
         )
     }
+}
+
+
+/**
+ * Диалог создания/редактирования события календаря
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CreateEventDialog(
+    event: CalendarEventEntity?,
+    initialDate: Date,
+    isCreating: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        allDayEvent: Boolean,
+        reminder: Int,
+        busyStatus: Int
+    ) -> Unit
+) {
+    val isEditing = event != null
+    
+    // Состояния полей
+    var subject by rememberSaveable { mutableStateOf(event?.subject ?: "") }
+    var location by rememberSaveable { mutableStateOf(event?.location ?: "") }
+    var body by rememberSaveable { mutableStateOf(event?.body ?: "") }
+    var allDayEvent by rememberSaveable { mutableStateOf(event?.allDayEvent ?: false) }
+    var reminder by rememberSaveable { mutableStateOf(event?.reminder ?: 15) }
+    var busyStatus by rememberSaveable { mutableStateOf(event?.busyStatus ?: 2) }
+    
+    // Даты и время
+    val calendar = Calendar.getInstance()
+    if (event != null) {
+        calendar.timeInMillis = event.startTime
+    } else {
+        calendar.time = initialDate
+        // Округляем до следующего часа
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.add(Calendar.HOUR_OF_DAY, 1)
+    }
+    
+    var startDate by remember { mutableStateOf(calendar.time) }
+    var startHour by rememberSaveable { mutableStateOf(calendar.get(Calendar.HOUR_OF_DAY)) }
+    var startMinute by rememberSaveable { mutableStateOf(calendar.get(Calendar.MINUTE)) }
+    
+    if (event != null) {
+        calendar.timeInMillis = event.endTime
+    } else {
+        calendar.add(Calendar.HOUR_OF_DAY, 1)
+    }
+    var endDate by remember { mutableStateOf(calendar.time) }
+    var endHour by rememberSaveable { mutableStateOf(calendar.get(Calendar.HOUR_OF_DAY)) }
+    var endMinute by rememberSaveable { mutableStateOf(calendar.get(Calendar.MINUTE)) }
+    
+    var showStartDatePicker by remember { mutableStateOf(false) }
+    var showEndDatePicker by remember { mutableStateOf(false) }
+    var showStartTimePicker by remember { mutableStateOf(false) }
+    var showEndTimePicker by remember { mutableStateOf(false) }
+    var showReminderMenu by remember { mutableStateOf(false) }
+    var showStatusMenu by remember { mutableStateOf(false) }
+    
+    val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    
+    // Валидация
+    val isValid = subject.isNotBlank()
+    
+    // Date Pickers
+    if (showStartDatePicker) {
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = startDate.time)
+        DatePickerDialog(
+            onDismissRequest = { showStartDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        startDate = Date(millis)
+                        // Если дата окончания раньше — сдвигаем
+                        if (endDate.before(startDate)) {
+                            endDate = startDate
+                        }
+                    }
+                    showStartDatePicker = false
+                }) { Text(Strings.ok) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStartDatePicker = false }) { Text(Strings.cancel) }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+    
+    if (showEndDatePicker) {
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = endDate.time)
+        DatePickerDialog(
+            onDismissRequest = { showEndDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        endDate = Date(millis)
+                    }
+                    showEndDatePicker = false
+                }) { Text(Strings.ok) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndDatePicker = false }) { Text(Strings.cancel) }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+    
+    // Time Pickers
+    if (showStartTimePicker) {
+        val timePickerState = rememberTimePickerState(initialHour = startHour, initialMinute = startMinute)
+        AlertDialog(
+            onDismissRequest = { showStartTimePicker = false },
+            title = { Text(Strings.startTime) },
+            text = { TimePicker(state = timePickerState) },
+            confirmButton = {
+                TextButton(onClick = {
+                    startHour = timePickerState.hour
+                    startMinute = timePickerState.minute
+                    showStartTimePicker = false
+                }) { Text(Strings.ok) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStartTimePicker = false }) { Text(Strings.cancel) }
+            }
+        )
+    }
+    
+    if (showEndTimePicker) {
+        val timePickerState = rememberTimePickerState(initialHour = endHour, initialMinute = endMinute)
+        AlertDialog(
+            onDismissRequest = { showEndTimePicker = false },
+            title = { Text(Strings.endTime) },
+            text = { TimePicker(state = timePickerState) },
+            confirmButton = {
+                TextButton(onClick = {
+                    endHour = timePickerState.hour
+                    endMinute = timePickerState.minute
+                    showEndTimePicker = false
+                }) { Text(Strings.ok) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndTimePicker = false }) { Text(Strings.cancel) }
+            }
+        )
+    }
+    
+    AlertDialog(
+        onDismissRequest = { if (!isCreating) onDismiss() },
+        title = { Text(if (isEditing) Strings.editEvent else Strings.newEvent) },
+        text = {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Название
+                item {
+                    OutlinedTextField(
+                        value = subject,
+                        onValueChange = { subject = it },
+                        label = { Text(Strings.eventTitle) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        isError = subject.isBlank()
+                    )
+                }
+                
+                // Весь день
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(Strings.allDay)
+                        Switch(
+                            checked = allDayEvent,
+                            onCheckedChange = { allDayEvent = it }
+                        )
+                    }
+                }
+                
+                // Дата начала
+                item {
+                    OutlinedTextField(
+                        value = dateFormat.format(startDate),
+                        onValueChange = {},
+                        label = { Text(Strings.startDate) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showStartDatePicker = true },
+                        readOnly = true,
+                        enabled = false,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline,
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    )
+                }
+                
+                // Время начала (если не весь день)
+                if (!allDayEvent) {
+                    item {
+                        val startCal = Calendar.getInstance().apply {
+                            time = startDate
+                            set(Calendar.HOUR_OF_DAY, startHour)
+                            set(Calendar.MINUTE, startMinute)
+                        }
+                        OutlinedTextField(
+                            value = timeFormat.format(startCal.time),
+                            onValueChange = {},
+                            label = { Text(Strings.startTime) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showStartTimePicker = true },
+                            readOnly = true,
+                            enabled = false,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                    }
+                }
+                
+                // Дата окончания
+                item {
+                    OutlinedTextField(
+                        value = dateFormat.format(endDate),
+                        onValueChange = {},
+                        label = { Text(Strings.endDate) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showEndDatePicker = true },
+                        readOnly = true,
+                        enabled = false,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline,
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    )
+                }
+                
+                // Время окончания (если не весь день)
+                if (!allDayEvent) {
+                    item {
+                        val endCal = Calendar.getInstance().apply {
+                            time = endDate
+                            set(Calendar.HOUR_OF_DAY, endHour)
+                            set(Calendar.MINUTE, endMinute)
+                        }
+                        OutlinedTextField(
+                            value = timeFormat.format(endCal.time),
+                            onValueChange = {},
+                            label = { Text(Strings.endTime) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showEndTimePicker = true },
+                            readOnly = true,
+                            enabled = false,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                    }
+                }
+                
+                // Место
+                item {
+                    OutlinedTextField(
+                        value = location,
+                        onValueChange = { location = it },
+                        label = { Text(Strings.eventLocation) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+                
+                // Напоминание
+                item {
+                    Box {
+                        OutlinedTextField(
+                            value = when (reminder) {
+                                0 -> Strings.noReminder
+                                5 -> Strings.minutes5
+                                15 -> Strings.minutes15
+                                30 -> Strings.minutes30
+                                60 -> Strings.hour1
+                                120 -> Strings.hours2
+                                1440 -> Strings.day1
+                                else -> "$reminder мин"
+                            },
+                            onValueChange = {},
+                            label = { Text(Strings.reminder) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showReminderMenu = true },
+                            readOnly = true,
+                            enabled = false,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                        
+                        DropdownMenu(
+                            expanded = showReminderMenu,
+                            onDismissRequest = { showReminderMenu = false }
+                        ) {
+                            listOf(
+                                0 to Strings.noReminder,
+                                5 to Strings.minutes5,
+                                15 to Strings.minutes15,
+                                30 to Strings.minutes30,
+                                60 to Strings.hour1,
+                                120 to Strings.hours2,
+                                1440 to Strings.day1
+                            ).forEach { (value, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        reminder = value
+                                        showReminderMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // Статус занятости
+                item {
+                    Box {
+                        OutlinedTextField(
+                            value = when (busyStatus) {
+                                0 -> Strings.statusFree
+                                1 -> Strings.statusTentative
+                                2 -> Strings.statusBusy
+                                3 -> Strings.statusOof
+                                else -> Strings.statusBusy
+                            },
+                            onValueChange = {},
+                            label = { Text(Strings.busyStatus) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showStatusMenu = true },
+                            readOnly = true,
+                            enabled = false,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                        
+                        DropdownMenu(
+                            expanded = showStatusMenu,
+                            onDismissRequest = { showStatusMenu = false }
+                        ) {
+                            listOf(
+                                0 to Strings.statusFree,
+                                1 to Strings.statusTentative,
+                                2 to Strings.statusBusy,
+                                3 to Strings.statusOof
+                            ).forEach { (value, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        busyStatus = value
+                                        showStatusMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // Описание
+                item {
+                    OutlinedTextField(
+                        value = body,
+                        onValueChange = { body = it },
+                        label = { Text(Strings.eventDescription) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(100.dp),
+                        maxLines = 5
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (isValid) {
+                        // Собираем время
+                        val startCal = Calendar.getInstance().apply {
+                            time = startDate
+                            if (allDayEvent) {
+                                set(Calendar.HOUR_OF_DAY, 0)
+                                set(Calendar.MINUTE, 0)
+                            } else {
+                                set(Calendar.HOUR_OF_DAY, startHour)
+                                set(Calendar.MINUTE, startMinute)
+                            }
+                            set(Calendar.SECOND, 0)
+                            set(Calendar.MILLISECOND, 0)
+                        }
+                        
+                        val endCal = Calendar.getInstance().apply {
+                            time = endDate
+                            if (allDayEvent) {
+                                set(Calendar.HOUR_OF_DAY, 23)
+                                set(Calendar.MINUTE, 59)
+                            } else {
+                                set(Calendar.HOUR_OF_DAY, endHour)
+                                set(Calendar.MINUTE, endMinute)
+                            }
+                            set(Calendar.SECOND, 0)
+                            set(Calendar.MILLISECOND, 0)
+                        }
+                        
+                        onSave(
+                            subject,
+                            startCal.timeInMillis,
+                            endCal.timeInMillis,
+                            location,
+                            body,
+                            allDayEvent,
+                            reminder,
+                            busyStatus
+                        )
+                    }
+                },
+                enabled = isValid && !isCreating
+            ) {
+                if (isCreating) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(Strings.save)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isCreating
+            ) {
+                Text(Strings.cancel)
+            }
+        }
+    )
 }

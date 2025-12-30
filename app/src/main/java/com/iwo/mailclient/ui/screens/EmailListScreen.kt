@@ -124,7 +124,7 @@ private fun getAvatarColor(name: String): Color {
 
 // Фильтры
 enum class MailFilter {
-    ALL, UNREAD, STARRED, WITH_ATTACHMENTS
+    ALL, UNREAD, STARRED, WITH_ATTACHMENTS, IMPORTANT
 }
 
 @Composable
@@ -133,6 +133,7 @@ fun MailFilter.label(): String = when (this) {
     MailFilter.UNREAD -> Strings.unreadOnly
     MailFilter.STARRED -> Strings.starred
     MailFilter.WITH_ATTACHMENTS -> Strings.withAttachments
+    MailFilter.IMPORTANT -> Strings.important
 }
 
 enum class EmailDateFilter(val days: Int?) {
@@ -224,6 +225,7 @@ fun EmailListScreen(
                 MailFilter.UNREAD -> !email.read
                 MailFilter.STARRED -> email.flagged
                 MailFilter.WITH_ATTACHMENTS -> email.hasAttachments
+                MailFilter.IMPORTANT -> email.importance == 2
             }
             
             val matchesDate = dateFilter.days?.let { days ->
@@ -756,6 +758,32 @@ fun EmailListScreen(
                 filteredCount = filteredEmails.size
             )
             
+            // Уведомление о локальных черновиках
+            if (isDraftsFolder) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            AppIcons.Info,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = Strings.localDraftsNotice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+            
             // Список писем
             EmailList(
                 emails = filteredEmails,
@@ -1049,6 +1077,16 @@ private fun EmailList(
         if (isSelectionMode) {
             listState.animateScrollToItem(0)
         }
+    }
+    
+    // Автоскролл вверх при появлении новых писем (во время синхронизации)
+    var previousEmailCount by remember { mutableStateOf(emails.size) }
+    LaunchedEffect(emails.size) {
+        if (emails.size > previousEmailCount && previousEmailCount > 0) {
+            // Новые письма появились — скроллим вверх
+            listState.animateScrollToItem(0)
+        }
+        previousEmailCount = emails.size
     }
     
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1462,6 +1500,16 @@ private fun EmailListItem(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    // Иконка высокого приоритета (важное)
+                    if (email.importance == 2) {
+                        Icon(
+                            AppIcons.PriorityHigh, 
+                            contentDescription = Strings.important,
+                            modifier = Modifier.size(16.dp), 
+                            tint = Color(0xFFE53935) // Красный
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     if (email.hasAttachments) {
                         Icon(AppIcons.Attachment, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(modifier = Modifier.width(4.dp))

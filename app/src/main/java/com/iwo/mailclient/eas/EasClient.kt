@@ -2,6 +2,7 @@ package com.iwo.mailclient.eas
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -1191,46 +1192,13 @@ class EasClient(
     
     /**
      * Загрузка полного тела письма с парсингом MDN заголовка
+     * Использует withTimeoutOrNull для ограничения общего времени выполнения
      */
     suspend fun fetchEmailBodyWithMdn(collectionId: String, serverId: String): EasResult<EmailBodyResult> {
-        // Сначала пробуем получить полный MIME (Type=4) для парсинга заголовков
-        val mimeXml = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <ItemOperations xmlns="ItemOperations">
-                <Fetch>
-                    <Store>Mailbox</Store>
-                    <CollectionId xmlns="AirSync">$collectionId</CollectionId>
-                    <ServerId xmlns="AirSync">$serverId</ServerId>
-                    <Options>
-                        <BodyPreference xmlns="AirSyncBase">
-                            <Type>4</Type>
-                            <TruncationSize>1048576</TruncationSize>
-                        </BodyPreference>
-                    </Options>
-                </Fetch>
-            </ItemOperations>
-        """.trimIndent()
-        
-        val mimeResult = executeEasCommand("ItemOperations", mimeXml) { responseXml ->
-            extractValue(responseXml, "Data") ?: ""
-        }
-        
-        var mdnRequestedBy: String? = null
-        var bodyContent = ""
-        
-        if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty()) {
-            val mimeData = mimeResult.data
-            
-            // Парсим MDN заголовок из MIME
-            mdnRequestedBy = parseMdnHeader(mimeData)
-            
-            // Извлекаем тело из MIME
-            bodyContent = extractBodyFromMime(mimeData)
-        }
-        
-        // Если MIME не сработал или тело пустое - fallback на обычный запрос
-        if (bodyContent.isEmpty()) {
-            val htmlXml = """
+        // Общий timeout на все попытки загрузки тела (25 сек, чтобы уложиться в 30 сек внешний timeout)
+        return withTimeoutOrNull(25_000L) {
+            // Сначала пробуем получить полный MIME (Type=4) для парсинга заголовков
+            val mimeXml = """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <ItemOperations xmlns="ItemOperations">
                     <Fetch>
@@ -1239,28 +1207,96 @@ class EasClient(
                         <ServerId xmlns="AirSync">$serverId</ServerId>
                         <Options>
                             <BodyPreference xmlns="AirSyncBase">
-                                <Type>2</Type>
-                                <TruncationSize>512000</TruncationSize>
+                                <Type>4</Type>
+                                <TruncationSize>1048576</TruncationSize>
                             </BodyPreference>
                         </Options>
                     </Fetch>
                 </ItemOperations>
             """.trimIndent()
             
-            val htmlResult = executeEasCommand("ItemOperations", htmlXml) { responseXml ->
-                extractValue(responseXml, "Data") 
-                    ?: extractValue(responseXml, "Body")
-                    ?: ""
+            val mimeResult = executeEasCommand("ItemOperations", mimeXml) { responseXml ->
+                extractValue(responseXml, "Data") ?: ""
             }
             
-            if (htmlResult is EasResult.Success) {
-                bodyContent = htmlResult.data
-            } else if (htmlResult is EasResult.Error) {
-                return EasResult.Error(htmlResult.message)
+            var mdnRequestedBy: String? = null
+            var bodyContent = ""
+            
+            if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty()) {
+                val mimeData = mimeResult.data
+                
+                // Парсим MDN заголовок из MIME
+                mdnRequestedBy = parseMdnHeader(mimeData)
+                
+                // Извлекаем тело из MIME
+                bodyContent = extractBodyFromMime(mimeData)
             }
-        }
-        
-        return EasResult.Success(EmailBodyResult(bodyContent, mdnRequestedBy))
+            
+            // Если MIME не сработал или тело пустое - fallback на обычный запрос
+            if (bodyContent.isEmpty()) {
+                // Пробуем HTML (Type=2)
+                val htmlXml = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <ItemOperations xmlns="ItemOperations">
+                        <Fetch>
+                            <Store>Mailbox</Store>
+                            <CollectionId xmlns="AirSync">$collectionId</CollectionId>
+                            <ServerId xmlns="AirSync">$serverId</ServerId>
+                            <Options>
+                                <BodyPreference xmlns="AirSyncBase">
+                                    <Type>2</Type>
+                                    <TruncationSize>512000</TruncationSize>
+                                </BodyPreference>
+                            </Options>
+                        </Fetch>
+                    </ItemOperations>
+                """.trimIndent()
+                
+                val htmlResult = executeEasCommand("ItemOperations", htmlXml) { responseXml ->
+                    extractValue(responseXml, "Data") 
+                        ?: extractValue(responseXml, "Body")
+                        ?: ""
+                }
+                
+                if (htmlResult is EasResult.Success && htmlResult.data.isNotBlank()) {
+                    bodyContent = htmlResult.data
+                }
+            }
+            
+            // Если HTML не сработал - пробуем plain text (Type=1)
+            if (bodyContent.isEmpty()) {
+                val plainXml = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <ItemOperations xmlns="ItemOperations">
+                        <Fetch>
+                            <Store>Mailbox</Store>
+                            <CollectionId xmlns="AirSync">$collectionId</CollectionId>
+                            <ServerId xmlns="AirSync">$serverId</ServerId>
+                            <Options>
+                                <BodyPreference xmlns="AirSyncBase">
+                                    <Type>1</Type>
+                                    <TruncationSize>512000</TruncationSize>
+                                </BodyPreference>
+                            </Options>
+                        </Fetch>
+                    </ItemOperations>
+                """.trimIndent()
+                
+                val plainResult = executeEasCommand("ItemOperations", plainXml) { responseXml ->
+                    extractValue(responseXml, "Data") 
+                        ?: extractValue(responseXml, "Body")
+                        ?: ""
+                }
+                
+                if (plainResult is EasResult.Success) {
+                    bodyContent = plainResult.data
+                } else if (plainResult is EasResult.Error) {
+                    return@withTimeoutOrNull EasResult.Error(plainResult.message)
+                }
+            }
+            
+            EasResult.Success(EmailBodyResult(bodyContent, mdnRequestedBy))
+        } ?: EasResult.Error("Timeout loading email body")
     }
     
     /**
@@ -1363,12 +1399,12 @@ class EasClient(
     }
     
     /**
-     * Декодирует quoted-printable
+     * Декодирует quoted-printable с корректной поддержкой UTF-8
      */
     private fun decodeQuotedPrintable(input: String): String {
-        val result = StringBuilder()
-        var i = 0
         val text = input.replace("=\r\n", "").replace("=\n", "") // Soft line breaks
+        val bytes = mutableListOf<Byte>()
+        var i = 0
         
         while (i < text.length) {
             val c = text[i]
@@ -1376,16 +1412,23 @@ class EasClient(
                 val hex = text.substring(i + 1, i + 3)
                 try {
                     val byte = hex.toInt(16).toByte()
-                    result.append(byte.toInt().toChar())
+                    bytes.add(byte)
                     i += 3
                     continue
                 } catch (_: Exception) {}
             }
-            result.append(c)
+            // Обычный ASCII символ - добавляем как байт
+            bytes.add(c.code.toByte())
             i++
         }
         
-        return result.toString()
+        // Декодируем байты как UTF-8
+        return try {
+            String(bytes.toByteArray(), Charsets.UTF_8)
+        } catch (_: Exception) {
+            // Fallback на ISO-8859-1 если UTF-8 не сработал
+            String(bytes.toByteArray(), Charsets.ISO_8859_1)
+        }
     }
     
     /**
@@ -2329,17 +2372,30 @@ $foldersXml
         val syncKey = extractValue(xml, "SyncKey") ?: "0"
         val status = extractValue(xml, "Status")?.toIntOrNull() ?: 1
         val emails = mutableListOf<EasEmail>()
+        val deletedIds = mutableListOf<String>()
         
         // Проверяем наличие MoreAvailable (пустой тег)
         val moreAvailable = xml.contains("<MoreAvailable/>") || xml.contains("<MoreAvailable>")
         
+        // Парсим добавленные письма
         val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
         addPattern.findAll(xml).forEach { match ->
             val emailXml = match.groupValues[1]
             parseEmail(emailXml)?.let { emails.add(it) }
         }
         
-        return SyncResponse(syncKey, status, emails, moreAvailable)
+        // Парсим удалённые письма (Delete и SoftDelete)
+        val deletePattern = "<Delete>(.*?)</Delete>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        deletePattern.findAll(xml).forEach { match ->
+            extractValue(match.groupValues[1], "ServerId")?.let { deletedIds.add(it) }
+        }
+        
+        val softDeletePattern = "<SoftDelete>(.*?)</SoftDelete>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        softDeletePattern.findAll(xml).forEach { match ->
+            extractValue(match.groupValues[1], "ServerId")?.let { deletedIds.add(it) }
+        }
+        
+        return SyncResponse(syncKey, status, emails, moreAvailable, deletedIds)
     }
     
     private fun parseEmail(xml: String): EasEmail? {
@@ -2510,27 +2566,52 @@ $foldersXml
     
     /**
      * Синхронизация заметок из папки Notes на сервере Exchange
-     * Возвращает список заметок
+     * 
+     * EAS 14.1+ (Exchange 2010 SP1+): стандартный Notes sync через type=10
+     * EAS 12.x (Exchange 2007): fallback через email-подход (IPM.StickyNote)
      */
     suspend fun syncNotes(): EasResult<List<EasNote>> {
         if (!versionDetected) {
             detectEasVersion()
         }
         
-        // Сначала получаем список папок чтобы найти папку Notes (type = 10)
+        android.util.Log.d("EasClient", "syncNotes: EAS version = $easVersion")
+        
         val foldersResult = folderSync("0")
-        val notesFolderId = when (foldersResult) {
-            is EasResult.Success -> {
-                foldersResult.data.folders.find { it.type == 10 }?.serverId
+        val folders = when (foldersResult) {
+            is EasResult.Success -> foldersResult.data.folders
+            is EasResult.Error -> {
+                android.util.Log.e("EasClient", "syncNotes: folderSync failed: ${foldersResult.message}")
+                return EasResult.Error(foldersResult.message)
             }
-            is EasResult.Error -> return EasResult.Error(foldersResult.message)
         }
         
-        if (notesFolderId == null) {
-            return EasResult.Error("Папка заметок не найдена")
+        android.util.Log.d("EasClient", "syncNotes: Found ${folders.size} folders")
+        folders.forEach { f ->
+            android.util.Log.d("EasClient", "  Folder: type=${f.type}, name='${f.displayName}', id=${f.serverId}")
         }
         
-        // Шаг 1: Получаем начальный SyncKey для папки заметок
+        // Определяем версию EAS
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+        android.util.Log.d("EasClient", "syncNotes: majorVersion = $majorVersion, using ${if (majorVersion >= 14) "Standard" else "Legacy"} mode")
+        
+        return if (majorVersion >= 14) {
+            // EAS 14.1+ — стандартный Notes sync
+            syncNotesStandard(folders)
+        } else {
+            // EAS 12.x (Exchange 2007) — fallback через email-подход
+            syncNotesLegacy(folders)
+        }
+    }
+    
+    /**
+     * Стандартная синхронизация заметок для EAS 14.1+ (Exchange 2010 SP1+)
+     */
+    private suspend fun syncNotesStandard(folders: List<EasFolder>): EasResult<List<EasNote>> {
+        val notesFolderId = folders.find { it.type == 10 }?.serverId
+            ?: return EasResult.Error("Папка Notes (type=10) не найдена на сервере")
+        
+        // Шаг 1: Получаем SyncKey
         val initialXml = """
             <?xml version="1.0" encoding="UTF-8"?>
             <Sync xmlns="AirSync">
@@ -2544,18 +2625,12 @@ $foldersXml
         """.trimIndent()
         
         var syncKey = "0"
-        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
-            extractValue(responseXml, "SyncKey") ?: "0"
+        when (val result = executeEasCommand("Sync", initialXml) { extractValue(it, "SyncKey") ?: "0" }) {
+            is EasResult.Success -> syncKey = result.data
+            is EasResult.Error -> return EasResult.Error(result.message)
         }
         
-        when (initialResult) {
-            is EasResult.Success -> syncKey = initialResult.data
-            is EasResult.Error -> return EasResult.Error(initialResult.message)
-        }
-        
-        if (syncKey == "0") {
-            return EasResult.Success(emptyList())
-        }
+        if (syncKey == "0") return EasResult.Success(emptyList())
         
         // Шаг 2: Запрашиваем заметки
         val syncXml = """
@@ -2579,41 +2654,1192 @@ $foldersXml
             </Sync>
         """.trimIndent()
         
-        return executeEasCommand("Sync", syncXml) { responseXml ->
-            parseNotesSyncResponse(responseXml)
+        return executeEasCommand("Sync", syncXml) { parseNotesResponse(it, legacy = false) }
+    }
+    
+    /**
+     * Legacy синхронизация заметок для EAS 12.x (Exchange 2007)
+     * Exchange 2007 не поддерживает Sync для Notes, используем Search
+     */
+    private suspend fun syncNotesLegacy(folders: List<EasFolder>): EasResult<List<EasNote>> {
+        android.util.Log.d("EasClient", "syncNotesLegacy: Starting legacy notes sync")
+        
+        // Ищем папку Notes по имени
+        val notesFolderId = folders.find { 
+            it.displayName.equals("Notes", ignoreCase = true) ||
+            it.displayName.equals("Заметки", ignoreCase = true)
+        }?.serverId
+        
+        if (notesFolderId == null) {
+            android.util.Log.w("EasClient", "syncNotesLegacy: Notes folder NOT FOUND! Available folders:")
+            folders.forEach { f ->
+                android.util.Log.w("EasClient", "  - '${f.displayName}' (type=${f.type})")
+            }
+            // Нет папки Notes — возвращаем пустой список без ошибки
+            return EasResult.Success(emptyList())
+        }
+        
+        android.util.Log.d("EasClient", "syncNotesLegacy: Found Notes folder: id=$notesFolderId")
+        
+        // Используем Search вместо Sync для Exchange 2007
+        val searchXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Search xmlns="Search" xmlns:airsync="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Store>
+                    <Name>Mailbox</Name>
+                    <Query>
+                        <And>
+                            <airsync:CollectionId>$notesFolderId</airsync:CollectionId>
+                            <FreeText>*</FreeText>
+                        </And>
+                    </Query>
+                    <Options>
+                        <Range>0-99</Range>
+                        <airsyncbase:BodyPreference>
+                            <airsyncbase:Type>1</airsyncbase:Type>
+                            <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                        </airsyncbase:BodyPreference>
+                    </Options>
+                </Store>
+            </Search>
+        """.trimIndent()
+        
+        android.util.Log.d("EasClient", "syncNotesLegacy: Trying Search command...")
+        
+        val searchResult = executeEasCommand("Search", searchXml) { responseXml ->
+            android.util.Log.d("EasClient", "syncNotesLegacy: Search response (first 2000 chars):\n${responseXml.take(2000)}")
+            parseNotesSearchResponse(responseXml)
+        }
+        
+        when (searchResult) {
+            is EasResult.Success -> android.util.Log.d("EasClient", "syncNotesLegacy: Search returned ${searchResult.data.size} notes")
+            is EasResult.Error -> android.util.Log.e("EasClient", "syncNotesLegacy: Search failed: ${searchResult.message}")
+        }
+        
+        // Если Search не сработал — пробуем Sync как fallback
+        if (searchResult is EasResult.Error || (searchResult is EasResult.Success && searchResult.data.isEmpty())) {
+            android.util.Log.d("EasClient", "syncNotesLegacy: Search empty/failed, trying Sync fallback...")
+            val syncResult = syncNotesLegacySync(notesFolderId)
+            
+            // Если Sync тоже не сработал — пробуем EWS
+            if (syncResult is EasResult.Success && syncResult.data.isEmpty()) {
+                android.util.Log.d("EasClient", "syncNotesLegacy: Sync empty, trying EWS fallback...")
+                return syncNotesEws()
+            }
+            return syncResult
+        }
+        
+        return searchResult
+    }
+    
+    /**
+     * EWS fallback для Notes на Exchange 2007
+     * EWS поддерживает Notes даже когда EAS не поддерживает
+     */
+    private suspend fun syncNotesEws(): EasResult<List<EasNote>> {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Формируем URL для EWS - убираем путь ActiveSync
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                android.util.Log.d("EasClient", "syncNotesEws: Trying EWS at $ewsUrl")
+                
+                // SOAP запрос для получения заметок - Exchange 2007 формат
+                // Используем IdOnly + AdditionalProperties чтобы получить Body
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                      <soap:Header>
+                        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                      </soap:Header>
+                      <soap:Body>
+                        <m:FindItem Traversal="Shallow">
+                          <m:ItemShape>
+                            <t:BaseShape>AllProperties</t:BaseShape>
+                            <t:BodyType>Text</t:BodyType>
+                            <t:AdditionalProperties>
+                              <t:FieldURI FieldURI="item:Body"/>
+                            </t:AdditionalProperties>
+                          </m:ItemShape>
+                          <m:IndexedPageItemView MaxEntriesReturned="100" Offset="0" BasePoint="Beginning"/>
+                          <m:ParentFolderIds>
+                            <t:DistinguishedFolderId Id="notes"/>
+                          </m:ParentFolderIds>
+                        </m:FindItem>
+                      </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                // Пробуем разные форматы авторизации
+                val authHeaders = buildEwsAuthHeaders()
+                
+                for ((authName, authValue) in authHeaders) {
+                    android.util.Log.d("EasClient", "syncNotesEws: Trying auth: $authName")
+                    
+                    val request = Request.Builder()
+                        .url(ewsUrl)
+                        .post(soapRequest.toRequestBody("text/xml; charset=utf-8".toMediaType()))
+                        .header("Authorization", authValue)
+                        .header("Content-Type", "text/xml; charset=utf-8")
+                        .header("SOAPAction", "\"http://schemas.microsoft.com/exchange/services/2006/messages/FindItem\"")
+                        .header("User-Agent", "ExchangeServicesClient/15.00.0000.000")
+                        .build()
+                    
+                    try {
+                        val response = executeRequest(request)
+                        
+                        android.util.Log.d("EasClient", "syncNotesEws: $authName -> HTTP ${response.code}")
+                        
+                        if (response.isSuccessful) {
+                            val responseBody = response.body?.string() ?: ""
+                            android.util.Log.d("EasClient", "syncNotesEws: Response (first 2000 chars):\n${responseBody.take(2000)}")
+                            
+                            // Проверяем на ошибки SOAP
+                            if (responseBody.contains("Fault") || responseBody.contains("ErrorAccessDenied")) {
+                                android.util.Log.w("EasClient", "syncNotesEws: SOAP error in response")
+                                continue
+                            }
+                            
+                            // Парсим ответ EWS - получаем ItemId
+                            val itemIds = parseEwsItemIds(responseBody)
+                            android.util.Log.d("EasClient", "syncNotesEws: Found ${itemIds.size} item IDs")
+                            
+                            if (itemIds.isEmpty()) {
+                                return@withContext EasResult.Success(emptyList())
+                            }
+                            
+                            // Запрашиваем полные данные через GetItem
+                            val notes = getEwsNotesWithBody(ewsUrl, authValue, itemIds)
+                            android.util.Log.d("EasClient", "syncNotesEws: Got ${notes.size} notes with body")
+                            
+                            return@withContext EasResult.Success(notes)
+                        } else if (response.code == 401) {
+                            // Пробуем следующий формат авторизации
+                            response.close()
+                            continue
+                        } else {
+                            response.close()
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("EasClient", "syncNotesEws: $authName failed: ${e.message}")
+                    }
+                }
+                
+                android.util.Log.e("EasClient", "syncNotesEws: All Basic auth methods failed, trying NTLM...")
+                
+                // Пробуем NTLM
+                val ntlmResult = syncNotesEwsNtlm(ewsUrl)
+                if (ntlmResult is EasResult.Success && ntlmResult.data.isNotEmpty()) {
+                    return@withContext ntlmResult
+                }
+                
+                android.util.Log.e("EasClient", "syncNotesEws: All auth methods failed")
+                EasResult.Success(emptyList())
+            } catch (e: Exception) {
+                android.util.Log.e("EasClient", "syncNotesEws: Error: ${e.message}")
+                EasResult.Success(emptyList())
+            }
         }
     }
     
-    private fun parseNotesSyncResponse(xml: String): List<EasNote> {
+    /**
+     * Извлекает ItemId из FindItem ответа
+     */
+    private fun parseEwsItemIds(xml: String): List<Pair<String, String>> {
+        val items = mutableListOf<Pair<String, String>>() // Pair(ItemId, Subject)
+        
+        // Ищем все Message элементы с IPM.StickyNote
+        val messagePattern = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        messagePattern.findAll(xml).forEach { match ->
+            val messageXml = match.groupValues[1]
+            
+            // Проверяем ItemClass
+            val itemClass = extractEwsValue(messageXml, "ItemClass") ?: ""
+            if (!itemClass.contains("StickyNote", ignoreCase = true)) {
+                return@forEach
+            }
+            
+            val itemId = extractEwsAttribute(messageXml, "ItemId", "Id") ?: return@forEach
+            val subject = extractEwsValue(messageXml, "Subject") ?: ""
+            
+            items.add(itemId to subject)
+        }
+        
+        return items
+    }
+    
+    /**
+     * Получает заметки с телом через GetItem
+     */
+    private suspend fun getEwsNotesWithBody(ewsUrl: String, authHeader: String, itemIds: List<Pair<String, String>>): List<EasNote> {
         val notes = mutableListOf<EasNote>()
         
-        // Парсим Add элементы
-        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        addPattern.findAll(xml).forEach { match ->
-            val addXml = match.groupValues[1]
+        // Запрашиваем по 10 элементов за раз
+        for (chunk in itemIds.chunked(10)) {
+            val itemIdXml = chunk.joinToString("\n") { (id, _) ->
+                """<t:ItemId Id="$id"/>"""
+            }
             
-            // Извлекаем ServerId
-            val serverId = extractValue(addXml, "ServerId") ?: return@forEach
+            val getItemRequest = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                  <soap:Header>
+                    <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                  </soap:Header>
+                  <soap:Body>
+                    <m:GetItem>
+                      <m:ItemShape>
+                        <t:BaseShape>AllProperties</t:BaseShape>
+                        <t:BodyType>Text</t:BodyType>
+                      </m:ItemShape>
+                      <m:ItemIds>
+                        $itemIdXml
+                      </m:ItemIds>
+                    </m:GetItem>
+                  </soap:Body>
+                </soap:Envelope>
+            """.trimIndent()
             
-            // Извлекаем ApplicationData
-            val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val dataMatch = dataPattern.find(addXml)
-            if (dataMatch != null) {
-                val dataXml = dataMatch.groupValues[1]
+            val request = Request.Builder()
+                .url(ewsUrl)
+                .post(getItemRequest.toRequestBody("text/xml; charset=utf-8".toMediaType()))
+                .header("Authorization", authHeader)
+                .header("Content-Type", "text/xml; charset=utf-8")
+                .header("SOAPAction", "\"http://schemas.microsoft.com/exchange/services/2006/messages/GetItem\"")
+                .build()
+            
+            try {
+                val response = executeRequest(request)
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: ""
+                    notes.addAll(parseEwsNotesResponse(responseBody))
+                }
+                response.close()
+            } catch (e: Exception) {
+                android.util.Log.w("EasClient", "getEwsNotesWithBody: Error: ${e.message}")
+            }
+        }
+        
+        return notes
+    }
+    
+    /**
+     * EWS запрос с NTLM аутентификацией
+     */
+    private suspend fun syncNotesEwsNtlm(ewsUrl: String): EasResult<List<EasNote>> {
+        try {
+            android.util.Log.d("EasClient", "syncNotesEwsNtlm: Starting NTLM handshake")
+            
+            // FindItem запрос - получаем ID и Subject
+            val findItemRequest = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                  <soap:Header>
+                    <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                  </soap:Header>
+                  <soap:Body>
+                    <m:FindItem Traversal="Shallow">
+                      <m:ItemShape>
+                        <t:BaseShape>AllProperties</t:BaseShape>
+                      </m:ItemShape>
+                      <m:IndexedPageItemView MaxEntriesReturned="100" Offset="0" BasePoint="Beginning"/>
+                      <m:ParentFolderIds>
+                        <t:DistinguishedFolderId Id="notes"/>
+                      </m:ParentFolderIds>
+                    </m:FindItem>
+                  </soap:Body>
+                </soap:Envelope>
+            """.trimIndent()
+            
+            // Получаем NTLM auth header
+            val ntlmAuth = performNtlmHandshake(ewsUrl, findItemRequest, "FindItem")
+            if (ntlmAuth == null) {
+                return EasResult.Success(emptyList())
+            }
+            
+            // Выполняем FindItem с NTLM
+            val findResponse = executeNtlmRequest(ewsUrl, findItemRequest, ntlmAuth, "FindItem")
+            if (findResponse == null) {
+                return EasResult.Success(emptyList())
+            }
+            
+            android.util.Log.d("EasClient", "syncNotesEwsNtlm: FindItem response (first 2000 chars):\n${findResponse.take(2000)}")
+            
+            // Парсим ID и Subject из FindItem
+            val itemIds = parseEwsItemIds(findResponse)
+            android.util.Log.d("EasClient", "syncNotesEwsNtlm: Found ${itemIds.size} items")
+            
+            if (itemIds.isEmpty()) {
+                return EasResult.Success(emptyList())
+            }
+            
+            // Получаем Body для каждой заметки через GetItem (по одной)
+            val notes = mutableListOf<EasNote>()
+            for ((itemId, subject) in itemIds) {
+                val getItemRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                      <soap:Header>
+                        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                      </soap:Header>
+                      <soap:Body>
+                        <m:GetItem>
+                          <m:ItemShape>
+                            <t:BaseShape>Default</t:BaseShape>
+                            <t:IncludeMimeContent>false</t:IncludeMimeContent>
+                            <t:BodyType>Text</t:BodyType>
+                          </m:ItemShape>
+                          <m:ItemIds>
+                            <t:ItemId Id="${escapeXml(itemId)}"/>
+                          </m:ItemIds>
+                        </m:GetItem>
+                      </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
                 
-                val subject = extractNoteValue(dataXml, "Subject") ?: ""
-                val body = extractNoteBody(dataXml)
-                val categories = extractNoteCategories(dataXml)
-                val lastModified = parseNoteDate(extractNoteValue(dataXml, "LastModifiedDate"))
+                try {
+                    val getItemAuth = performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
+                    if (getItemAuth != null) {
+                        val getResponse = executeNtlmRequest(ewsUrl, getItemRequest, getItemAuth, "GetItem")
+                        if (getResponse != null) {
+                            android.util.Log.d("EasClient", "syncNotesEwsNtlm: GetItem response for '$subject': ${getResponse.take(500)}")
+                            
+                            // Извлекаем Body из ответа
+                            val body = extractEwsValue(getResponse, "Body") ?: ""
+                            val lastModified = parseEwsDate(extractEwsValue(getResponse, "DateTimeCreated"))
+                            
+                            notes.add(EasNote(
+                                serverId = itemId,
+                                subject = subject.ifEmpty { "Без темы" },
+                                body = body,
+                                categories = emptyList(),
+                                lastModified = lastModified
+                            ))
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("EasClient", "syncNotesEwsNtlm: GetItem failed for '$subject': ${e.message}")
+                    // Добавляем заметку без Body
+                    notes.add(EasNote(
+                        serverId = itemId,
+                        subject = subject.ifEmpty { "Без темы" },
+                        body = "",
+                        categories = emptyList(),
+                        lastModified = System.currentTimeMillis()
+                    ))
+                }
+            }
+            
+            android.util.Log.d("EasClient", "syncNotesEwsNtlm: Got ${notes.size} notes")
+            return EasResult.Success(notes)
+            
+        } catch (e: Exception) {
+            android.util.Log.e("EasClient", "syncNotesEwsNtlm: Error: ${e.message}", e)
+        }
+        
+        return EasResult.Success(emptyList())
+    }
+    
+    /**
+     * Выполняет NTLM handshake и возвращает auth header
+     */
+    private suspend fun performNtlmHandshake(ewsUrl: String, soapRequest: String, action: String): String? {
+        // Шаг 1: Type 1 (Negotiate)
+        val type1Message = createNtlmType1Message()
+        val type1Base64 = Base64.encodeToString(type1Message, Base64.NO_WRAP)
+        
+        val request1 = Request.Builder()
+            .url(ewsUrl)
+            .post(soapRequest.toRequestBody("text/xml; charset=utf-8".toMediaType()))
+            .header("Authorization", "NTLM $type1Base64")
+            .header("Content-Type", "text/xml; charset=utf-8")
+            .header("SOAPAction", "\"http://schemas.microsoft.com/exchange/services/2006/messages/$action\"")
+            .header("Connection", "keep-alive")
+            .build()
+        
+        val response1 = executeRequest(request1)
+        
+        if (response1.code != 401) {
+            response1.close()
+            return null
+        }
+        
+        // Получаем Type 2 (Challenge)
+        val wwwAuth = response1.header("WWW-Authenticate") ?: ""
+        response1.close()
+        
+        val type2Base64 = wwwAuth
+            .split(",")
+            .map { it.trim() }
+            .find { it.startsWith("NTLM ", ignoreCase = true) }
+            ?.substringAfter("NTLM ")
+            ?.trim()
+        
+        if (type2Base64.isNullOrEmpty()) {
+            return null
+        }
+        
+        val type2Message = Base64.decode(type2Base64, Base64.DEFAULT)
+        
+        // Шаг 2: Type 3 (Authenticate)
+        val type3Message = createNtlmType3Message(type2Message)
+        val type3Base64 = Base64.encodeToString(type3Message, Base64.NO_WRAP)
+        
+        return "NTLM $type3Base64"
+    }
+    
+    /**
+     * Выполняет запрос с NTLM auth header
+     */
+    private suspend fun executeNtlmRequest(ewsUrl: String, soapRequest: String, authHeader: String, action: String): String? {
+        val request = Request.Builder()
+            .url(ewsUrl)
+            .post(soapRequest.toRequestBody("text/xml; charset=utf-8".toMediaType()))
+            .header("Authorization", authHeader)
+            .header("Content-Type", "text/xml; charset=utf-8")
+            .header("SOAPAction", "\"http://schemas.microsoft.com/exchange/services/2006/messages/$action\"")
+            .build()
+        
+        val response = executeRequest(request)
+        
+        return if (response.isSuccessful) {
+            val body = response.body?.string()
+            response.close()
+            body
+        } else {
+            android.util.Log.e("EasClient", "executeNtlmRequest: HTTP ${response.code}")
+            response.close()
+            null
+        }
+    }
+    
+    /**
+     * Создаёт NTLM Type 1 (Negotiate) сообщение
+     */
+    private fun createNtlmType1Message(): ByteArray {
+        val domainBytes = domain.uppercase().toByteArray(Charsets.US_ASCII)
+        val workstationBytes = "ANDROID".toByteArray(Charsets.US_ASCII)
+        
+        // Флаги NTLM
+        val flags = 0x00000001 or  // Negotiate Unicode
+                    0x00000002 or  // Negotiate OEM
+                    0x00000004 or  // Request Target
+                    0x00000200 or  // Negotiate NTLM
+                    0x00008000 or  // Negotiate Always Sign
+                    0x00080000 or  // Negotiate NTLM2 Key
+                    0x02000000 or  // Negotiate 128
+                    0x20000000     // Negotiate 56
+        
+        val message = java.io.ByteArrayOutputStream()
+        
+        // Signature "NTLMSSP\0"
+        message.write("NTLMSSP".toByteArray(Charsets.US_ASCII))
+        message.write(0)
+        
+        // Type 1 indicator
+        writeInt32LE(message, 1)
+        
+        // Flags
+        writeInt32LE(message, flags)
+        
+        // Domain (security buffer): length, allocated, offset
+        val domainOffset = 32
+        writeInt16LE(message, domainBytes.size)
+        writeInt16LE(message, domainBytes.size)
+        writeInt32LE(message, domainOffset)
+        
+        // Workstation (security buffer)
+        val workstationOffset = domainOffset + domainBytes.size
+        writeInt16LE(message, workstationBytes.size)
+        writeInt16LE(message, workstationBytes.size)
+        writeInt32LE(message, workstationOffset)
+        
+        // Domain and workstation data
+        message.write(domainBytes)
+        message.write(workstationBytes)
+        
+        return message.toByteArray()
+    }
+    
+    /**
+     * Создаёт NTLM Type 3 (Authenticate) сообщение с NTLMv2
+     */
+    private fun createNtlmType3Message(type2Message: ByteArray): ByteArray {
+        // Извлекаем данные из Type 2
+        val serverChallenge = type2Message.copyOfRange(24, 32)
+        
+        // Извлекаем target info из Type 2 (если есть)
+        val targetInfo = extractTargetInfo(type2Message)
+        
+        // Подготавливаем данные
+        val domainUnicode = domain.uppercase().toByteArray(Charsets.UTF_16LE)
+        val userUnicode = username.toByteArray(Charsets.UTF_16LE)
+        val workstationUnicode = "ANDROID".toByteArray(Charsets.UTF_16LE)
+        
+        // NTLMv2 вычисления
+        val ntlmHash = createNtlmHash(password)
+        val ntlmv2Hash = createNtlmv2Hash(ntlmHash, username, domain)
+        
+        // Создаём client challenge (8 random bytes)
+        val clientChallenge = ByteArray(8)
+        java.security.SecureRandom().nextBytes(clientChallenge)
+        
+        // Создаём blob для NTLMv2
+        val blob = createNtlmv2Blob(clientChallenge, targetInfo)
+        
+        // Вычисляем NTLMv2 response
+        val ntlmv2Response = createNtlmv2Response(ntlmv2Hash, serverChallenge, blob)
+        
+        // LMv2 response (упрощённый - используем client challenge)
+        val lmv2Response = createLmv2Response(ntlmv2Hash, serverChallenge, clientChallenge)
+        
+        // Строим Type 3 сообщение
+        val message = java.io.ByteArrayOutputStream()
+        
+        // Signature
+        message.write("NTLMSSP".toByteArray(Charsets.US_ASCII))
+        message.write(0)
+        
+        // Type 3 indicator
+        writeInt32LE(message, 3)
+        
+        // Вычисляем смещения (header = 88 bytes для NTLMv2)
+        val headerSize = 88
+        var offset = headerSize
+        
+        // LM Response (security buffer)
+        writeInt16LE(message, lmv2Response.size)
+        writeInt16LE(message, lmv2Response.size)
+        writeInt32LE(message, offset)
+        offset += lmv2Response.size
+        
+        // NTLM Response (security buffer)
+        writeInt16LE(message, ntlmv2Response.size)
+        writeInt16LE(message, ntlmv2Response.size)
+        writeInt32LE(message, offset)
+        offset += ntlmv2Response.size
+        
+        // Domain (security buffer)
+        writeInt16LE(message, domainUnicode.size)
+        writeInt16LE(message, domainUnicode.size)
+        writeInt32LE(message, offset)
+        offset += domainUnicode.size
+        
+        // User (security buffer)
+        writeInt16LE(message, userUnicode.size)
+        writeInt16LE(message, userUnicode.size)
+        writeInt32LE(message, offset)
+        offset += userUnicode.size
+        
+        // Workstation (security buffer)
+        writeInt16LE(message, workstationUnicode.size)
+        writeInt16LE(message, workstationUnicode.size)
+        writeInt32LE(message, offset)
+        offset += workstationUnicode.size
+        
+        // Encrypted random session key (empty)
+        writeInt16LE(message, 0)
+        writeInt16LE(message, 0)
+        writeInt32LE(message, offset)
+        
+        // Flags (NTLMv2)
+        val flags = 0x00000001 or  // Unicode
+                    0x00000200 or  // NTLM
+                    0x00008000 or  // Always Sign
+                    0x00080000 or  // NTLM2 Key
+                    0x02000000 or  // 128-bit
+                    0x20000000     // 56-bit
+        writeInt32LE(message, flags)
+        
+        // Version (optional, 8 bytes)
+        message.write(byteArrayOf(6, 1, 0, 0, 0, 0, 0, 15)) // Windows Vista
+        
+        // MIC (16 bytes, zeros for now)
+        message.write(ByteArray(16))
+        
+        // Данные
+        message.write(lmv2Response)
+        message.write(ntlmv2Response)
+        message.write(domainUnicode)
+        message.write(userUnicode)
+        message.write(workstationUnicode)
+        
+        return message.toByteArray()
+    }
+    
+    /**
+     * Извлекает Target Info из Type 2 сообщения
+     */
+    private fun extractTargetInfo(type2Message: ByteArray): ByteArray {
+        if (type2Message.size < 48) return ByteArray(0)
+        
+        // Target Info находится по смещению из заголовка
+        val targetInfoLen = readInt16LE(type2Message, 40)
+        val targetInfoOffset = readInt32LE(type2Message, 44)
+        
+        if (targetInfoOffset + targetInfoLen > type2Message.size) return ByteArray(0)
+        
+        return type2Message.copyOfRange(targetInfoOffset, targetInfoOffset + targetInfoLen)
+    }
+    
+    /**
+     * Создаёт NTLMv2 hash
+     */
+    private fun createNtlmv2Hash(ntlmHash: ByteArray, user: String, domain: String): ByteArray {
+        val identity = (user.uppercase() + domain.uppercase()).toByteArray(Charsets.UTF_16LE)
+        return hmacMd5(ntlmHash, identity)
+    }
+    
+    /**
+     * Создаёт NTLMv2 blob
+     */
+    private fun createNtlmv2Blob(clientChallenge: ByteArray, targetInfo: ByteArray): ByteArray {
+        val blob = java.io.ByteArrayOutputStream()
+        
+        // Blob signature
+        blob.write(byteArrayOf(0x01, 0x01, 0x00, 0x00))
+        
+        // Reserved
+        blob.write(byteArrayOf(0x00, 0x00, 0x00, 0x00))
+        
+        // Timestamp (FILETIME - 100ns intervals since 1601)
+        val now = System.currentTimeMillis()
+        val filetime = (now + 11644473600000L) * 10000L
+        for (i in 0..7) {
+            blob.write((filetime shr (i * 8)).toInt() and 0xFF)
+        }
+        
+        // Client challenge
+        blob.write(clientChallenge)
+        
+        // Reserved
+        blob.write(byteArrayOf(0x00, 0x00, 0x00, 0x00))
+        
+        // Target info
+        blob.write(targetInfo)
+        
+        // Reserved
+        blob.write(byteArrayOf(0x00, 0x00, 0x00, 0x00))
+        
+        return blob.toByteArray()
+    }
+    
+    /**
+     * Создаёт NTLMv2 response
+     */
+    private fun createNtlmv2Response(ntlmv2Hash: ByteArray, serverChallenge: ByteArray, blob: ByteArray): ByteArray {
+        // Concatenate server challenge + blob
+        val data = serverChallenge + blob
+        
+        // HMAC-MD5
+        val ntProofStr = hmacMd5(ntlmv2Hash, data)
+        
+        // Response = NTProofStr + blob
+        return ntProofStr + blob
+    }
+    
+    /**
+     * Создаёт LMv2 response
+     */
+    private fun createLmv2Response(ntlmv2Hash: ByteArray, serverChallenge: ByteArray, clientChallenge: ByteArray): ByteArray {
+        val data = serverChallenge + clientChallenge
+        val hash = hmacMd5(ntlmv2Hash, data)
+        return hash + clientChallenge
+    }
+    
+    /**
+     * HMAC-MD5
+     */
+    private fun hmacMd5(key: ByteArray, data: ByteArray): ByteArray {
+        val mac = javax.crypto.Mac.getInstance("HmacMD5")
+        mac.init(javax.crypto.spec.SecretKeySpec(key, "HmacMD5"))
+        return mac.doFinal(data)
+    }
+    
+    private fun readInt16LE(data: ByteArray, offset: Int): Int {
+        return (data[offset].toInt() and 0xFF) or
+               ((data[offset + 1].toInt() and 0xFF) shl 8)
+    }
+    
+    private fun readInt32LE(data: ByteArray, offset: Int): Int {
+        return (data[offset].toInt() and 0xFF) or
+               ((data[offset + 1].toInt() and 0xFF) shl 8) or
+               ((data[offset + 2].toInt() and 0xFF) shl 16) or
+               ((data[offset + 3].toInt() and 0xFF) shl 24)
+    }
+    
+    /**
+     * Создаёт NTLM hash из пароля (MD4)
+     */
+    private fun createNtlmHash(password: String): ByteArray {
+        val passwordUnicode = password.toByteArray(Charsets.UTF_16LE)
+        
+        // Пробуем стандартный MD4
+        return try {
+            val md4 = java.security.MessageDigest.getInstance("MD4")
+            md4.digest(passwordUnicode)
+        } catch (e: Exception) {
+            // MD4 не доступен, используем свою реализацию
+            android.util.Log.d("EasClient", "MD4 not available, using custom implementation")
+            md4Hash(passwordUnicode)
+        }
+    }
+    
+    /**
+     * Простая реализация MD4 для NTLM
+     */
+    private fun md4Hash(input: ByteArray): ByteArray {
+        // Padding
+        val originalLength = input.size
+        val paddedLength = ((originalLength + 8) / 64 + 1) * 64
+        val padded = ByteArray(paddedLength)
+        System.arraycopy(input, 0, padded, 0, originalLength)
+        padded[originalLength] = 0x80.toByte()
+        
+        // Length in bits (little-endian)
+        val bitLength = originalLength.toLong() * 8
+        for (i in 0..7) {
+            padded[paddedLength - 8 + i] = (bitLength shr (i * 8)).toByte()
+        }
+        
+        // Initial hash values
+        var a = 0x67452301
+        var b = 0xefcdab89.toInt()
+        var c = 0x98badcfe.toInt()
+        var d = 0x10325476
+        
+        // Process each 64-byte block
+        for (blockStart in 0 until paddedLength step 64) {
+            val x = IntArray(16)
+            for (i in 0..15) {
+                x[i] = (padded[blockStart + i * 4].toInt() and 0xFF) or
+                       ((padded[blockStart + i * 4 + 1].toInt() and 0xFF) shl 8) or
+                       ((padded[blockStart + i * 4 + 2].toInt() and 0xFF) shl 16) or
+                       ((padded[blockStart + i * 4 + 3].toInt() and 0xFF) shl 24)
+            }
+            
+            val aa = a; val bb = b; val cc = c; val dd = d
+            
+            // Round 1
+            a = md4Round1(a, b, c, d, x[0], 3)
+            d = md4Round1(d, a, b, c, x[1], 7)
+            c = md4Round1(c, d, a, b, x[2], 11)
+            b = md4Round1(b, c, d, a, x[3], 19)
+            a = md4Round1(a, b, c, d, x[4], 3)
+            d = md4Round1(d, a, b, c, x[5], 7)
+            c = md4Round1(c, d, a, b, x[6], 11)
+            b = md4Round1(b, c, d, a, x[7], 19)
+            a = md4Round1(a, b, c, d, x[8], 3)
+            d = md4Round1(d, a, b, c, x[9], 7)
+            c = md4Round1(c, d, a, b, x[10], 11)
+            b = md4Round1(b, c, d, a, x[11], 19)
+            a = md4Round1(a, b, c, d, x[12], 3)
+            d = md4Round1(d, a, b, c, x[13], 7)
+            c = md4Round1(c, d, a, b, x[14], 11)
+            b = md4Round1(b, c, d, a, x[15], 19)
+            
+            // Round 2
+            a = md4Round2(a, b, c, d, x[0], 3)
+            d = md4Round2(d, a, b, c, x[4], 5)
+            c = md4Round2(c, d, a, b, x[8], 9)
+            b = md4Round2(b, c, d, a, x[12], 13)
+            a = md4Round2(a, b, c, d, x[1], 3)
+            d = md4Round2(d, a, b, c, x[5], 5)
+            c = md4Round2(c, d, a, b, x[9], 9)
+            b = md4Round2(b, c, d, a, x[13], 13)
+            a = md4Round2(a, b, c, d, x[2], 3)
+            d = md4Round2(d, a, b, c, x[6], 5)
+            c = md4Round2(c, d, a, b, x[10], 9)
+            b = md4Round2(b, c, d, a, x[14], 13)
+            a = md4Round2(a, b, c, d, x[3], 3)
+            d = md4Round2(d, a, b, c, x[7], 5)
+            c = md4Round2(c, d, a, b, x[11], 9)
+            b = md4Round2(b, c, d, a, x[15], 13)
+            
+            // Round 3
+            a = md4Round3(a, b, c, d, x[0], 3)
+            d = md4Round3(d, a, b, c, x[8], 9)
+            c = md4Round3(c, d, a, b, x[4], 11)
+            b = md4Round3(b, c, d, a, x[12], 15)
+            a = md4Round3(a, b, c, d, x[2], 3)
+            d = md4Round3(d, a, b, c, x[10], 9)
+            c = md4Round3(c, d, a, b, x[6], 11)
+            b = md4Round3(b, c, d, a, x[14], 15)
+            a = md4Round3(a, b, c, d, x[1], 3)
+            d = md4Round3(d, a, b, c, x[9], 9)
+            c = md4Round3(c, d, a, b, x[5], 11)
+            b = md4Round3(b, c, d, a, x[13], 15)
+            a = md4Round3(a, b, c, d, x[3], 3)
+            d = md4Round3(d, a, b, c, x[11], 9)
+            c = md4Round3(c, d, a, b, x[7], 11)
+            b = md4Round3(b, c, d, a, x[15], 15)
+            
+            a += aa; b += bb; c += cc; d += dd
+        }
+        
+        // Output
+        val result = ByteArray(16)
+        for (i in 0..3) {
+            result[i] = (a shr (i * 8)).toByte()
+            result[i + 4] = (b shr (i * 8)).toByte()
+            result[i + 8] = (c shr (i * 8)).toByte()
+            result[i + 12] = (d shr (i * 8)).toByte()
+        }
+        return result
+    }
+    
+    private fun md4Round1(a: Int, b: Int, c: Int, d: Int, x: Int, s: Int): Int {
+        val f = (b and c) or (b.inv() and d)
+        return Integer.rotateLeft(a + f + x, s)
+    }
+    
+    private fun md4Round2(a: Int, b: Int, c: Int, d: Int, x: Int, s: Int): Int {
+        val f = (b and c) or (b and d) or (c and d)
+        return Integer.rotateLeft(a + f + x + 0x5a827999, s)
+    }
+    
+    private fun md4Round3(a: Int, b: Int, c: Int, d: Int, x: Int, s: Int): Int {
+        val f = b xor c xor d
+        return Integer.rotateLeft(a + f + x + 0x6ed9eba1, s)
+    }
+    
+    private fun writeInt16LE(stream: java.io.ByteArrayOutputStream, value: Int) {
+        stream.write(value and 0xFF)
+        stream.write((value shr 8) and 0xFF)
+    }
+    
+    private fun writeInt32LE(stream: java.io.ByteArrayOutputStream, value: Int) {
+        stream.write(value and 0xFF)
+        stream.write((value shr 8) and 0xFF)
+        stream.write((value shr 16) and 0xFF)
+        stream.write((value shr 24) and 0xFF)
+    }
+    
+    /**
+     * Формирует список вариантов авторизации для EWS
+     * Exchange 2007 может требовать разные форматы
+     */
+    private fun buildEwsAuthHeaders(): List<Pair<String, String>> {
+        val headers = mutableListOf<Pair<String, String>>()
+        
+        // 1. Стандартный Basic Auth (как для EAS)
+        headers.add("Basic (domain\\user)" to getAuthHeader())
+        
+        // 2. Basic Auth с email как username (без домена)
+        val emailAuth = Base64.encodeToString("$username:$password".toByteArray(), Base64.NO_WRAP)
+        headers.add("Basic (email)" to "Basic $emailAuth")
+        
+        // 3. Basic Auth с UPN форматом (user@domain)
+        if (domain.isNotEmpty() && !username.contains("@")) {
+            val upnAuth = Base64.encodeToString("$username@$domain:$password".toByteArray(), Base64.NO_WRAP)
+            headers.add("Basic (UPN)" to "Basic $upnAuth")
+        }
+        
+        // 4. Basic Auth только с именем пользователя (без домена в credentials)
+        if (domain.isNotEmpty()) {
+            val userOnly = username.substringAfterLast("\\")
+            val userOnlyAuth = Base64.encodeToString("$userOnly:$password".toByteArray(), Base64.NO_WRAP)
+            headers.add("Basic (user only)" to "Basic $userOnlyAuth")
+        }
+        
+        return headers
+    }
+    
+    /**
+     * Парсит ответ EWS FindItem для Notes
+     */
+    private fun parseEwsNotesResponse(xml: String): List<EasNote> {
+        val notes = mutableListOf<EasNote>()
+        
+        // Ищем все PostItem или Message элементы (Notes в EWS)
+        val itemPatterns = listOf(
+            "<t:PostItem>(.*?)</t:PostItem>",
+            "<t:Message>(.*?)</t:Message>",
+            "<t:Item>(.*?)</t:Item>"
+        )
+        
+        for (pattern in itemPatterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            regex.findAll(xml).forEach { match ->
+                val itemXml = match.groupValues[1]
+                
+                // Проверяем ItemClass — должен быть IPM.StickyNote
+                val itemClass = extractEwsValue(itemXml, "ItemClass") ?: ""
+                if (itemClass.isNotEmpty() && !itemClass.contains("StickyNote", ignoreCase = true)) {
+                    return@forEach
+                }
+                
+                val itemId = extractEwsAttribute(itemXml, "ItemId", "Id") ?: return@forEach
+                val subject = extractEwsValue(itemXml, "Subject") ?: ""
+                val body = extractEwsValue(itemXml, "Body") ?: ""
+                val lastModified = parseEwsDate(extractEwsValue(itemXml, "LastModifiedTime"))
                 
                 notes.add(EasNote(
-                    serverId = serverId,
-                    subject = subject,
+                    serverId = itemId,
+                    subject = subject.ifEmpty { "Без темы" },
                     body = body,
-                    categories = categories,
+                    categories = emptyList(),
                     lastModified = lastModified
                 ))
             }
+        }
+        
+        return notes
+    }
+    
+    private fun extractEwsValue(xml: String, tag: String): String? {
+        val patterns = listOf(
+            "<t:$tag[^>]*>(.*?)</t:$tag>",
+            "<$tag[^>]*>(.*?)</$tag>"
+        )
+        for (pattern in patterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+        }
+        return null
+    }
+    
+    private fun extractEwsAttribute(xml: String, tag: String, attr: String): String? {
+        val pattern = "<t:$tag[^>]*$attr=\"([^\"]+)\"".toRegex()
+        val match = pattern.find(xml)
+        return match?.groupValues?.get(1)
+    }
+    
+    private fun parseEwsDate(dateStr: String?): Long {
+        if (dateStr.isNullOrBlank()) return System.currentTimeMillis()
+        return try {
+            val cleanDate = dateStr.substringBefore("Z").substringBefore("+")
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                .parse(cleanDate)?.time ?: System.currentTimeMillis()
+        } catch (e: Exception) {
+            System.currentTimeMillis()
+        }
+    }
+    
+    /**
+     * Fallback на Sync для legacy Notes (если Search не работает)
+     * Для Exchange 2007 пробуем синхронизировать как email с фильтром IPM.StickyNote
+     */
+    private suspend fun syncNotesLegacySync(notesFolderId: String): EasResult<List<EasNote>> {
+        android.util.Log.d("EasClient", "syncNotesLegacySync: === CALLED === folder=$notesFolderId")
+        
+        // Шаг 1: Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        when (val result = executeEasCommand("Sync", initialXml) { responseXml ->
+            android.util.Log.d("EasClient", "syncNotesLegacySync: Initial response: ${responseXml.take(500)}")
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }) {
+            is EasResult.Success -> {
+                syncKey = result.data
+                android.util.Log.d("EasClient", "syncNotesLegacySync: Got initial SyncKey: $syncKey")
+            }
+            is EasResult.Error -> {
+                android.util.Log.e("EasClient", "syncNotesLegacySync: Initial sync failed: ${result.message}")
+                return EasResult.Success(emptyList())
+            }
+        }
+        
+        if (syncKey == "0") {
+            android.util.Log.w("EasClient", "syncNotesLegacySync: SyncKey is 0, returning empty")
+            return EasResult.Success(emptyList())
+        }
+        
+        // Шаг 2: Запрашиваем элементы — пробуем разные варианты XML
+        // Вариант 1: Минимальный Sync без Options
+        val syncXml1 = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                        <GetChanges/>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        android.util.Log.d("EasClient", "syncNotesLegacySync: Trying minimal Sync...")
+        
+        val result1 = executeEasCommandRaw("Sync", syncXml1)
+        when (result1) {
+            is EasResult.Success -> {
+                val responseXml = result1.data
+                android.util.Log.d("EasClient", "syncNotesLegacySync: Raw response (first 3000 chars):\n${responseXml.take(3000)}")
+                
+                // Проверяем есть ли Add элементы
+                if (responseXml.contains("<Add>")) {
+                    val notes = parseNotesResponse(responseXml, legacy = true)
+                    android.util.Log.d("EasClient", "syncNotesLegacySync: Parsed ${notes.size} notes")
+                    return EasResult.Success(notes)
+                }
+                
+                // Проверяем Status
+                val status = extractValue(responseXml, "Status")
+                android.util.Log.d("EasClient", "syncNotesLegacySync: Status = $status")
+                
+                if (status == "1" && !responseXml.contains("<Add>")) {
+                    // Успех но нет данных — папка пустая или не поддерживается
+                    android.util.Log.w("EasClient", "syncNotesLegacySync: Status=1 but no Add elements. Exchange 2007 may not support Notes sync via EAS.")
+                }
+            }
+            is EasResult.Error -> {
+                android.util.Log.e("EasClient", "syncNotesLegacySync: Sync failed: ${result1.message}")
+            }
+        }
+        
+        return EasResult.Success(emptyList())
+    }
+    
+    /**
+     * Выполняет EAS команду и возвращает сырой XML ответ
+     */
+    private suspend fun executeEasCommandRaw(command: String, xmlBody: String): EasResult<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = buildUrl(command)
+                val wbxmlBody = wbxmlParser.generate(xmlBody)
+                
+                val requestBuilder = Request.Builder()
+                    .url(url)
+                    .post(wbxmlBody.toRequestBody("application/vnd.ms-sync.wbxml".toMediaType()))
+                    .header("Authorization", getAuthHeader())
+                    .header("MS-ASProtocolVersion", easVersion)
+                    .header("Content-Type", "application/vnd.ms-sync.wbxml")
+                    .header("User-Agent", "Android/12-EAS-2.0")
+                
+                if (policyKey != null) {
+                    requestBuilder.header("X-MS-PolicyKey", policyKey!!)
+                }
+                
+                val request = requestBuilder.build()
+                val response = executeRequest(request)
+                
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.bytes()
+                    if (responseBody != null && responseBody.isNotEmpty()) {
+                        val responseXml = wbxmlParser.parse(responseBody)
+                        EasResult.Success(responseXml)
+                    } else {
+                        // Пустой ответ — возвращаем пустой XML
+                        EasResult.Success("")
+                    }
+                } else {
+                    EasResult.Error("HTTP ${response.code}")
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
+    
+    /**
+     * Парсинг ответа Search для заметок
+     */
+    private fun parseNotesSearchResponse(xml: String): List<EasNote> {
+        val notes = mutableListOf<EasNote>()
+        
+        val resultPattern = "<Result>(.*?)</Result>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        resultPattern.findAll(xml).forEach { match ->
+            val resultXml = match.groupValues[1]
+            
+            val serverId = extractValue(resultXml, "LongId") 
+                ?: extractValue(resultXml, "ServerId") 
+                ?: return@forEach
+            
+            val propertiesPattern = "<Properties>(.*?)</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val propertiesMatch = propertiesPattern.find(resultXml) ?: return@forEach
+            val propsXml = propertiesMatch.groupValues[1]
+            
+            // Проверяем MessageClass
+            val messageClass = extractValue(propsXml, "MessageClass") ?: ""
+            if (messageClass.isNotEmpty() && !messageClass.contains("StickyNote", ignoreCase = true)) {
+                return@forEach
+            }
+            
+            val subject = extractValue(propsXml, "Subject") ?: ""
+            val body = extractNoteBody(propsXml)
+            val lastModified = parseNoteDate(extractValue(propsXml, "DateReceived"))
+            
+            notes.add(EasNote(
+                serverId = serverId,
+                subject = subject.ifEmpty { "Без темы" },
+                body = body,
+                categories = emptyList(),
+                lastModified = lastModified
+            ))
+        }
+        
+        return notes
+    }
+    
+    /**
+     * Парсинг ответа Notes sync
+     * @param legacy true для Exchange 2007 (фильтруем по IPM.StickyNote)
+     */
+    private fun parseNotesResponse(xml: String, legacy: Boolean): List<EasNote> {
+        val notes = mutableListOf<EasNote>()
+        
+        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        addPattern.findAll(xml).forEach { match ->
+            val addXml = match.groupValues[1]
+            val serverId = extractValue(addXml, "ServerId") ?: return@forEach
+            
+            val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val dataMatch = dataPattern.find(addXml) ?: return@forEach
+            val dataXml = dataMatch.groupValues[1]
+            
+            // Для legacy режима фильтруем по MessageClass
+            if (legacy) {
+                val messageClass = extractValue(dataXml, "MessageClass") ?: ""
+                if (!messageClass.contains("StickyNote", ignoreCase = true)) {
+                    return@forEach
+                }
+            }
+            
+            val subject = extractNoteValue(dataXml, "Subject") 
+                ?: extractValue(dataXml, "Subject") 
+                ?: ""
+            val body = extractNoteBody(dataXml)
+            val categories = extractNoteCategories(dataXml)
+            val lastModified = parseNoteDate(
+                extractNoteValue(dataXml, "LastModifiedDate")
+                    ?: extractValue(dataXml, "DateReceived")
+            )
+            
+            notes.add(EasNote(
+                serverId = serverId,
+                subject = subject.ifEmpty { "Без темы" },
+                body = body,
+                categories = categories,
+                lastModified = lastModified
+            ))
         }
         
         return notes
@@ -2675,6 +3901,307 @@ $foldersXml
                 .parse(cleanDate)?.time ?: System.currentTimeMillis()
         } catch (e: Exception) {
             System.currentTimeMillis()
+        }
+    }
+    
+    /**
+     * Создание события календаря на сервере Exchange через EAS
+     * Работает на всех версиях EAS (12.x и 14.x)
+     */
+    suspend fun createCalendarEvent(
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String = "",
+        body: String = "",
+        allDayEvent: Boolean = false,
+        reminder: Int = 15,
+        busyStatus: Int = 2, // 0=Free, 1=Tentative, 2=Busy, 3=OOF
+        sensitivity: Int = 0 // 0=Normal, 1=Personal, 2=Private, 3=Confidential
+    ): EasResult<String> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Получаем папку календаря
+        val foldersResult = folderSync("0")
+        val calendarFolderId = when (foldersResult) {
+            is EasResult.Success -> {
+                foldersResult.data.folders.find { it.type == 8 }?.serverId
+            }
+            is EasResult.Error -> return EasResult.Error(foldersResult.message)
+        }
+        
+        if (calendarFolderId == null) {
+            return EasResult.Error("Папка календаря не найдена")
+        }
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        // Генерируем уникальный ClientId
+        val clientId = java.util.UUID.randomUUID().toString().replace("-", "").take(32)
+        
+        // Форматируем даты в формат EAS (yyyyMMdd'T'HHmmss'Z')
+        val dateFormat = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", java.util.Locale.US)
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        val startTimeStr = dateFormat.format(java.util.Date(startTime))
+        val endTimeStr = dateFormat.format(java.util.Date(endTime))
+        
+        // Экранируем XML
+        val escapedSubject = escapeXml(subject)
+        val escapedLocation = escapeXml(location)
+        val escapedBody = escapeXml(body)
+        
+        // Формируем XML для создания события
+        val createXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:calendar="Calendar">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                        <Commands>
+                            <Add>
+                                <ClientId>$clientId</ClientId>
+                                <ApplicationData>
+                                    <calendar:Subject>$escapedSubject</calendar:Subject>
+                                    <calendar:StartTime>$startTimeStr</calendar:StartTime>
+                                    <calendar:EndTime>$endTimeStr</calendar:EndTime>
+                                    <calendar:Location>$escapedLocation</calendar:Location>
+                                    <airsyncbase:Body>
+                                        <airsyncbase:Type>1</airsyncbase:Type>
+                                        <airsyncbase:Data>$escapedBody</airsyncbase:Data>
+                                    </airsyncbase:Body>
+                                    <calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>
+                                    <calendar:Reminder>$reminder</calendar:Reminder>
+                                    <calendar:BusyStatus>$busyStatus</calendar:BusyStatus>
+                                    <calendar:Sensitivity>$sensitivity</calendar:Sensitivity>
+                                    <calendar:MeetingStatus>0</calendar:MeetingStatus>
+                                </ApplicationData>
+                            </Add>
+                        </Commands>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", createXml) { responseXml ->
+            android.util.Log.d("EasClient", "createCalendarEvent response: ${responseXml.take(1000)}")
+            
+            // Проверяем статус
+            val status = extractValue(responseXml, "Status")
+            if (status == "1") {
+                // Ищем ServerId созданного события
+                val serverId = extractValue(responseXml, "ServerId") ?: clientId
+                serverId
+            } else {
+                throw Exception("Ошибка создания события: Status=$status")
+            }
+        }
+    }
+    
+    /**
+     * Удаление события календаря на сервере Exchange
+     */
+    suspend fun deleteCalendarEvent(serverId: String): EasResult<Boolean> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Получаем папку календаря
+        val foldersResult = folderSync("0")
+        val calendarFolderId = when (foldersResult) {
+            is EasResult.Success -> {
+                foldersResult.data.folders.find { it.type == 8 }?.serverId
+            }
+            is EasResult.Error -> return EasResult.Error(foldersResult.message)
+        }
+        
+        if (calendarFolderId == null) {
+            return EasResult.Error("Папка календаря не найдена")
+        }
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        // Формируем XML для удаления
+        val deleteXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                        <Commands>
+                            <Delete>
+                                <ServerId>$serverId</ServerId>
+                            </Delete>
+                        </Commands>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", deleteXml) { responseXml ->
+            val status = extractValue(responseXml, "Status")
+            status == "1"
+        }
+    }
+    
+    /**
+     * Обновление события календаря на сервере Exchange
+     */
+    suspend fun updateCalendarEvent(
+        serverId: String,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String = "",
+        body: String = "",
+        allDayEvent: Boolean = false,
+        reminder: Int = 15,
+        busyStatus: Int = 2,
+        sensitivity: Int = 0
+    ): EasResult<Boolean> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Получаем папку календаря
+        val foldersResult = folderSync("0")
+        val calendarFolderId = when (foldersResult) {
+            is EasResult.Success -> {
+                foldersResult.data.folders.find { it.type == 8 }?.serverId
+            }
+            is EasResult.Error -> return EasResult.Error(foldersResult.message)
+        }
+        
+        if (calendarFolderId == null) {
+            return EasResult.Error("Папка календаря не найдена")
+        }
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        // Форматируем даты
+        val dateFormat = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", java.util.Locale.US)
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        val startTimeStr = dateFormat.format(java.util.Date(startTime))
+        val endTimeStr = dateFormat.format(java.util.Date(endTime))
+        
+        // Экранируем XML
+        val escapedSubject = escapeXml(subject)
+        val escapedLocation = escapeXml(location)
+        val escapedBody = escapeXml(body)
+        
+        // Формируем XML для обновления
+        val updateXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:calendar="Calendar">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                        <Commands>
+                            <Change>
+                                <ServerId>$serverId</ServerId>
+                                <ApplicationData>
+                                    <calendar:Subject>$escapedSubject</calendar:Subject>
+                                    <calendar:StartTime>$startTimeStr</calendar:StartTime>
+                                    <calendar:EndTime>$endTimeStr</calendar:EndTime>
+                                    <calendar:Location>$escapedLocation</calendar:Location>
+                                    <airsyncbase:Body>
+                                        <airsyncbase:Type>1</airsyncbase:Type>
+                                        <airsyncbase:Data>$escapedBody</airsyncbase:Data>
+                                    </airsyncbase:Body>
+                                    <calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>
+                                    <calendar:Reminder>$reminder</calendar:Reminder>
+                                    <calendar:BusyStatus>$busyStatus</calendar:BusyStatus>
+                                    <calendar:Sensitivity>$sensitivity</calendar:Sensitivity>
+                                </ApplicationData>
+                            </Change>
+                        </Commands>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", updateXml) { responseXml ->
+            val status = extractValue(responseXml, "Status")
+            status == "1"
         }
     }
     
@@ -3089,7 +4616,8 @@ data class SyncResponse(
     val syncKey: String,
     val status: Int,
     val emails: List<EasEmail>,
-    val moreAvailable: Boolean = false
+    val moreAvailable: Boolean = false,
+    val deletedIds: List<String> = emptyList() // ServerId удалённых/перемещённых писем
 )
 
 data class EasEmail(

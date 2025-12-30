@@ -100,6 +100,177 @@ class CalendarRepository(context: Context) {
         if (query.isBlank()) return getEventsList(accountId)
         return calendarEventDao.searchEvents(accountId, query)
     }
+    
+    // === Создание/Редактирование/Удаление ===
+    
+    /**
+     * Создание события календаря на сервере и в локальной БД
+     */
+    suspend fun createEvent(
+        accountId: Long,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String = "",
+        body: String = "",
+        allDayEvent: Boolean = false,
+        reminder: Int = 15,
+        busyStatus: Int = 2,
+        sensitivity: Int = 0
+    ): EasResult<CalendarEventEntity> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val account = accountRepo.getAccount(accountId)
+                    ?: return@withContext EasResult.Error("Аккаунт не найден")
+                
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    return@withContext EasResult.Error("Календарь поддерживается только для Exchange")
+                }
+                
+                val easClient = accountRepo.createEasClient(accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val result = easClient.createCalendarEvent(
+                    subject = subject,
+                    startTime = startTime,
+                    endTime = endTime,
+                    location = location,
+                    body = body,
+                    allDayEvent = allDayEvent,
+                    reminder = reminder,
+                    busyStatus = busyStatus,
+                    sensitivity = sensitivity
+                )
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        val serverId = result.data
+                        val event = CalendarEventEntity(
+                            id = "${accountId}_${serverId}",
+                            accountId = accountId,
+                            serverId = serverId,
+                            subject = subject,
+                            location = location,
+                            body = body,
+                            startTime = startTime,
+                            endTime = endTime,
+                            allDayEvent = allDayEvent,
+                            reminder = reminder,
+                            busyStatus = busyStatus,
+                            sensitivity = sensitivity,
+                            organizer = "",
+                            attendees = "",
+                            isRecurring = false,
+                            recurrenceRule = "",
+                            categories = "",
+                            lastModified = System.currentTimeMillis()
+                        )
+                        calendarEventDao.insert(event)
+                        EasResult.Success(event)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка создания события")
+            }
+        }
+    }
+    
+    /**
+     * Обновление события календаря
+     */
+    suspend fun updateEvent(
+        event: CalendarEventEntity,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String = "",
+        body: String = "",
+        allDayEvent: Boolean = false,
+        reminder: Int = 15,
+        busyStatus: Int = 2,
+        sensitivity: Int = 0
+    ): EasResult<CalendarEventEntity> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val account = accountRepo.getAccount(event.accountId)
+                    ?: return@withContext EasResult.Error("Аккаунт не найден")
+                
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    return@withContext EasResult.Error("Календарь поддерживается только для Exchange")
+                }
+                
+                val easClient = accountRepo.createEasClient(event.accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val result = easClient.updateCalendarEvent(
+                    serverId = event.serverId,
+                    subject = subject,
+                    startTime = startTime,
+                    endTime = endTime,
+                    location = location,
+                    body = body,
+                    allDayEvent = allDayEvent,
+                    reminder = reminder,
+                    busyStatus = busyStatus,
+                    sensitivity = sensitivity
+                )
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        val updatedEvent = event.copy(
+                            subject = subject,
+                            startTime = startTime,
+                            endTime = endTime,
+                            location = location,
+                            body = body,
+                            allDayEvent = allDayEvent,
+                            reminder = reminder,
+                            busyStatus = busyStatus,
+                            sensitivity = sensitivity,
+                            lastModified = System.currentTimeMillis()
+                        )
+                        calendarEventDao.update(updatedEvent)
+                        EasResult.Success(updatedEvent)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка обновления события")
+            }
+        }
+    }
+    
+    /**
+     * Удаление события календаря
+     */
+    suspend fun deleteEvent(event: CalendarEventEntity): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val account = accountRepo.getAccount(event.accountId)
+                    ?: return@withContext EasResult.Error("Аккаунт не найден")
+                
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    return@withContext EasResult.Error("Календарь поддерживается только для Exchange")
+                }
+                
+                val easClient = accountRepo.createEasClient(event.accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val result = easClient.deleteCalendarEvent(event.serverId)
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        calendarEventDao.delete(event.id)
+                        EasResult.Success(true)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка удаления события")
+            }
+        }
+    }
 
     
     // === Синхронизация ===

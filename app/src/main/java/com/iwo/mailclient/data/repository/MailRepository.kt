@@ -542,12 +542,21 @@ class MailRepository(context: Context) {
                         if (allAttachments.isNotEmpty()) {
                             attachmentDao.insertAll(allAttachments)
                         }
-                        
-                        // Обновляем счётчики из БД (реальные значения)
-                        val totalCount = emailDao.getCountByFolder(folderId)
-                        val unreadCount = emailDao.getUnreadCount(folderId)
-                        folderDao.updateCounts(folderId, unreadCount, totalCount)
                     }
+                    
+                    // Удаляем письма которые были удалены/перемещены на сервере
+                    if (result.data.deletedIds.isNotEmpty()) {
+                        result.data.deletedIds.forEach { serverId ->
+                            val emailId = "${accountId}_$serverId"
+                            attachmentDao.deleteByEmail(emailId)
+                            emailDao.delete(emailId)
+                        }
+                    }
+                    
+                    // Обновляем счётчики из БД (реальные значения)
+                    val totalCount = emailDao.getCountByFolder(folderId)
+                    val unreadCount = emailDao.getUnreadCount(folderId)
+                    folderDao.updateCounts(folderId, unreadCount, totalCount)
                 }
                 is EasResult.Error -> {
                     return if (newEmailsCount > 0) {
@@ -992,6 +1001,10 @@ class MailRepository(context: Context) {
                     deletedCount++
                 }
                 is EasResult.Error -> {
+                    // Ошибка удаления на сервере — удаляем локально чтобы не застрять
+                    attachmentDao.deleteByEmail(emailId)
+                    emailDao.delete(emailId)
+                    deletedCount++
                 }
             }
         }
@@ -1109,7 +1122,12 @@ class MailRepository(context: Context) {
                     emailDao.delete(emailId)
                     deletedCount++
                 }
-                is EasResult.Error -> { }
+                is EasResult.Error -> {
+                    // Ошибка удаления на сервере — удаляем локально чтобы не застрять
+                    attachmentDao.deleteByEmail(emailId)
+                    emailDao.delete(emailId)
+                    deletedCount++
+                }
             }
             onProgress(deletedCount, total)
         }

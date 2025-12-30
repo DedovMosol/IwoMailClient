@@ -487,6 +487,7 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                 "UNREAD" -> com.iwo.mailclient.ui.screens.MailFilter.UNREAD
                 "STARRED" -> com.iwo.mailclient.ui.screens.MailFilter.STARRED
                 "WITH_ATTACHMENTS" -> com.iwo.mailclient.ui.screens.MailFilter.WITH_ATTACHMENTS
+                "IMPORTANT" -> com.iwo.mailclient.ui.screens.MailFilter.IMPORTANT
                 else -> com.iwo.mailclient.ui.screens.MailFilter.ALL
             }
             EmailListScreen(

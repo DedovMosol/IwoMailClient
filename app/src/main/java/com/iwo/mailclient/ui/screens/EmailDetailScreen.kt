@@ -57,7 +57,27 @@ fun EmailDetailScreen(
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     
     val email by mailRepo.getEmail(emailId).collectAsState(initial = null)
-    val attachments by mailRepo.getAttachments(emailId).collectAsState(initial = emptyList())
+    
+    // Вложения - используем remember для сохранения при повороте
+    var attachmentsState by remember { mutableStateOf<List<AttachmentEntity>>(emptyList()) }
+    val attachmentsFlow by mailRepo.getAttachments(emailId).collectAsState(initial = emptyList())
+    
+    // Обновляем состояние когда Flow возвращает данные
+    // Всегда синхронизируем с Flow, но сохраняем предыдущее значение при пустом ответе во время загрузки
+    LaunchedEffect(attachmentsFlow, email?.id) {
+        // Если Flow вернул данные - используем их
+        if (attachmentsFlow.isNotEmpty()) {
+            attachmentsState = attachmentsFlow
+        } else if (email != null && !email!!.hasAttachments) {
+            // Если письмо загружено и у него нет вложений - очищаем
+            attachmentsState = emptyList()
+        }
+        // Иначе сохраняем предыдущее состояние (защита от race condition при повороте)
+    }
+    
+    // Используем attachmentsState вместо attachmentsFlow
+    val attachments = attachmentsState
+    
     var downloadingId by rememberSaveable { mutableStateOf<Long?>(null) }
     var isLoadingBody by remember { mutableStateOf(false) } // НЕ saveable - сбрасывается при входе
     var bodyLoadError by remember { mutableStateOf<String?>(null) } // НЕ saveable
