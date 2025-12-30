@@ -2166,7 +2166,8 @@ private fun DrawerContent(
         }
         
         // ��T�T¦-��Ț-T˦� ���-������ (��T��-�-�� Contacts - type 9, T� �-�-T� T��-�-�� Tͦ�T��-�- ���-�-T¦-��T¦-�-)
-        val hiddenFolderTypes = listOf(9) // Contacts
+        // Остальные папки (скрываем Contacts, Calendar, Notes - они показаны отдельно)
+        val hiddenFolderTypes = listOf(8, 9, 10) // Calendar, Contacts, Notes
         val otherFolders = folders.filter { it.type !in mainFolderTypes && it.type !in hiddenFolderTypes }
         
         // Контакты

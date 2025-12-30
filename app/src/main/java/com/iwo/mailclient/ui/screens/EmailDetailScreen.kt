@@ -472,7 +472,7 @@ fun EmailDetailScreen(
                 containerColor = LocalColorTheme.current.gradientStart
             ) {
                 Icon(
-                    if (isInSent) AppIcons.Edit else AppIcons.Reply, 
+                    if (isInSent) AppIcons.Email else AppIcons.Reply, 
                     if (isInSent) Strings.writeMore else Strings.reply, 
                     tint = Color.White
                 )

@@ -84,6 +84,7 @@ fun ComposeScreen(
     replyToEmailId: String? = null,
     forwardEmailId: String? = null,
     initialToEmail: String? = null,
+    editDraftId: String? = null,
     onBackClick: () -> Unit,
     onSent: () -> Unit
 ) {
@@ -92,6 +93,7 @@ fun ComposeScreen(
     val accountRepo = remember { AccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val mailRepo = remember { MailRepository(context) }
+    val database = remember { MailDatabase.getInstance(context) }
     
     // Аккаунт отправителя
     var activeAccount by remember { mutableStateOf<AccountEntity?>(null) }
@@ -149,7 +151,6 @@ fun ComposeScreen(
     var contactPickerTarget by remember { mutableStateOf("to") } // "to", "cc", "bcc"
     
     // Автодополнение email
-    val database = remember { MailDatabase.getInstance(context) }
     val contactRepo = remember { ContactRepository(context) }
     var toSuggestions by remember { mutableStateOf<List<EmailSuggestion>>(emptyList()) }
     var showToSuggestions by remember { mutableStateOf(false) }
@@ -327,6 +328,21 @@ fun ComposeScreen(
         }
     }
     
+    // Загружаем данные черновика для редактирования
+    LaunchedEffect(editDraftId) {
+        editDraftId?.let { draftId ->
+            mailRepo.getEmailSync(draftId)?.let { draft ->
+                to = draft.to
+                cc = draft.cc
+                subject = draft.subject
+                body = stripHtml(draft.body)
+                if (cc.isNotBlank()) {
+                    showCcBcc = true
+                }
+            }
+        }
+    }
+    
     // Локализованные строки для Toast (нужно получить до launch)
     val accountNotFoundMsg = Strings.accountNotFound
     val authErrorMsg = Strings.authError
@@ -348,6 +364,13 @@ fun ComposeScreen(
             }
             
             try {
+                // Если редактируем существующий черновик — удаляем его перед созданием нового
+                editDraftId?.let { draftId ->
+                    withContext(Dispatchers.IO) {
+                        database.emailDao().delete(draftId)
+                    }
+                }
+                
                 val success = withContext(Dispatchers.IO) {
                     mailRepo.saveDraft(
                         accountId = account.id,
@@ -435,6 +458,12 @@ fun ComposeScreen(
             
             when (result) {
                 is EasResult.Success -> {
+                    // Удаляем черновик если редактировали
+                    editDraftId?.let { draftId ->
+                        withContext(Dispatchers.IO) {
+                            database.emailDao().delete(draftId)
+                        }
+                    }
                     val isRussian = currentLanguage == AppLanguage.RUSSIAN
                     Toast.makeText(context, NotificationStrings.getEmailSent(isRussian), Toast.LENGTH_SHORT).show()
                     com.iwo.mailclient.util.SoundPlayer.playSendSound(context)

@@ -153,6 +153,7 @@ fun EmailDateFilter.label(): String = when (this) {
 fun EmailListScreen(
     folderId: String,
     onEmailClick: (String) -> Unit,
+    onDraftClick: (String) -> Unit = onEmailClick, // Для черновиков - открыть в ComposeScreen
     onBackClick: () -> Unit,
     onComposeClick: () -> Unit,
     onSearchClick: () -> Unit = {},
@@ -726,9 +727,9 @@ fun EmailListScreen(
                     onClick = onComposeClick,
                     containerColor = LocalColorTheme.current.gradientStart
                 ) {
-                    // В папке Отправленные показываем иконку письма вместо карандаша
+                    // FAB всегда карандаш в списке писем
                     Icon(
-                        if (isSentFolder) AppIcons.Email else AppIcons.Edit, 
+                        AppIcons.Edit, 
                         Strings.compose, 
                         tint = Color.White
                     )
@@ -770,7 +771,12 @@ fun EmailListScreen(
                     if (isSelectionMode) {
                         selectedIds = if (email.id in selectedIds) selectedIds - email.id else selectedIds + email.id
                     } else {
-                        onEmailClick(email.id)
+                        // Для черновиков открываем ComposeScreen, для остальных - EmailDetailScreen
+                        if (isDraftsFolder) {
+                            onDraftClick(email.id)
+                        } else {
+                            onEmailClick(email.id)
+                        }
                     }
                 },
                 onLongClick = { email -> selectedIds = selectedIds + email.id },
