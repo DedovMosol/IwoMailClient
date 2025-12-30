@@ -48,7 +48,8 @@ The App requests the following permissions:
 
 - Account passwords are stored encrypted using Android Keystore
 - All connections to mail servers use TLS encryption
-- No data is shared with third parties
+- No data is shared with third parties, including the developer
+- The app has no backend servers — all data stays on your device
 
 ### Changes to This Policy
 
@@ -106,7 +107,8 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 
 - Пароли аккаунтов хранятся в зашифрованном виде с использованием Android Keystore
 - Все соединения с почтовыми серверами используют шифрование TLS
-- Данные не передаются третьим лицам
+- Данные не передаются третьим лицам, включая разработчика
+- Приложение не имеет собственных серверов — все данные остаются на вашем устройстве
 
 ### Изменения политики
 
