@@ -487,3 +487,6 @@
 - Auto-start after reboot
 - Dark theme
 - Two languages (RU/EN)
+f o r c e 
+ 
+ 
