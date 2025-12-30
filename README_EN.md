@@ -49,12 +49,18 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Color themes (7 colors) | ✅ |
 | Interface personalization | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
+| Calendar event reminders | ✅ |
+| "Important" filter (high priority) | ✅ |
+| Night sync mode | ✅ |
+| Battery saver mode | ✅ |
 
 ## 🆕 What's New in v1.4.0
 
 - **Create calendar events** — create, edit and delete events with Exchange sync
+- **Event reminders** — push notifications before event start time
 - **Create notes** — create, edit and delete notes (EAS for Exchange 2010+, EWS for Exchange 2007)
 - **Auto-scroll** — list scrolls to top after creating note or event
+- **Battery optimization** — increased PushService restart timeout
 - **Draft fix** — email body now saves correctly
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
