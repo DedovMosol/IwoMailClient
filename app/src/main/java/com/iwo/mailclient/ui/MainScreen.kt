@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import kotlinx.coroutines.cancel
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -331,8 +332,15 @@ fun MainScreen(
         }
     }
     
-    // �ݦ����-�-��T����-T˦� scope �+��T� T����-T�T��-�-�����-TƦ��� (�-�� �-T¦-���-TϦ�T�T�T� ��T��� �-�-�-�����-TƦ���)
+    // Отдельный scope для синхронизации (чтобы не прерывалась при рекомпозиции)
     val syncScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
+    
+    // Очистка scope при выходе из композиции
+    DisposableEffect(Unit) {
+        onDispose {
+            syncScope.cancel()
+        }
+    }
     
     fun syncFolders() {
         activeAccount?.let { account ->
@@ -340,9 +348,9 @@ fun MainScreen(
                 isLoading = true
                 
                 try {
-                    // ��-���-�-T�T� �-�- �-T�T� T����-T�T��-�-�����-TƦ�T� - 60 T�����Tæ-�+
+                    // Таймаут на всю синхронизацию - 60 секунд
                     kotlinx.coroutines.withTimeoutOrNull(60_000L) {
-                        // �᦬�-T�T��-�-������T�Tæ��- ���-������
+                        // Синхронизируем папки
                         val result = withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                         
                         if (result is com.iwo.mailclient.eas.EasResult.Error) {
@@ -1423,7 +1431,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.3.2",
+                                text = "v1.4.0",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

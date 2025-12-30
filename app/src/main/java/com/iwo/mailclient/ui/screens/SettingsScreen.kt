@@ -299,7 +299,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("iwo Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.3.2") },
+                    supportingContent = { Text("${Strings.version} 1.4.0") },
                     leadingContent = { Icon(AppIcons.Info, null) }
                 )
             }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">iwo Mail Client</string>
+    <string name="calendar_event">Событие календаря</string>
+    <string name="all_day">Весь день</string>
+</resources>

@@ -3,6 +3,7 @@ package com.iwo.mailclient.data.repository
 import android.content.Context
 import com.iwo.mailclient.data.database.*
 import com.iwo.mailclient.eas.EasResult
+import com.iwo.mailclient.sync.CalendarReminderReceiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -13,7 +14,7 @@ import java.util.*
 /**
  * Репозиторий для работы с календарём Exchange
  */
-class CalendarRepository(context: Context) {
+class CalendarRepository(private val context: Context) {
     
     private val database = MailDatabase.getInstance(context)
     private val calendarEventDao = database.calendarEventDao()
@@ -166,6 +167,8 @@ class CalendarRepository(context: Context) {
                             lastModified = System.currentTimeMillis()
                         )
                         calendarEventDao.insert(event)
+                        // Планируем напоминание
+                        CalendarReminderReceiver.scheduleReminder(context, event)
                         EasResult.Success(event)
                     }
                     is EasResult.Error -> result
@@ -231,6 +234,9 @@ class CalendarRepository(context: Context) {
                             lastModified = System.currentTimeMillis()
                         )
                         calendarEventDao.update(updatedEvent)
+                        // Перепланируем напоминание (отменяем старое, планируем новое)
+                        CalendarReminderReceiver.cancelReminder(context, event.id)
+                        CalendarReminderReceiver.scheduleReminder(context, updatedEvent)
                         EasResult.Success(updatedEvent)
                     }
                     is EasResult.Error -> result
@@ -261,6 +267,8 @@ class CalendarRepository(context: Context) {
                 
                 when (result) {
                     is EasResult.Success -> {
+                        // Отменяем напоминание
+                        CalendarReminderReceiver.cancelReminder(context, event.id)
                         calendarEventDao.delete(event.id)
                         EasResult.Success(true)
                     }
@@ -327,6 +335,8 @@ class CalendarRepository(context: Context) {
                         
                         if (eventEntities.isNotEmpty()) {
                             calendarEventDao.insertAll(eventEntities)
+                            // Планируем напоминания для всех событий
+                            CalendarReminderReceiver.rescheduleAllReminders(context, eventEntities)
                         }
                         
                         EasResult.Success(eventEntities.size)

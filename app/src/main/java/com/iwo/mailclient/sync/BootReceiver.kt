@@ -44,8 +44,24 @@ class BootReceiver : BroadcastReceiver() {
                         PushService.start(context)
                     }
                     
+                    // Перепланируем напоминания календаря для всех аккаунтов
+                    rescheduleCalendarReminders(context, database)
+                    
                 } catch (_: Exception) { }
             }
         }
+    }
+    
+    /**
+     * Перепланирует напоминания календаря после перезагрузки.
+     * AlarmManager теряет все alarm'ы при перезагрузке.
+     */
+    private suspend fun rescheduleCalendarReminders(context: Context, database: MailDatabase) {
+        try {
+            val now = System.currentTimeMillis()
+            // Получаем все будущие события с напоминаниями
+            val events = database.calendarEventDao().getAllFutureEventsWithReminders(now)
+            CalendarReminderReceiver.rescheduleAllReminders(context, events)
+        } catch (_: Exception) { }
     }
 }

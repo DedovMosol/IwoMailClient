@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -49,6 +50,12 @@ fun NotesScreen(
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var isSyncing by remember { mutableStateOf(false) }
     var selectedNote by remember { mutableStateOf<NoteEntity?>(null) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var editingNote by remember { mutableStateOf<NoteEntity?>(null) }
+    var isCreating by remember { mutableStateOf(false) }
+    
+    // Состояние списка для автоскролла
+    val listState = rememberLazyListState()
 
     // Фильтрация по поиску
     val filteredNotes = remember(notes, searchQuery) {
@@ -64,9 +71,80 @@ fun NotesScreen(
     
     // Диалог просмотра заметки
     selectedNote?.let { note ->
+        val noteDeletedText = Strings.noteDeleted
         NoteDetailDialog(
             note = note,
-            onDismiss = { selectedNote = null }
+            onDismiss = { selectedNote = null },
+            onEditClick = {
+                editingNote = note
+                selectedNote = null
+                showCreateDialog = true
+            },
+            onDeleteClick = {
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        noteRepo.deleteNote(note)
+                    }
+                    when (result) {
+                        is EasResult.Success -> {
+                            Toast.makeText(context, noteDeletedText, Toast.LENGTH_SHORT).show()
+                        }
+                        is EasResult.Error -> {
+                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    selectedNote = null
+                }
+            }
+        )
+    }
+    
+    // Диалог создания/редактирования заметки
+    if (showCreateDialog) {
+        val noteUpdatedText = Strings.noteUpdated
+        val noteCreatedText = Strings.noteCreated
+        val isEditing = editingNote != null
+        CreateNoteDialog(
+            note = editingNote,
+            isCreating = isCreating,
+            onDismiss = {
+                showCreateDialog = false
+                editingNote = null
+            },
+            onSave = { subject, body ->
+                scope.launch {
+                    isCreating = true
+                    val result = if (editingNote != null) {
+                        withContext(Dispatchers.IO) {
+                            noteRepo.updateNote(editingNote!!, subject, body)
+                        }
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            noteRepo.createNote(accountId, subject, body)
+                        }
+                    }
+                    isCreating = false
+                    when (result) {
+                        is EasResult.Success -> {
+                            Toast.makeText(
+                                context,
+                                if (isEditing) noteUpdatedText else noteCreatedText,
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            showCreateDialog = false
+                            editingNote = null
+                            // Автоскролл вверх после создания (с задержкой для обновления списка)
+                            if (!isEditing) {
+                                kotlinx.coroutines.delay(100)
+                                listState.animateScrollToItem(0)
+                            }
+                        }
+                        is EasResult.Error -> {
+                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
         )
     }
     
@@ -127,6 +205,17 @@ fun NotesScreen(
                     )
                 )
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    editingNote = null
+                    showCreateDialog = true
+                },
+                containerColor = LocalColorTheme.current.gradientStart
+            ) {
+                Icon(AppIcons.Add, Strings.newNote, tint = Color.White)
+            }
         }
     ) { padding ->
         Column(
@@ -188,6 +277,7 @@ fun NotesScreen(
             } else {
                 // Список заметок
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -274,9 +364,37 @@ private fun NoteCard(
 @Composable
 private fun NoteDetailDialog(
     note: NoteEntity,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onEditClick: () -> Unit = {},
+    onDeleteClick: () -> Unit = {}
 ) {
     val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    
+    // Диалог подтверждения удаления
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(Strings.deleteNote) },
+            text = { Text(Strings.deleteNoteConfirm) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDeleteClick()
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text(Strings.delete)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
+    }
     
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -317,8 +435,106 @@ private fun NoteDetailDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.close)
+            Row {
+                // Кнопка удаления
+                TextButton(
+                    onClick = { showDeleteConfirm = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(Strings.delete)
+                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                // Кнопка редактирования
+                TextButton(onClick = onEditClick) {
+                    Icon(AppIcons.Edit, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(Strings.edit)
+                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                // Кнопка закрытия
+                TextButton(onClick = onDismiss) {
+                    Text(Strings.close)
+                }
+            }
+        }
+    )
+}
+
+
+/**
+ * Диалог создания/редактирования заметки
+ */
+@Composable
+private fun CreateNoteDialog(
+    note: NoteEntity?,
+    isCreating: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (subject: String, body: String) -> Unit
+) {
+    val isEditing = note != null
+    
+    var subject by rememberSaveable { mutableStateOf(note?.subject ?: "") }
+    var body by rememberSaveable { mutableStateOf(note?.body ?: "") }
+    
+    val isValid = subject.isNotBlank()
+    
+    AlertDialog(
+        onDismissRequest = { if (!isCreating) onDismiss() },
+        title = { Text(if (isEditing) Strings.editNote else Strings.newNote) },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Заголовок
+                OutlinedTextField(
+                    value = subject,
+                    onValueChange = { subject = it },
+                    label = { Text(Strings.noteTitle) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    isError = subject.isBlank()
+                )
+                
+                // Текст заметки
+                OutlinedTextField(
+                    value = body,
+                    onValueChange = { body = it },
+                    label = { Text(Strings.noteBody) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    maxLines = 10
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (isValid) {
+                        onSave(subject, body)
+                    }
+                },
+                enabled = isValid && !isCreating
+            ) {
+                if (isCreating) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(Strings.save)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isCreating
+            ) {
+                Text(Strings.cancel)
             }
         }
     )

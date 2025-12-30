@@ -45,6 +45,7 @@ class MailApplication : Application() {
         try {
             notificationManager.deleteNotificationChannel(CHANNEL_SYNC)
             notificationManager.deleteNotificationChannel(CHANNEL_NEW_MAIL)
+            notificationManager.deleteNotificationChannel(CHANNEL_CALENDAR)
         } catch (_: Exception) { }
         
         // Канал для новых писем - ВЫСОКИЙ приоритет для показа на заблокированном экране
@@ -72,7 +73,20 @@ class MailApplication : Application() {
             lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
         }
         
-        notificationManager.createNotificationChannels(listOf(newMailChannel, syncChannel))
+        // Канал для напоминаний календаря - ВЫСОКИЙ приоритет
+        val calendarChannel = NotificationChannel(
+            CHANNEL_CALENDAR,
+            "Напоминания календаря",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Напоминания о событиях календаря"
+            enableLights(true)
+            enableVibration(true)
+            setShowBadge(true)
+            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+        }
+        
+        notificationManager.createNotificationChannels(listOf(newMailChannel, syncChannel, calendarChannel))
     }
     
     private fun scheduleSync() {
@@ -121,5 +135,6 @@ class MailApplication : Application() {
     companion object {
         const val CHANNEL_NEW_MAIL = "new_mail"
         const val CHANNEL_SYNC = "sync"
+        const val CHANNEL_CALENDAR = "calendar_reminders"
     }
 }

@@ -1,6 +1,13 @@
 # Reference project (fork)
 reference/
 
+# Architecture documentation (personal notes)
+ARCHITECTURE.md
+
+# Screenshots (for store, not for repo)
+Screenshots/
+Rustore*.png
+
 # Built application files
 *.apk
 *.aar

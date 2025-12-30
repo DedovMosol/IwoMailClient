@@ -4,7 +4,7 @@
 
 Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
 
-**Version:** 1.3.2  
+**Version:** 1.4.0  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -12,7 +12,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 ## 🌟 Features
 
 - 📧 **Exchange ActiveSync** — full EAS 12.0-14.1 support (Exchange 2007+)
-- 🔄 **EWS for Exchange 2007** — notes sync via EWS with NTLMv2 (fallback for EAS 12.x)
+- 🔄 **EWS for Exchange 2007** — notes sync and creation via EWS with NTLMv2 (fallback for EAS 12.x)
 - 📬 **IMAP/POP3** — works with any mail server (beta)
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
 - 🔒 **Exchange 2007 compatibility** — TLS 1.0/1.1 support via Conscrypt
@@ -38,8 +38,8 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Contacts with import/export | ✅ |
 | Contact groups | ✅ |
 | Favorite contacts | ✅ |
-| Exchange Notes | ✅ |
-| Exchange Calendar | ✅ |
+| Exchange Notes (create/edit/delete) | ✅ |
+| Exchange Calendar (create/edit/delete) | ✅ |
 | Email autocomplete | ✅ |
 | Multiple accounts | ✅ |
 | Multiple signatures | ✅ |
@@ -50,13 +50,12 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Interface personalization | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 
-## 🆕 What's New in v1.3.2
+## 🆕 What's New in v1.4.0
 
-- **"Important" filter** — new filter for high priority emails
-- **Priority icon** — high priority emails marked with red exclamation mark
-- **Notes for Exchange 2007** — notes sync via EWS with NTLMv2 for servers without EAS 14.1+
-- **Sync deletions** — emails deleted on server are removed from local database
-- **Parallel sync** — folders sync in parallel
+- **Create calendar events** — create, edit and delete events with Exchange sync
+- **Create notes** — create, edit and delete notes (EAS for Exchange 2010+, EWS for Exchange 2007)
+- **Auto-scroll** — list scrolls to top after creating note or event
+- **Draft fix** — email body now saves correctly
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 

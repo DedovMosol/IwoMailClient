@@ -237,8 +237,8 @@ fun ComposeScreen(
             // Выбираем подпись по умолчанию или первую
             selectedSignature = signatures.find { it.isDefault } ?: signatures.firstOrNull()
         }
-        // Подставляем подпись для нового письма (если нет ответа/пересылки)
-        if (replyToEmailId == null && forwardEmailId == null) {
+        // Подставляем подпись для нового письма (если нет ответа/пересылки и body пустой)
+        if (replyToEmailId == null && forwardEmailId == null && editDraftId == null && body.isEmpty()) {
             selectedSignature?.text?.takeIf { it.isNotBlank() }?.let { sig ->
                 body = "\n\n--\n$sig"
             } ?: activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { sig ->

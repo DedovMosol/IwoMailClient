@@ -152,9 +152,9 @@ fun ContactsScreen(
         uri?.let {
             scope.launch {
                 try {
-                    val inputStream = context.contentResolver.openInputStream(it)
-                    val content = inputStream?.bufferedReader()?.readText() ?: ""
-                    inputStream?.close()
+                    val content = context.contentResolver.openInputStream(it)?.use { stream ->
+                        stream.bufferedReader().readText()
+                    } ?: ""
                     val count = contactRepo.importFromVCard(accountId, content)
                     Toast.makeText(context, "$importedMessage $count", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
@@ -170,9 +170,9 @@ fun ContactsScreen(
         uri?.let {
             scope.launch {
                 try {
-                    val inputStream = context.contentResolver.openInputStream(it)
-                    val content = inputStream?.bufferedReader()?.readText() ?: ""
-                    inputStream?.close()
+                    val content = context.contentResolver.openInputStream(it)?.use { stream ->
+                        stream.bufferedReader().readText()
+                    } ?: ""
                     val count = contactRepo.importFromCSV(accountId, content)
                     Toast.makeText(context, "$importedMessage $count", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {

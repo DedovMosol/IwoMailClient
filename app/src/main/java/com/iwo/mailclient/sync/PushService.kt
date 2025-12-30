@@ -300,7 +300,8 @@ class PushService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
             
-            val triggerTime = System.currentTimeMillis() + 5000
+            // 30 секунд — достаточно для восстановления, но не агрессивно для батареи
+            val triggerTime = System.currentTimeMillis() + 30_000
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 alarmManager.setExactAndAllowWhileIdle(

@@ -61,4 +61,7 @@ interface CalendarEventDao {
     
     @Query("DELETE FROM calendar_events WHERE accountId = :accountId")
     suspend fun deleteByAccount(accountId: Long)
+    
+    @Query("SELECT * FROM calendar_events WHERE startTime > :now AND reminder > 0")
+    suspend fun getAllFutureEventsWithReminders(now: Long): List<CalendarEventEntity>
 }

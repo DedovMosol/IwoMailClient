@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -65,6 +66,9 @@ fun CalendarScreen(
     var editingEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var isCreating by remember { mutableStateOf(false) }
     
+    // Состояние списка для автоскролла
+    val listState = rememberLazyListState()
+    
     // Фильтрация по поиску
     val filteredEvents = remember(events, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -80,6 +84,7 @@ fun CalendarScreen(
     
     // Диалог просмотра события
     selectedEvent?.let { event ->
+        val eventDeletedText = Strings.eventDeleted
         EventDetailDialog(
             event = event,
             calendarRepo = calendarRepo,
@@ -97,7 +102,7 @@ fun CalendarScreen(
                     }
                     when (result) {
                         is EasResult.Success -> {
-                            Toast.makeText(context, Strings.eventDeleted, Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, eventDeletedText, Toast.LENGTH_SHORT).show()
                         }
                         is EasResult.Error -> {
                             Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
@@ -111,6 +116,9 @@ fun CalendarScreen(
     
     // Диалог создания/редактирования события
     if (showCreateDialog) {
+        val eventUpdatedText = Strings.eventUpdated
+        val eventCreatedText = Strings.eventCreated
+        val isEditing = editingEvent != null
         CreateEventDialog(
             event = editingEvent,
             initialDate = selectedDate,
@@ -156,11 +164,16 @@ fun CalendarScreen(
                         is EasResult.Success -> {
                             Toast.makeText(
                                 context,
-                                if (editingEvent != null) Strings.eventUpdated else Strings.eventCreated,
+                                if (isEditing) eventUpdatedText else eventCreatedText,
                                 Toast.LENGTH_SHORT
                             ).show()
                             showCreateDialog = false
                             editingEvent = null
+                            // Автоскролл вверх после создания (с задержкой для обновления списка)
+                            if (!isEditing) {
+                                kotlinx.coroutines.delay(100)
+                                listState.animateScrollToItem(0)
+                            }
                         }
                         is EasResult.Error -> {
                             Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
@@ -269,7 +282,8 @@ fun CalendarScreen(
                         events = filteredEvents,
                         searchQuery = searchQuery,
                         onSearchQueryChange = { searchQuery = it },
-                        onEventClick = { selectedEvent = it }
+                        onEventClick = { selectedEvent = it },
+                        listState = listState
                     )
                 }
                 CalendarViewMode.MONTH -> {
@@ -297,7 +311,8 @@ private fun AgendaView(
     events: List<CalendarEventEntity>,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
-    onEventClick: (CalendarEventEntity) -> Unit
+    onEventClick: (CalendarEventEntity) -> Unit,
+    listState: androidx.compose.foundation.lazy.LazyListState
 ) {
     Column {
         // Поле поиска
@@ -363,6 +378,7 @@ private fun AgendaView(
             }.toSortedMap()
             
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)

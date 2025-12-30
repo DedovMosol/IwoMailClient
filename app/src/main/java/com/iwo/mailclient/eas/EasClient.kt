@@ -46,6 +46,8 @@ class EasClient(
     private var serverSupportedVersions: List<String> = emptyList()
     // Флаг что версия уже определена
     private var versionDetected = false
+    // Кэш ID папки заметок
+    private var cachedNotesFolderId: String? = null
     // DeviceId должен быть стабильным для одного аккаунта
     private val deviceId = generateStableDeviceId(username, deviceIdSuffix)
     // DeviceType - как у Huawei
@@ -201,6 +203,12 @@ class EasClient(
     }
     
     companion object {
+        // Предкомпилированные regex для производительности
+        private val EMAIL_BRACKET_REGEX = "<([^>]+)>".toRegex()
+        private val EWS_ITEM_ID_REGEX = """<t:ItemId Id="([^"]+)"""".toRegex()
+        private val NOTES_CATEGORY_REGEX = "<notes:Category>(.*?)</notes:Category>".toRegex()
+        private val CALENDAR_CATEGORY_REGEX = "<calendar:Category>(.*?)</calendar:Category>".toRegex()
+        
         /**
          * Нормализует URL сервера - добавляет схему и порт
          */
@@ -1315,7 +1323,7 @@ class EasClient(
             if (match != null) {
                 val email = match.groupValues[1].trim()
                 // Извлекаем email если в формате "Name <email>"
-                val emailMatch = "<([^>]+)>".toRegex().find(email)
+                val emailMatch = EMAIL_BRACKET_REGEX.find(email)
                 return emailMatch?.groupValues?.get(1) ?: email
             }
         }
@@ -2565,6 +2573,496 @@ $foldersXml
     }
     
     /**
+     * Создание заметки на сервере Exchange
+     * EAS 14.x — через Sync Add
+     * EAS 12.x — через EWS CreateItem
+     */
+    suspend fun createNote(subject: String, body: String): EasResult<String> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+        
+        return if (majorVersion >= 14) {
+            createNoteEas(subject, body)
+        } else {
+            createNoteEws(subject, body)
+        }
+    }
+    
+    /**
+     * Создание заметки через EAS (Exchange 2010+)
+     */
+    private suspend fun createNoteEas(subject: String, body: String): EasResult<String> {
+        // Получаем папку Notes
+        val notesFolderId = cachedNotesFolderId ?: run {
+            val foldersResult = folderSync("0")
+            when (foldersResult) {
+                is EasResult.Success -> {
+                    val folderId = foldersResult.data.folders.find { it.type == 10 }?.serverId
+                    if (folderId != null) cachedNotesFolderId = folderId
+                    folderId
+                }
+                is EasResult.Error -> return EasResult.Error(foldersResult.message)
+            }
+        }
+        
+        if (notesFolderId == null) {
+            return EasResult.Error("Папка Notes не найдена")
+        }
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        val clientId = java.util.UUID.randomUUID().toString().replace("-", "").take(32)
+        val escapedSubject = escapeXml(subject)
+        val escapedBody = escapeXml(body)
+        
+        val createXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:notes="Notes">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                        <Commands>
+                            <Add>
+                                <ClientId>$clientId</ClientId>
+                                <ApplicationData>
+                                    <notes:Subject>$escapedSubject</notes:Subject>
+                                    <airsyncbase:Body>
+                                        <airsyncbase:Type>1</airsyncbase:Type>
+                                        <airsyncbase:Data>$escapedBody</airsyncbase:Data>
+                                    </airsyncbase:Body>
+                                    <notes:MessageClass>IPM.StickyNote</notes:MessageClass>
+                                </ApplicationData>
+                            </Add>
+                        </Commands>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", createXml) { responseXml ->
+            android.util.Log.d("EasClient", "createNoteEas response: ${responseXml.take(1000)}")
+            val status = extractValue(responseXml, "Status")
+            if (status == "1") {
+                extractValue(responseXml, "ServerId") ?: clientId
+            } else {
+                throw Exception("Ошибка создания заметки: Status=$status")
+            }
+        }
+    }
+    
+    /**
+     * Создание заметки через EWS (Exchange 2007)
+     */
+    private suspend fun createNoteEws(subject: String, body: String): EasResult<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                val escapedSubject = escapeXml(subject)
+                val escapedBody = escapeXml(body)
+                
+                // Exchange 2007 использует Message с ItemClass для заметок
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:CreateItem MessageDisposition="SaveOnly">
+                                <m:SavedItemFolderId>
+                                    <t:DistinguishedFolderId Id="notes"/>
+                                </m:SavedItemFolderId>
+                                <m:Items>
+                                    <t:Message>
+                                        <t:ItemClass>IPM.StickyNote</t:ItemClass>
+                                        <t:Subject>$escapedSubject</t:Subject>
+                                        <t:Body BodyType="Text">$escapedBody</t:Body>
+                                    </t:Message>
+                                </m:Items>
+                            </m:CreateItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                android.util.Log.d("EasClient", "createNoteEws: URL = $ewsUrl")
+                
+                // Пробуем NTLM аутентификацию
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+                if (ntlmAuth == null) {
+                    android.util.Log.e("EasClient", "createNoteEws: NTLM handshake failed")
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                if (responseXml == null) {
+                    android.util.Log.e("EasClient", "createNoteEws: executeNtlmRequest returned null")
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                android.util.Log.d("EasClient", "createNoteEws response: ${responseXml.take(1500)}")
+                
+                // Проверяем на ошибки
+                if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
+                    android.util.Log.e("EasClient", "createNoteEws: Schema validation error")
+                    return@withContext EasResult.Error("Ошибка схемы EWS")
+                }
+                
+                // Извлекаем ItemId
+                val itemId = EWS_ITEM_ID_REGEX.find(responseXml)?.groupValues?.get(1)
+                
+                if (itemId != null) {
+                    EasResult.Success(itemId)
+                } else if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+                    EasResult.Success(java.util.UUID.randomUUID().toString())
+                } else {
+                    android.util.Log.e("EasClient", "createNoteEws: No ItemId and no success in response")
+                    EasResult.Error("Не удалось создать заметку через EWS")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("EasClient", "createNoteEws error", e)
+                EasResult.Error(e.message ?: "Ошибка создания заметки через EWS")
+            }
+        }
+    }
+    
+    /**
+     * Удаление заметки на сервере Exchange
+     */
+    suspend fun deleteNote(serverId: String): EasResult<Boolean> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+        
+        return if (majorVersion >= 14) {
+            deleteNoteEas(serverId)
+        } else {
+            deleteNoteEws(serverId)
+        }
+    }
+    
+    /**
+     * Удаление заметки через EAS (Exchange 2010+)
+     */
+    private suspend fun deleteNoteEas(serverId: String): EasResult<Boolean> {
+        val notesFolderId = cachedNotesFolderId ?: run {
+            val foldersResult = folderSync("0")
+            when (foldersResult) {
+                is EasResult.Success -> {
+                    val folderId = foldersResult.data.folders.find { it.type == 10 }?.serverId
+                    if (folderId != null) cachedNotesFolderId = folderId
+                    folderId
+                }
+                is EasResult.Error -> return EasResult.Error(foldersResult.message)
+            }
+        }
+        
+        if (notesFolderId == null) {
+            return EasResult.Error("Папка Notes не найдена")
+        }
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        val deleteXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                        <Commands>
+                            <Delete>
+                                <ServerId>$serverId</ServerId>
+                            </Delete>
+                        </Commands>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", deleteXml) { responseXml ->
+            val status = extractValue(responseXml, "Status")
+            status == "1"
+        }
+    }
+    
+    /**
+     * Удаление заметки через EWS (Exchange 2007)
+     */
+    private suspend fun deleteNoteEws(serverId: String): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                val escapedServerId = escapeXml(serverId)
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:DeleteItem DeleteType="MoveToDeletedItems">
+                                <m:ItemIds>
+                                    <t:ItemId Id="$escapedServerId"/>
+                                </m:ItemIds>
+                            </m:DeleteItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                if (ntlmAuth == null) {
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                EasResult.Success(responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\""))
+            } catch (e: Exception) {
+                android.util.Log.e("EasClient", "deleteNoteEws error", e)
+                EasResult.Error(e.message ?: "Ошибка удаления заметки через EWS")
+            }
+        }
+    }
+    
+    /**
+     * Обновление заметки на сервере Exchange
+     */
+    suspend fun updateNote(serverId: String, subject: String, body: String): EasResult<Boolean> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+        
+        return if (majorVersion >= 14) {
+            updateNoteEas(serverId, subject, body)
+        } else {
+            updateNoteEws(serverId, subject, body)
+        }
+    }
+    
+    /**
+     * Обновление заметки через EAS (Exchange 2010+)
+     */
+    private suspend fun updateNoteEas(serverId: String, subject: String, body: String): EasResult<Boolean> {
+        val notesFolderId = cachedNotesFolderId ?: run {
+            val foldersResult = folderSync("0")
+            when (foldersResult) {
+                is EasResult.Success -> {
+                    val folderId = foldersResult.data.folders.find { it.type == 10 }?.serverId
+                    if (folderId != null) cachedNotesFolderId = folderId
+                    folderId
+                }
+                is EasResult.Error -> return EasResult.Error(foldersResult.message)
+            }
+        }
+        
+        if (notesFolderId == null) {
+            return EasResult.Error("Папка Notes не найдена")
+        }
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        val escapedSubject = escapeXml(subject)
+        val escapedBody = escapeXml(body)
+        
+        val updateXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:notes="Notes">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$notesFolderId</CollectionId>
+                        <Commands>
+                            <Change>
+                                <ServerId>$serverId</ServerId>
+                                <ApplicationData>
+                                    <notes:Subject>$escapedSubject</notes:Subject>
+                                    <airsyncbase:Body>
+                                        <airsyncbase:Type>1</airsyncbase:Type>
+                                        <airsyncbase:Data>$escapedBody</airsyncbase:Data>
+                                    </airsyncbase:Body>
+                                </ApplicationData>
+                            </Change>
+                        </Commands>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", updateXml) { responseXml ->
+            val status = extractValue(responseXml, "Status")
+            status == "1"
+        }
+    }
+    
+    /**
+     * Обновление заметки через EWS (Exchange 2007)
+     */
+    private suspend fun updateNoteEws(serverId: String, subject: String, body: String): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                val escapedSubject = escapeXml(subject)
+                val escapedBody = escapeXml(body)
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:UpdateItem MessageDisposition="SaveOnly" ConflictResolution="AlwaysOverwrite">
+                                <m:ItemChanges>
+                                    <t:ItemChange>
+                                        <t:ItemId Id="$serverId"/>
+                                        <t:Updates>
+                                            <t:SetItemField>
+                                                <t:FieldURI FieldURI="item:Subject"/>
+                                                <t:PostItem>
+                                                    <t:Subject>$escapedSubject</t:Subject>
+                                                </t:PostItem>
+                                            </t:SetItemField>
+                                            <t:SetItemField>
+                                                <t:FieldURI FieldURI="item:Body"/>
+                                                <t:PostItem>
+                                                    <t:Body BodyType="Text">$escapedBody</t:Body>
+                                                </t:PostItem>
+                                            </t:SetItemField>
+                                        </t:Updates>
+                                    </t:ItemChange>
+                                </m:ItemChanges>
+                            </m:UpdateItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                // NTLM аутентификация
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "UpdateItem")
+                if (ntlmAuth == null) {
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "UpdateItem")
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                android.util.Log.d("EasClient", "updateNoteEws response: ${responseXml.take(500)}")
+                
+                EasResult.Success(responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\""))
+            } catch (e: Exception) {
+                android.util.Log.e("EasClient", "updateNoteEws error", e)
+                EasResult.Error(e.message ?: "Ошибка обновления заметки через EWS")
+            }
+        }
+    }
+    
+    /**
      * Синхронизация заметок из папки Notes на сервере Exchange
      * 
      * EAS 14.1+ (Exchange 2010 SP1+): стандартный Notes sync через type=10
@@ -2610,6 +3108,9 @@ $foldersXml
     private suspend fun syncNotesStandard(folders: List<EasFolder>): EasResult<List<EasNote>> {
         val notesFolderId = folders.find { it.type == 10 }?.serverId
             ?: return EasResult.Error("Папка Notes (type=10) не найдена на сервере")
+        
+        // Сохраняем для использования в create/update/delete
+        cachedNotesFolderId = notesFolderId
         
         // Шаг 1: Получаем SyncKey
         val initialXml = """
@@ -3884,8 +4385,7 @@ $foldersXml
         val categoriesMatch = categoriesPattern.find(xml)
         if (categoriesMatch != null) {
             val categoriesXml = categoriesMatch.groupValues[1]
-            val categoryPattern = "<notes:Category>(.*?)</notes:Category>".toRegex()
-            categoryPattern.findAll(categoriesXml).forEach { match ->
+            NOTES_CATEGORY_REGEX.findAll(categoriesXml).forEach { match ->
                 categories.add(match.groupValues[1].trim())
             }
         }
@@ -4376,8 +4876,7 @@ $foldersXml
         val categoriesMatch = categoriesPattern.find(xml)
         if (categoriesMatch != null) {
             val categoriesXml = categoriesMatch.groupValues[1]
-            val categoryPattern = "<calendar:Category>(.*?)</calendar:Category>".toRegex()
-            categoryPattern.findAll(categoriesXml).forEach { match ->
+            CALENDAR_CATEGORY_REGEX.findAll(categoriesXml).forEach { match ->
                 categories.add(match.groupValues[1].trim())
             }
         }

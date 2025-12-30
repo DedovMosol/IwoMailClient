@@ -45,6 +45,124 @@ class NoteRepository(context: Context) {
         return noteDao.searchNotes(accountId, query)
     }
     
+    // === Создание/Редактирование/Удаление ===
+    
+    /**
+     * Создание заметки на сервере и в локальной БД
+     */
+    suspend fun createNote(
+        accountId: Long,
+        subject: String,
+        body: String
+    ): EasResult<NoteEntity> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val account = accountRepo.getAccount(accountId)
+                    ?: return@withContext EasResult.Error("Аккаунт не найден")
+                
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    return@withContext EasResult.Error("Заметки поддерживаются только для Exchange")
+                }
+                
+                val easClient = accountRepo.createEasClient(accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val result = easClient.createNote(subject, body)
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        val serverId = result.data
+                        val note = NoteEntity(
+                            id = "${accountId}_${serverId}",
+                            accountId = accountId,
+                            serverId = serverId,
+                            subject = subject,
+                            body = body,
+                            categories = "",
+                            lastModified = System.currentTimeMillis()
+                        )
+                        noteDao.insert(note)
+                        EasResult.Success(note)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка создания заметки")
+            }
+        }
+    }
+    
+    /**
+     * Обновление заметки
+     */
+    suspend fun updateNote(
+        note: NoteEntity,
+        subject: String,
+        body: String
+    ): EasResult<NoteEntity> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val account = accountRepo.getAccount(note.accountId)
+                    ?: return@withContext EasResult.Error("Аккаунт не найден")
+                
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    return@withContext EasResult.Error("Заметки поддерживаются только для Exchange")
+                }
+                
+                val easClient = accountRepo.createEasClient(note.accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val result = easClient.updateNote(note.serverId, subject, body)
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        val updatedNote = note.copy(
+                            subject = subject,
+                            body = body,
+                            lastModified = System.currentTimeMillis()
+                        )
+                        noteDao.update(updatedNote)
+                        EasResult.Success(updatedNote)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка обновления заметки")
+            }
+        }
+    }
+    
+    /**
+     * Удаление заметки
+     */
+    suspend fun deleteNote(note: NoteEntity): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val account = accountRepo.getAccount(note.accountId)
+                    ?: return@withContext EasResult.Error("Аккаунт не найден")
+                
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    return@withContext EasResult.Error("Заметки поддерживаются только для Exchange")
+                }
+                
+                val easClient = accountRepo.createEasClient(note.accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val result = easClient.deleteNote(note.serverId)
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        noteDao.delete(note.id)
+                        EasResult.Success(true)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка удаления заметки")
+            }
+        }
+    }
+    
     // === Синхронизация ===
     
     /**

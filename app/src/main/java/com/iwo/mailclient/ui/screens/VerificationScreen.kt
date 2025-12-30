@@ -330,19 +330,22 @@ fun VerificationScreen(
     }
 }
 
+// Предкомпилированные regex для производительности
+private val BRACKET_EMAIL_REGEX = "<([^>]+@[^>]+)>".toRegex()
+private val SIMPLE_EMAIL_REGEX = "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})".toRegex()
 
 /**
  * Извлекает email из строки формата "Name <email@domain.com>" или просто "email@domain.com"
  */
 private fun extractEmailFromString(str: String): String {
     // Ищем email в угловых скобках
-    val bracketMatch = "<([^>]+@[^>]+)>".toRegex().find(str)
+    val bracketMatch = BRACKET_EMAIL_REGEX.find(str)
     if (bracketMatch != null) {
         return bracketMatch.groupValues[1].lowercase().trim()
     }
     
     // Ищем просто email
-    val emailMatch = "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})".toRegex().find(str)
+    val emailMatch = SIMPLE_EMAIL_REGEX.find(str)
     if (emailMatch != null) {
         return emailMatch.groupValues[1].lowercase().trim()
     }

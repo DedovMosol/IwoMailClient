@@ -87,6 +87,16 @@
                 <action android:name="com.iwo.mailclient.SYNC_ALARM" />
             </intent-filter>
         </receiver>
+        
+        <!-- Receiver для напоминаний календаря -->
+        <receiver
+            android:name=".sync.CalendarReminderReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.iwo.mailclient.CALENDAR_REMINDER" />
+            </intent-filter>
+        </receiver>
 
     </application>
 
