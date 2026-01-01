@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.4.1 (31.12.2025)
+
+### New Features
+- **Server-side drafts** — drafts now sync with Exchange server via EWS (previously stored locally only)
+  - Creating draft saves to server
+  - Sync downloads drafts from server
+  - Deleting draft removes from server
+  - Editing draft updates on server
+- **High priority when sending** — ability to mark email as important when sending (recipient will see red exclamation mark)
+
+### Improvements
+- **Compact dialogs** — notes and calendar event dialogs are now compact, sized by content
+- **Dynamic folder card height** — text no longer truncated on small screens
+- **Regex optimization** — precompiled and cached regex patterns in all key files
+
+### Bug Fixes
+- **Draft deletion** — drafts are deleted immediately without moving to trash
+- **Mixed deletion** — correct handling when deleting emails from different folders simultaneously
+- **Drafts folder display** — fixed crash when deleting emails, drafts now use standard Flow instead of manual loading
+- **Blind carbon copy (BCC)** — fixed sending emails with BCC (previously BCC was not working)
+- **Quote localization** — text "Original message", "From", "Date", "Subject" in replies and forwards is now localized
+- **Drafts sync** — full resync on every update, deletions from Outlook now reflected
+- **Calendar sync** — fixed UI flickering and rescheduling all reminders on every sync
+- **Notes sync** — fixed UI flickering during sync
+- **Contacts sync** — fixed UI flickering during sync
+- **Localization** — all hardcoded strings are now localized
+- **DatePicker crash** — fixed crash when selecting scheduled send date
+- **WBXML parser crash** — fixed crash when encoding zero value
+- **SSL with self-signed certificates** — fixed security policy negotiation error when acceptAllCerts enabled
+- **EWS authentication** — added Basic auth fallback for servers not supporting NTLM
+
+---
+
 ## v1.4.0 (31.12.2025)
 
 ### New Features
@@ -465,3 +498,4 @@
 - Auto-start after reboot
 - Dark theme
 - Two languages (RU/EN)
+
