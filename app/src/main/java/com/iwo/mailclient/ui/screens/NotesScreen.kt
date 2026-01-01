@@ -316,7 +316,7 @@ private fun NoteCard(
         ) {
             // Заголовок
             Text(
-                text = note.subject.ifBlank { "(Без заголовка)" },
+                text = note.subject.ifBlank { Strings.noTitle },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -400,8 +400,8 @@ private fun NoteDetailDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = note.subject.ifBlank { "(Без заголовка)" },
-                style = MaterialTheme.typography.titleLarge
+                text = note.subject.ifBlank { Strings.noSubject },
+                style = MaterialTheme.typography.titleMedium
             )
         },
         text = {
@@ -423,44 +423,33 @@ private fun NoteDetailDialog(
                     )
                 }
                 
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // Текст заметки
-                Text(
-                    text = note.body.ifBlank { "(Пусто)" },
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                // Текст заметки (если есть)
+                if (note.body.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = note.body,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         },
         confirmButton = {
-            Row {
-                // Кнопка удаления
-                TextButton(
-                    onClick = { showDeleteConfirm = true },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(Strings.delete)
-                }
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                // Кнопка редактирования
-                TextButton(onClick = onEditClick) {
-                    Icon(AppIcons.Edit, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(Strings.edit)
-                }
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                // Кнопка закрытия
-                TextButton(onClick = onDismiss) {
-                    Text(Strings.close)
-                }
+            // Кнопка редактирования
+            TextButton(onClick = onEditClick) {
+                Icon(AppIcons.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(Strings.edit)
+            }
+        },
+        dismissButton = {
+            // Кнопка удаления
+            TextButton(
+                onClick = { showDeleteConfirm = true },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(Strings.delete)
             }
         }
     )

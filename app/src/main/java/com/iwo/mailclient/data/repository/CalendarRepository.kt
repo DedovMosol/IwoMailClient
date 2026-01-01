@@ -306,10 +306,22 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Success -> {
                         val serverEvents = result.data
                         
-                        // Удаляем старые события для этого аккаунта
-                        calendarEventDao.deleteByAccount(accountId)
+                        // Получаем существующие события
+                        val existingEvents = calendarEventDao.getEventsByAccountList(accountId)
+                        val existingServerIds = existingEvents.map { it.serverId }.toSet()
                         
-                        // Добавляем новые
+                        // Определяем какие события удалены на сервере
+                        val serverIds = serverEvents.map { it.serverId }.toSet()
+                        val deletedServerIds = existingServerIds - serverIds
+                        
+                        // Удаляем только те, которых нет на сервере
+                        for (serverId in deletedServerIds) {
+                            val eventId = "${accountId}_${serverId}"
+                            CalendarReminderReceiver.cancelReminder(context, eventId)
+                            calendarEventDao.delete(eventId)
+                        }
+                        
+                        // Добавляем/обновляем события с сервера
                         val eventEntities = serverEvents.map { event ->
                             CalendarEventEntity(
                                 id = "${accountId}_${event.serverId}",
@@ -334,9 +346,14 @@ class CalendarRepository(private val context: Context) {
                         }
                         
                         if (eventEntities.isNotEmpty()) {
+                            // INSERT OR REPLACE — обновляет существующие
                             calendarEventDao.insertAll(eventEntities)
-                            // Планируем напоминания для всех событий
-                            CalendarReminderReceiver.rescheduleAllReminders(context, eventEntities)
+                            // Перепланируем напоминания только для новых/изменённых событий
+                            val newServerIds = serverIds - existingServerIds
+                            val newEvents = eventEntities.filter { it.serverId in newServerIds }
+                            if (newEvents.isNotEmpty()) {
+                                CalendarReminderReceiver.rescheduleAllReminders(context, newEvents)
+                            }
                         }
                         
                         EasResult.Success(eventEntities.size)

@@ -9,6 +9,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
+// Кэш для vCard regex паттернов
+private val vcardFieldCache = mutableMapOf<String, Regex>()
+private val vcardAllFieldsCache = mutableMapOf<String, Regex>()
+
 /**
  * Репозиторий для работы с контактами
  */
@@ -94,13 +98,24 @@ class ContactRepository(context: Context) {
                     is EasResult.Success -> {
                         val serverContacts = result.data
                         
-                        // Удаляем старые Exchange контакты для этого аккаунта
-                        contactDao.deleteExchangeContacts(accountId)
+                        // Получаем существующие Exchange контакты
+                        val existingContacts = contactDao.getExchangeContactsList(accountId)
+                        val existingEmails = existingContacts.map { it.email.lowercase() }.toSet()
                         
-                        // Добавляем новые
+                        // Определяем какие контакты удалены на сервере
+                        val serverEmails = serverContacts.map { it.email.lowercase() }.toSet()
+                        val deletedEmails = existingEmails - serverEmails
+                        
+                        // Удаляем только те, которых нет на сервере
+                        for (email in deletedEmails) {
+                            val contactId = "${accountId}_exchange_${email.hashCode()}"
+                            contactDao.deleteById(contactId)
+                        }
+                        
+                        // Добавляем/обновляем контакты с сервера
                         val contactEntities = serverContacts.map { galContact ->
                             ContactEntity(
-                                id = "${accountId}_exchange_${galContact.email.hashCode()}",
+                                id = "${accountId}_exchange_${galContact.email.lowercase().hashCode()}",
                                 accountId = accountId,
                                 serverId = galContact.email, // Используем email как serverId
                                 displayName = galContact.displayName.ifBlank { 
@@ -119,6 +134,7 @@ class ContactRepository(context: Context) {
                         }
                         
                         if (contactEntities.isNotEmpty()) {
+                            // INSERT OR REPLACE — обновляет существующие
                             contactDao.insertAll(contactEntities)
                         }
                         
@@ -181,10 +197,21 @@ class ContactRepository(context: Context) {
                     return@withContext EasResult.Success(0)
                 }
                 
-                // Удаляем старые Exchange контакты
-                contactDao.deleteExchangeContacts(accountId)
+                // Получаем существующие Exchange контакты
+                val existingContacts = contactDao.getExchangeContactsList(accountId)
+                val existingEmails = existingContacts.map { it.email.lowercase() }.toSet()
                 
-                // Сохраняем новые
+                // Определяем какие контакты удалены на сервере
+                val serverEmails = allContacts.map { it.email.lowercase() }.toSet()
+                val deletedEmails = existingEmails - serverEmails
+                
+                // Удаляем только те, которых нет на сервере
+                for (email in deletedEmails) {
+                    val contactId = "${accountId}_gal_${email.hashCode()}"
+                    contactDao.deleteById(contactId)
+                }
+                
+                // Добавляем/обновляем контакты с сервера
                 val contactEntities = allContacts.mapNotNull { galContact ->
                     if (galContact.email.isBlank()) return@mapNotNull null
                     ContactEntity(
@@ -207,6 +234,7 @@ class ContactRepository(context: Context) {
                 }
                 
                 if (contactEntities.isNotEmpty()) {
+                    // INSERT OR REPLACE — обновляет существующие
                     contactDao.insertAll(contactEntities)
                 }
                 
@@ -606,7 +634,9 @@ class ContactRepository(context: Context) {
     }
     
     private fun extractVCardField(vcard: String, field: String): String? {
-        val pattern = "(?m)^$field[^:]*:(.*)$".toRegex()
+        val pattern = vcardFieldCache.getOrPut(field) {
+            "(?m)^$field[^:]*:(.*)$".toRegex()
+        }
         return pattern.find(vcard)?.groupValues?.get(1)?.trim()
             ?.replace("\\n", "\n")
             ?.replace("\\,", ",")
@@ -615,7 +645,9 @@ class ContactRepository(context: Context) {
     }
     
     private fun extractAllVCardFields(vcard: String, field: String): List<Pair<String, String>> {
-        val pattern = "(?m)^($field[^:]*):(.*)$".toRegex()
+        val pattern = vcardAllFieldsCache.getOrPut(field) {
+            "(?m)^($field[^:]*):(.*)$".toRegex()
+        }
         return pattern.findAll(vcard).map { 
             it.groupValues[1] to it.groupValues[2].trim()
         }.toList()

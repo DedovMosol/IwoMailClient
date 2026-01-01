@@ -11,6 +11,9 @@ import javax.mail.internet.InternetAddress
 import javax.mail.internet.MimeMessage
 import javax.mail.internet.MimeMultipart
 
+// Предкомпилированный regex для производительности
+private val HTML_TAG_REGEX = Regex("<[^>]*>")
+
 /**
  * Клиент для работы с IMAP серверами
  */
@@ -141,7 +144,7 @@ class ImapClient(
                 ?.joinToString(", ") { (it as? InternetAddress)?.address ?: "" } ?: "",
             cc = message.getRecipients(Message.RecipientType.CC)
                 ?.joinToString(", ") { (it as? InternetAddress)?.address ?: "" } ?: "",
-            subject = message.subject ?: "(Без темы)",
+            subject = message.subject ?: "(No subject)",
             preview = getPreview(message),
             body = getBody(message),
             bodyType = if (getBody(message).contains("<html", ignoreCase = true)) 2 else 1,
@@ -155,7 +158,7 @@ class ImapClient(
     
     private fun getPreview(message: Message): String {
         return try {
-            getBody(message).take(200).replace(Regex("<[^>]*>"), "").trim()
+            getBody(message).take(200).replace(HTML_TAG_REGEX, "").trim()
         } catch (_: Exception) { "" }
     }
     

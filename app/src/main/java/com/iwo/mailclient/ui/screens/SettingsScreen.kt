@@ -29,6 +29,7 @@ import com.iwo.mailclient.data.repository.SettingsRepository
 import com.iwo.mailclient.sync.SyncWorker
 import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.LocalLanguage
+import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.isRussian
 import com.iwo.mailclient.ui.theme.LocalColorTheme
@@ -299,7 +300,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("iwo Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.4.0") },
+                    supportingContent = { Text("${Strings.version} 1.4.1") },
                     leadingContent = { Icon(AppIcons.Info, null) }
                 )
             }
@@ -492,7 +493,7 @@ private fun AccountSettingsItem(
                             }
                             android.widget.Toast.makeText(
                                 context,
-                                if (isRu) "Сертификат экспортирован" else "Certificate exported",
+                                NotificationStrings.getCertificateExported(isRu),
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -500,7 +501,7 @@ private fun AccountSettingsItem(
                 } catch (e: Exception) {
                     android.widget.Toast.makeText(
                         context,
-                        if (isRu) "Ошибка экспорта" else "Export error",
+                        NotificationStrings.getExportError(isRu),
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -543,7 +544,7 @@ private fun AccountSettingsItem(
                     if (extension !in validExtensions) {
                         android.widget.Toast.makeText(
                             context,
-                            if (isRu) "Неверный формат файла" else "Invalid file format",
+                            NotificationStrings.getInvalidFileFormat(isRu),
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                         return@launch
@@ -569,13 +570,13 @@ private fun AccountSettingsItem(
                     onCertificateChange(certFile.absolutePath)
                     android.widget.Toast.makeText(
                         context,
-                        if (isRu) "Сертификат обновлён" else "Certificate updated",
+                        NotificationStrings.getCertificateUpdated(isRu),
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 } catch (e: Exception) {
                     android.widget.Toast.makeText(
                         context,
-                        if (isRu) "Ошибка загрузки сертификата" else "Certificate loading error",
+                        NotificationStrings.getCertificateLoadingError(isRu),
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -597,7 +598,7 @@ private fun AccountSettingsItem(
                 Column {
                     // Информация о сертификате
                     Text(
-                        if (isRu) "Файл:" else "File:",
+                        Strings.fileLabel,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -606,7 +607,7 @@ private fun AccountSettingsItem(
                     Spacer(modifier = Modifier.height(8.dp))
                     
                     Text(
-                        if (isRu) "Размер:" else "Size:",
+                        Strings.sizeLabel,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -626,7 +627,7 @@ private fun AccountSettingsItem(
                         ) {
                             Icon(AppIcons.Download, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRu) "Экспортировать" else "Export")
+                            Text(Strings.exportAction)
                         }
                         
                         // Заменить
@@ -639,7 +640,7 @@ private fun AccountSettingsItem(
                         ) {
                             Icon(AppIcons.SwapHoriz, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRu) "Заменить" else "Replace")
+                            Text(Strings.replaceAction)
                         }
                         
                         // Удалить
@@ -649,12 +650,9 @@ private fun AccountSettingsItem(
                             com.iwo.mailclient.ui.theme.StyledAlertDialog(
                                 onDismissRequest = { showDeleteConfirm = false },
                                 icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
-                                title = { Text(if (isRu) "Удалить сертификат?" else "Remove certificate?") },
+                                title = { Text(Strings.removeCertificateTitle) },
                                 text = {
-                                    Text(
-                                        if (isRu) "Без сертификата подключение к серверу может не работать. Вы уверены?"
-                                        else "Connection to server may fail without certificate. Are you sure?"
-                                    )
+                                    Text(Strings.removeCertificateWarning)
                                 },
                                 confirmButton = {
                                     TextButton(
@@ -666,12 +664,12 @@ private fun AccountSettingsItem(
                                             onCertificateChange(null)
                                             android.widget.Toast.makeText(
                                                 context,
-                                                if (isRu) "Сертификат удалён" else "Certificate removed",
+                                                NotificationStrings.getCertificateRemoved(isRu),
                                                 android.widget.Toast.LENGTH_SHORT
                                             ).show()
                                         }
                                     ) {
-                                        Text(if (isRu) "Удалить" else "Remove", color = MaterialTheme.colorScheme.error)
+                                        Text(Strings.removeAction, color = MaterialTheme.colorScheme.error)
                                     }
                                 },
                                 dismissButton = {
@@ -691,7 +689,7 @@ private fun AccountSettingsItem(
                         ) {
                             Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRu) "Удалить" else "Remove")
+                            Text(Strings.removeAction)
                         }
                     }
                 }
@@ -970,8 +968,7 @@ private fun AccountSettingsItem(
                 supportingContent = { 
                     Text(
                         if (signatures.isEmpty()) Strings.noSignature 
-                        else if (isRu) "${signatures.size} подпис${if (signatures.size == 1) "ь" else if (signatures.size in 2..4) "и" else "ей"}"
-                        else "${signatures.size} signature${if (signatures.size > 1) "s" else ""}",
+                        else Strings.signaturesCount(signatures.size),
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1
                     ) 
@@ -1042,12 +1039,12 @@ private fun AccountSettingsItem(
  */
 fun getContactsSyncIntervalText(days: Int, isRu: Boolean): String {
     return when (days) {
-        0 -> if (isRu) "Никогда" else "Never"
-        1 -> if (isRu) "Ежедневно" else "Daily"
-        7 -> if (isRu) "Еженедельно" else "Weekly"
-        14 -> if (isRu) "Раз в 2 недели" else "Every 2 weeks"
-        30 -> if (isRu) "Ежемесячно" else "Monthly"
-        else -> if (isRu) "Каждые $days дней" else "Every $days days"
+        0 -> NotificationStrings.getNever(isRu)
+        1 -> NotificationStrings.getDaily(isRu)
+        7 -> NotificationStrings.getWeekly(isRu)
+        14 -> NotificationStrings.getEveryTwoWeeks(isRu)
+        30 -> NotificationStrings.getMonthly(isRu)
+        else -> NotificationStrings.getEveryNDays(days, isRu)
     }
 }
 
@@ -1062,11 +1059,11 @@ fun ContactsSyncDialog(
     onDismiss: () -> Unit
 ) {
     val options = listOf(
-        0 to (if (isRu) "Никогда" else "Never"),
-        1 to (if (isRu) "Ежедневно" else "Daily"),
-        7 to (if (isRu) "Еженедельно" else "Weekly"),
-        14 to (if (isRu) "Раз в 2 недели" else "Every 2 weeks"),
-        30 to (if (isRu) "Ежемесячно" else "Monthly")
+        0 to (NotificationStrings.getNever(isRu)),
+        1 to (NotificationStrings.getDaily(isRu)),
+        7 to (NotificationStrings.getWeekly(isRu)),
+        14 to (NotificationStrings.getEveryTwoWeeks(isRu)),
+        30 to (NotificationStrings.getMonthly(isRu))
     )
     
     com.iwo.mailclient.ui.theme.ScaledAlertDialog(
@@ -1417,7 +1414,7 @@ fun SignaturesManagementDialog(
         com.iwo.mailclient.ui.theme.StyledAlertDialog(
             onDismissRequest = { signatureToDelete = null },
             icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
-            title = { Text(if (isRu) "Удалить подпись?" else "Delete signature?") },
+            title = { Text(Strings.deleteSignatureTitle) },
             text = { Text(signature.name) },
             confirmButton = {
                 TextButton(
@@ -1456,12 +1453,12 @@ fun SignaturesManagementDialog(
     
     com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isRu) "Подписи" else "Signatures") },
+        title = { Text(Strings.signaturesTitle) },
         text = {
             Column {
                 if (signatures.isEmpty()) {
                     Text(
-                        if (isRu) "Нет подписей. Добавьте первую!" else "No signatures. Add your first!",
+                        Strings.noSignaturesHint,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 16.dp)
@@ -1485,7 +1482,7 @@ fun SignaturesManagementDialog(
                                     if (signature.isDefault) {
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            if (isRu) "(по умолч.)" else "(default)",
+                                            Strings.defaultLabel,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.primary
                                         )
@@ -1520,7 +1517,7 @@ fun SignaturesManagementDialog(
                     ) {
                         Icon(AppIcons.Add, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (isRu) "Добавить подпись" else "Add signature")
+                        Text(Strings.addSignatureAction)
                     }
                 }
             }
@@ -1551,14 +1548,14 @@ private fun SignatureEditDialog(
     
     com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (signature != null) (if (isRu) "Редактировать" else "Edit") else (if (isRu) "Новая подпись" else "New signature")) },
+        title = { Text(if (signature != null) Strings.editTitle else Strings.newSignatureTitle) },
         text = {
             Column {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text(if (isRu) "Название" else "Name") },
-                    placeholder = { Text(if (isRu) "Рабочая, Личная..." else "Work, Personal...") },
+                    label = { Text(Strings.nameLabel) },
+                    placeholder = { Text(Strings.namePlaceholder) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1568,7 +1565,7 @@ private fun SignatureEditDialog(
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text(if (isRu) "Текст подписи" else "Signature text") },
+                    label = { Text(Strings.signatureTextLabel) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 100.dp),
@@ -1592,7 +1589,7 @@ private fun SignatureEditDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        if (isRu) "По умолчанию" else "Default",
+                        Strings.defaultCheckbox,
                         color = if (canToggleDefault) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

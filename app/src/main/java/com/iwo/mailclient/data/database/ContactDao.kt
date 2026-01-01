@@ -17,6 +17,9 @@ interface ContactDao {
     @Query("SELECT * FROM contacts WHERE accountId = :accountId AND source = 'EXCHANGE' ORDER BY displayName COLLATE NOCASE")
     fun getExchangeContacts(accountId: Long): Flow<List<ContactEntity>>
     
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND source = 'EXCHANGE' ORDER BY displayName COLLATE NOCASE")
+    suspend fun getExchangeContactsList(accountId: Long): List<ContactEntity>
+    
     @Query("SELECT * FROM contacts WHERE accountId = :accountId ORDER BY displayName COLLATE NOCASE")
     suspend fun getContactsByAccountList(accountId: Long): List<ContactEntity>
     

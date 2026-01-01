@@ -190,9 +190,6 @@ fun EmailListScreen(
     val isDraftsFolder = folder?.type == 3 // type 3 = Drafts
     val isSentFolder = folder?.type == 5 // type 5 = Sent Items
     
-    // Для папки Черновики загружаем письма напрямую из базы (не через Flow)
-    var draftsEmails by remember { mutableStateOf<List<EmailEntity>>(emptyList()) }
-    
     // Фильтры - используем initialFilter как начальное значение
     var showFilters by rememberSaveable { mutableStateOf(initialFilter != MailFilter.ALL) }
     var mailFilter by rememberSaveable { mutableStateOf(initialFilter) }
@@ -210,10 +207,9 @@ fun EmailListScreen(
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<FolderEntity>>(emptyList()) }
 
-    // Используем локальные письма для Черновиков, иначе Flow
+    // Используем Flow для всех папок включая Черновики (теперь они серверные)
     val displayEmails = when {
         isFavorites -> favoriteEmails
-        isDraftsFolder -> draftsEmails
         else -> emails
     }
 
@@ -262,19 +258,11 @@ fun EmailListScreen(
     
     var folderSynced by rememberSaveable { mutableStateOf(false) }
     
-    // Загружаем папку и черновики
+    // Загружаем папку
     LaunchedEffect(folderId, activeAccount?.id) {
         if (!isFavorites) {
             val loadedFolder = withContext(Dispatchers.IO) { database.folderDao().getFolder(folderId) }
             folder = loadedFolder
-            
-            // Для папки Черновики загружаем письма по serverId
-            val accountId = activeAccount?.id
-            if (loadedFolder?.type == 3 && accountId != null) {
-                draftsEmails = withContext(Dispatchers.IO) {
-                    database.emailDao().getLocalDraftEmails(accountId)
-                }
-            }
         }
     }
 
@@ -285,18 +273,7 @@ fun EmailListScreen(
                 isRefreshing = true
                 errorMessage = null
                 
-                // Для Черновиков просто перезагружаем из базы по serverId
-                if (f.type == 3) {
-                    val accountId = activeAccount?.id
-                    if (accountId != null) {
-                        draftsEmails = withContext(Dispatchers.IO) {
-                            database.emailDao().getLocalDraftEmails(accountId)
-                        }
-                    }
-                    isRefreshing = false
-                    return@launch
-                }
-                
+                // Синхронизируем папку (для Черновиков вызовется syncDrafts)
                 val result = withContext(Dispatchers.IO) { mailRepo.syncEmails(f.accountId, folderId) }
                 when (result) {
                     is EasResult.Success -> {}
@@ -339,16 +316,6 @@ fun EmailListScreen(
                 }
             }
             selectedIds = emptySet()
-            
-            // Обновляем список черновиков после удаления
-            if (isDraftsFolder) {
-                val accountId = activeAccount?.id
-                if (accountId != null) {
-                    draftsEmails = withContext(Dispatchers.IO) {
-                        database.emailDao().getLocalDraftEmails(accountId)
-                    }
-                }
-            }
         }
     }
     
@@ -377,16 +344,6 @@ fun EmailListScreen(
                 }
             }
             selectedIds = emptySet()
-            
-            // Обновляем список черновиков после удаления
-            if (isDraftsFolder) {
-                val accountId = activeAccount?.id
-                if (accountId != null) {
-                    draftsEmails = withContext(Dispatchers.IO) {
-                        database.emailDao().getLocalDraftEmails(accountId)
-                    }
-                }
-            }
         }
     }
     
@@ -757,32 +714,6 @@ fun EmailListScreen(
                 totalCount = displayEmails.size,
                 filteredCount = filteredEmails.size
             )
-            
-            // Уведомление о локальных черновиках
-            if (isDraftsFolder) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            AppIcons.Info,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = Strings.localDraftsNotice,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                }
-            }
             
             // Список писем
             EmailList(
@@ -1324,33 +1255,6 @@ private fun EmailListContent(
     }
     
     LazyColumn(state = listState) {
-        // Уведомление для папки Черновики - компактный баннер
-        if (isDrafts) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        AppIcons.PhoneAndroid,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = Strings.localDraftsNotice,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-        
         if (isSelectionMode) {
             item {
                 Row(

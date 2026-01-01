@@ -56,6 +56,18 @@ import kotlinx.coroutines.withContext
 import java.util.*
 import java.util.concurrent.TimeUnit
 
+// Предкомпилированные regex для stripHtml (производительность)
+private val BR_REGEX = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
+private val BLOCK_END_REGEX = Regex("</(?:p|div|li|tr)>", RegexOption.IGNORE_CASE)
+private val TD_END_REGEX = Regex("</td>", RegexOption.IGNORE_CASE)
+private val STYLE_REGEX = Regex("<style[^>]*>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+private val SCRIPT_REGEX = Regex("<script[^>]*>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+private val COMMENT_REGEX = Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL)
+private val TAG_REGEX = Regex("<[^>]+>")
+private val SPACES_REGEX = Regex("[ \\t]+")
+private val NEWLINES_REGEX = Regex("\\n{3,}")
+private val SIGNATURE_REGEX = Regex("\n\n--\n.*", RegexOption.DOT_MATCHES_ALL)
+
 /**
  * Подсказка для автодополнения email
  */
@@ -110,6 +122,7 @@ fun ComposeScreen(
     var attachments by remember { mutableStateOf<List<AttachmentInfo>>(emptyList()) }
     var requestReadReceipt by rememberSaveable { mutableStateOf(false) }
     var requestDeliveryReceipt by rememberSaveable { mutableStateOf(false) }
+    var highPriority by rememberSaveable { mutableStateOf(false) }
     
     // Подписи
     var signatures by remember { mutableStateOf<List<SignatureEntity>>(emptyList()) }
@@ -271,6 +284,14 @@ fun ComposeScreen(
         }
     }
     
+    // Локализованные строки для цитирования (нужно получить до LaunchedEffect)
+    val originalMessageStr = Strings.originalMessage
+    val forwardedMessageStr = Strings.forwardedMessage
+    val quoteFromStr = Strings.quoteFrom
+    val quoteDateStr = Strings.quoteDate
+    val quoteSubjectStr = Strings.quoteSubject
+    val quoteToStr = Strings.quoteTo
+    
     // Загружаем данные для ответа
     LaunchedEffect(replyToEmailId) {
         replyToEmailId?.let { emailId ->
@@ -293,10 +314,10 @@ fun ComposeScreen(
                     ?: activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
                 // Очищаем HTML из тела письма для цитаты
                 val plainBody = stripHtml(email.body)
-                body = "$signature\n\n--- Исходное сообщение ---\n" +
-                       "От: ${email.from}\n" +
-                       "Дата: ${formatDate(email.dateReceived)}\n" +
-                       "Тема: ${email.subject}\n\n" +
+                body = "$signature\n\n--- $originalMessageStr ---\n" +
+                       "$quoteFromStr: ${email.from}\n" +
+                       "$quoteDateStr: ${formatDate(email.dateReceived)}\n" +
+                       "$quoteSubjectStr: ${email.subject}\n\n" +
                        plainBody
             }
         }
@@ -318,11 +339,11 @@ fun ComposeScreen(
                     ?: activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { "\n\n--\n$it" } ?: ""
                 // Очищаем HTML из тела письма для пересылки
                 val plainBody = stripHtml(email.body)
-                body = "$signature\n\n---------- Пересылаемое сообщение ----------\n" +
-                       "От: ${email.from}\n" +
-                       "Дата: ${formatDate(email.dateReceived)}\n" +
-                       "Тема: ${email.subject}\n" +
-                       "Кому: ${email.to}\n\n" +
+                body = "$signature\n\n---------- $forwardedMessageStr ----------\n" +
+                       "$quoteFromStr: ${email.from}\n" +
+                       "$quoteDateStr: ${formatDate(email.dateReceived)}\n" +
+                       "$quoteSubjectStr: ${email.subject}\n" +
+                       "$quoteToStr: ${email.to}\n\n" +
                        plainBody
             }
         }
@@ -350,8 +371,7 @@ fun ComposeScreen(
     val draftSavedMsg = Strings.draftSaved
     val draftSaveErrorMsg = Strings.draftSaveError
     
-    // Функция сохранения черновика (только локально)
-    // EAS не поддерживает создание email через Sync Add
+    // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
         scope.launch {
             isSavingDraft = true
@@ -364,14 +384,17 @@ fun ComposeScreen(
             }
             
             try {
-                // Если редактируем существующий черновик — удаляем его перед созданием нового
+                // Если редактируем существующий черновик — удаляем его
                 editDraftId?.let { draftId ->
-                    withContext(Dispatchers.IO) {
-                        database.emailDao().delete(draftId)
+                    val email = withContext(Dispatchers.IO) { database.emailDao().getEmail(draftId) }
+                    if (email != null) {
+                        withContext(Dispatchers.IO) {
+                            mailRepo.deleteDraft(account.id, email.serverId)
+                        }
                     }
                 }
                 
-                val success = withContext(Dispatchers.IO) {
+                val serverId = withContext(Dispatchers.IO) {
                     mailRepo.saveDraft(
                         accountId = account.id,
                         to = to,
@@ -384,7 +407,7 @@ fun ComposeScreen(
                     )
                 }
                 
-                if (success) {
+                if (serverId != null) {
                     Toast.makeText(context, draftSavedMsg, Toast.LENGTH_SHORT).show()
                     onBackClick()
                 } else {
@@ -420,7 +443,7 @@ fun ComposeScreen(
             if (scheduledTime != null) {
                 val delay = scheduledTime - System.currentTimeMillis()
                 if (delay > 0) {
-                    scheduleEmail(context, account.id, to, cc, bcc, subject, body, delay, requestReadReceipt, requestDeliveryReceipt)
+                    scheduleEmail(context, account.id, to, cc, bcc, subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
                     Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
                     onSent()
                     isSending = false
@@ -451,9 +474,9 @@ fun ComposeScreen(
             )
             
             val result = if (attachmentDataList.isEmpty()) {
-                client.sendMail(to, subject, body, cc, requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt)
+                client.sendMail(to, subject, body, cc, bcc, importance = if (highPriority) 2 else 1, requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt)
             } else {
-                client.sendMailWithAttachments(to, subject, body, cc, attachmentDataList, requestReadReceipt, requestDeliveryReceipt)
+                client.sendMailWithAttachments(to, subject, body, cc, bcc, attachmentDataList, requestReadReceipt, requestDeliveryReceipt, importance = if (highPriority) 2 else 1)
             }
             
             when (result) {
@@ -521,10 +544,9 @@ fun ComposeScreen(
     
     // Диалог выбора подписи
     if (showSignaturePicker) {
-        val isRu = currentLanguage == AppLanguage.RUSSIAN
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showSignaturePicker = false },
-            title = { Text(if (isRu) "Выбрать подпись" else "Select signature") },
+            title = { Text(Strings.selectSignature) },
             text = {
                 Column {
                     // Список подписей (без опции "Без подписи" — всегда должна быть выбрана одна)
@@ -536,9 +558,8 @@ fun ComposeScreen(
                                     val oldSignature = selectedSignature
                                     selectedSignature = signature
                                     // Заменяем подпись в body
-                                    val signaturePattern = "\n\n--\n.*".toRegex(RegexOption.DOT_MATCHES_ALL)
                                     body = if (oldSignature != null || body.contains("\n\n--\n")) {
-                                        body.replace(signaturePattern, "\n\n--\n${signature.text}")
+                                        body.replace(SIGNATURE_REGEX, "\n\n--\n${signature.text}")
                                     } else {
                                         body + "\n\n--\n${signature.text}"
                                     }
@@ -747,6 +768,17 @@ fun ComposeScreen(
                                 leadingIcon = {
                                     Checkbox(
                                         checked = requestDeliveryReceipt,
+                                        onCheckedChange = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(Strings.highPriority) },
+                                onClick = { highPriority = !highPriority },
+                                leadingIcon = {
+                                    Checkbox(
+                                        checked = highPriority,
                                         onCheckedChange = null,
                                         modifier = Modifier.size(24.dp)
                                     )
@@ -1080,6 +1112,7 @@ private fun ScheduleSendDialog(
     onDismiss: () -> Unit,
     onSchedule: (Long) -> Unit
 ) {
+    val context = LocalContext.current
     var showCustomPicker by remember { mutableStateOf(false) }
     var customDate by remember { mutableStateOf(Calendar.getInstance()) }
     
@@ -1139,7 +1172,7 @@ private fun ScheduleSendDialog(
                             IconButton(onClick = {
                                 // Показываем DatePicker через Android API
                                 android.app.DatePickerDialog(
-                                    android.app.Application().applicationContext,
+                                    context,
                                     { _, year, month, day ->
                                         customDate = (customDate.clone() as Calendar).apply {
                                             set(Calendar.YEAR, year)
@@ -1345,7 +1378,8 @@ private fun scheduleEmail(
     body: String,
     delayMillis: Long,
     requestReadReceipt: Boolean = false,
-    requestDeliveryReceipt: Boolean = false
+    requestDeliveryReceipt: Boolean = false,
+    importance: Int = 1
 ) {
     val data = workDataOf(
         "accountId" to accountId,
@@ -1355,7 +1389,8 @@ private fun scheduleEmail(
         "subject" to subject,
         "body" to body,
         "requestReadReceipt" to requestReadReceipt,
-        "requestDeliveryReceipt" to requestDeliveryReceipt
+        "requestDeliveryReceipt" to requestDeliveryReceipt,
+        "importance" to importance
     )
     
     val request = OneTimeWorkRequestBuilder<ScheduledEmailWorker>()
@@ -1373,9 +1408,9 @@ private fun formatDate(timestamp: Long): String {
 
 private fun formatFileSize(bytes: Long): String {
     return when {
-        bytes < 1024 -> "$bytes Б"
-        bytes < 1024 * 1024 -> "${bytes / 1024} КБ"
-        else -> String.format("%.1f МБ", bytes / (1024.0 * 1024.0))
+        bytes < 1024 -> if (java.util.Locale.getDefault().language == "ru") "$bytes Б" else "$bytes B"
+        bytes < 1024 * 1024 -> if (java.util.Locale.getDefault().language == "ru") "${bytes / 1024} КБ" else "${bytes / 1024} KB"
+        else -> if (java.util.Locale.getDefault().language == "ru") String.format("%.1f МБ", bytes / (1024.0 * 1024.0)) else String.format("%.1f MB", bytes / (1024.0 * 1024.0))
     }
 }
 
@@ -1396,6 +1431,7 @@ class ScheduledEmailWorker(
         val body = inputData.getString("body") ?: ""
         val requestReadReceipt = inputData.getBoolean("requestReadReceipt", false)
         val requestDeliveryReceipt = inputData.getBoolean("requestDeliveryReceipt", false)
+        val importance = inputData.getInt("importance", 1)
         
         val accountRepo = AccountRepository(applicationContext)
         val account = accountRepo.getAccount(accountId) ?: return Result.failure()
@@ -1411,10 +1447,13 @@ class ScheduledEmailWorker(
             certificatePath = account.certificatePath
         )
         
-        return when (client.sendMail(to, subject, body, cc, requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt)) {
+        return when (client.sendMail(to, subject, body, cc, bcc, importance = importance, requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt)) {
             is EasResult.Success -> {
                 // Показываем уведомление об успешной отправке
-                showNotification("Письмо отправлено", "Запланированное письмо для $to отправлено")
+                val isRu = java.util.Locale.getDefault().language == "ru"
+                val title = NotificationStrings.getEmailSent(isRu)
+                val text = NotificationStrings.getScheduledEmailSent(to, isRu)
+                showNotification(title, text)
                 Result.success()
             }
             is EasResult.Error -> Result.retry()
@@ -1446,18 +1485,18 @@ private fun stripHtml(html: String): String {
     
     return html
         // Заменяем <br>, <br/>, <br /> на переносы строк
-        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+        .replace(BR_REGEX, "\n")
         // Заменяем </p>, </div>, </li> на переносы строк
-        .replace(Regex("</(?:p|div|li|tr)>", RegexOption.IGNORE_CASE), "\n")
+        .replace(BLOCK_END_REGEX, "\n")
         // Заменяем </td> на табуляцию
-        .replace(Regex("</td>", RegexOption.IGNORE_CASE), "\t")
+        .replace(TD_END_REGEX, "\t")
         // Удаляем <style>...</style> и <script>...</script> блоки
-        .replace(Regex("<style[^>]*>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
-        .replace(Regex("<script[^>]*>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+        .replace(STYLE_REGEX, "")
+        .replace(SCRIPT_REGEX, "")
         // Удаляем HTML комментарии
-        .replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        .replace(COMMENT_REGEX, "")
         // Удаляем все оставшиеся HTML теги
-        .replace(Regex("<[^>]+>"), "")
+        .replace(TAG_REGEX, "")
         // Декодируем HTML entities
         .replace("&nbsp;", " ")
         .replace("&amp;", "&")
@@ -1467,9 +1506,9 @@ private fun stripHtml(html: String): String {
         .replace("&#39;", "'")
         .replace("&apos;", "'")
         // Убираем множественные пробелы
-        .replace(Regex("[ \\t]+"), " ")
+        .replace(SPACES_REGEX, " ")
         // Убираем множественные переносы строк (больше 2 подряд)
-        .replace(Regex("\\n{3,}"), "\n\n")
+        .replace(NEWLINES_REGEX, "\n\n")
         // Убираем пробелы в начале и конце строк
         .lines().joinToString("\n") { it.trim() }
         .trim()

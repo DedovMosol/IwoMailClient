@@ -34,9 +34,10 @@ class SyncService : Service() {
     }
     
     private fun createNotification(): Notification {
+        val isRu = java.util.Locale.getDefault().language == "ru"
         return NotificationCompat.Builder(this, MailApplication.CHANNEL_SYNC)
-            .setContentTitle("Синхронизация почты")
-            .setContentText("Проверка новых писем...")
+            .setContentTitle(com.iwo.mailclient.ui.NotificationStrings.getSyncMailTitle(isRu))
+            .setContentText(com.iwo.mailclient.ui.NotificationStrings.getSyncMailText(isRu))
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

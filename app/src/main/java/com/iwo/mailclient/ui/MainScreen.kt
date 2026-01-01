@@ -1431,7 +1431,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.4.0",
+                                text = "v1.4.1",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1941,7 +1941,7 @@ private fun FolderCardDisplay(
     Card(
         onClick = onClick,
         modifier = modifier
-            .height(80.dp)
+            .heightIn(min = 80.dp)
             .scale(scale)
             .shadow(elevation, RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
@@ -1986,9 +1986,9 @@ private fun FolderCardDisplay(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = name,
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         color = Color.White
                     )

@@ -27,6 +27,7 @@ import com.iwo.mailclient.data.database.MailDatabase
 import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.SettingsRepository
 import com.iwo.mailclient.sync.SyncWorker
+import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.isRussian
 import com.iwo.mailclient.ui.theme.LocalColorTheme
@@ -99,7 +100,7 @@ fun AccountSettingsScreen(
                             }
                             android.widget.Toast.makeText(
                                 context,
-                                if (isRu) "Сертификат экспортирован" else "Certificate exported",
+                                com.iwo.mailclient.ui.NotificationStrings.getCertificateExported(isRu),
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -107,7 +108,7 @@ fun AccountSettingsScreen(
                 } catch (e: Exception) {
                     android.widget.Toast.makeText(
                         context,
-                        if (isRu) "Ошибка экспорта" else "Export error",
+                        com.iwo.mailclient.ui.NotificationStrings.getExportError(isRu),
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -137,7 +138,7 @@ fun AccountSettingsScreen(
                     if (extension !in validExtensions) {
                         android.widget.Toast.makeText(
                             context,
-                            if (isRu) "Неверный формат файла" else "Invalid file format",
+                            com.iwo.mailclient.ui.NotificationStrings.getInvalidFileFormat(isRu),
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                         return@launch
@@ -162,13 +163,13 @@ fun AccountSettingsScreen(
                     account = accountRepo.getAccount(accountId)
                     android.widget.Toast.makeText(
                         context,
-                        if (isRu) "Сертификат обновлён" else "Certificate updated",
+                        com.iwo.mailclient.ui.NotificationStrings.getCertificateUpdated(isRu),
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 } catch (e: Exception) {
                     android.widget.Toast.makeText(
                         context,
-                        if (isRu) "Ошибка загрузки сертификата" else "Certificate loading error",
+                        com.iwo.mailclient.ui.NotificationStrings.getCertificateLoadingError(isRu),
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -318,7 +319,7 @@ fun AccountSettingsScreen(
     if (showNotesSyncDialog) {
         SyncIntervalDialog(
             isRu = isRu,
-            title = if (isRu) "Синхронизация заметок" else "Notes sync",
+            title = com.iwo.mailclient.ui.NotificationStrings.getNotesSyncTitle(isRu),
             currentDays = currentAccount.notesSyncIntervalDays,
             onDaysChange = { days ->
                 scope.launch {
@@ -334,7 +335,7 @@ fun AccountSettingsScreen(
     if (showCalendarSyncDialog) {
         SyncIntervalDialog(
             isRu = isRu,
-            title = if (isRu) "Синхронизация календаря" else "Calendar sync",
+            title = com.iwo.mailclient.ui.NotificationStrings.getCalendarSyncTitle(isRu),
             currentDays = currentAccount.calendarSyncIntervalDays,
             onDaysChange = { days ->
                 scope.launch {
@@ -357,12 +358,9 @@ fun AccountSettingsScreen(
             com.iwo.mailclient.ui.theme.StyledAlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
                 icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
-                title = { Text(if (isRu) "Удалить сертификат?" else "Remove certificate?") },
+                title = { Text(com.iwo.mailclient.ui.NotificationStrings.getDeleteCertificateTitle(isRu)) },
                 text = {
-                    Text(
-                        if (isRu) "Без сертификата подключение к серверу может не работать. Вы уверены?"
-                        else "Connection to server may fail without certificate. Are you sure?"
-                    )
+                    Text(com.iwo.mailclient.ui.NotificationStrings.getDeleteCertificateWarning(isRu))
                 },
                 confirmButton = {
                     TextButton(
@@ -376,12 +374,12 @@ fun AccountSettingsScreen(
                             }
                             android.widget.Toast.makeText(
                                 context,
-                                if (isRu) "Сертификат удалён" else "Certificate removed",
+                                com.iwo.mailclient.ui.NotificationStrings.getCertificateRemoved(isRu),
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
                         }
                     ) {
-                        Text(if (isRu) "Удалить" else "Remove", color = MaterialTheme.colorScheme.error)
+                        Text(com.iwo.mailclient.ui.NotificationStrings.getRemove(isRu), color = MaterialTheme.colorScheme.error)
                     }
                 },
                 dismissButton = {
@@ -398,10 +396,10 @@ fun AccountSettingsScreen(
             title = { Text(Strings.serverCertificate) },
             text = {
                 Column {
-                    Text(if (isRu) "Файл:" else "File:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(com.iwo.mailclient.ui.NotificationStrings.getFileLabel(isRu), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(certFile.name, style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(if (isRu) "Размер:" else "Size:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(com.iwo.mailclient.ui.NotificationStrings.getSizeLabel(isRu), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(certFileSize, style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(16.dp))
                     
@@ -415,7 +413,7 @@ fun AccountSettingsScreen(
                         ) {
                             Icon(AppIcons.Download, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRu) "Экспортировать" else "Export")
+                            Text(com.iwo.mailclient.ui.NotificationStrings.getExport(isRu))
                         }
                         OutlinedButton(
                             onClick = {
@@ -426,7 +424,7 @@ fun AccountSettingsScreen(
                         ) {
                             Icon(AppIcons.SwapHoriz, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRu) "Заменить" else "Replace")
+                            Text(com.iwo.mailclient.ui.NotificationStrings.getReplace(isRu))
                         }
                         OutlinedButton(
                             onClick = { showDeleteConfirm = true },
@@ -435,7 +433,7 @@ fun AccountSettingsScreen(
                         ) {
                             Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRu) "Удалить" else "Remove")
+                            Text(com.iwo.mailclient.ui.NotificationStrings.getRemove(isRu))
                         }
                     }
                 }
@@ -554,8 +552,7 @@ fun AccountSettingsScreen(
                     supportingContent = { 
                         Text(
                             if (signatures.isEmpty()) Strings.noSignature 
-                            else if (isRu) "${signatures.size} подпис${if (signatures.size == 1) "ь" else if (signatures.size in 2..4) "и" else "ей"}"
-                            else "${signatures.size} signature${if (signatures.size > 1) "s" else ""}"
+                            else Strings.signaturesCount(signatures.size)
                         ) 
                     },
                     leadingContent = { Icon(AppIcons.Draw, null) },
@@ -590,7 +587,7 @@ fun AccountSettingsScreen(
                 // Синхронизация заметок
                 item {
                     ListItem(
-                        headlineContent = { Text(if (isRu) "Синхронизация заметок" else "Notes sync") },
+                        headlineContent = { Text(Strings.notesSync) },
                         supportingContent = { Text(getContactsSyncIntervalText(currentAccount.notesSyncIntervalDays, isRu)) },
                         leadingContent = { Icon(AppIcons.StickyNote, null) },
                         trailingContent = { Icon(AppIcons.ChevronRight, null) },
@@ -601,7 +598,7 @@ fun AccountSettingsScreen(
                 // Синхронизация календаря
                 item {
                     ListItem(
-                        headlineContent = { Text(if (isRu) "Синхронизация календаря" else "Calendar sync") },
+                        headlineContent = { Text(Strings.calendarSync) },
                         supportingContent = { Text(getContactsSyncIntervalText(currentAccount.calendarSyncIntervalDays, isRu)) },
                         leadingContent = { Icon(AppIcons.CalendarMonth, null) },
                         trailingContent = { Icon(AppIcons.ChevronRight, null) },
@@ -625,11 +622,11 @@ private fun SyncIntervalDialog(
     onDismiss: () -> Unit
 ) {
     val intervals = listOf(
-        0 to (if (isRu) "Никогда" else "Never"),
-        1 to (if (isRu) "Ежедневно" else "Daily"),
-        7 to (if (isRu) "Еженедельно" else "Weekly"),
-        14 to (if (isRu) "Раз в 2 недели" else "Every 2 weeks"),
-        30 to (if (isRu) "Ежемесячно" else "Monthly")
+        0 to (NotificationStrings.getNever(isRu)),
+        1 to (NotificationStrings.getDaily(isRu)),
+        7 to (NotificationStrings.getWeekly(isRu)),
+        14 to (NotificationStrings.getEveryTwoWeeks(isRu)),
+        30 to (NotificationStrings.getMonthly(isRu))
     )
     
     com.iwo.mailclient.ui.theme.ScaledAlertDialog(

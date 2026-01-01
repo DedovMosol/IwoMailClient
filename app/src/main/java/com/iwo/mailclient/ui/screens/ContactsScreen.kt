@@ -605,7 +605,6 @@ fun ContactsScreen(
                         }
                         // Копировать в локальные (только для организации)
                         if (selectedTab == 1) {
-                            val copiedToLocalMsg = if (isRussian) "Скопировано в личные контакты" else "Copied to personal contacts"
                             IconButton(
                                 onClick = {
                                     scope.launch {
@@ -625,7 +624,8 @@ fun ContactsScreen(
                                             )
                                             copied++
                                         }
-                                        Toast.makeText(context, "$copiedToLocalMsg: $copied", Toast.LENGTH_SHORT).show()
+                                        val msg = com.iwo.mailclient.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
+                                        Toast.makeText(context, "$msg: $copied", Toast.LENGTH_SHORT).show()
                                     }
                                     isSelectionMode = false
                                     selectedContactIds = emptySet()
@@ -928,7 +928,7 @@ fun ContactsScreen(
                             syncError = null
                             when (val result = contactRepo.syncGalContactsToDb(accountId)) {
                                 is EasResult.Success -> {
-                                    val msg = if (isRussian) "Синхронизировано: ${result.data}" else "Synced: ${result.data}"
+                                    val msg = com.iwo.mailclient.ui.NotificationStrings.getSynced(result.data, isRussian)
                                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                 }
                                 is EasResult.Error -> {
@@ -1152,15 +1152,15 @@ private fun OrganizationContactsList(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    if (isRussian) "Адресная книга организации" else "Organization Address Book",
+                    com.iwo.mailclient.ui.NotificationStrings.getOrganizationAddressBook(isRussian),
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
                     if (contacts.isNotEmpty()) 
-                        "${if (isRussian) "Контактов:" else "Contacts:"} ${contacts.size}"
+                        com.iwo.mailclient.ui.NotificationStrings.getContactsCount(contacts.size, isRussian)
                     else 
-                        if (isRussian) "Глобальная адресная книга (GAL)" else "Global Address List (GAL)",
+                        com.iwo.mailclient.ui.NotificationStrings.getGlobalAddressList(isRussian),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1179,7 +1179,7 @@ private fun OrganizationContactsList(
                 } else {
                     Icon(
                         AppIcons.Sync,
-                        contentDescription = if (isRussian) "Синхронизировать" else "Sync",
+                        contentDescription = com.iwo.mailclient.ui.NotificationStrings.getSyncAction(isRussian),
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -1212,7 +1212,7 @@ private fun OrganizationContactsList(
                         CircularProgressIndicator()
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            if (isRussian) "Загрузка контактов..." else "Loading contacts...",
+                            com.iwo.mailclient.ui.NotificationStrings.getLoadingContacts(isRussian),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -1235,7 +1235,7 @@ private fun OrganizationContactsList(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            if (isRussian) "Нажмите для загрузки контактов" else "Tap to load contacts",
+                            com.iwo.mailclient.ui.NotificationStrings.getTapToLoadContacts(isRussian),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
@@ -1244,7 +1244,7 @@ private fun OrganizationContactsList(
                         OutlinedButton(onClick = onSyncClick) {
                             Icon(AppIcons.Sync, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRussian) "Загрузить" else "Load")
+                            Text(com.iwo.mailclient.ui.NotificationStrings.getLoadAction(isRussian))
                         }
                     }
                 }

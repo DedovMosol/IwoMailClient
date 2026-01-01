@@ -15,6 +15,11 @@ import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 import android.util.Base64
 
+// Предкомпилированные regex для производительности
+private val FETCH_STATUS_REGEX = "<Fetch>.*?<Status>(\\d+)</Status>".toRegex(RegexOption.DOT_MATCHES_ALL)
+private val DATA_REGEX = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
+private val SAFE_FILENAME_REGEX = Regex("[^a-zA-Z0-9._-]")
+
 /**
  * Менеджер для работы с вложениями Exchange
  */
@@ -52,8 +57,17 @@ class AttachmentManager(
             ))
         
         if (acceptAllCerts) {
+            // Принимаем все сертификаты (самоподписанные)
             builder.hostnameVerifier { _, _ -> true }
-            builder.sslSocketFactory(createTrustAllSslSocketFactory(), TrustAllManager())
+            val trustAllManager = TrustAllManager()
+            val sslContext = try {
+                javax.net.ssl.SSLContext.getInstance("TLS", "Conscrypt")
+            } catch (_: Exception) {
+                javax.net.ssl.SSLContext.getInstance("TLS")
+            }
+            sslContext.init(null, arrayOf<javax.net.ssl.TrustManager>(trustAllManager), java.security.SecureRandom())
+            // Используем TlsSocketFactory для поддержки старых TLS версий
+            builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), trustAllManager)
         } else {
             // Даже без принятия всех сертификатов, включаем старые TLS протоколы
             try {
@@ -77,17 +91,6 @@ class AttachmentManager(
     private fun generateStableDeviceId(username: String, suffix: String): String {
         val hash = (username + suffix).hashCode().toLong() and 0xFFFFFFFFL
         return "androidc${String.format("%010d", hash % 10000000000L)}"
-    }
-    
-    private fun createTrustAllSslSocketFactory(): javax.net.ssl.SSLSocketFactory {
-        val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(TrustAllManager())
-        val sslContext = try {
-            javax.net.ssl.SSLContext.getInstance("TLS", "Conscrypt")
-        } catch (e: Exception) {
-            javax.net.ssl.SSLContext.getInstance("TLS")
-        }
-        sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-        return TlsSocketFactory(sslContext.socketFactory)
     }
     
     companion object {
@@ -240,16 +243,14 @@ class AttachmentManager(
             val responseXml = wbxmlParser.parse(responseBody)
             
             // Проверяем статус внутри Fetch
-            val fetchStatusPattern = "<Fetch>.*?<Status>(\\d+)</Status>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val fetchStatus = fetchStatusPattern.find(responseXml)?.groupValues?.get(1)
+            val fetchStatus = FETCH_STATUS_REGEX.find(responseXml)?.groupValues?.get(1)
             // Status=1 - успех, Status=6 - не найдено
             if (fetchStatus != "1") {
                 return@withContext EasResult.Error("Вложение не найдено (Status=$fetchStatus)")
             }
             
             // Извлекаем данные вложения
-            val dataPattern = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val dataMatch = dataPattern.find(responseXml)
+            val dataMatch = DATA_REGEX.find(responseXml)
             
             if (dataMatch == null) {
                 return@withContext EasResult.Error("Данные не найдены в ответе")
@@ -263,7 +264,7 @@ class AttachmentManager(
                 attachmentsDir.mkdirs()
             }
             
-            val safeFileName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            val safeFileName = SAFE_FILENAME_REGEX.replace(fileName, "_")
             val file = File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
             
             FileOutputStream(file).use { fos ->

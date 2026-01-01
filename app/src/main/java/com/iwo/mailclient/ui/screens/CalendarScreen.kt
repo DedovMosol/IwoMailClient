@@ -41,6 +41,10 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 
+// Предкомпилированные regex для производительности
+private val HTML_TAG_REGEX = Regex("<[^>]*>")
+private val EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarScreen(
@@ -571,7 +575,7 @@ private fun EventCard(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = event.subject.ifBlank { "(Без заголовка)" },
+                        text = event.subject.ifBlank { Strings.noTitle },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
@@ -583,7 +587,7 @@ private fun EventCard(
                         Spacer(modifier = Modifier.width(8.dp))
                         Icon(
                             AppIcons.CheckCircle,
-                            contentDescription = "Завершено",
+                            contentDescription = Strings.completed,
                             modifier = Modifier.size(18.dp),
                             tint = Color(0xFF4CAF50)
                         )
@@ -626,7 +630,7 @@ private fun EventCard(
             if (event.isRecurring) {
                 Icon(
                     AppIcons.Refresh,
-                    contentDescription = "Повторяющееся событие",
+                    contentDescription = Strings.recurringEvent,
                     modifier = Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -643,12 +647,7 @@ private fun MonthHeader(
     onNextMonth: () -> Unit,
     onTitleClick: () -> Unit = {}
 ) {
-    val monthNames = remember {
-        listOf(
-            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
-        )
-    }
+    val monthNames = Strings.monthNames
     
     Row(
         modifier = Modifier
@@ -658,7 +657,7 @@ private fun MonthHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(onClick = onPreviousMonth) {
-            Icon(AppIcons.ChevronLeft, "Предыдущий месяц")
+            Icon(AppIcons.ChevronLeft, Strings.previousMonth)
         }
         
         Text(
@@ -669,7 +668,7 @@ private fun MonthHeader(
         )
         
         IconButton(onClick = onNextMonth) {
-            Icon(AppIcons.ChevronRight, "Следующий месяц")
+            Icon(AppIcons.ChevronRight, Strings.nextMonth)
         }
     }
 }
@@ -691,7 +690,7 @@ private fun CalendarGrid(
     val firstDayOffset = if (firstDayOfWeek == Calendar.SUNDAY) 6 else firstDayOfWeek - 2
     val daysInMonth = calendar.getActualMaximum(Calendar.DAY_OF_MONTH)
     
-    val dayNames = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    val dayNames = Strings.dayNamesShort
     
     Column {
         // Заголовки дней недели
@@ -843,8 +842,7 @@ private fun EventDetailDialog(
     
     // Извлекаем email из строки организатора
     val organizerEmail = remember(event.organizer) {
-        val emailRegex = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}".toRegex()
-        emailRegex.find(event.organizer)?.value ?: ""
+        EMAIL_REGEX.find(event.organizer)?.value ?: ""
     }
     
     // Диалог подтверждения удаления
@@ -876,205 +874,91 @@ private fun EventDetailDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = event.subject.ifBlank { "(Без заголовка)" },
-                style = MaterialTheme.typography.titleLarge
+                text = event.subject.ifBlank { Strings.noSubject },
+                style = MaterialTheme.typography.titleMedium
             )
         },
         text = {
-            LazyColumn {
-                item {
+            Column {
+                // Дата/время
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Icon(
+                        AppIcons.Schedule,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (event.allDayEvent) {
+                            "${dateFormat.format(Date(event.startTime))} - ${Strings.allDay}"
+                        } else {
+                            "${dateFormat.format(Date(event.startTime))} ${timeFormat.format(Date(event.startTime))} - ${timeFormat.format(Date(event.endTime))}"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                
+                // Место
+                if (event.location.isNotBlank()) {
+                    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                    val isUrl = event.location.startsWith("http://") || event.location.startsWith("https://")
+                    
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(bottom = 8.dp)
                     ) {
                         Icon(
-                            AppIcons.Schedule,
+                            if (isUrl) AppIcons.OpenInNew else AppIcons.Business,
                             contentDescription = null,
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (event.allDayEvent) {
-                                "${dateFormat.format(Date(event.startTime))} - ${Strings.allDay}"
-                            } else {
-                                "${dateFormat.format(Date(event.startTime))} ${timeFormat.format(Date(event.startTime))} - ${timeFormat.format(Date(event.endTime))}"
-                            },
-                            style = MaterialTheme.typography.bodyMedium
+                            text = event.location,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isUrl) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = if (isUrl) {
+                                Modifier.clickable { uriHandler.openUri(event.location) }
+                            } else Modifier
                         )
                     }
                 }
                 
-                if (event.location.isNotBlank()) {
-                    item {
-                        val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-                        val isUrl = event.location.startsWith("http://") || event.location.startsWith("https://")
-                        
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        ) {
-                            Icon(
-                                if (isUrl) AppIcons.OpenInNew else AppIcons.Business,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = event.location,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (isUrl) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                modifier = if (isUrl) {
-                                    Modifier.clickable { uriHandler.openUri(event.location) }
-                                } else Modifier
-                            )
-                        }
-                    }
-                }
-                
-                if (event.organizer.isNotBlank()) {
-                    item {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        ) {
-                            Icon(
-                                AppIcons.Person,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    text = Strings.organizer,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = event.organizer,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = if (organizerEmail.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    modifier = if (organizerEmail.isNotBlank()) {
-                                        Modifier.clickable { 
-                                            onComposeClick(organizerEmail)
-                                            onDismiss()
-                                        }
-                                    } else Modifier
-                                )
-                            }
-                        }
-                    }
-                }
-                
-                if (attendees.isNotEmpty()) {
-                    item {
-                        Row(
-                            verticalAlignment = Alignment.Top,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        ) {
-                            Icon(
-                                AppIcons.People,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    text = Strings.attendees,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                attendees.forEach { attendee ->
-                                    Text(
-                                        text = if (attendee.name.isNotBlank()) {
-                                            "${attendee.name} (${attendee.email})"
-                                        } else {
-                                            attendee.email
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (attendee.email.contains("@")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier
-                                            .padding(top = 2.dp)
-                                            .then(
-                                                if (attendee.email.contains("@")) {
-                                                    Modifier.clickable { 
-                                                        onComposeClick(attendee.email)
-                                                        onDismiss()
-                                                    }
-                                                } else Modifier
-                                            )
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if (event.categories.isNotBlank()) {
-                    item {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        ) {
-                            Icon(
-                                AppIcons.Task,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = event.categories,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                }
-                
+                // Описание
                 if (event.body.isNotBlank()) {
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(8.dp))
-                        ClickableHtmlText(
-                            text = event.body,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = event.body.replace(HTML_TAG_REGEX, "").take(200) + if (event.body.length > 200) "..." else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         },
         confirmButton = {
-            Row {
-                // Кнопка удаления
-                TextButton(
-                    onClick = { showDeleteConfirm = true },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(Strings.delete)
-                }
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                // Кнопка редактирования
-                TextButton(onClick = onEditClick) {
-                    Icon(AppIcons.Edit, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(Strings.edit)
-                }
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                // Кнопка закрытия
-                TextButton(onClick = onDismiss) {
-                    Text(Strings.close)
-                }
+            // Кнопка редактирования
+            TextButton(onClick = onEditClick) {
+                Icon(AppIcons.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(Strings.edit)
+            }
+        },
+        dismissButton = {
+            // Кнопка удаления
+            TextButton(
+                onClick = { showDeleteConfirm = true },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Icon(AppIcons.Delete, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(Strings.delete)
             }
         }
     )
@@ -1092,7 +976,7 @@ private fun YearView(
     onYearChange: (Int) -> Unit,
     onBack: () -> Unit
 ) {
-    val monthNames = listOf("янв", "фев", "мар", "апр", "май", "июнь", "июль", "авг", "сен", "окт", "ноя", "дек")
+    val monthNames = Strings.monthNamesShort
     
     Column(
         modifier = Modifier
@@ -1106,7 +990,7 @@ private fun YearView(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { onYearChange(year - 1) }) {
-                Icon(AppIcons.ChevronLeft, "Предыдущий год")
+                Icon(AppIcons.ChevronLeft, Strings.previousYear)
             }
             
             Text(
@@ -1117,7 +1001,7 @@ private fun YearView(
             )
             
             IconButton(onClick = { onYearChange(year + 1) }) {
-                Icon(AppIcons.ChevronRight, "Следующий год")
+                Icon(AppIcons.ChevronRight, Strings.nextYear)
             }
         }
         
@@ -1198,7 +1082,7 @@ private fun MiniMonthCard(
             
             // Дни недели
             Row(modifier = Modifier.fillMaxWidth()) {
-                listOf("П", "В", "С", "Ч", "П", "С", "В").forEach { day ->
+                Strings.dayNamesMin.forEach { day ->
                     Text(
                         text = day,
                         modifier = Modifier.weight(1f),
@@ -1293,6 +1177,7 @@ private fun ClickableHtmlText(
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     val primaryColor = MaterialTheme.colorScheme.primary
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+    val couldNotOpenLinkText = Strings.couldNotOpenLink
     
     // Типы элементов: 0=text, 1=link, 2=image, 3=clickable image
     data class Part(val content: String, val type: Int, val url: String = "", val linkUrl: String = "")
@@ -1357,7 +1242,7 @@ private fun ClickableHtmlText(
                     style = style.copy(color = primaryColor, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline),
                     modifier = Modifier.clickable {
                         try { uriHandler.openUri(part.url) }
-                        catch (e: Exception) { Toast.makeText(context, "Не удалось открыть ссылку", Toast.LENGTH_SHORT).show() }
+                        catch (e: Exception) { Toast.makeText(context, couldNotOpenLinkText, Toast.LENGTH_SHORT).show() }
                     }
                 )
                 2 -> NetworkImage(url = part.url, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
@@ -1368,7 +1253,7 @@ private fun ClickableHtmlText(
                         .padding(vertical = 8.dp)
                         .clickable {
                             try { uriHandler.openUri(part.linkUrl) }
-                            catch (e: Exception) { Toast.makeText(context, "Не удалось открыть ссылку", Toast.LENGTH_SHORT).show() }
+                            catch (e: Exception) { Toast.makeText(context, couldNotOpenLinkText, Toast.LENGTH_SHORT).show() }
                         }
                 )
             }

@@ -41,6 +41,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
+// Предкомпилированные regex для производительности
+private val CN_REGEX = Regex("CN=([^/><]+)", RegexOption.IGNORE_CASE)
+private val NAME_BEFORE_BRACKET_REGEX = Regex("^\"?([^\"<]+)\"?\\s*<")
+private val EMAIL_IN_BRACKETS_REGEX = Regex("<([^>]+@[^>]+)>")
+private val CID_REGEX = Regex("cid:([^\"'\\s>]+)")
+private val SAFE_FILENAME_REGEX = Regex("[^a-zA-Z0-9._-]")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EmailDetailScreen(
@@ -111,8 +118,7 @@ fun EmailDetailScreen(
         if (body.isEmpty() || isLoadingInlineImages) return@LaunchedEffect
         
         // Находим все cid: ссылки в HTML
-        val cidPattern = "cid:([^\"'\\s>]+)".toRegex()
-        val cidRefs = cidPattern.findAll(body).map { it.groupValues[1] }.toSet()
+        val cidRefs = CID_REGEX.findAll(body).map { it.groupValues[1] }.toSet()
         
         if (cidRefs.isEmpty()) return@LaunchedEffect
         
@@ -679,7 +685,7 @@ fun EmailDetailScreen(
                                                         val attachmentsDir = File(context.filesDir, "attachments")
                                                         if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
                                                         
-                                                        val safeFileName = attachment.displayName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
                                                         val file = File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                                                         FileOutputStream(file).use { it.write(result.data) }
                                                         
@@ -894,7 +900,7 @@ private fun AttachmentsSection(
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
-            text = "Вложения (${attachments.size})",
+            text = Strings.attachmentsWithCount(attachments.size),
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(bottom = 8.dp)
         )
@@ -939,14 +945,14 @@ private fun AttachmentsSection(
                         attachment.downloaded -> {
                             Icon(
                                 AppIcons.CheckCircle,
-                                "Скачано",
+                                Strings.downloaded,
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
                         else -> {
                             Icon(
                                 AppIcons.Download,
-                                "Скачать",
+                                Strings.download,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -974,7 +980,10 @@ private fun openFile(context: android.content.Context, file: File) {
         }
         context.startActivity(intent)
     } catch (e: Exception) {
-        Toast.makeText(context, "Нет приложения для открытия файла", Toast.LENGTH_SHORT).show()
+        // Используем NotificationStrings для не-Composable контекста
+        val isRussian = java.util.Locale.getDefault().language == "ru"
+        val message = if (isRussian) "Нет приложения для открытия файла" else "No app to open file"
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -984,10 +993,11 @@ private fun formatFullDate(timestamp: Long): String {
 }
 
 private fun formatFileSize(bytes: Long): String {
+    val isRussian = java.util.Locale.getDefault().language == "ru"
     return when {
-        bytes < 1024 -> "$bytes Б"
-        bytes < 1024 * 1024 -> "${bytes / 1024} КБ"
-        else -> "${bytes / (1024 * 1024)} МБ"
+        bytes < 1024 -> if (isRussian) "$bytes Б" else "$bytes B"
+        bytes < 1024 * 1024 -> if (isRussian) "${bytes / 1024} КБ" else "${bytes / 1024} KB"
+        else -> if (isRussian) "${bytes / (1024 * 1024)} МБ" else "${bytes / (1024 * 1024)} MB"
     }
 }
 
@@ -999,20 +1009,20 @@ private fun extractDisplayName(email: String): String {
     // X.500 DN формат
     if (email.contains("/O=") || email.contains("/CN=")) {
         // Ищем CN (Common Name)
-        val cnMatch = Regex("CN=([^/><]+)", RegexOption.IGNORE_CASE).findAll(email).toList()
+        val cnMatch = CN_REGEX.findAll(email).toList()
         val lastCn = cnMatch.lastOrNull()?.groupValues?.get(1)?.trim()
         if (lastCn != null && !lastCn.equals("RECIPIENTS", ignoreCase = true)) {
             return lastCn.lowercase().replaceFirstChar { it.uppercase() }
         }
         // Fallback - имя до <
-        val nameMatch = Regex("^\"?([^\"<]+)\"?\\s*<").find(email)
+        val nameMatch = NAME_BEFORE_BRACKET_REGEX.find(email)
         if (nameMatch != null) {
             return nameMatch.groupValues[1].trim()
         }
     }
     
     // Стандартный формат: "John Doe <john@example.com>"
-    val match = Regex("^\"?([^\"<]+)\"?\\s*<").find(email)
+    val match = NAME_BEFORE_BRACKET_REGEX.find(email)
     return match?.groupValues?.get(1)?.trim()?.removeSurrounding("\"") 
         ?: email.substringBefore("@").substringBefore("<").trim()
 }
@@ -1023,7 +1033,7 @@ private fun extractDisplayName(email: String): String {
  */
 private fun extractEmailAddress(email: String): String {
     // Ищем email в угловых скобках: <user@domain.com>
-    val emailMatch = Regex("<([^>]+@[^>]+)>").find(email)
+    val emailMatch = EMAIL_IN_BRACKETS_REGEX.find(email)
     if (emailMatch != null) {
         return emailMatch.groupValues[1]
     }

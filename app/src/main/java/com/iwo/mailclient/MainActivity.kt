@@ -31,6 +31,7 @@ import androidx.core.content.ContextCompat
 import com.iwo.mailclient.data.repository.SettingsRepository
 import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.LocalLanguage
+import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.theme.ExchangeMailTheme
 import com.iwo.mailclient.ui.theme.AppColorTheme
 import com.iwo.mailclient.ui.navigation.AppNavigation
@@ -249,15 +250,11 @@ class MainActivity : ComponentActivity() {
                     
                     val showBattery by showBatteryDialog
                     if (showBattery) {
-                        val isRu = currentLanguage == AppLanguage.RUSSIAN
                         PermissionDialog(
-                            title = if (isRu) "Фоновая работа" else "Background work",
-                            text = if (isRu) 
-                                "Для получения уведомлений о новых письмах приложению нужно работать в фоне.\n\nНажмите «Разрешить» в следующем окне."
-                            else 
-                                "To receive notifications about new emails, the app needs to work in the background.\n\nTap «Allow» in the next screen.",
-                            dismissText = if (isRu) "Позже" else "Later",
-                            confirmText = if (isRu) "Продолжить" else "Continue",
+                            title = Strings.backgroundWorkTitle,
+                            text = Strings.backgroundWorkText,
+                            dismissText = Strings.later,
+                            confirmText = Strings.continueAction,
                             onDismiss = { showBatteryDialog.value = false },
                             onConfirm = {
                                 showBatteryDialog.value = false
@@ -268,15 +265,11 @@ class MainActivity : ComponentActivity() {
                     
                     val showAlarm by showAlarmDialog
                     if (showAlarm) {
-                        val isRu = currentLanguage == AppLanguage.RUSSIAN
                         PermissionDialog(
-                            title = if (isRu) "Точные уведомления" else "Exact notifications",
-                            text = if (isRu) 
-                                "Для своевременной синхронизации почты приложению нужно разрешение на точные будильники.\n\nВключите переключатель в следующем окне."
-                            else 
-                                "For timely mail sync, the app needs permission for exact alarms.\n\nEnable the toggle in the next screen.",
-                            dismissText = if (isRu) "Позже" else "Later",
-                            confirmText = if (isRu) "Продолжить" else "Continue",
+                            title = Strings.exactAlarmsTitle,
+                            text = Strings.exactAlarmsText,
+                            dismissText = Strings.later,
+                            confirmText = Strings.continueAction,
                             onDismiss = { showAlarmDialog.value = false },
                             onConfirm = {
                                 showAlarmDialog.value = false

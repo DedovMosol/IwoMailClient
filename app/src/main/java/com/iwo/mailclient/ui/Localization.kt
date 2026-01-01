@@ -273,6 +273,14 @@ object Strings {
         "Черновик будет удалён" 
         else "Draft will be discarded"
     
+    // Цитирование в ответе/пересылке
+    val originalMessage: String @Composable get() = if (isRussian()) "Исходное сообщение" else "Original message"
+    val forwardedMessage: String @Composable get() = if (isRussian()) "Пересылаемое сообщение" else "Forwarded message"
+    val quoteFrom: String @Composable get() = if (isRussian()) "От" else "From"
+    val quoteDate: String @Composable get() = if (isRussian()) "Дата" else "Date"
+    val quoteSubject: String @Composable get() = if (isRussian()) "Тема" else "Subject"
+    val quoteTo: String @Composable get() = if (isRussian()) "Кому" else "To"
+    
     // Поиск
     val search: String @Composable get() = if (isRussian()) "Поиск" else "Search"
     val searchHint: String @Composable get() = if (isRussian()) "Введите запрос для поиска" else "Enter search query"
@@ -506,6 +514,7 @@ object Strings {
     // Отчёт о прочтении
     val requestReadReceipt: String @Composable get() = if (isRussian()) "Запросить отчёт о прочтении" else "Request read receipt"
     val requestDeliveryReceipt: String @Composable get() = if (isRussian()) "Запросить отчёт о доставке" else "Request delivery receipt"
+    val highPriority: String @Composable get() = if (isRussian()) "Высокий приоритет" else "High priority"
     val readReceiptRequest: String @Composable get() = if (isRussian()) "Запрос отчёта о прочтении" else "Read receipt request"
     val readReceiptRequestText: String @Composable get() = if (isRussian()) "Отправитель запросил уведомление о прочтении этого письма. Отправить?" else "The sender requested a read receipt for this message. Send it?"
     val readReceiptSent: String @Composable get() = if (isRussian()) "Отчёт о прочтении отправлен" else "Read receipt sent"
@@ -661,6 +670,53 @@ object Strings {
     val deleteNote: String @Composable get() = if (isRussian()) "Удалить заметку?" else "Delete note?"
     val deleteNoteConfirm: String @Composable get() = if (isRussian()) "Заметка будет удалена с сервера" else "Note will be deleted from server"
     val syncError: String @Composable get() = if (isRussian()) "Ошибка синхронизации" else "Sync error"
+    
+    // Вложения
+    @Composable
+    fun attachmentsWithCount(count: Int): String = if (isRussian()) "Вложения ($count)" else "Attachments ($count)"
+    val downloaded: String @Composable get() = if (isRussian()) "Скачано" else "Downloaded"
+    val download: String @Composable get() = if (isRussian()) "Скачать" else "Download"
+    val noAppToOpenFile: String @Composable get() = if (isRussian()) "Нет приложения для открытия файла" else "No app to open file"
+    val couldNotOpenLink: String @Composable get() = if (isRussian()) "Не удалось открыть ссылку" else "Could not open link"
+    
+    // Размер файла
+    @Composable
+    fun formatFileSize(bytes: Long): String {
+        return when {
+            bytes < 1024 -> if (isRussian()) "$bytes Б" else "$bytes B"
+            bytes < 1024 * 1024 -> if (isRussian()) "${bytes / 1024} КБ" else "${bytes / 1024} KB"
+            else -> if (isRussian()) "${bytes / (1024 * 1024)} МБ" else "${bytes / (1024 * 1024)} MB"
+        }
+    }
+    
+    // Календарь - названия месяцев
+    val monthNames: List<String> @Composable get() = if (isRussian()) 
+        listOf("Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь")
+        else listOf("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+    
+    val monthNamesShort: List<String> @Composable get() = if (isRussian())
+        listOf("янв", "фев", "мар", "апр", "май", "июнь", "июль", "авг", "сен", "окт", "ноя", "дек")
+        else listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    
+    // Дни недели короткие
+    val dayNamesShort: List<String> @Composable get() = if (isRussian())
+        listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+        else listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    
+    val dayNamesMin: List<String> @Composable get() = if (isRussian())
+        listOf("П", "В", "С", "Ч", "П", "С", "В")
+        else listOf("M", "T", "W", "T", "F", "S", "S")
+    
+    // Навигация по месяцам/годам
+    val previousMonth: String @Composable get() = if (isRussian()) "Предыдущий месяц" else "Previous month"
+    val nextMonth: String @Composable get() = if (isRussian()) "Следующий месяц" else "Next month"
+    val previousYear: String @Composable get() = if (isRussian()) "Предыдущий год" else "Previous year"
+    val nextYear: String @Composable get() = if (isRussian()) "Следующий год" else "Next year"
+    
+    // Статусы событий
+    val completed: String @Composable get() = if (isRussian()) "Завершено" else "Completed"
+    val recurringEvent: String @Composable get() = if (isRussian()) "Повторяющееся событие" else "Recurring event"
+    val noTitle: String @Composable get() = if (isRussian()) "(Без заголовка)" else "(No title)"
     val exchangeContacts: String @Composable get() = if (isRussian()) "Контакты Exchange" else "Exchange contacts"
     val exchangeContactsDesc: String @Composable get() = if (isRussian()) "Контакты с сервера (только чтение)" else "Server contacts (read-only)"
     @Composable
@@ -683,6 +739,70 @@ object Strings {
     } else {
         if (n == 1) "1 day" else "$n days"
     }
+    
+    // Сертификаты
+    val fileLabel: String @Composable get() = if (isRussian()) "Файл:" else "File:"
+    val sizeLabel: String @Composable get() = if (isRussian()) "Размер:" else "Size:"
+    val exportAction: String @Composable get() = if (isRussian()) "Экспортировать" else "Export"
+    val replaceAction: String @Composable get() = if (isRussian()) "Заменить" else "Replace"
+    val removeAction: String @Composable get() = if (isRussian()) "Удалить" else "Remove"
+    val removeCertificateTitle: String @Composable get() = if (isRussian()) "Удалить сертификат?" else "Remove certificate?"
+    val removeCertificateWarning: String @Composable get() = if (isRussian()) 
+        "Без сертификата подключение к серверу может не работать. Вы уверены?" 
+        else "Connection to server may fail without certificate. Are you sure?"
+    
+    // Подписи
+    val signaturesTitle: String @Composable get() = if (isRussian()) "Подписи" else "Signatures"
+    val noSignaturesHint: String @Composable get() = if (isRussian()) "Нет подписей. Добавьте первую!" else "No signatures. Add your first!"
+    val defaultLabel: String @Composable get() = if (isRussian()) "(по умолч.)" else "(default)"
+    val addSignatureAction: String @Composable get() = if (isRussian()) "Добавить подпись" else "Add signature"
+    val deleteSignatureTitle: String @Composable get() = if (isRussian()) "Удалить подпись?" else "Delete signature?"
+    val editTitle: String @Composable get() = if (isRussian()) "Редактировать" else "Edit"
+    val newSignatureTitle: String @Composable get() = if (isRussian()) "Новая подпись" else "New signature"
+    val nameLabel: String @Composable get() = if (isRussian()) "Название" else "Name"
+    val namePlaceholder: String @Composable get() = if (isRussian()) "Рабочая, Личная..." else "Work, Personal..."
+    val signatureTextLabel: String @Composable get() = if (isRussian()) "Текст подписи" else "Signature text"
+    val defaultCheckbox: String @Composable get() = if (isRussian()) "По умолчанию" else "Default"
+    
+    // Счётчик подписей
+    @Composable
+    fun signaturesCount(count: Int): String = if (isRussian()) {
+        when {
+            count == 1 -> "1 подпись"
+            count in 2..4 -> "$count подписи"
+            else -> "$count подписей"
+        }
+    } else {
+        if (count == 1) "1 signature" else "$count signatures"
+    }
+    
+    // Интервалы синхронизации
+    val never: String @Composable get() = if (isRussian()) "Никогда" else "Never"
+    val daily: String @Composable get() = if (isRussian()) "Ежедневно" else "Daily"
+    val weekly: String @Composable get() = if (isRussian()) "Еженедельно" else "Weekly"
+    val everyTwoWeeks: String @Composable get() = if (isRussian()) "Раз в 2 недели" else "Every 2 weeks"
+    val monthly: String @Composable get() = if (isRussian()) "Ежемесячно" else "Monthly"
+    @Composable
+    fun everyNDays(n: Int): String = if (isRussian()) "Каждые $n дней" else "Every $n days"
+    
+    // Выбор подписи
+    val selectSignature: String @Composable get() = if (isRussian()) "Выбрать подпись" else "Select signature"
+    
+    // Синхронизация
+    val notesSync: String @Composable get() = if (isRussian()) "Синхронизация заметок" else "Notes sync"
+    val calendarSync: String @Composable get() = if (isRussian()) "Синхронизация календаря" else "Calendar sync"
+    
+    // Диалоги разрешений
+    val backgroundWorkTitle: String @Composable get() = if (isRussian()) "Фоновая работа" else "Background work"
+    val backgroundWorkText: String @Composable get() = if (isRussian()) 
+        "Для получения уведомлений о новых письмах приложению нужно работать в фоне.\n\nНажмите «Разрешить» в следующем окне."
+        else "To receive notifications about new emails, the app needs to work in the background.\n\nTap «Allow» in the next screen."
+    val exactAlarmsTitle: String @Composable get() = if (isRussian()) "Точные уведомления" else "Exact notifications"
+    val exactAlarmsText: String @Composable get() = if (isRussian()) 
+        "Для своевременной синхронизации почты приложению нужно разрешение на точные будильники.\n\nВключите переключатель в следующем окне."
+        else "For timely mail sync, the app needs permission for exact alarms.\n\nEnable the toggle in the next screen."
+    val later: String @Composable get() = if (isRussian()) "Позже" else "Later"
+    val continueAction: String @Composable get() = if (isRussian()) "Продолжить" else "Continue"
 }
 
 /**
@@ -805,6 +925,10 @@ object NotificationStrings {
         return if (isRussian) "Письмо отправлено" else "Email sent"
     }
     
+    fun getScheduledEmailSent(to: String, isRussian: Boolean): String {
+        return if (isRussian) "Запланированное письмо для $to отправлено" else "Scheduled email to $to sent"
+    }
+    
     fun getAttachmentsTooLarge(sizeMB: Int, limitMB: Int, isRussian: Boolean): String {
         return if (isRussian) {
             "Размер вложений ($sizeMB МБ) превышает лимит сервера ($limitMB МБ)"
@@ -844,6 +968,183 @@ object NotificationStrings {
     
     fun getNoInternetConnection(isRussian: Boolean): String {
         return if (isRussian) "Нет подключения к интернету. Проверьте сетевое соединение." else "No internet connection. Check your network."
+    }
+    
+    // SyncService
+    fun getSyncMailTitle(isRussian: Boolean): String {
+        return if (isRussian) "Синхронизация почты" else "Mail sync"
+    }
+    
+    fun getSyncMailText(isRussian: Boolean): String {
+        return if (isRussian) "Проверка новых писем..." else "Checking for new emails..."
+    }
+    
+    // Сертификаты
+    fun getCertificateExported(isRussian: Boolean): String {
+        return if (isRussian) "Сертификат экспортирован" else "Certificate exported"
+    }
+    
+    fun getExportError(isRussian: Boolean): String {
+        return if (isRussian) "Ошибка экспорта" else "Export error"
+    }
+    
+    fun getInvalidFileFormat(isRussian: Boolean): String {
+        return if (isRussian) "Неверный формат файла" else "Invalid file format"
+    }
+    
+    fun getCertificateUpdated(isRussian: Boolean): String {
+        return if (isRussian) "Сертификат обновлён" else "Certificate updated"
+    }
+    
+    fun getCertificateLoadingError(isRussian: Boolean): String {
+        return if (isRussian) "Ошибка загрузки сертификата" else "Certificate loading error"
+    }
+    
+    fun getDeleteCertificateTitle(isRussian: Boolean): String {
+        return if (isRussian) "Удалить сертификат?" else "Remove certificate?"
+    }
+    
+    fun getDeleteCertificateWarning(isRussian: Boolean): String {
+        return if (isRussian) "Без сертификата подключение к серверу может не работать. Вы уверены?" else "Connection to server may fail without certificate. Are you sure?"
+    }
+    
+    fun getCertificateRemoved(isRussian: Boolean): String {
+        return if (isRussian) "Сертификат удалён" else "Certificate removed"
+    }
+    
+    fun getExport(isRussian: Boolean): String {
+        return if (isRussian) "Экспортировать" else "Export"
+    }
+    
+    fun getReplace(isRussian: Boolean): String {
+        return if (isRussian) "Заменить" else "Replace"
+    }
+    
+    fun getRemove(isRussian: Boolean): String {
+        return if (isRussian) "Удалить" else "Remove"
+    }
+    
+    fun getFileLabel(isRussian: Boolean): String {
+        return if (isRussian) "Файл:" else "File:"
+    }
+    
+    fun getSizeLabel(isRussian: Boolean): String {
+        return if (isRussian) "Размер:" else "Size:"
+    }
+    
+    // Подписи
+    fun getSignaturesTitle(isRussian: Boolean): String {
+        return if (isRussian) "Подписи" else "Signatures"
+    }
+    
+    fun getNoSignaturesHint(isRussian: Boolean): String {
+        return if (isRussian) "Нет подписей. Добавьте первую!" else "No signatures. Add your first!"
+    }
+    
+    fun getDefaultLabel(isRussian: Boolean): String {
+        return if (isRussian) "(по умолч.)" else "(default)"
+    }
+    
+    fun getAddSignature(isRussian: Boolean): String {
+        return if (isRussian) "Добавить подпись" else "Add signature"
+    }
+    
+    fun getDeleteSignatureTitle(isRussian: Boolean): String {
+        return if (isRussian) "Удалить подпись?" else "Delete signature?"
+    }
+    
+    fun getEditTitle(isRussian: Boolean): String {
+        return if (isRussian) "Редактировать" else "Edit"
+    }
+    
+    fun getNewSignatureTitle(isRussian: Boolean): String {
+        return if (isRussian) "Новая подпись" else "New signature"
+    }
+    
+    fun getNameLabel(isRussian: Boolean): String {
+        return if (isRussian) "Название" else "Name"
+    }
+    
+    fun getNamePlaceholder(isRussian: Boolean): String {
+        return if (isRussian) "Рабочая, Личная..." else "Work, Personal..."
+    }
+    
+    fun getSignatureTextLabel(isRussian: Boolean): String {
+        return if (isRussian) "Текст подписи" else "Signature text"
+    }
+    
+    fun getDefaultCheckbox(isRussian: Boolean): String {
+        return if (isRussian) "По умолчанию" else "Default"
+    }
+    
+    // Синхронизация
+    fun getNotesSyncTitle(isRussian: Boolean): String {
+        return if (isRussian) "Синхронизация заметок" else "Notes sync"
+    }
+    
+    fun getCalendarSyncTitle(isRussian: Boolean): String {
+        return if (isRussian) "Синхронизация календаря" else "Calendar sync"
+    }
+    
+    fun getNever(isRussian: Boolean): String {
+        return if (isRussian) "Никогда" else "Never"
+    }
+    
+    fun getDaily(isRussian: Boolean): String {
+        return if (isRussian) "Ежедневно" else "Daily"
+    }
+    
+    fun getWeekly(isRussian: Boolean): String {
+        return if (isRussian) "Еженедельно" else "Weekly"
+    }
+    
+    fun getEveryTwoWeeks(isRussian: Boolean): String {
+        return if (isRussian) "Раз в 2 недели" else "Every 2 weeks"
+    }
+    
+    fun getEveryNDays(days: Int, isRussian: Boolean): String {
+        return if (isRussian) "Каждые $days дней" else "Every $days days"
+    }
+    
+    fun getMonthly(isRussian: Boolean): String {
+        return if (isRussian) "Ежемесячно" else "Monthly"
+    }
+    
+    // Контакты - организация
+    fun getOrganizationAddressBook(isRussian: Boolean): String {
+        return if (isRussian) "Адресная книга организации" else "Organization Address Book"
+    }
+    
+    fun getContactsCount(count: Int, isRussian: Boolean): String {
+        return if (isRussian) "Контактов: $count" else "Contacts: $count"
+    }
+    
+    fun getGlobalAddressList(isRussian: Boolean): String {
+        return if (isRussian) "Глобальная адресная книга (GAL)" else "Global Address List (GAL)"
+    }
+    
+    fun getSyncAction(isRussian: Boolean): String {
+        return if (isRussian) "Синхронизировать" else "Sync"
+    }
+    
+    fun getLoadingContacts(isRussian: Boolean): String {
+        return if (isRussian) "Загрузка контактов..." else "Loading contacts..."
+    }
+    
+    fun getTapToLoadContacts(isRussian: Boolean): String {
+        return if (isRussian) "Нажмите для загрузки контактов" else "Tap to load contacts"
+    }
+    
+    fun getLoadAction(isRussian: Boolean): String {
+        return if (isRussian) "Загрузить" else "Load"
+    }
+    
+    fun getSynced(count: Int, isRussian: Boolean): String {
+        return if (isRussian) "Синхронизировано: $count" else "Synced: $count"
+    }
+    
+    fun getCopiedToPersonalContacts(isRussian: Boolean): String {
+        return if (isRussian) "Скопировано в личные контакты" else "Copied to personal contacts"
     }
 }
 

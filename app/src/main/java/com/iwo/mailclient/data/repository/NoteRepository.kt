@@ -188,10 +188,21 @@ class NoteRepository(context: Context) {
                     is EasResult.Success -> {
                         val serverNotes = result.data
                         
-                        // Удаляем старые заметки для этого аккаунта
-                        noteDao.deleteByAccount(accountId)
+                        // Получаем существующие заметки
+                        val existingNotes = noteDao.getNotesByAccountList(accountId)
+                        val existingServerIds = existingNotes.map { it.serverId }.toSet()
                         
-                        // Добавляем новые
+                        // Определяем какие заметки удалены на сервере
+                        val serverIds = serverNotes.map { it.serverId }.toSet()
+                        val deletedServerIds = existingServerIds - serverIds
+                        
+                        // Удаляем только те, которых нет на сервере
+                        for (serverId in deletedServerIds) {
+                            val noteId = "${accountId}_${serverId}"
+                            noteDao.delete(noteId)
+                        }
+                        
+                        // Добавляем/обновляем заметки с сервера
                         val noteEntities = serverNotes.map { note ->
                             NoteEntity(
                                 id = "${accountId}_${note.serverId}",
@@ -205,6 +216,7 @@ class NoteRepository(context: Context) {
                         }
                         
                         if (noteEntities.isNotEmpty()) {
+                            // INSERT OR REPLACE — обновляет существующие
                             noteDao.insertAll(noteEntities)
                         }
                         

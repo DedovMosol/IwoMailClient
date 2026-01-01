@@ -182,6 +182,9 @@ interface EmailDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(email: EmailEntity)
     
+    @Update
+    suspend fun update(email: EmailEntity)
+    
     @Query("DELETE FROM emails WHERE id = :id")
     suspend fun delete(id: String)
     

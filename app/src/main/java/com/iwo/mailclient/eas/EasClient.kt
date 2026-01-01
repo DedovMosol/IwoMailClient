@@ -152,7 +152,15 @@ class EasClient(
             if (acceptAllCerts) {
                 // Принимаем все сертификаты (самоподписанные)
                 builder.hostnameVerifier { _, _ -> true }
-                builder.sslSocketFactory(createTrustAllSslSocketFactory(), createTrustAllManager())
+                val trustAllManager = createTrustAllManager()
+                val sslContext = try {
+                    SSLContext.getInstance("TLS", "Conscrypt")
+                } catch (_: Exception) {
+                    SSLContext.getInstance("TLS")
+                }
+                sslContext.init(null, arrayOf(trustAllManager), SecureRandom())
+                // Используем TlsSocketFactory для поддержки старых TLS версий
+                builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), trustAllManager)
             } else if (certificatePath != null) {
                 // Используем указанный сертификат из файла
                 val certTrustManager = createCertificateTrustManager(certificatePath)
@@ -208,6 +216,29 @@ class EasClient(
         private val EWS_ITEM_ID_REGEX = """<t:ItemId Id="([^"]+)"""".toRegex()
         private val NOTES_CATEGORY_REGEX = "<notes:Category>(.*?)</notes:Category>".toRegex()
         private val CALENDAR_CATEGORY_REGEX = "<calendar:Category>(.*?)</calendar:Category>".toRegex()
+        private val EWS_SUBJECT_REGEX = """<t:Subject>(.*?)</t:Subject>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_BODY_REGEX = """<t:Body[^>]*>(.*?)</t:Body>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_DATE_CREATED_REGEX = """<t:DateTimeCreated>(.*?)</t:DateTimeCreated>""".toRegex()
+        private val EWS_EMAIL_ADDRESS_REGEX = """<t:EmailAddress>([^<]+)</t:EmailAddress>""".toRegex()
+        private val EWS_TO_RECIPIENTS_REGEX = """<t:ToRecipients>(.*?)</t:ToRecipients>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_CC_RECIPIENTS_REGEX = """<t:CcRecipients>(.*?)</t:CcRecipients>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_MESSAGE_TEXT_REGEX = """<m:MessageText>(.*?)</m:MessageText>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_RESPONSE_CODE_REGEX = """<m:ResponseCode>(.*?)</m:ResponseCode>""".toRegex()
+        
+        // Дополнительные предкомпилированные regex
+        private val MDN_DISPOSITION_REGEX = "Disposition-Notification-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
+        private val MDN_RETURN_RECEIPT_REGEX = "Return-Receipt-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
+        private val MDN_CONFIRM_READING_REGEX = "X-Confirm-Reading-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
+        private val BOUNDARY_REGEX = "boundary=\"?([^\"\\r\\n]+)\"?".toRegex(RegexOption.IGNORE_CASE)
+        private val MOVE_RESPONSE_REGEX = "<Response>(.*?)</Response>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val ITEM_OPS_GLOBAL_STATUS_REGEX = "<ItemOperations>.*?<Status>(\\d+)</Status>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val ITEM_OPS_FETCH_STATUS_REGEX = "<Fetch>.*?<Status>(\\d+)</Status>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val ITEM_OPS_DATA_REGEX = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val ITEM_OPS_PROPS_DATA_REGEX = "<Properties>.*?<Data>(.*?)</Data>.*?</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val FOLDER_REGEX = "<Folder>(.*?)</Folder>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        
+        // Кэш для extractValue regex паттернов
+        private val extractValueCache = mutableMapOf<String, Regex>()
         
         /**
          * Нормализует URL сервера - добавляет схему и порт
@@ -243,18 +274,6 @@ class EasClient(
     @Suppress("unused")
     private fun generateDeviceId(): String {
         return "android${System.currentTimeMillis().toString(16)}"
-    }
-    
-    private fun createTrustAllSslSocketFactory(): SSLSocketFactory {
-        val trustAllCerts = arrayOf<TrustManager>(createTrustAllManager())
-        // Используем Conscrypt для поддержки старых TLS
-        val sslContext = try {
-            SSLContext.getInstance("TLS", "Conscrypt")
-        } catch (e: Exception) {
-            SSLContext.getInstance("TLS")
-        }
-        sslContext.init(null, trustAllCerts, SecureRandom())
-        return TlsSocketFactory(sslContext.socketFactory)
     }
     
     /**
@@ -573,6 +592,7 @@ class EasClient(
         val savedPolicyKey = policyKey
         policyKey = null
         
+        // Фаза 1: Запрос политик
         val xml1 = """
             <?xml version="1.0" encoding="UTF-8"?>
             <Provision xmlns="Provision">
@@ -584,23 +604,35 @@ class EasClient(
             </Provision>
         """.trimIndent()
         
+        var tempPolicyKey: String? = null
+        var provisionStatus: Int? = null
+        
         val result1 = executeEasCommand("Provision", xml1) { responseXml ->
-            extractValue(responseXml, "PolicyKey")
+            tempPolicyKey = extractValue(responseXml, "PolicyKey")
+            provisionStatus = extractValue(responseXml, "Status")?.toIntOrNull()
+            tempPolicyKey
         }
         
-        val tempPolicyKey = when (result1) {
-            is EasResult.Success -> result1.data ?: run {
-                policyKey = savedPolicyKey
-                return EasResult.Error("PolicyKey not found")
+        when (result1) {
+            is EasResult.Success -> {
+                if (tempPolicyKey == null) {
+                    policyKey = savedPolicyKey
+                    return EasResult.Error("PolicyKey not found in response")
+                }
+                // Status 1 = Success, 2 = Protocol error, 3 = General error
+                if (provisionStatus != null && provisionStatus != 1) {
+                    policyKey = savedPolicyKey
+                    return EasResult.Error("Provision phase 1 failed with status: $provisionStatus")
+                }
             }
             is EasResult.Error -> {
                 policyKey = savedPolicyKey
                 return result1
             }
         }
-        // PolicyKey передаётся ТОЛЬКО в теле, НЕ в заголовке (policyKey = null)
-        // Status = 1 означает "политики приняты" (согласно AOSP)
-        // ВАЖНО: Тег Status должен идти ПОСЛЕ PolicyKey (как в AOSP Serializer)
+        
+        // Фаза 2: Подтверждение принятия политик
+        // Status = 1 означает "политики приняты"
         val xml2 = """
             <?xml version="1.0" encoding="UTF-8"?>
             <Provision xmlns="Provision">
@@ -615,13 +647,33 @@ class EasClient(
         """.trimIndent()
         
         var finalKey: String? = null
+        var finalStatus: Int? = null
+        
         val result2 = executeEasCommand("Provision", xml2) { responseXml ->
             finalKey = extractValue(responseXml, "PolicyKey") ?: tempPolicyKey
+            finalStatus = extractValue(responseXml, "Status")?.toIntOrNull()
             finalKey
         }
         
         when (result2) {
             is EasResult.Success -> {
+                // Проверяем статус фазы 2
+                // Status codes: 1=Success, 2=ProtocolError, 3=GeneralError, 4=DeviceNotProvisioned
+                // 5=PolicyRefresh, 6=InvalidPolicyKey, 7=ExternallyManaged, 8=UnknownDeviceType
+                if (finalStatus != null && finalStatus != 1) {
+                    policyKey = savedPolicyKey
+                    val statusDesc = when (finalStatus) {
+                        2 -> "Protocol error"
+                        3 -> "General error"
+                        4 -> "Device not provisioned"
+                        5 -> "Policy refresh required"
+                        6 -> "Invalid policy key"
+                        7 -> "Device externally managed"
+                        8 -> "Unknown device type"
+                        else -> "Unknown error"
+                    }
+                    return EasResult.Error("Provision failed: $statusDesc (Status: $finalStatus)")
+                }
                 policyKey = finalKey
             }
             is EasResult.Error -> {
@@ -631,7 +683,7 @@ class EasClient(
         }
         
         sendDeviceSettings()
-        return EasResult.Success(finalKey ?: tempPolicyKey)
+        return EasResult.Success(finalKey ?: tempPolicyKey!!)
     }
     
     /**
@@ -905,8 +957,7 @@ class EasClient(
         
         return executeEasCommand("MoveItems", xml) { responseXml ->
             val results = mutableMapOf<String, String>()
-            val responsePattern = "<Response>(.*?)</Response>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            responsePattern.findAll(responseXml).forEach { match ->
+            MOVE_RESPONSE_REGEX.findAll(responseXml).forEach { match ->
                 val responseContent = match.groupValues[1]
                 val srcMsgId = extractValue(responseContent, "SrcMsgId") ?: ""
                 val status = extractValue(responseContent, "Status")?.toIntOrNull() ?: 0
@@ -1007,12 +1058,13 @@ class EasClient(
         subject: String,
         body: String,
         cc: String = "",
+        bcc: String = "",
         importance: Int = 1,
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
-            val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, requestReadReceipt, requestDeliveryReceipt)
+            val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance)
             val url = buildUrl("SendMail") + "&SaveInSent=T"
             val contentType = "message/rfc822"
             
@@ -1065,7 +1117,7 @@ class EasClient(
         }
     }
     
-    private fun buildMimeMessageBytes(to: String, subject: String, body: String, cc: String, requestReadReceipt: Boolean = false, requestDeliveryReceipt: Boolean = false): ByteArray {
+    private fun buildMimeMessageBytes(to: String, subject: String, body: String, cc: String, bcc: String, requestReadReceipt: Boolean = false, requestDeliveryReceipt: Boolean = false, importance: Int = 1): ByteArray {
         // Используем реальный email из deviceIdSuffix (передаётся account.email)
         // Fallback на username@domain если deviceIdSuffix не содержит @
         val fromEmail = if (deviceIdSuffix.contains("@")) {
@@ -1090,10 +1142,23 @@ class EasClient(
         if (cc.isNotEmpty()) {
             sb.append("Cc: $cc\r\n")
         }
+        if (bcc.isNotEmpty()) {
+            sb.append("Bcc: $bcc\r\n")
+        }
         sb.append("Message-ID: $messageId\r\n")
         // Кодируем тему в UTF-8 Base64 для поддержки кириллицы
         val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
         sb.append("Subject: $encodedSubject\r\n")
+        // Приоритет письма (importance: 0=low, 1=normal, 2=high)
+        if (importance == 2) {
+            sb.append("X-Priority: 1\r\n")
+            sb.append("Importance: high\r\n")
+            sb.append("X-MSMail-Priority: High\r\n")
+        } else if (importance == 0) {
+            sb.append("X-Priority: 5\r\n")
+            sb.append("Importance: low\r\n")
+            sb.append("X-MSMail-Priority: Low\r\n")
+        }
         // Запрос отчёта о прочтении (MDN)
         if (requestReadReceipt) {
             sb.append("Disposition-Notification-To: $fromEmail\r\n")
@@ -1122,9 +1187,11 @@ class EasClient(
         subject: String, 
         body: String, 
         cc: String,
+        bcc: String,
         attachments: List<Triple<String, String, ByteArray>>, // name, mimeType, data
         requestReadReceipt: Boolean = false,
-        requestDeliveryReceipt: Boolean = false
+        requestDeliveryReceipt: Boolean = false,
+        importance: Int = 1
     ): ByteArray {
         // Используем реальный email из deviceIdSuffix (передаётся account.email)
         val fromEmail = if (deviceIdSuffix.contains("@")) {
@@ -1147,9 +1214,22 @@ class EasClient(
         if (cc.isNotEmpty()) {
             sb.append("Cc: $cc\r\n")
         }
+        if (bcc.isNotEmpty()) {
+            sb.append("Bcc: $bcc\r\n")
+        }
         sb.append("Message-ID: $messageId\r\n")
         val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
         sb.append("Subject: $encodedSubject\r\n")
+        // Приоритет письма (importance: 0=low, 1=normal, 2=high)
+        if (importance == 2) {
+            sb.append("X-Priority: 1\r\n")
+            sb.append("Importance: high\r\n")
+            sb.append("X-MSMail-Priority: High\r\n")
+        } else if (importance == 0) {
+            sb.append("X-Priority: 5\r\n")
+            sb.append("Importance: low\r\n")
+            sb.append("X-MSMail-Priority: Low\r\n")
+        }
         // Запрос отчёта о прочтении (MDN)
         if (requestReadReceipt) {
             sb.append("Disposition-Notification-To: $fromEmail\r\n")
@@ -1313,9 +1393,9 @@ class EasClient(
     private fun parseMdnHeader(mimeData: String): String? {
         // Ищем заголовок в разных вариантах написания
         val patterns = listOf(
-            "Disposition-Notification-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE),
-            "Return-Receipt-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE),
-            "X-Confirm-Reading-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
+            MDN_DISPOSITION_REGEX,
+            MDN_RETURN_RECEIPT_REGEX,
+            MDN_CONFIRM_READING_REGEX
         )
         
         for (pattern in patterns) {
@@ -1338,7 +1418,7 @@ class EasClient(
         // Если это multipart - ищем text/html или text/plain часть
         if (mimeData.contains("Content-Type:", ignoreCase = true)) {
             // Ищем boundary
-            val boundaryMatch = "boundary=\"?([^\"\\r\\n]+)\"?".toRegex(RegexOption.IGNORE_CASE).find(mimeData)
+            val boundaryMatch = BOUNDARY_REGEX.find(mimeData)
             
             if (boundaryMatch != null) {
                 val boundary = boundaryMatch.groupValues[1]
@@ -1477,9 +1557,11 @@ class EasClient(
         subject: String,
         body: String,
         cc: String = "",
+        bcc: String = "",
         attachments: List<Triple<String, String, ByteArray>>,
         requestReadReceipt: Boolean = false,
-        requestDeliveryReceipt: Boolean = false
+        requestDeliveryReceipt: Boolean = false,
+        importance: Int = 1
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         val totalSize = attachments.sumOf { it.third.size }
         val maxAttachmentSize = 7 * 1024 * 1024
@@ -1489,7 +1571,7 @@ class EasClient(
         }
         
         try {
-            val mimeBytes = buildMimeWithAttachments(to, subject, body, cc, attachments, requestReadReceipt, requestDeliveryReceipt)
+            val mimeBytes = buildMimeWithAttachments(to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance)
             
             val maxMimeSize = 10 * 1024 * 1024
             if (mimeBytes.size > maxMimeSize) {
@@ -1930,11 +2012,9 @@ class EasClient(
     
     private fun parseItemOperationsResponse(responseXml: String): ByteArray {
         // Проверяем общий статус
-        val globalStatusPattern = "<ItemOperations>.*?<Status>(\\d+)</Status>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val globalStatus = globalStatusPattern.find(responseXml)?.groupValues?.get(1)
+        val globalStatus = ITEM_OPS_GLOBAL_STATUS_REGEX.find(responseXml)?.groupValues?.get(1)
         // Проверяем статус внутри Fetch
-        val fetchStatusPattern = "<Fetch>.*?<Status>(\\d+)</Status>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val fetchStatus = fetchStatusPattern.find(responseXml)?.groupValues?.get(1)
+        val fetchStatus = ITEM_OPS_FETCH_STATUS_REGEX.find(responseXml)?.groupValues?.get(1)
         // Status=1 - успех, Status=6 - не найдено
         if (fetchStatus != "1") {
             return ByteArray(0)
@@ -1942,8 +2022,7 @@ class EasClient(
         
         // Извлекаем данные - может быть в разных местах
         // Вариант 1: <Data>base64</Data>
-        val dataPattern = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val dataMatch = dataPattern.find(responseXml)
+        val dataMatch = ITEM_OPS_DATA_REGEX.find(responseXml)
         
         if (dataMatch != null) {
             val base64Data = dataMatch.groupValues[1].trim()
@@ -1954,8 +2033,7 @@ class EasClient(
         }
         
         // Вариант 2: Данные могут быть в Properties/Data
-        val propsDataPattern = "<Properties>.*?<Data>(.*?)</Data>.*?</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val propsMatch = propsDataPattern.find(responseXml)
+        val propsMatch = ITEM_OPS_PROPS_DATA_REGEX.find(responseXml)
         if (propsMatch != null) {
             val base64Data = propsMatch.groupValues[1].trim()
             try {
@@ -2123,8 +2201,7 @@ $foldersXml
                 val status = extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
                 val changedFolders = mutableListOf<String>()
                 
-                val folderPattern = "<Folder>(.*?)</Folder>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                folderPattern.findAll(responseXml).forEach { match ->
+                FOLDER_REGEX.findAll(responseXml).forEach { match ->
                     val folderId = extractValue(match.groupValues[1], "Id")
                     if (folderId != null) {
                         changedFolders.add(folderId)
@@ -2345,15 +2422,14 @@ $foldersXml
         
         // Папки могут быть внутри <Add><Folder>...</Folder></Add> или напрямую <Add>...</Add>
         // Сначала пробуем найти <Folder> внутри <Add>
-        val folderPattern = "<Folder>(.*?)</Folder>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
         
         // Проверяем есть ли теги <Folder>
-        val hasFolderTags = folderPattern.containsMatchIn(xml)
+        val hasFolderTags = FOLDER_REGEX.containsMatchIn(xml)
         
         if (hasFolderTags) {
             // Старый формат: <Add><Folder>...</Folder></Add>
-            folderPattern.findAll(xml).forEach { match ->
+            FOLDER_REGEX.findAll(xml).forEach { match ->
                 val folderXml = match.groupValues[1]
                 parseFolder(folderXml)?.let { folders.add(it) }
             }
@@ -2435,7 +2511,7 @@ $foldersXml
             from = extractValue(xml, "From") ?: "",
             to = extractValue(xml, "To") ?: "",
             cc = extractValue(xml, "Cc") ?: "",
-            subject = extractValue(xml, "Subject") ?: "(без темы)",
+            subject = extractValue(xml, "Subject") ?: "(No subject)",
             dateReceived = extractValue(xml, "DateReceived") ?: "",
             read = extractValue(xml, "Read") == "1",
             importance = extractValue(xml, "Importance")?.toIntOrNull() ?: 1,
@@ -2446,7 +2522,9 @@ $foldersXml
     }
     
     private fun extractValue(xml: String, tag: String): String? {
-        val pattern = "<$tag>(.*?)</$tag>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val pattern = extractValueCache.getOrPut(tag) {
+            "<$tag>(.*?)</$tag>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        }
         return pattern.find(xml)?.groupValues?.get(1)
     }
     
@@ -3522,7 +3600,7 @@ $foldersXml
                             
                             notes.add(EasNote(
                                 serverId = itemId,
-                                subject = subject.ifEmpty { "Без темы" },
+                                subject = subject.ifEmpty { "No subject" },
                                 body = body,
                                 categories = emptyList(),
                                 lastModified = lastModified
@@ -3534,7 +3612,7 @@ $foldersXml
                     // Добавляем заметку без Body
                     notes.add(EasNote(
                         serverId = itemId,
-                        subject = subject.ifEmpty { "Без темы" },
+                        subject = subject.ifEmpty { "No subject" },
                         body = "",
                         categories = emptyList(),
                         lastModified = System.currentTimeMillis()
@@ -3621,6 +3699,33 @@ $foldersXml
         } else {
             android.util.Log.e("EasClient", "executeNtlmRequest: HTTP ${response.code}")
             response.close()
+            null
+        }
+    }
+    
+    /**
+     * Пробует Basic аутентификацию для EWS запроса
+     */
+    private suspend fun tryBasicAuthEws(ewsUrl: String, soapRequest: String, action: String): String? {
+        val request = Request.Builder()
+            .url(ewsUrl)
+            .post(soapRequest.toRequestBody("text/xml; charset=utf-8".toMediaType()))
+            .header("Authorization", getAuthHeader())
+            .header("Content-Type", "text/xml; charset=utf-8")
+            .header("SOAPAction", "\"http://schemas.microsoft.com/exchange/services/2006/messages/$action\"")
+            .build()
+        
+        return try {
+            val response = executeRequest(request)
+            if (response.isSuccessful) {
+                val body = response.body?.string()
+                response.close()
+                body
+            } else {
+                response.close()
+                null
+            }
+        } catch (_: Exception) {
             null
         }
     }
@@ -4088,7 +4193,7 @@ $foldersXml
                 
                 notes.add(EasNote(
                     serverId = itemId,
-                    subject = subject.ifEmpty { "Без темы" },
+                    subject = subject.ifEmpty { "No subject" },
                     body = body,
                     categories = emptyList(),
                     lastModified = lastModified
@@ -4290,7 +4395,7 @@ $foldersXml
             
             notes.add(EasNote(
                 serverId = serverId,
-                subject = subject.ifEmpty { "Без темы" },
+                subject = subject.ifEmpty { "No subject" },
                 body = body,
                 categories = emptyList(),
                 lastModified = lastModified
@@ -4336,7 +4441,7 @@ $foldersXml
             
             notes.add(EasNote(
                 serverId = serverId,
-                subject = subject.ifEmpty { "Без темы" },
+                subject = subject.ifEmpty { "No subject" },
                 body = body,
                 categories = categories,
                 lastModified = lastModified
@@ -5076,6 +5181,334 @@ $foldersXml
         }
         return null
     }
+    
+    // ==================== ЧЕРНОВИКИ (DRAFTS) ====================
+    
+    /**
+     * Создание черновика на сервере Exchange через EWS
+     * EAS не поддерживает создание email через Sync Add, поэтому используем только EWS
+     */
+    suspend fun createDraft(
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String
+    ): EasResult<String> {
+        return createDraftEws(to, cc, bcc, subject, body)
+    }
+    
+    /**
+     * Создание черновика через EWS CreateItem с MessageDisposition="SaveOnly"
+     */
+    private suspend fun createDraftEws(
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String
+    ): EasResult<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                val escapedSubject = escapeXml(subject)
+                val escapedBody = escapeXml(body)
+                
+                // Формируем получателей
+                val toRecipients = to.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("") { email ->
+                        """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
+                    }
+                
+                val ccRecipients = cc.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("") { email ->
+                        """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
+                    }
+                
+                val bccRecipients = bcc.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("") { email ->
+                        """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
+                    }
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:CreateItem MessageDisposition="SaveOnly">
+                                <m:SavedItemFolderId>
+                                    <t:DistinguishedFolderId Id="drafts"/>
+                                </m:SavedItemFolderId>
+                                <m:Items>
+                                    <t:Message>
+                                        <t:Subject>$escapedSubject</t:Subject>
+                                        <t:Body BodyType="HTML">$escapedBody</t:Body>
+                                        ${if (toRecipients.isNotBlank()) "<t:ToRecipients>$toRecipients</t:ToRecipients>" else ""}
+                                        ${if (ccRecipients.isNotBlank()) "<t:CcRecipients>$ccRecipients</t:CcRecipients>" else ""}
+                                        ${if (bccRecipients.isNotBlank()) "<t:BccRecipients>$bccRecipients</t:BccRecipients>" else ""}
+                                    </t:Message>
+                                </m:Items>
+                            </m:CreateItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                // Сначала пробуем Basic аутентификацию
+                var responseXml = tryBasicAuthEws(ewsUrl, soapRequest, "CreateItem")
+                
+                // Если Basic не сработал, пробуем NTLM
+                if (responseXml == null) {
+                    val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+                    if (ntlmAuth != null) {
+                        responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                    }
+                }
+                
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
+                }
+                
+                // Извлекаем ItemId
+                val itemId = EWS_ITEM_ID_REGEX.find(responseXml)?.groupValues?.get(1)
+                
+                if (itemId != null) {
+                    EasResult.Success(itemId)
+                } else if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+                    EasResult.Success(java.util.UUID.randomUUID().toString())
+                } else {
+                    EasResult.Error("Не удалось создать черновик: ${extractEwsError(responseXml)}")
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка создания черновика")
+            }
+        }
+    }
+    
+    /**
+     * Обновление черновика на сервере Exchange
+     */
+    suspend fun updateDraft(
+        serverId: String,
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String
+    ): EasResult<Boolean> {
+        return updateDraftEws(serverId, to, cc, bcc, subject, body)
+    }
+    
+    /**
+     * Обновление черновика через EWS UpdateItem
+     */
+    private suspend fun updateDraftEws(
+        serverId: String,
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String
+    ): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                val escapedSubject = escapeXml(subject)
+                val escapedBody = escapeXml(body)
+                
+                // Формируем получателей
+                val toRecipients = to.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("") { email ->
+                        """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
+                    }
+                
+                val ccRecipients = cc.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("") { email ->
+                        """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
+                    }
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:UpdateItem MessageDisposition="SaveOnly" ConflictResolution="AutoResolve">
+                                <m:ItemChanges>
+                                    <t:ItemChange>
+                                        <t:ItemId Id="$serverId"/>
+                                        <t:Updates>
+                                            <t:SetItemField>
+                                                <t:FieldURI FieldURI="item:Subject"/>
+                                                <t:Message>
+                                                    <t:Subject>$escapedSubject</t:Subject>
+                                                </t:Message>
+                                            </t:SetItemField>
+                                            <t:SetItemField>
+                                                <t:FieldURI FieldURI="item:Body"/>
+                                                <t:Message>
+                                                    <t:Body BodyType="HTML">$escapedBody</t:Body>
+                                                </t:Message>
+                                            </t:SetItemField>
+                                            ${if (toRecipients.isNotBlank()) """
+                                            <t:SetItemField>
+                                                <t:FieldURI FieldURI="message:ToRecipients"/>
+                                                <t:Message>
+                                                    <t:ToRecipients>$toRecipients</t:ToRecipients>
+                                                </t:Message>
+                                            </t:SetItemField>
+                                            """ else ""}
+                                            ${if (ccRecipients.isNotBlank()) """
+                                            <t:SetItemField>
+                                                <t:FieldURI FieldURI="message:CcRecipients"/>
+                                                <t:Message>
+                                                    <t:CcRecipients>$ccRecipients</t:CcRecipients>
+                                                </t:Message>
+                                            </t:SetItemField>
+                                            """ else ""}
+                                        </t:Updates>
+                                    </t:ItemChange>
+                                </m:ItemChanges>
+                            </m:UpdateItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                // Сначала пробуем Basic аутентификацию
+                var responseXml = tryBasicAuthEws(ewsUrl, soapRequest, "UpdateItem")
+                
+                // Если Basic не сработал, пробуем NTLM
+                if (responseXml == null) {
+                    val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "UpdateItem")
+                    if (ntlmAuth != null) {
+                        responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "UpdateItem")
+                    }
+                }
+                
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
+                }
+                
+                if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+                    EasResult.Success(true)
+                } else {
+                    EasResult.Error("Не удалось обновить черновик: ${extractEwsError(responseXml)}")
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка обновления черновика")
+            }
+        }
+    }
+    
+    /**
+     * Удаление черновика с сервера Exchange
+     */
+    suspend fun deleteDraft(serverId: String): EasResult<Boolean> {
+        return deleteDraftEws(serverId)
+    }
+    
+    /**
+     * Удаление черновика через EWS DeleteItem
+     */
+    private suspend fun deleteDraftEws(serverId: String): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:DeleteItem DeleteType="MoveToDeletedItems">
+                                <m:ItemIds>
+                                    <t:ItemId Id="$serverId"/>
+                                </m:ItemIds>
+                            </m:DeleteItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                // Сначала пробуем Basic аутентификацию
+                var responseXml = tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
+                
+                // Если Basic не сработал, пробуем NTLM
+                if (responseXml == null) {
+                    val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                    if (ntlmAuth != null) {
+                        responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                    }
+                }
+                
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
+                }
+                
+                if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+                    EasResult.Success(true)
+                } else {
+                    EasResult.Error("Не удалось удалить черновик: ${extractEwsError(responseXml)}")
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка удаления черновика")
+            }
+        }
+    }
+    
+    /**
+     * Извлекает текст ошибки из EWS ответа
+     */
+    private fun extractEwsError(xml: String): String {
+        val messageText = EWS_MESSAGE_TEXT_REGEX.find(xml)?.groupValues?.get(1)
+        val responseCode = EWS_RESPONSE_CODE_REGEX.find(xml)?.groupValues?.get(1)
+        return messageText ?: responseCode ?: "Unknown error"
+    }
+    
+    /**
+     * Unescape XML entities
+     */
+    private fun unescapeXml(text: String): String {
+        return text
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+    }
 }
 
 sealed class EasResult<out T> {
@@ -5175,6 +5608,19 @@ data class EasNote(
     val body: String,
     val categories: List<String> = emptyList(),
     val lastModified: Long = System.currentTimeMillis()
+)
+
+/**
+ * Черновик из Exchange Drafts
+ */
+data class EasDraft(
+    val serverId: String,
+    val subject: String,
+    val body: String,
+    val to: String = "",
+    val cc: String = "",
+    val bcc: String = "",
+    val dateCreated: Long = System.currentTimeMillis()
 )
 
 /**

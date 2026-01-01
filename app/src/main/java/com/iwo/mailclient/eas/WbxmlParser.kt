@@ -294,6 +294,11 @@ class WbxmlParser {
             return
         }
         
+        if (value == 0) {
+            output.write(0)
+            return
+        }
+        
         val bytes = mutableListOf<Int>()
         var v = value
         while (v > 0) {
