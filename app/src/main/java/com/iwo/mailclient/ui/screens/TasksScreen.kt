@@ -616,15 +616,17 @@ private fun TaskDetailDialog(
             }
         },
         confirmButton = {
-            Row {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 TextButton(onClick = onDeleteClick) {
-                    Text(Strings.delete, color = Color(0xFFF44336))
+                    Text(Strings.delete, color = Color(0xFFF44336), maxLines = 1, softWrap = false)
                 }
                 TextButton(onClick = onEditClick) {
-                    Text(Strings.edit)
+                    Text(Strings.edit, maxLines = 1, softWrap = false)
                 }
                 TextButton(onClick = onDismiss) {
-                    Text(Strings.close)
+                    Text(Strings.close, maxLines = 1, softWrap = false)
                 }
             }
         }
