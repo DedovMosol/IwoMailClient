@@ -325,6 +325,7 @@ object Strings {
     val featureContacts: String @Composable get() = if (isRussian()) "👥 Контакты" else "👥 Contacts"
     val featureNotes: String @Composable get() = if (isRussian()) "📝 Заметки" else "📝 Notes"
     val featureCalendar: String @Composable get() = if (isRussian()) "📅 Календарь" else "📅 Calendar"
+    val featureTasks: String @Composable get() = if (isRussian()) "✅ Задачи" else "✅ Tasks"
     val developerLabel: String @Composable get() = if (isRussian()) "Разработчик:" else "Developer:"
     
     // Советы по работе с приложением
@@ -560,6 +561,39 @@ object Strings {
     val location: String @Composable get() = if (isRussian()) "Место" else "Location"
     val organizer: String @Composable get() = if (isRussian()) "Организатор" else "Organizer"
     val attendees: String @Composable get() = if (isRussian()) "Участники" else "Attendees"
+    val showMore: String @Composable get() = if (isRussian()) "Показать ещё" else "Show more"
+    val showLess: String @Composable get() = if (isRussian()) "Свернуть" else "Show less"
+    
+    // Задачи
+    val noTasks: String @Composable get() = if (isRussian()) "Нет задач" else "No tasks"
+    val syncTasks: String @Composable get() = if (isRussian()) "Синхронизировать задачи" else "Sync tasks"
+    val tasksSynced: String @Composable get() = if (isRussian()) "Задачи синхронизированы" else "Tasks synced"
+    val searchTasks: String @Composable get() = if (isRussian()) "Поиск задач..." else "Search tasks..."
+    val newTask: String @Composable get() = if (isRussian()) "Новая задача" else "New task"
+    val editTask: String @Composable get() = if (isRussian()) "Редактировать задачу" else "Edit task"
+    val taskTitle: String @Composable get() = if (isRussian()) "Название задачи" else "Task title"
+    val taskDescription: String @Composable get() = if (isRussian()) "Описание" else "Description"
+    val startDate: String @Composable get() = if (isRussian()) "Дата начала" else "Start date"
+    val dueDate: String @Composable get() = if (isRussian()) "Срок выполнения" else "Due date"
+    val priority: String @Composable get() = if (isRussian()) "Приоритет" else "Priority"
+    val priorityLow: String @Composable get() = if (isRussian()) "Низкий" else "Low"
+    val priorityNormal: String @Composable get() = if (isRussian()) "Обычный" else "Normal"
+    val priorityHigh: String @Composable get() = if (isRussian()) "Высокий" else "High"
+    val taskCreated: String @Composable get() = if (isRussian()) "Задача создана" else "Task created"
+    val taskUpdated: String @Composable get() = if (isRussian()) "Задача обновлена" else "Task updated"
+    val taskDeleted: String @Composable get() = if (isRussian()) "Задача удалена" else "Task deleted"
+    val taskCompleted: String @Composable get() = if (isRussian()) "Задача выполнена" else "Task completed"
+    val taskNotCompleted: String @Composable get() = if (isRussian()) "Задача не выполнена" else "Task not completed"
+    val activeTasks: String @Composable get() = if (isRussian()) "Активные" else "Active"
+    val completedTasks: String @Composable get() = if (isRussian()) "Выполненные" else "Completed"
+    val allTasks: String @Composable get() = if (isRussian()) "Все" else "All"
+    val highPriorityTasks: String @Composable get() = if (isRussian()) "Важные" else "High priority"
+    val overdueTasks: String @Composable get() = if (isRussian()) "Просроченные" else "Overdue"
+    val noTitle: String @Composable get() = if (isRussian()) "(Без названия)" else "(No title)"
+    val tasksCount: String @Composable get() = if (isRussian()) "задач" else "tasks"
+    val reminder: String @Composable get() = if (isRussian()) "Напоминание" else "Reminder"
+    val setReminder: String @Composable get() = if (isRussian()) "Установить напоминание" else "Set reminder"
+    
     val searchContacts: String @Composable get() = if (isRussian()) "Поиск контактов..." else "Search contacts..."
     val enterNameToSearch: String @Composable get() = if (isRussian()) "Введите имя для поиска" else "Enter name to search"
     val firstName: String @Composable get() = if (isRussian()) "Имя" else "First name"
@@ -635,11 +669,9 @@ object Strings {
     val eventTitle: String @Composable get() = if (isRussian()) "Название" else "Title"
     val eventLocation: String @Composable get() = if (isRussian()) "Место" else "Location"
     val eventDescription: String @Composable get() = if (isRussian()) "Описание" else "Description"
-    val startDate: String @Composable get() = if (isRussian()) "Дата начала" else "Start date"
     val endDate: String @Composable get() = if (isRussian()) "Дата окончания" else "End date"
     val startTime: String @Composable get() = if (isRussian()) "Время начала" else "Start time"
     val endTime: String @Composable get() = if (isRussian()) "Время окончания" else "End time"
-    val reminder: String @Composable get() = if (isRussian()) "Напоминание" else "Reminder"
     val noReminder: String @Composable get() = if (isRussian()) "Без напоминания" else "No reminder"
     val minutes5: String @Composable get() = if (isRussian()) "5 минут" else "5 minutes"
     val minutes15: String @Composable get() = if (isRussian()) "15 минут" else "15 minutes"
@@ -716,7 +748,6 @@ object Strings {
     // Статусы событий
     val completed: String @Composable get() = if (isRussian()) "Завершено" else "Completed"
     val recurringEvent: String @Composable get() = if (isRussian()) "Повторяющееся событие" else "Recurring event"
-    val noTitle: String @Composable get() = if (isRussian()) "(Без заголовка)" else "(No title)"
     val exchangeContacts: String @Composable get() = if (isRussian()) "Контакты Exchange" else "Exchange contacts"
     val exchangeContactsDesc: String @Composable get() = if (isRussian()) "Контакты с сервера (только чтение)" else "Server contacts (read-only)"
     @Composable
@@ -791,6 +822,7 @@ object Strings {
     // Синхронизация
     val notesSync: String @Composable get() = if (isRussian()) "Синхронизация заметок" else "Notes sync"
     val calendarSync: String @Composable get() = if (isRussian()) "Синхронизация календаря" else "Calendar sync"
+    val tasksSync: String @Composable get() = if (isRussian()) "Синхронизация задач" else "Tasks sync"
     
     // Диалоги разрешений
     val backgroundWorkTitle: String @Composable get() = if (isRussian()) "Фоновая работа" else "Background work"

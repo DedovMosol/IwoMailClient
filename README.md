@@ -4,7 +4,7 @@
 
 Почтовый клиент для Android с поддержкой Microsoft Exchange Server 2007+ (ActiveSync), IMAP и POP3.
 
-**Версия:** 1.4.1  
+**Версия:** 1.4.2  
 **Разработчик:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com

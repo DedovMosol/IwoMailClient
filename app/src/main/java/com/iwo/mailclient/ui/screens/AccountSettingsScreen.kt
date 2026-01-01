@@ -77,6 +77,7 @@ fun AccountSettingsScreen(
     var showContactsSyncDialog by remember { mutableStateOf(false) }
     var showNotesSyncDialog by remember { mutableStateOf(false) }
     var showCalendarSyncDialog by remember { mutableStateOf(false) }
+    var showTasksSyncDialog by remember { mutableStateOf(false) }
     var showCertificateDialog by remember { mutableStateOf(false) }
     
     // Пикеры для сертификата
@@ -346,6 +347,22 @@ fun AccountSettingsScreen(
             onDismiss = { showCalendarSyncDialog = false }
         )
     }
+    
+    // Диалог синхронизации задач
+    if (showTasksSyncDialog) {
+        SyncIntervalDialog(
+            isRu = isRu,
+            title = if (isRu) "Синхронизация задач" else "Tasks sync",
+            currentDays = currentAccount.tasksSyncIntervalDays,
+            onDaysChange = { days ->
+                scope.launch {
+                    accountRepo.updateTasksSyncInterval(accountId, days)
+                    account = accountRepo.getAccount(accountId)
+                }
+            },
+            onDismiss = { showTasksSyncDialog = false }
+        )
+    }
 
     
     // Диалог сертификата
@@ -603,6 +620,17 @@ fun AccountSettingsScreen(
                         leadingContent = { Icon(AppIcons.CalendarMonth, null) },
                         trailingContent = { Icon(AppIcons.ChevronRight, null) },
                         modifier = Modifier.clickable { showCalendarSyncDialog = true }
+                    )
+                }
+                
+                // Синхронизация задач
+                item {
+                    ListItem(
+                        headlineContent = { Text(Strings.tasksSync) },
+                        supportingContent = { Text(getContactsSyncIntervalText(currentAccount.tasksSyncIntervalDays, isRu)) },
+                        leadingContent = { Icon(AppIcons.Task, null) },
+                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
+                        modifier = Modifier.clickable { showTasksSyncDialog = true }
                     )
                 }
             }

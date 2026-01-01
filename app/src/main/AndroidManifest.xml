@@ -97,6 +97,16 @@
                 <action android:name="com.iwo.mailclient.CALENDAR_REMINDER" />
             </intent-filter>
         </receiver>
+        
+        <!-- Receiver для напоминаний задач -->
+        <receiver
+            android:name=".sync.TaskReminderReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.iwo.mailclient.TASK_REMINDER" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

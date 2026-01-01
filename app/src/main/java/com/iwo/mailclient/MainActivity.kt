@@ -125,14 +125,20 @@ private fun PermissionDialog(
                         modifier = Modifier.padding(top = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        text.split("\n\n").forEach { paragraph ->
+                        text.split("\n\n").forEachIndexed { index, paragraph ->
                             if (paragraph.isNotBlank()) {
+                                val isLastParagraph = index == text.split("\n\n").lastIndex
                                 Text(
                                     text = paragraph,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        textIndent = TextIndent(firstLine = 24.sp)
-                                    ),
-                                    textAlign = TextAlign.Justify
+                                    style = if (isLastParagraph) {
+                                        MaterialTheme.typography.bodyMedium
+                                    } else {
+                                        MaterialTheme.typography.bodyMedium.copy(
+                                            textIndent = TextIndent(firstLine = 24.sp)
+                                        )
+                                    },
+                                    textAlign = if (isLastParagraph) TextAlign.Center else TextAlign.Justify,
+                                    modifier = if (isLastParagraph) Modifier.fillMaxWidth() else Modifier
                                 )
                             }
                         }

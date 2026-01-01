@@ -192,6 +192,7 @@ sealed class Screen(val route: String) {
     object Contacts : Screen("contacts")
     object Notes : Screen("notes")
     object Calendar : Screen("calendar")
+    object Tasks : Screen("tasks")
 }
 
 @Composable
@@ -373,6 +374,9 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                 },
                 onNavigateToCalendar = {
                     navController.navigate(Screen.Calendar.route)
+                },
+                onNavigateToTasks = {
+                    navController.navigate(Screen.Tasks.route)
                 }
             )
         }
@@ -625,6 +629,12 @@ fun AppNavigation(openInboxUnread: Boolean = false, openEmailId: String? = null)
                 onComposeClick = { email ->
                     navController.navigate(Screen.Compose.createRoute(toEmail = email))
                 }
+            )
+        }
+        
+        composable(Screen.Tasks.route) {
+            TasksScreen(
+                onBackClick = { navController.popBackStack() }
             )
         }
     }

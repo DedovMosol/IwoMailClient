@@ -3,4 +3,8 @@
     <string name="app_name">iwo Mail Client</string>
     <string name="calendar_event">Calendar event</string>
     <string name="all_day">All day</string>
+    <string name="task">Task</string>
+    <string name="task_reminder">Task reminder</string>
+    <string name="due_date_label">Due</string>
+    <string name="high_priority">High priority</string>
 </resources>

@@ -123,6 +123,9 @@ class SyncWorker(
         // Синхронизация календаря (для Exchange аккаунтов)
         syncCalendar()
         
+        // Синхронизация задач (для Exchange аккаунтов)
+        syncTasks()
+        
         // Перепланируем с учётом ночного режима (интервал может измениться)
         scheduleWithNightMode(applicationContext)
         
@@ -351,6 +354,38 @@ class SyncWorker(
                 }
             } catch (e: Exception) {
                 // Игнорируем ошибки синхронизации календаря
+            }
+        }
+    }
+    
+    /**
+     * Синхронизация задач для Exchange аккаунтов
+     */
+    private suspend fun syncTasks() {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val accounts = database.accountDao().getAllAccountsList()
+        val taskRepo = com.iwo.mailclient.data.repository.TaskRepository(applicationContext)
+        
+        for (account in accounts) {
+            // Только для Exchange аккаунтов
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            
+            // Проверяем интервал синхронизации задач (0 = отключено)
+            if (account.tasksSyncIntervalDays <= 0) continue
+            
+            // Проверяем когда была последняя синхронизация
+            val lastSync = settingsRepo.getLastTasksSyncTimeSync(account.id)
+            val intervalMs = account.tasksSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            // Синхронизируем задачи
+            try {
+                val result = taskRepo.syncTasks(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastTasksSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (e: Exception) {
+                // Игнорируем ошибки синхронизации задач
             }
         }
     }

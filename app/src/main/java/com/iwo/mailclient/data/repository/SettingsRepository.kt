@@ -55,8 +55,7 @@ class SettingsRepository private constructor(private val context: Context) {
     // Размеры шрифта
     enum class FontSize(val scale: Float, val displayNameRu: String, val displayNameEn: String) {
         SMALL(0.85f, "Маленький", "Small"),
-        MEDIUM(1.0f, "Средний", "Medium"),
-        LARGE(1.15f, "Большой", "Large");
+        MEDIUM(1.0f, "Средний", "Medium");
         
         fun getDisplayName(isRussian: Boolean): String = if (isRussian) displayNameRu else displayNameEn
         
@@ -356,6 +355,21 @@ class SettingsRepository private constructor(private val context: Context) {
     fun getLastCalendarSyncTimeSync(accountId: Long): Long {
         return runBlocking {
             context.dataStore.data.first()[getCalendarSyncKey(accountId)] ?: 0L
+        }
+    }
+    
+    // Время последней синхронизации задач (для каждого аккаунта отдельно)
+    private fun getTasksSyncKey(accountId: Long) = longPreferencesKey("last_tasks_sync_$accountId")
+    
+    suspend fun setLastTasksSyncTime(accountId: Long, timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[getTasksSyncKey(accountId)] = timeMillis
+        }
+    }
+    
+    fun getLastTasksSyncTimeSync(accountId: Long): Long {
+        return runBlocking {
+            context.dataStore.data.first()[getTasksSyncKey(accountId)] ?: 0L
         }
     }
 

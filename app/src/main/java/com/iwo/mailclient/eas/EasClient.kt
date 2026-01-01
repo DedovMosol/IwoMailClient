@@ -48,6 +48,10 @@ class EasClient(
     private var versionDetected = false
     // Кэш ID папки заметок
     private var cachedNotesFolderId: String? = null
+    // Кэш ID папки задач
+    private var cachedTasksFolderId: String? = null
+    // Кэш ID папки календаря
+    private var cachedCalendarFolderId: String? = null
     // DeviceId должен быть стабильным для одного аккаунта
     private val deviceId = generateStableDeviceId(username, deviceIdSuffix)
     // DeviceType - как у Huawei
@@ -5041,6 +5045,491 @@ $foldersXml
         return 0L
     }
 
+    // ==================== ЗАДАЧИ (TASKS) ====================
+    
+    /**
+     * Получает ID папки задач с кэшированием и автоматической инвалидацией при ошибке
+     * @param forceRefresh принудительно обновить кэш
+     */
+    private suspend fun getTasksFolderId(forceRefresh: Boolean = false): String? {
+        if (forceRefresh) cachedTasksFolderId = null
+        
+        return cachedTasksFolderId ?: run {
+            val foldersResult = folderSync("0")
+            when (foldersResult) {
+                is EasResult.Success -> {
+                    val folderId = foldersResult.data.folders.find { it.type == 7 }?.serverId
+                    if (folderId != null) cachedTasksFolderId = folderId
+                    folderId
+                }
+                is EasResult.Error -> null
+            }
+        }
+    }
+    
+    /**
+     * Синхронизация задач из папки Tasks на сервере Exchange
+     * Папка Tasks имеет type = 7
+     */
+    suspend fun syncTasks(): EasResult<List<EasTask>> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Получаем папку задач (type = 7) с кэшированием
+        var tasksFolderId = getTasksFolderId()
+        
+        if (tasksFolderId == null) {
+            return EasResult.Error("Папка задач не найдена")
+        }
+        
+        // Шаг 1: Получаем начальный SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            // Проверяем Status - если ошибка, возможно папка изменилась
+            val status = extractValue(responseXml, "Status")
+            if (status != null && status != "1") {
+                throw Exception("INVALID_FOLDER:$status")
+            }
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> {
+                // Если ошибка связана с папкой, сбрасываем кэш и пробуем снова
+                if (initialResult.message.contains("INVALID_FOLDER")) {
+                    tasksFolderId = getTasksFolderId(forceRefresh = true)
+                    if (tasksFolderId == null) {
+                        return EasResult.Error("Папка задач не найдена")
+                    }
+                    // Повторяем запрос с новым ID
+                    val retryXml = initialXml.replace(
+                        Regex("<CollectionId>.*?</CollectionId>"),
+                        "<CollectionId>$tasksFolderId</CollectionId>"
+                    )
+                    val retryResult = executeEasCommand("Sync", retryXml) { responseXml ->
+                        extractValue(responseXml, "SyncKey") ?: "0"
+                    }
+                    when (retryResult) {
+                        is EasResult.Success -> syncKey = retryResult.data
+                        is EasResult.Error -> return retryResult
+                    }
+                } else {
+                    return initialResult
+                }
+            }
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Success(emptyList())
+        }
+        
+        // Шаг 2: Запрашиваем задачи
+        val syncXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                        <DeletesAsMoves/>
+                        <GetChanges/>
+                        <WindowSize>100</WindowSize>
+                        <Options>
+                            <airsyncbase:BodyPreference>
+                                <airsyncbase:Type>1</airsyncbase:Type>
+                                <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                            </airsyncbase:BodyPreference>
+                        </Options>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", syncXml) { responseXml ->
+            parseTaskSyncResponse(responseXml)
+        }
+    }
+    
+    private fun parseTaskSyncResponse(xml: String): List<EasTask> {
+        val tasks = mutableListOf<EasTask>()
+        
+        // Парсим Add и Change элементы
+        val patterns = listOf(
+            "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL),
+            "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        )
+        
+        for (pattern in patterns) {
+            pattern.findAll(xml).forEach { match ->
+                val itemXml = match.groupValues[1]
+                
+                val serverId = extractValue(itemXml, "ServerId") ?: return@forEach
+                
+                val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                val dataMatch = dataPattern.find(itemXml)
+                if (dataMatch != null) {
+                    val dataXml = dataMatch.groupValues[1]
+                    
+                    val subject = extractTaskValue(dataXml, "Subject") ?: ""
+                    val body = extractTaskBody(dataXml)
+                    val startDate = parseCalendarDate(extractTaskValue(dataXml, "StartDate") ?: extractTaskValue(dataXml, "UtcStartDate"))
+                    val dueDate = parseCalendarDate(extractTaskValue(dataXml, "DueDate") ?: extractTaskValue(dataXml, "UtcDueDate"))
+                    val complete = extractTaskValue(dataXml, "Complete") == "1"
+                    val dateCompleted = parseCalendarDate(extractTaskValue(dataXml, "DateCompleted"))
+                    val importance = extractTaskValue(dataXml, "Importance")?.toIntOrNull() ?: 1
+                    val sensitivity = extractTaskValue(dataXml, "Sensitivity")?.toIntOrNull() ?: 0
+                    val reminderSet = extractTaskValue(dataXml, "ReminderSet") == "1"
+                    val reminderTime = parseCalendarDate(extractTaskValue(dataXml, "ReminderTime"))
+                    val categories = extractTaskCategories(dataXml)
+                    val lastModified = System.currentTimeMillis()
+                    
+                    tasks.add(EasTask(
+                        serverId = serverId,
+                        subject = subject,
+                        body = body,
+                        startDate = startDate,
+                        dueDate = dueDate,
+                        complete = complete,
+                        dateCompleted = dateCompleted,
+                        importance = importance,
+                        sensitivity = sensitivity,
+                        reminderSet = reminderSet,
+                        reminderTime = reminderTime,
+                        categories = categories,
+                        lastModified = lastModified
+                    ))
+                }
+            }
+        }
+        
+        return tasks
+    }
+    
+    private fun extractTaskValue(xml: String, tag: String): String? {
+        val patterns = listOf(
+            "<tasks:$tag>(.*?)</tasks:$tag>",
+            "<$tag>(.*?)</$tag>"
+        )
+        for (pattern in patterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+        }
+        return null
+    }
+    
+    private fun extractTaskBody(xml: String): String {
+        val bodyPatterns = listOf(
+            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
+            "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
+            "<tasks:Body>(.*?)</tasks:Body>"
+        )
+        for (pattern in bodyPatterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val match = regex.find(xml)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+        }
+        return ""
+    }
+    
+    private fun extractTaskCategories(xml: String): List<String> {
+        val categories = mutableListOf<String>()
+        val categoriesPattern = "<tasks:Categories>(.*?)</tasks:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val categoriesMatch = categoriesPattern.find(xml)
+        if (categoriesMatch != null) {
+            val categoriesXml = categoriesMatch.groupValues[1]
+            val categoryPattern = "<tasks:Category>(.*?)</tasks:Category>".toRegex()
+            categoryPattern.findAll(categoriesXml).forEach { match ->
+                categories.add(match.groupValues[1].trim())
+            }
+        }
+        return categories
+    }
+    
+    /**
+     * Создание задачи на сервере Exchange
+     */
+    suspend fun createTask(
+        subject: String,
+        body: String = "",
+        startDate: Long = 0,
+        dueDate: Long = 0,
+        importance: Int = 1, // 0=Low, 1=Normal, 2=High
+        reminderSet: Boolean = false,
+        reminderTime: Long = 0
+    ): EasResult<String> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Получаем папку задач с кэшированием
+        val tasksFolderId = getTasksFolderId()
+            ?: return EasResult.Error("Папка задач не найдена")
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        val clientId = java.util.UUID.randomUUID().toString().replace("-", "").take(32)
+        
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.000'Z'", java.util.Locale.US)
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        
+        val escapedSubject = escapeXml(subject)
+        val escapedBody = escapeXml(body)
+        
+        // Формируем XML для создания задачи
+        val createXml = buildString {
+            append("""<?xml version="1.0" encoding="UTF-8"?>""")
+            append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
+            append("<Collections><Collection>")
+            append("<SyncKey>$syncKey</SyncKey>")
+            append("<CollectionId>$tasksFolderId</CollectionId>")
+            append("<Commands><Add>")
+            append("<ClientId>$clientId</ClientId>")
+            append("<ApplicationData>")
+            append("<tasks:Subject>$escapedSubject</tasks:Subject>")
+            append("<airsyncbase:Body>")
+            append("<airsyncbase:Type>1</airsyncbase:Type>")
+            append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
+            append("</airsyncbase:Body>")
+            append("<tasks:Importance>$importance</tasks:Importance>")
+            append("<tasks:Complete>0</tasks:Complete>")
+            if (startDate > 0) {
+                append("<tasks:StartDate>${dateFormat.format(java.util.Date(startDate))}</tasks:StartDate>")
+                append("<tasks:UtcStartDate>${dateFormat.format(java.util.Date(startDate))}</tasks:UtcStartDate>")
+            }
+            if (dueDate > 0) {
+                append("<tasks:DueDate>${dateFormat.format(java.util.Date(dueDate))}</tasks:DueDate>")
+                append("<tasks:UtcDueDate>${dateFormat.format(java.util.Date(dueDate))}</tasks:UtcDueDate>")
+            }
+            if (reminderSet && reminderTime > 0) {
+                append("<tasks:ReminderSet>1</tasks:ReminderSet>")
+                append("<tasks:ReminderTime>${dateFormat.format(java.util.Date(reminderTime))}</tasks:ReminderTime>")
+            } else {
+                append("<tasks:ReminderSet>0</tasks:ReminderSet>")
+            }
+            append("</ApplicationData>")
+            append("</Add></Commands>")
+            append("</Collection></Collections>")
+            append("</Sync>")
+        }
+        
+        return executeEasCommand("Sync", createXml) { responseXml ->
+            val status = extractValue(responseXml, "Status")
+            if (status == "1") {
+                val serverId = extractValue(responseXml, "ServerId") ?: clientId
+                serverId
+            } else {
+                throw Exception("Ошибка создания задачи: Status=$status")
+            }
+        }
+    }
+    
+    /**
+     * Обновление задачи на сервере Exchange
+     */
+    suspend fun updateTask(
+        serverId: String,
+        subject: String,
+        body: String = "",
+        startDate: Long = 0,
+        dueDate: Long = 0,
+        complete: Boolean = false,
+        importance: Int = 1,
+        reminderSet: Boolean = false,
+        reminderTime: Long = 0
+    ): EasResult<Boolean> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Получаем папку задач с кэшированием
+        val tasksFolderId = getTasksFolderId()
+            ?: return EasResult.Error("Папка задач не найдена")
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.000'Z'", java.util.Locale.US)
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        
+        val escapedSubject = escapeXml(subject)
+        val escapedBody = escapeXml(body)
+        
+        // Формируем XML для обновления
+        val updateXml = buildString {
+            append("""<?xml version="1.0" encoding="UTF-8"?>""")
+            append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
+            append("<Collections><Collection>")
+            append("<SyncKey>$syncKey</SyncKey>")
+            append("<CollectionId>$tasksFolderId</CollectionId>")
+            append("<Commands><Change>")
+            append("<ServerId>$serverId</ServerId>")
+            append("<ApplicationData>")
+            append("<tasks:Subject>$escapedSubject</tasks:Subject>")
+            append("<airsyncbase:Body>")
+            append("<airsyncbase:Type>1</airsyncbase:Type>")
+            append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
+            append("</airsyncbase:Body>")
+            append("<tasks:Importance>$importance</tasks:Importance>")
+            append("<tasks:Complete>${if (complete) "1" else "0"}</tasks:Complete>")
+            if (complete) {
+                append("<tasks:DateCompleted>${dateFormat.format(java.util.Date())}</tasks:DateCompleted>")
+            }
+            if (startDate > 0) {
+                append("<tasks:StartDate>${dateFormat.format(java.util.Date(startDate))}</tasks:StartDate>")
+                append("<tasks:UtcStartDate>${dateFormat.format(java.util.Date(startDate))}</tasks:UtcStartDate>")
+            }
+            if (dueDate > 0) {
+                append("<tasks:DueDate>${dateFormat.format(java.util.Date(dueDate))}</tasks:DueDate>")
+                append("<tasks:UtcDueDate>${dateFormat.format(java.util.Date(dueDate))}</tasks:UtcDueDate>")
+            }
+            if (reminderSet && reminderTime > 0) {
+                append("<tasks:ReminderSet>1</tasks:ReminderSet>")
+                append("<tasks:ReminderTime>${dateFormat.format(java.util.Date(reminderTime))}</tasks:ReminderTime>")
+            } else {
+                append("<tasks:ReminderSet>0</tasks:ReminderSet>")
+            }
+            append("</ApplicationData>")
+            append("</Change></Commands>")
+            append("</Collection></Collections>")
+            append("</Sync>")
+        }
+        
+        return executeEasCommand("Sync", updateXml) { responseXml ->
+            val status = extractValue(responseXml, "Status")
+            status == "1"
+        }
+    }
+    
+    /**
+     * Удаление задачи на сервере Exchange
+     */
+    suspend fun deleteTask(serverId: String): EasResult<Boolean> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        // Получаем папку задач с кэшированием
+        val tasksFolderId = getTasksFolderId()
+            ?: return EasResult.Error("Папка задач не найдена")
+        
+        // Получаем SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        val deleteXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                        <Commands>
+                            <Delete>
+                                <ServerId>$serverId</ServerId>
+                            </Delete>
+                        </Commands>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", deleteXml) { responseXml ->
+            val status = extractValue(responseXml, "Status")
+            status == "1"
+        }
+    }
+
     private fun parseContactsSyncResponse(xml: String): List<GalContact> {
         val contacts = mutableListOf<GalContact>()
         
@@ -5652,5 +6141,24 @@ data class EasAttendee(
     val email: String,
     val name: String = "",
     val status: Int = 0 // 0=Unknown, 2=Tentative, 3=Accept, 4=Decline, 5=NotResponded
+)
+
+/**
+ * Задача из Exchange Tasks
+ */
+data class EasTask(
+    val serverId: String,
+    val subject: String,
+    val body: String = "",
+    val startDate: Long = 0,
+    val dueDate: Long = 0,
+    val complete: Boolean = false,
+    val dateCompleted: Long = 0,
+    val importance: Int = 1, // 0=Low, 1=Normal, 2=High
+    val sensitivity: Int = 0, // 0=Normal, 1=Personal, 2=Private, 3=Confidential
+    val reminderSet: Boolean = false,
+    val reminderTime: Long = 0,
+    val categories: List<String> = emptyList(),
+    val lastModified: Long = System.currentTimeMillis()
 )
 

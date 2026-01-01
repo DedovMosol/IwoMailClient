@@ -11,8 +11,11 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -23,8 +26,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -839,11 +845,15 @@ private fun EventDetailDialog(
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
     
     // Извлекаем email из строки организатора
     val organizerEmail = remember(event.organizer) {
         EMAIL_REGEX.find(event.organizer)?.value ?: ""
     }
+    
+    // Проверяем есть ли что показывать в расширенном виде
+    val hasMoreContent = event.body.isNotBlank() || event.organizer.isNotBlank() || attendees.isNotEmpty()
     
     // Диалог подтверждения удаления
     if (showDeleteConfirm) {
@@ -879,7 +889,9 @@ private fun EventDetailDialog(
             )
         },
         text = {
-            Column {
+            Column(
+                modifier = if (expanded) Modifier.verticalScroll(rememberScrollState()) else Modifier
+            ) {
                 // Дата/время
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -929,8 +941,8 @@ private fun EventDetailDialog(
                     }
                 }
                 
-                // Описание
-                if (event.body.isNotBlank()) {
+                // Краткое описание (свёрнутый вид)
+                if (!expanded && event.body.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = event.body.replace(HTML_TAG_REGEX, "").take(200) + if (event.body.length > 200) "..." else "",
@@ -939,6 +951,118 @@ private fun EventDetailDialog(
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                
+                // Кнопка "Показать ещё"
+                if (!expanded && hasMoreContent) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = { expanded = true },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text(Strings.showMore)
+                        Icon(
+                            AppIcons.ExpandMore,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                
+                // Расширенный вид
+                if (expanded) {
+                    // Организатор
+                    if (event.organizer.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        ) {
+                            Icon(
+                                AppIcons.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = Strings.organizer,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = event.organizer.replace(HTML_TAG_REGEX, ""),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (organizerEmail.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = if (organizerEmail.isNotBlank()) {
+                                        Modifier.clickable { onComposeClick(organizerEmail) }
+                                    } else Modifier
+                                )
+                            }
+                        }
+                    }
+                    
+                    // Участники
+                    if (attendees.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.Top,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        ) {
+                            Icon(
+                                AppIcons.People,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = Strings.attendees,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                attendees.forEach { attendee ->
+                                    val displayText = if (attendee.name.isNotBlank()) "${attendee.name} <${attendee.email}>" else attendee.email
+                                    Text(
+                                        text = displayText,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (attendee.email.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        modifier = if (attendee.email.isNotBlank()) {
+                                            Modifier.clickable { onComposeClick(attendee.email) }
+                                        } else Modifier
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Полное описание с изображениями и ссылками
+                    if (event.body.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        com.iwo.mailclient.ui.components.RichTextWithImages(
+                            htmlContent = event.body,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
+                    // Кнопка "Свернуть"
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = { expanded = false },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text(Strings.showLess)
+                        Icon(
+                            AppIcons.ExpandLess,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         },

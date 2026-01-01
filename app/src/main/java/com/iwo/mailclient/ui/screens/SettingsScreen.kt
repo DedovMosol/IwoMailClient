@@ -60,8 +60,14 @@ fun SettingsScreen(
     val nightModeEnabled by settingsRepo.nightModeEnabled.collectAsState(initial = false)
     val ignoreBatterySaver by settingsRepo.ignoreBatterySaver.collectAsState(initial = false)
     
-    // Проверяем активен ли Battery Saver
-    val isBatterySaverActive = remember { settingsRepo.isBatterySaverActive() }
+    // Проверяем активен ли Battery Saver с периодическим обновлением
+    var isBatterySaverActive by remember { mutableStateOf(settingsRepo.isBatterySaverActive()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            isBatterySaverActive = settingsRepo.isBatterySaverActive()
+        }
+    }
     
     // Диалог подтверждения удаления
     accountToDelete?.let { account ->
@@ -300,7 +306,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("iwo Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.4.1") },
+                    supportingContent = { Text("${Strings.version} 1.4.2") },
                     leadingContent = { Icon(AppIcons.Info, null) }
                 )
             }

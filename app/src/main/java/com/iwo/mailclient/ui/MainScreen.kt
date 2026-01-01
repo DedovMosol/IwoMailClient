@@ -212,7 +212,8 @@ fun MainScreen(
     onNavigateToEmailDetail: (String) -> Unit = {},
     onNavigateToContacts: () -> Unit = {},
     onNavigateToNotes: () -> Unit = {},
-    onNavigateToCalendar: () -> Unit = {}
+    onNavigateToCalendar: () -> Unit = {},
+    onNavigateToTasks: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -220,6 +221,9 @@ fun MainScreen(
     val accountRepo = remember { AccountRepository(context) }
     val mailRepo = remember { MailRepository(context) }
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
+    val noteRepo = remember { com.iwo.mailclient.data.repository.NoteRepository(context) }
+    val calendarRepo = remember { com.iwo.mailclient.data.repository.CalendarRepository(context) }
+    val taskRepo = remember { com.iwo.mailclient.data.repository.TaskRepository(context) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     
     val accounts by accountRepo.accounts.collectAsState(initial = emptyList())
@@ -283,17 +287,21 @@ fun MainScreen(
     // Счётчики заметок и календаря
     var notesCount by remember { mutableStateOf(0) }
     var eventsCount by remember { mutableStateOf(0) }
+    var tasksCount by remember { mutableStateOf(0) }
     
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        val noteRepo = com.iwo.mailclient.data.repository.NoteRepository(context)
         noteRepo.getNotesCount(accountId).collect { notesCount = it }
     }
     
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        val calendarRepo = com.iwo.mailclient.data.repository.CalendarRepository(context)
         calendarRepo.getEventsCount(accountId).collect { eventsCount = it }
+    }
+    
+    LaunchedEffect(activeAccount?.id) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        taskRepo.getActiveTasksCount(accountId).collect { tasksCount = it }
     }
     
     // Первоначальная синхронизация при PUSH или после загрузки приложения
@@ -674,6 +682,10 @@ fun MainScreen(
                         scope.launch { drawerState.close() }
                         onNavigateToCalendar()
                     },
+                    onTasksClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToTasks()
+                    },
                     onCreateFolder = {
                         scope.launch { drawerState.close() }
                         showCreateFolderDialog = true
@@ -734,6 +746,7 @@ fun MainScreen(
                 flaggedCount = flaggedCount,
                 notesCount = notesCount,
                 eventsCount = eventsCount,
+                tasksCount = tasksCount,
                 isLoading = isLoading,
                 isSyncing = isSyncing,
                 onSyncFolders = { syncFolders() },
@@ -741,6 +754,7 @@ fun MainScreen(
                 onContactsClick = onNavigateToContacts,
                 onNotesClick = onNavigateToNotes,
                 onCalendarClick = onNavigateToCalendar,
+                onTasksClick = onNavigateToTasks,
                 onSettingsClick = onNavigateToSettings,
                 modifier = Modifier.padding(padding)
             )
@@ -756,6 +770,7 @@ private fun HomeContent(
     flaggedCount: Int,
     notesCount: Int = 0,
     eventsCount: Int = 0,
+    tasksCount: Int = 0,
     isLoading: Boolean,
     isSyncing: Boolean = false,
     onSyncFolders: () -> Unit,
@@ -763,6 +778,7 @@ private fun HomeContent(
     onContactsClick: () -> Unit,
     onNotesClick: () -> Unit = {},
     onCalendarClick: () -> Unit = {},
+    onTasksClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -774,10 +790,18 @@ private fun HomeContent(
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val lastSyncTime by settingsRepo.lastSyncTime.collectAsState(initial = 0L)
     
-    // ��T��-�-��T�TϦ��- �-��T¦��-���- ���� Battery Saver
-    val isBatterySaverActive = remember { settingsRepo.isBatterySaverActive() }
+    // Проверяем состояние Battery Saver с периодическим обновлением
+    var isBatterySaverActive by remember { mutableStateOf(settingsRepo.isBatterySaverActive()) }
     val ignoreBatterySaver by settingsRepo.ignoreBatterySaver.collectAsState(initial = false)
     val showBatterySaverWarning = isBatterySaverActive && !ignoreBatterySaver
+    
+    // Периодически проверяем состояние Battery Saver (каждые 5 секунд)
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            isBatterySaverActive = settingsRepo.isBatterySaverActive()
+        }
+    }
     
     // ��-T�T¦-TϦ-���� �+��T� T���T�T�T¦�T� T������-�-���-�+�-TƦ��� (T��-T�T��-�-TϦ�T�T�T� ��T��� �-�-�-�����-TƦ���, T��-T��-T�T˦-�-��T�T�T� ��T��� ����T������-��T�T����� ��T������-�����-��T�)
     var isRecommendationDismissed by rememberSaveable { mutableStateOf(false) }
@@ -790,6 +814,7 @@ private fun HomeContent(
     val favoritesName = Strings.favorites
     val notesName = Strings.notes
     val calendarName = Strings.calendar
+    val tasksName = Strings.tasks
     val foldersTitle = Strings.folders
     val refreshText = Strings.refresh
     val emailsCountText = Strings.emailsCount
@@ -1078,6 +1103,8 @@ private fun HomeContent(
             orderedFolders.add(FolderDisplay("notes", notesName, notesCount, 0, -3))
             // Календарь
             orderedFolders.add(FolderDisplay("calendar", calendarName, eventsCount, 0, -4))
+            // Задачи
+            orderedFolders.add(FolderDisplay("tasks", tasksName, tasksCount, 0, -5))
             
             val displayFolders = orderedFolders.toList()
             
@@ -1123,6 +1150,7 @@ private fun HomeContent(
                                             "contacts" -> onContactsClick()
                                             "notes" -> onNotesClick()
                                             "calendar" -> onCalendarClick()
+                                            "tasks" -> onTasksClick()
                                             else -> onFolderClick(folder.id)
                                         }
                                     },
@@ -1156,6 +1184,7 @@ private fun HomeContent(
                                         "contacts" -> onContactsClick()
                                         "notes" -> onNotesClick()
                                         "calendar" -> onCalendarClick()
+                                        "tasks" -> onTasksClick()
                                         else -> onFolderClick(folder.id)
                                     }
                                 },
@@ -1426,12 +1455,12 @@ private fun HomeContent(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Exchange Mail Client",
+                                text = "iwo Mail Client",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.4.1",
+                                text = "v1.4.2",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1479,6 +1508,7 @@ private fun HomeContent(
                                 FeatureChip(Strings.featureContacts)
                                 FeatureChip(Strings.featureNotes)
                                 FeatureChip(Strings.featureCalendar)
+                                FeatureChip(Strings.featureTasks)
                             }
                             
                             Spacer(modifier = Modifier.height(12.dp))
@@ -1932,6 +1962,10 @@ private fun FolderCardDisplay(
             AppIcons.Calendar, 
             listOf(Color(0xFF42A5F5), Color(0xFF1E88E5)) // Blue
         )
+        -5 -> FolderColors(
+            AppIcons.CheckCircle, 
+            listOf(Color(0xFFAB47BC), Color(0xFF8E24AA)) // Purple
+        )
         else -> FolderColors(
             AppIcons.Folder, 
             listOf(Color(0xFF90A4AE), Color(0xFF78909C)) // Blue Grey Light
@@ -2000,6 +2034,7 @@ private fun FolderCardDisplay(
                                 count > 0 -> "$count ${when (type) {
                                     -3 -> Strings.notesCount  // Заметки
                                     -4 -> Strings.events      // Календарь
+                                    -5 -> Strings.tasksCount  // Задачи
                                     else -> Strings.emailsCount
                                 }}"
                                 else -> Strings.empty
@@ -2137,6 +2172,7 @@ private fun DrawerContent(
     onContactsClick: () -> Unit = {},
     onNotesClick: () -> Unit = {},
     onCalendarClick: () -> Unit = {},
+    onTasksClick: () -> Unit = {},
     onCreateFolder: () -> Unit = {},
     onFolderLongClick: (FolderEntity) -> Unit = {}
 ) {
@@ -2285,6 +2321,30 @@ private fun DrawerContent(
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.calendar,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+        }
+        
+        // Задачи
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clickable(onClick = onTasksClick),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(AppIcons.CheckCircle, null, tint = Color(0xFF9C27B0))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = Strings.tasks,
                         style = MaterialTheme.typography.labelLarge
                     )
                 }

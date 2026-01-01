@@ -410,6 +410,20 @@ class AccountRepository(private val context: Context) {
     }
     
     /**
+     * Обновляет интервал синхронизации задач для аккаунта
+     */
+    suspend fun updateTasksSyncInterval(accountId: Long, days: Int) {
+        accountDao.updateTasksSyncInterval(accountId, days)
+    }
+    
+    /**
+     * Обновляет ключ синхронизации задач для аккаунта
+     */
+    suspend fun updateTasksSyncKey(accountId: Long, syncKey: String) {
+        accountDao.updateTasksSyncKey(accountId, syncKey)
+    }
+    
+    /**
      * Создаёт IMAP клиент для указанного аккаунта
      */
     suspend fun createImapClient(accountId: Long): ImapClient? {
