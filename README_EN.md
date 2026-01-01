@@ -50,16 +50,16 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Interface personalization | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 | Calendar event reminders | ✅ |
+| Exchange Tasks (create/edit/delete) | ✅ |
 | "Important" filter (high priority) | ✅ |
 | Night sync mode | ✅ |
 | Battery saver mode | ✅ |
 
-## 🆕 What's New in v1.4.1
+## 🆕 What's New in v1.4.2
 
-- **Server-side drafts** — drafts sync with server via EWS
-- **Drafts sync** — deletions from Outlook now reflected
-- **SSL fix** — fixed error with self-signed certificates
-- **EWS authentication** — fallback to Basic auth
+- **Tasks** — sync and manage tasks from Exchange server
+- **Date and time picker** — for task start date and due date
+- **Drafts fix** — editing server drafts now works correctly
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 
