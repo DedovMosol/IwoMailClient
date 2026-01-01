@@ -54,14 +54,12 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Night sync mode | ✅ |
 | Battery saver mode | ✅ |
 
-## 🆕 What's New in v1.4.0
+## 🆕 What's New in v1.4.1
 
-- **Create calendar events** — create, edit and delete events with Exchange sync
-- **Event reminders** — push notifications before event start time
-- **Create notes** — create, edit and delete notes (EAS for Exchange 2010+, EWS for Exchange 2007)
-- **Auto-scroll** — list scrolls to top after creating note or event
-- **Battery optimization** — increased PushService restart timeout
-- **Draft fix** — email body now saves correctly
+- **Server-side drafts** — drafts sync with server via EWS
+- **Drafts sync** — deletions from Outlook now reflected
+- **SSL fix** — fixed error with self-signed certificates
+- **EWS authentication** — fallback to Basic auth
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 
