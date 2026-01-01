@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.4.2 (01.01.2026)
+
+### New Features
+- **Tasks** — sync and manage of personal tasks from the server
+  - View, create, edit and delete tasks
+  - Filters: all, active, completed, high priority, overdue
+  - Task search
+  - Mark complete with server sync
+  - Priority and due date
+  - Automatic background sync
+  - Notifications
+  - Date and time picker for start date and due date
+
+### Improvements
+- **Memory optimization** — repositories on main screen are now cached
+- **Network optimization** — tasks folder ID caching (fewer HTTP requests)
+- **Battery optimization** — tasks sync respects interval (not on every run)
+- **Draft editing** — fixed saving changes to server drafts
+
+### Fixes
+- Battery saver indicator now updates when mode changes
+- Removed large font size option from settings
+- Fixed drafts badge on main screen
+
+---
+
 ## v1.4.1 (31.12.2025)
 
 ### New Features
@@ -498,4 +524,5 @@
 - Auto-start after reboot
 - Dark theme
 - Two languages (RU/EN)
+
 
