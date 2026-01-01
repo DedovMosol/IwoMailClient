@@ -593,6 +593,7 @@ object Strings {
     val tasksCount: String @Composable get() = if (isRussian()) "задач" else "tasks"
     val reminder: String @Composable get() = if (isRussian()) "Напоминание" else "Reminder"
     val setReminder: String @Composable get() = if (isRussian()) "Установить напоминание" else "Set reminder"
+    val selectTime: String @Composable get() = if (isRussian()) "Выберите время" else "Select time"
     
     val searchContacts: String @Composable get() = if (isRussian()) "Поиск контактов..." else "Search contacts..."
     val enterNameToSearch: String @Composable get() = if (isRussian()) "Введите имя для поиска" else "Enter name to search"

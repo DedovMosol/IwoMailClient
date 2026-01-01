@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -530,7 +531,7 @@ private fun TaskDetailDialog(
     onDeleteClick: () -> Unit,
     onToggleComplete: () -> Unit
 ) {
-    val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
+    val dateTimeFormat = remember { SimpleDateFormat("d MMMM yyyy, HH:mm", Locale.getDefault()) }
     
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -583,7 +584,7 @@ private fun TaskDetailDialog(
                 if (task.startDate > 0) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "${Strings.startDate}: ${dateFormat.format(Date(task.startDate))}",
+                        text = "${Strings.startDate}: ${dateTimeFormat.format(Date(task.startDate))}",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
@@ -592,7 +593,7 @@ private fun TaskDetailDialog(
                     Spacer(modifier = Modifier.height(4.dp))
                     val isOverdue = task.dueDate < System.currentTimeMillis() && !task.complete
                     Text(
-                        text = "${Strings.dueDate}: ${dateFormat.format(Date(task.dueDate))}",
+                        text = "${Strings.dueDate}: ${dateTimeFormat.format(Date(task.dueDate))}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isOverdue) Color(0xFFF44336) else MaterialTheme.colorScheme.onSurface
                     )
@@ -631,7 +632,7 @@ private fun TaskDetailDialog(
 }
 
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun CreateTaskDialog(
     task: TaskEntity?,
@@ -648,10 +649,17 @@ private fun CreateTaskDialog(
     var reminderTime by remember { mutableStateOf(task?.reminderTime ?: 0L) }
     
     var showStartDatePicker by remember { mutableStateOf(false) }
+    var showStartTimePicker by remember { mutableStateOf(false) }
+    var tempStartDate by remember { mutableStateOf(0L) }
     var showDueDatePicker by remember { mutableStateOf(false) }
+    var showDueTimePicker by remember { mutableStateOf(false) }
+    var tempDueDate by remember { mutableStateOf(0L) }
     var showReminderPicker by remember { mutableStateOf(false) }
+    var showReminderTimePicker by remember { mutableStateOf(false) }
+    var tempReminderDate by remember { mutableStateOf(0L) }
     
     val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
+    val dateTimeFormat = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
     
     // Date pickers
     if (showStartDatePicker) {
@@ -662,10 +670,13 @@ private fun CreateTaskDialog(
             onDismissRequest = { showStartDatePicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    startDate = datePickerState.selectedDateMillis ?: 0L
-                    showStartDatePicker = false
+                    tempStartDate = datePickerState.selectedDateMillis ?: 0L
+                    if (tempStartDate > 0) {
+                        showStartDatePicker = false
+                        showStartTimePicker = true
+                    }
                 }) {
-                    Text(Strings.ok)
+                    Text(Strings.next)
                 }
             },
             dismissButton = {
@@ -678,6 +689,48 @@ private fun CreateTaskDialog(
         }
     }
     
+    if (showStartTimePicker) {
+        val calendar = remember { Calendar.getInstance().apply { 
+            timeInMillis = if (startDate > 0) startDate else System.currentTimeMillis()
+        }}
+        val timePickerState = rememberTimePickerState(
+            initialHour = calendar.get(Calendar.HOUR_OF_DAY),
+            initialMinute = calendar.get(Calendar.MINUTE)
+        )
+        AlertDialog(
+            onDismissRequest = { showStartTimePicker = false },
+            title = { Text(Strings.selectTime) },
+            text = {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    TimePicker(state = timePickerState)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cal = Calendar.getInstance().apply {
+                        timeInMillis = tempStartDate
+                        set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+                        set(Calendar.MINUTE, timePickerState.minute)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
+                    startDate = cal.timeInMillis
+                    showStartTimePicker = false
+                }) {
+                    Text(Strings.ok)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStartTimePicker = false }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
+    }
+    
     if (showDueDatePicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = if (dueDate > 0) dueDate else System.currentTimeMillis()
@@ -686,10 +739,13 @@ private fun CreateTaskDialog(
             onDismissRequest = { showDueDatePicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    dueDate = datePickerState.selectedDateMillis ?: 0L
-                    showDueDatePicker = false
+                    tempDueDate = datePickerState.selectedDateMillis ?: 0L
+                    if (tempDueDate > 0) {
+                        showDueDatePicker = false
+                        showDueTimePicker = true
+                    }
                 }) {
-                    Text(Strings.ok)
+                    Text(Strings.next)
                 }
             },
             dismissButton = {
@@ -702,6 +758,48 @@ private fun CreateTaskDialog(
         }
     }
     
+    if (showDueTimePicker) {
+        val calendar = remember { Calendar.getInstance().apply { 
+            timeInMillis = if (dueDate > 0) dueDate else System.currentTimeMillis()
+        }}
+        val timePickerState = rememberTimePickerState(
+            initialHour = calendar.get(Calendar.HOUR_OF_DAY),
+            initialMinute = calendar.get(Calendar.MINUTE)
+        )
+        AlertDialog(
+            onDismissRequest = { showDueTimePicker = false },
+            title = { Text(Strings.selectTime) },
+            text = {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    TimePicker(state = timePickerState)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cal = Calendar.getInstance().apply {
+                        timeInMillis = tempDueDate
+                        set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+                        set(Calendar.MINUTE, timePickerState.minute)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
+                    dueDate = cal.timeInMillis
+                    showDueTimePicker = false
+                }) {
+                    Text(Strings.ok)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDueTimePicker = false }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
+    }
+    
     if (showReminderPicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = if (reminderTime > 0) reminderTime else System.currentTimeMillis()
@@ -710,11 +808,13 @@ private fun CreateTaskDialog(
             onDismissRequest = { showReminderPicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    reminderTime = datePickerState.selectedDateMillis ?: 0L
-                    reminderSet = reminderTime > 0
-                    showReminderPicker = false
+                    tempReminderDate = datePickerState.selectedDateMillis ?: 0L
+                    if (tempReminderDate > 0) {
+                        showReminderPicker = false
+                        showReminderTimePicker = true
+                    }
                 }) {
-                    Text(Strings.ok)
+                    Text(Strings.next)
                 }
             },
             dismissButton = {
@@ -725,6 +825,62 @@ private fun CreateTaskDialog(
         ) {
             DatePicker(state = datePickerState)
         }
+    }
+    
+    // TimePicker для напоминания
+    if (showReminderTimePicker) {
+        val calendar = remember { 
+            java.util.Calendar.getInstance().apply {
+                if (reminderTime > 0) {
+                    timeInMillis = reminderTime
+                } else {
+                    set(java.util.Calendar.HOUR_OF_DAY, 9)
+                    set(java.util.Calendar.MINUTE, 0)
+                }
+            }
+        }
+        val timePickerState = rememberTimePickerState(
+            initialHour = calendar.get(java.util.Calendar.HOUR_OF_DAY),
+            initialMinute = calendar.get(java.util.Calendar.MINUTE),
+            is24Hour = true
+        )
+        
+        AlertDialog(
+            onDismissRequest = { showReminderTimePicker = false },
+            title = { Text(Strings.selectTime) },
+            text = {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    TimePicker(state = timePickerState)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cal = java.util.Calendar.getInstance().apply {
+                        timeInMillis = tempReminderDate
+                        set(java.util.Calendar.HOUR_OF_DAY, timePickerState.hour)
+                        set(java.util.Calendar.MINUTE, timePickerState.minute)
+                        set(java.util.Calendar.SECOND, 0)
+                        set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                    reminderTime = cal.timeInMillis
+                    reminderSet = true
+                    showReminderTimePicker = false
+                }) {
+                    Text(Strings.ok)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { 
+                    showReminderTimePicker = false
+                    showReminderPicker = true // Вернуться к выбору даты
+                }) {
+                    Text(Strings.back)
+                }
+            }
+        )
     }
     
     AlertDialog(
@@ -759,8 +915,9 @@ private fun CreateTaskDialog(
                     text = Strings.priority,
                     style = MaterialTheme.typography.labelMedium
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     FilterChip(
                         selected = importance == TaskImportance.LOW.value,
@@ -797,10 +954,12 @@ private fun CreateTaskDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (startDate > 0) {
-                            "${Strings.startDate}: ${dateFormat.format(Date(startDate))}"
+                            "${Strings.startDate}: ${dateTimeFormat.format(Date(startDate))}"
                         } else {
                             Strings.startDate
-                        }
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 
@@ -813,10 +972,12 @@ private fun CreateTaskDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (dueDate > 0) {
-                            "${Strings.dueDate}: ${dateFormat.format(Date(dueDate))}"
+                            "${Strings.dueDate}: ${dateTimeFormat.format(Date(dueDate))}"
                         } else {
                             Strings.dueDate
-                        }
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 
@@ -829,10 +990,12 @@ private fun CreateTaskDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (reminderSet && reminderTime > 0) {
-                            "${Strings.reminder}: ${dateFormat.format(Date(reminderTime))}"
+                            "${Strings.reminder}: ${dateTimeFormat.format(Date(reminderTime))}"
                         } else {
                             Strings.setReminder
-                        }
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }

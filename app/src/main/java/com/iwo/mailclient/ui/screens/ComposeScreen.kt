@@ -384,30 +384,59 @@ fun ComposeScreen(
             }
             
             try {
-                // Если редактируем существующий черновик — удаляем его
-                editDraftId?.let { draftId ->
-                    val email = withContext(Dispatchers.IO) { database.emailDao().getEmail(draftId) }
+                val success: Boolean
+                
+                // Если редактируем существующий черновик — используем updateDraft
+                if (editDraftId != null) {
+                    val email = withContext(Dispatchers.IO) { database.emailDao().getEmail(editDraftId) }
                     if (email != null) {
-                        withContext(Dispatchers.IO) {
-                            mailRepo.deleteDraft(account.id, email.serverId)
+                        val result = withContext(Dispatchers.IO) {
+                            mailRepo.updateDraft(
+                                accountId = account.id,
+                                serverId = email.serverId,
+                                to = to,
+                                cc = cc,
+                                subject = subject,
+                                body = body,
+                                fromEmail = account.email,
+                                fromName = account.displayName
+                            )
                         }
+                        success = result is EasResult.Success
+                    } else {
+                        // Черновик не найден в БД - создаём новый
+                        val serverId = withContext(Dispatchers.IO) {
+                            mailRepo.saveDraft(
+                                accountId = account.id,
+                                to = to,
+                                cc = cc,
+                                subject = subject,
+                                body = body,
+                                fromEmail = account.email,
+                                fromName = account.displayName,
+                                hasAttachments = attachments.isNotEmpty()
+                            )
+                        }
+                        success = serverId != null
                     }
+                } else {
+                    // Новый черновик
+                    val serverId = withContext(Dispatchers.IO) {
+                        mailRepo.saveDraft(
+                            accountId = account.id,
+                            to = to,
+                            cc = cc,
+                            subject = subject,
+                            body = body,
+                            fromEmail = account.email,
+                            fromName = account.displayName,
+                            hasAttachments = attachments.isNotEmpty()
+                        )
+                    }
+                    success = serverId != null
                 }
                 
-                val serverId = withContext(Dispatchers.IO) {
-                    mailRepo.saveDraft(
-                        accountId = account.id,
-                        to = to,
-                        cc = cc,
-                        subject = subject,
-                        body = body,
-                        fromEmail = account.email,
-                        fromName = account.displayName,
-                        hasAttachments = attachments.isNotEmpty()
-                    )
-                }
-                
-                if (serverId != null) {
+                if (success) {
                     Toast.makeText(context, draftSavedMsg, Toast.LENGTH_SHORT).show()
                     onBackClick()
                 } else {

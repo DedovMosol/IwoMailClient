@@ -152,24 +152,31 @@ class MailRepository(context: Context) {
             return EasResult.Error("Не поддерживается")
         }
         
-        val draftsFolder = folderDao.getFolderByType(accountId, 3)
+        var draftsFolder = folderDao.getFolderByType(accountId, 3)
             ?: return EasResult.Error("Папка черновиков не найдена")
         
         val easClient = accountRepo.createEasClient(accountId)
             ?: return EasResult.Error("Не удалось создать клиент")
         
-        // 1. Удаляем старый черновик локально
+        // 1. Синхронизируем папку черновиков для получения актуального syncKey
+        syncEmailsEas(accountId, draftsFolder.id)
+        
+        // Перечитываем папку после синхронизации
+        draftsFolder = folderDao.getFolderByType(accountId, 3)
+            ?: return EasResult.Error("Папка черновиков не найдена")
+        
+        // 2. Удаляем старый черновик локально
         val oldEmailId = "${accountId}_${serverId}"
         emailDao.delete(oldEmailId)
         
-        // 2. Удаляем на сервере через EAS
+        // 3. Удаляем на сервере через EAS с актуальным syncKey
         val syncKey = draftsFolder.syncKey
         easClient.deleteEmailPermanently(draftsFolder.serverId, serverId, syncKey)
         
-        // 3. Создаём новый через EWS
+        // 4. Создаём новый через EWS
         val createResult = easClient.createDraft(to, cc, "", subject, body)
         if (createResult is EasResult.Success) {
-            // 4. Синхронизируем папку черновиков чтобы получить EAS ServerId
+            // 5. Синхронизируем папку черновиков чтобы получить EAS ServerId нового черновика
             syncEmailsEas(accountId, draftsFolder.id)
             return EasResult.Success("synced")
         }

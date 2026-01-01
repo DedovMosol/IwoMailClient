@@ -1,6 +1,6 @@
 # Privacy Policy / Политика конфиденциальности
 
-**Last updated / Последнее обновление:** December 31, 2025
+**Last updated / Последнее обновление:** January 1, 2026
 
 ---
 
@@ -24,6 +24,7 @@ The following data is stored only on your device:
 - Contacts (personal and from corporate address book)
 - Calendar events and reminders
 - Notes
+- Tasks and task reminders
 - Server certificates (if configured)
 - App settings and preferences
 - Sync history
@@ -39,10 +40,10 @@ The App connects only to:
 
 The App requests the following permissions:
 - **Internet** — to connect to mail servers
-- **Notifications** — to notify about new emails
+- **Notifications** — to notify about new emails, calendar events and task reminders
 - **Boot completed** — to start background sync after device restart
 - **Foreground service** — for reliable background synchronization
-- **Exact alarms** — for scheduled email sending
+- **Exact alarms** — for scheduled email sending and reminders
 
 ### Security
 
@@ -83,6 +84,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 - Контакты (личные и из корпоративной адресной книги)
 - События календаря и напоминания
 - Заметки
+- Задачи и напоминания о задачах
 - Сертификаты серверов (если настроены)
 - Настройки приложения
 - История синхронизации
@@ -98,10 +100,10 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 
 Приложение запрашивает следующие разрешения:
 - **Интернет** — для подключения к почтовым серверам
-- **Уведомления** — для оповещения о новых письмах
+- **Уведомления** — для оповещения о новых письмах, событиях календаря и напоминаниях о задачах
 - **Автозапуск** — для запуска фоновой синхронизации после перезагрузки
 - **Фоновая служба** — для надёжной фоновой синхронизации
-- **Точные будильники** — для отложенной отправки писем
+- **Точные будильники** — для отложенной отправки писем и напоминаний
 
 ### Безопасность
 
@@ -122,4 +124,4 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 
 ---
 
-© 2025 DedovMosol
+© 2025-2026 DedovMosol

@@ -2045,8 +2045,9 @@ private fun FolderCardDisplay(
                     }
                 }
                 
-                // Badge T� �-����T��-TǦ�T¦-�-�-T˦-�� ��� T� ��Tæ�T�T��-TƦ����� (��T����� �-�-���-�-TƦ��� �-����T�TǦ��-T�)
-                if (unreadCount > 0) {
+                // Badge с непрочитанными или с избранными (только когда включены анимации)
+                // Для черновиков (type 3) badge не показываем - они не имеют статуса "прочитано"
+                if (unreadCount > 0 && type != 3) {
                     val badgeScale: Float = if (animationsEnabled) {
                         val badgeTransition = rememberInfiniteTransition(label = "badge")
                         badgeTransition.animateFloat(
