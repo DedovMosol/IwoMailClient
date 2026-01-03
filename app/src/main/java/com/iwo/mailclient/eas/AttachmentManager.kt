@@ -2,7 +2,6 @@ package com.iwo.mailclient.eas
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -12,7 +11,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.TimeUnit
 import android.util.Base64
 
 // Предкомпилированные regex для производительности
@@ -22,6 +20,7 @@ private val SAFE_FILENAME_REGEX = Regex("[^a-zA-Z0-9._-]")
 
 /**
  * Менеджер для работы с вложениями Exchange
+ * Использует общий HttpClientProvider для предотвращения утечек памяти
  */
 class AttachmentManager(
     private val context: Context,
@@ -35,7 +34,8 @@ class AttachmentManager(
     private val policyKey: String? = null,
     deviceIdSuffix: String = "" // Для стабильного deviceId
 ) {
-    private val client: OkHttpClient
+    // Используем общий HttpClient с увеличенными таймаутами для вложений
+    private val client: OkHttpClient = com.iwo.mailclient.network.HttpClientProvider.getAttachmentClient(acceptAllCerts)
     private val wbxmlParser = WbxmlParser()
     private val easVersion = "12.1"
     // Используем стабильный deviceId как в EasClient
@@ -43,50 +43,6 @@ class AttachmentManager(
     
     // Нормализуем URL - добавляем схему и порт
     private val normalizedServerUrl: String = normalizeUrl(serverUrl, port, useHttps)
-    
-    init {
-        val builder = OkHttpClient.Builder()
-            .connectTimeout(120, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)
-            .writeTimeout(120, TimeUnit.SECONDS)
-            // Разрешаем все TLS версии для совместимости с Exchange 2007
-            .connectionSpecs(listOf(
-                ConnectionSpec.COMPATIBLE_TLS,
-                ConnectionSpec.MODERN_TLS,
-                ConnectionSpec.CLEARTEXT
-            ))
-        
-        if (acceptAllCerts) {
-            // Принимаем все сертификаты (самоподписанные)
-            builder.hostnameVerifier { _, _ -> true }
-            val trustAllManager = TrustAllManager()
-            val sslContext = try {
-                javax.net.ssl.SSLContext.getInstance("TLS", "Conscrypt")
-            } catch (_: Exception) {
-                javax.net.ssl.SSLContext.getInstance("TLS")
-            }
-            sslContext.init(null, arrayOf<javax.net.ssl.TrustManager>(trustAllManager), java.security.SecureRandom())
-            // Используем TlsSocketFactory для поддержки старых TLS версий
-            builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), trustAllManager)
-        } else {
-            // Даже без принятия всех сертификатов, включаем старые TLS протоколы
-            try {
-                val sslContext = try {
-                    javax.net.ssl.SSLContext.getInstance("TLS", "Conscrypt")
-                } catch (e: Exception) {
-                    javax.net.ssl.SSLContext.getInstance("TLS")
-                }
-                sslContext.init(null, null, java.security.SecureRandom())
-                val defaultTrustManager = javax.net.ssl.TrustManagerFactory.getInstance(
-                    javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-                ).apply { init(null as java.security.KeyStore?) }.trustManagers[0] as javax.net.ssl.X509TrustManager
-                builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), defaultTrustManager)
-            } catch (e: Exception) {
-            }
-        }
-        
-        client = builder.build()
-    }
     
     private fun generateStableDeviceId(username: String, suffix: String): String {
         val hash = (username + suffix).hashCode().toLong() and 0xFFFFFFFFL
@@ -347,64 +303,6 @@ class AttachmentManager(
                 "eml" -> "message/rfc822"
                 else -> "application/octet-stream"
             }
-    }
-}
-
-private class TrustAllManager : javax.net.ssl.X509TrustManager {
-    override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-    override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-}
-
-/**
- * SSLSocketFactory с поддержкой TLS 1.0/1.1/1.2 для Exchange 2007
- */
-private class TlsSocketFactory(private val delegate: javax.net.ssl.SSLSocketFactory) : javax.net.ssl.SSLSocketFactory() {
-    private val preferredProtocols = arrayOf("TLSv1.3", "TLSv1.2", "TLSv1.1", "TLSv1")
-    
-    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
-    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
-    
-    override fun createSocket(s: java.net.Socket, host: String, port: Int, autoClose: Boolean): java.net.Socket {
-        return enableTls(delegate.createSocket(s, host, port, autoClose))
-    }
-    
-    override fun createSocket(host: String, port: Int): java.net.Socket {
-        return enableTls(delegate.createSocket(host, port))
-    }
-    
-    override fun createSocket(host: String, port: Int, localHost: java.net.InetAddress, localPort: Int): java.net.Socket {
-        return enableTls(delegate.createSocket(host, port, localHost, localPort))
-    }
-    
-    override fun createSocket(host: java.net.InetAddress, port: Int): java.net.Socket {
-        return enableTls(delegate.createSocket(host, port))
-    }
-    
-    override fun createSocket(address: java.net.InetAddress, port: Int, localAddress: java.net.InetAddress, localPort: Int): java.net.Socket {
-        return enableTls(delegate.createSocket(address, port, localAddress, localPort))
-    }
-    
-    private fun enableTls(socket: java.net.Socket): java.net.Socket {
-        if (socket is javax.net.ssl.SSLSocket) {
-            try {
-                val supported = socket.supportedProtocols ?: emptyArray()
-                if (supported.isEmpty()) return socket
-                
-                val toEnable = preferredProtocols.filter { it in supported }
-                if (toEnable.isNotEmpty()) {
-                    socket.enabledProtocols = toEnable.toTypedArray()
-                }
-                
-                val supportedCiphers = socket.supportedCipherSuites
-                if (supportedCiphers != null && supportedCiphers.isNotEmpty()) {
-                    socket.enabledCipherSuites = supportedCiphers
-                }
-            } catch (_: Exception) {
-                // Оставляем сокет как есть
-            }
-        }
-        return socket
     }
 }
 

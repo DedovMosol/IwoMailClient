@@ -1,10 +1,16 @@
 package com.iwo.mailclient.data.repository
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.PowerManager
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
@@ -128,6 +134,32 @@ class SettingsRepository private constructor(private val context: Context) {
     fun isBatterySaverActive(): Boolean {
         val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
         return powerManager?.isPowerSaveMode == true
+    }
+    
+    /**
+     * Flow для отслеживания состояния Battery Saver через BroadcastReceiver
+     * Мгновенно реагирует на изменения без polling
+     */
+    val batterySaverState: Flow<Boolean> = callbackFlow {
+        // Отправляем начальное состояние
+        trySend(isBatterySaverActive())
+        
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == PowerManager.ACTION_POWER_SAVE_MODE_CHANGED) {
+                    trySend(isBatterySaverActive())
+                }
+            }
+        }
+        
+        context.registerReceiver(
+            receiver,
+            IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+        )
+        
+        awaitClose {
+            context.unregisterReceiver(receiver)
+        }
     }
     
     /**

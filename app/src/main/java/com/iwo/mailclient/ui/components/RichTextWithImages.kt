@@ -40,24 +40,30 @@ fun RichTextWithImages(
         parsedContent.forEach { element ->
             when (element) {
                 is ContentElement.Image -> {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(element.url)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = element.alt,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 300.dp)
-                            .clickable {
-                                // Открыть изображение в браузере при клике
-                                try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(element.url))
-                                    context.startActivity(intent)
-                                } catch (e: Exception) { }
-                            },
-                        contentScale = ContentScale.FillWidth
-                    )
+                    var imageLoaded by remember { mutableStateOf(true) }
+                    if (imageLoaded) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(element.url)
+                                .crossfade(true)
+                                .listener(
+                                    onError = { _, _ -> imageLoaded = false }
+                                )
+                                .build(),
+                            contentDescription = element.alt,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 300.dp)
+                                .clickable {
+                                    // Открыть изображение в браузере при клике
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(element.url))
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) { }
+                                },
+                            contentScale = ContentScale.FillWidth
+                        )
+                    }
                 }
                 is ContentElement.Text -> {
                     if (element.text.isNotBlank()) {
@@ -126,43 +132,65 @@ private fun parseHtmlContent(html: String): List<ContentElement> {
     val imgRegex = Regex("<img[^>]*src=[\"']([^\"']+)[\"'][^>]*(?:alt=[\"']([^\"']*)[\"'])?[^>]*>", RegexOption.IGNORE_CASE)
     val linkRegex = Regex("<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>([^<]*)</a>", RegexOption.IGNORE_CASE)
     val urlRegex = Regex("(https?://[^\\s<>\"]+)")
+    val imageExtensions = listOf(".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
     
-    // Разбиваем HTML по изображениям
+    // Собираем все изображения: из <img> тегов и из URL
+    data class ImageMatch(val range: IntRange, val url: String, val alt: String)
+    val allImages = mutableListOf<ImageMatch>()
+    
+    // Изображения из <img> тегов
+    imgRegex.findAll(html).forEach { match ->
+        val imgUrl = match.groupValues[1]
+        val imgAlt = match.groupValues.getOrNull(2) ?: ""
+        if (imgUrl.startsWith("http")) {
+            allImages.add(ImageMatch(match.range, imgUrl, imgAlt))
+        }
+    }
+    
+    // Изображения из URL (не внутри <img> тегов)
+    urlRegex.findAll(html).forEach { match ->
+        val url = match.value
+        val isImage = imageExtensions.any { url.lowercase().contains(it) }
+        val alreadyInImg = allImages.any { it.range.first <= match.range.first && it.range.last >= match.range.last }
+        if (isImage && !alreadyInImg) {
+            allImages.add(ImageMatch(match.range, url, ""))
+        }
+    }
+    
+    // Сортируем по позиции
+    allImages.sortBy { it.range.first }
+    
+    // Разбиваем контент по изображениям
     var currentPosition = 0
-    val imgMatches = imgRegex.findAll(html).toList()
     
-    for (imgMatch in imgMatches) {
+    for (img in allImages) {
         // Текст до изображения
-        if (imgMatch.range.first > currentPosition) {
-            val textBefore = html.substring(currentPosition, imgMatch.range.first)
-            val textElement = parseTextWithLinks(textBefore, linkRegex, urlRegex)
+        if (img.range.first > currentPosition) {
+            val textBefore = html.substring(currentPosition, img.range.first)
+            val textElement = parseTextWithLinks(textBefore, linkRegex, urlRegex, imageExtensions)
             if (textElement != null) {
                 elements.add(textElement)
             }
         }
         
         // Изображение
-        val imgUrl = imgMatch.groupValues[1]
-        val imgAlt = imgMatch.groupValues.getOrNull(2) ?: ""
-        if (imgUrl.startsWith("http")) {
-            elements.add(ContentElement.Image(imgUrl, imgAlt))
-        }
+        elements.add(ContentElement.Image(img.url, img.alt))
         
-        currentPosition = imgMatch.range.last + 1
+        currentPosition = img.range.last + 1
     }
     
     // Текст после последнего изображения
     if (currentPosition < html.length) {
         val textAfter = html.substring(currentPosition)
-        val textElement = parseTextWithLinks(textAfter, linkRegex, urlRegex)
+        val textElement = parseTextWithLinks(textAfter, linkRegex, urlRegex, imageExtensions)
         if (textElement != null) {
             elements.add(textElement)
         }
     }
     
     // Если не было изображений, парсим весь текст
-    if (imgMatches.isEmpty()) {
-        val textElement = parseTextWithLinks(html, linkRegex, urlRegex)
+    if (allImages.isEmpty()) {
+        val textElement = parseTextWithLinks(html, linkRegex, urlRegex, imageExtensions)
         if (textElement != null) {
             elements.add(textElement)
         }
@@ -174,7 +202,11 @@ private fun parseHtmlContent(html: String): List<ContentElement> {
 /**
  * Парсит текст с ссылками
  */
-private fun parseTextWithLinks(html: String, linkRegex: Regex, urlRegex: Regex): ContentElement.Text? {
+private fun parseTextWithLinks(html: String, linkRegex: Regex, urlRegex: Regex, imageExtensions: List<String>): ContentElement.Text? {
+    // Регулярки для email и телефонов
+    val emailRegex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+    val phoneRegex = Regex("(?:\\+7|8)[\\s-]?\\(?\\d{3}\\)?[\\s-]?\\d{3}[\\s-]?\\d{2}[\\s-]?\\d{2}|\\+?\\d{1,3}[\\s-]?\\(?\\d{2,4}\\)?[\\s-]?\\d{2,4}[\\s-]?\\d{2,4}")
+    
     // Извлекаем ссылки из <a> тегов
     val htmlLinks = linkRegex.findAll(html).map { it.groupValues[1] to it.groupValues[2] }.toList()
     
@@ -189,7 +221,7 @@ private fun parseTextWithLinks(html: String, linkRegex: Regex, urlRegex: Regex):
     }
     
     // Очищаем HTML теги
-    val cleanText = processedHtml
+    var cleanText = processedHtml
         .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
         .replace(Regex("<[^>]*>"), "")
         .replace("&nbsp;", " ")
@@ -198,7 +230,19 @@ private fun parseTextWithLinks(html: String, linkRegex: Regex, urlRegex: Regex):
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("{{/LINK}}", "")
-        .trim()
+    
+    // Очищаем markdown-ссылки [text](url) — оставляем только text
+    cleanText = cleanText.replace(Regex("\\[([^\\]]*)]\\([^)]+\\)")) { match ->
+        match.groupValues[1]
+    }
+    
+    // Очищаем markdown-изображения ![alt](url) — удаляем полностью
+    cleanText = cleanText.replace(Regex("!\\[[^\\]]*]\\([^)]+\\)"), "")
+    
+    // Удаляем одиночные [ и ] которые остались
+    cleanText = cleanText.replace(Regex("\\[\\s*\\]"), "")
+    
+    cleanText = cleanText.trim()
     
     if (cleanText.isBlank()) return null
     
@@ -223,12 +267,38 @@ private fun parseTextWithLinks(html: String, linkRegex: Regex, urlRegex: Regex):
         }
     }
     
-    // Находим URL в тексте
+    // Находим URL в тексте (исключая картинки — они обрабатываются отдельно)
     urlRegex.findAll(finalText).forEach { match ->
-        // Проверяем, что этот URL не уже в списке ссылок
+        val url = match.value
+        val isImage = imageExtensions.any { url.lowercase().contains(it) }
+        // Проверяем, что этот URL не уже в списке ссылок и не картинка
         val alreadyLinked = links.any { it.range.first <= match.range.first && it.range.last >= match.range.last }
-        if (!alreadyLinked) {
+        if (!alreadyLinked && !isImage) {
             links.add(LinkInfo(match.range, match.value))
+        }
+    }
+    
+    // Находим email адреса
+    emailRegex.findAll(finalText).forEach { match ->
+        val alreadyLinked = links.any { 
+            (it.range.first <= match.range.first && it.range.last >= match.range.last) ||
+            (match.range.first <= it.range.first && match.range.last >= it.range.last)
+        }
+        if (!alreadyLinked) {
+            links.add(LinkInfo(match.range, "mailto:${match.value}"))
+        }
+    }
+    
+    // Находим телефонные номера
+    phoneRegex.findAll(finalText).forEach { match ->
+        val alreadyLinked = links.any { 
+            (it.range.first <= match.range.first && it.range.last >= match.range.last) ||
+            (match.range.first <= it.range.first && match.range.last >= it.range.last)
+        }
+        if (!alreadyLinked) {
+            // Очищаем номер от пробелов и скобок для tel: URI
+            val cleanPhone = match.value.replace(Regex("[\\s()-]"), "")
+            links.add(LinkInfo(match.range, "tel:$cleanPhone"))
         }
     }
     

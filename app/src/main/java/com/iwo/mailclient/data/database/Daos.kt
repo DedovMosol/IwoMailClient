@@ -134,6 +134,17 @@ interface FolderDao {
     @Query("UPDATE folders SET displayName = :displayName, parentId = :parentId, type = :type WHERE id = :id")
     suspend fun updateFolder(id: String, displayName: String, parentId: String, type: Int)
     
+    /**
+     * Batch upsert папок в одной транзакции (оптимизация производительности)
+     */
+    @Transaction
+    suspend fun upsertFolders(folders: List<FolderEntity>) {
+        insertAll(folders)
+        for (folder in folders) {
+            updateFolder(folder.id, folder.displayName, folder.parentId, folder.type)
+        }
+    }
+    
     @Query("DELETE FROM folders WHERE id = :id")
     suspend fun delete(id: String)
     
@@ -193,6 +204,9 @@ interface EmailDao {
     
     @Query("DELETE FROM emails WHERE id = :id")
     suspend fun delete(id: String)
+    
+    @Query("DELETE FROM emails WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
     
     @Query("DELETE FROM emails WHERE folderId = :folderId")
     suspend fun deleteByFolder(folderId: String)
@@ -331,11 +345,111 @@ interface AttachmentDao {
     @Query("DELETE FROM attachments WHERE emailId = :emailId")
     suspend fun deleteByEmail(emailId: String)
     
+    @Query("DELETE FROM attachments WHERE emailId IN (:emailIds)")
+    suspend fun deleteByEmailIds(emailIds: List<String>)
+    
     @Query("""
         SELECT a.localPath FROM attachments a
         INNER JOIN emails e ON a.emailId = e.id
         WHERE e.accountId = :accountId AND a.localPath IS NOT NULL
     """)
     suspend fun getLocalPathsByAccount(accountId: Long): List<String>
+}
+
+/**
+ * DAO для транзакционных операций синхронизации
+ * Объединяет несколько операций в одну транзакцию для консистентности и производительности
+ */
+@Dao
+abstract class SyncDao {
+    
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    abstract suspend fun insertEmailsIgnore(emails: List<EmailEntity>)
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun insertAttachments(attachments: List<AttachmentEntity>)
+    
+    @Query("DELETE FROM attachments WHERE emailId = :emailId")
+    abstract suspend fun deleteAttachmentsByEmail(emailId: String)
+    
+    @Query("DELETE FROM emails WHERE id = :id")
+    abstract suspend fun deleteEmail(id: String)
+    
+    @Query("UPDATE folders SET unreadCount = :unread, totalCount = :total WHERE id = :id")
+    abstract suspend fun updateFolderCounts(id: String, unread: Int, total: Int)
+    
+    @Query("UPDATE folders SET syncKey = :syncKey WHERE id = :id")
+    abstract suspend fun updateFolderSyncKey(id: String, syncKey: String)
+    
+    @Query("SELECT COUNT(*) FROM emails WHERE folderId = :folderId")
+    abstract suspend fun getEmailCount(folderId: String): Int
+    
+    @Query("SELECT COUNT(*) FROM emails WHERE folderId = :folderId AND read = 0")
+    abstract suspend fun getUnreadCount(folderId: String): Int
+    
+    /**
+     * Вставка писем и вложений в одной транзакции
+     */
+    @Transaction
+    open suspend fun insertEmailsWithAttachments(
+        emails: List<EmailEntity>,
+        attachments: List<AttachmentEntity>
+    ) {
+        if (emails.isNotEmpty()) {
+            insertEmailsIgnore(emails)
+        }
+        if (attachments.isNotEmpty()) {
+            insertAttachments(attachments)
+        }
+    }
+    
+    /**
+     * Удаление писем с вложениями в одной транзакции
+     */
+    @Transaction
+    open suspend fun deleteEmailsWithAttachments(emailIds: List<String>) {
+        for (emailId in emailIds) {
+            deleteAttachmentsByEmail(emailId)
+            deleteEmail(emailId)
+        }
+    }
+    
+    /**
+     * Полная синхронизация: вставка новых, удаление старых, обновление счётчиков
+     */
+    @Transaction
+    open suspend fun syncEmailsBatch(
+        folderId: String,
+        newEmails: List<EmailEntity>,
+        newAttachments: List<AttachmentEntity>,
+        deletedServerIds: List<String>,
+        accountId: Long,
+        newSyncKey: String
+    ) {
+        // Вставляем новые письма
+        if (newEmails.isNotEmpty()) {
+            insertEmailsIgnore(newEmails)
+        }
+        
+        // Вставляем вложения
+        if (newAttachments.isNotEmpty()) {
+            insertAttachments(newAttachments)
+        }
+        
+        // Удаляем удалённые на сервере
+        for (serverId in deletedServerIds) {
+            val emailId = "${accountId}_$serverId"
+            deleteAttachmentsByEmail(emailId)
+            deleteEmail(emailId)
+        }
+        
+        // Обновляем syncKey
+        updateFolderSyncKey(folderId, newSyncKey)
+        
+        // Обновляем счётчики
+        val total = getEmailCount(folderId)
+        val unread = getUnreadCount(folderId)
+        updateFolderCounts(folderId, unread, total)
+    }
 }
 

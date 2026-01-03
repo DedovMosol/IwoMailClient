@@ -97,10 +97,12 @@ object AppIcons {
     val TableChart: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_table_chart)
     val Task: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_task)
     val TextFields: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_text_fields)
+    val Update: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_update)
     val Upload: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_upload)
     val Visibility: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_visibility)
     val VisibilityOff: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_visibility_off)
     val Warning: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_warning)
     val WbSunny: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_wb_sunny)
     val Wifi: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_wifi)
+    val Install: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_install)
 }

@@ -263,6 +263,15 @@ fun EmailListScreen(
         if (!isFavorites) {
             val loadedFolder = withContext(Dispatchers.IO) { database.folderDao().getFolder(folderId) }
             folder = loadedFolder
+            
+            // Автоматическая синхронизация для черновиков при входе в папку
+            if (loadedFolder?.type == 3 && loadedFolder.accountId > 0) {
+                isRefreshing = true
+                withContext(Dispatchers.IO) { 
+                    mailRepo.syncEmails(loadedFolder.accountId, folderId) 
+                }
+                isRefreshing = false
+            }
         }
     }
 
@@ -1037,11 +1046,15 @@ private fun EmailList(
                     
                     // Индикатор обновления для пустого состояния
                     if (!isFavorites) {
-                        EnvelopeRefreshIndicator(
-                            refreshing = isRefreshing,
-                            state = pullRefreshState,
-                            modifier = Modifier.align(Alignment.TopCenter)
-                        )
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.TopCenter
+                        ) {
+                            EnvelopeRefreshIndicator(
+                                refreshing = isRefreshing,
+                                state = pullRefreshState
+                            )
+                        }
                     }
                 }
             }

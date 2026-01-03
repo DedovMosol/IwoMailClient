@@ -63,11 +63,9 @@ class SyncWorker(
         var hasErrors = false
         
         for (account in accounts) {
+            // Синхронизируем папки (игнорируем ошибки - пробуем синхронизировать письма в любом случае)
             when (mailRepo.syncFolders(account.id)) {
-                is EasResult.Error -> {
-                    hasErrors = true
-                    continue
-                }
+                is EasResult.Error -> hasErrors = true
                 is EasResult.Success -> { }
             }
             
@@ -75,12 +73,12 @@ class SyncWorker(
             val allFolders = database.folderDao().getFoldersByAccountList(account.id)
             val foldersToSync = allFolders.filter { it.type in mainFolderTypes }
             
-            if (foldersToSync.isEmpty()) continue
-            
+            // Синхронизируем письма даже если папок нет (могут быть в кэше)
             for (folder in foldersToSync) {
                 mailRepo.syncEmails(account.id, folder.id)
             }
             
+            // Проверяем новые письма для этого аккаунта
             val newEmailEntities = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
             if (newEmailEntities.isNotEmpty()) {
                 val accountEmails = newEmailsByAccount.getOrPut(account.id) { mutableListOf() }
@@ -94,17 +92,11 @@ class SyncWorker(
         
         // Показываем уведомления для каждого аккаунта отдельно
         if (newEmailsByAccount.isNotEmpty()) {
-            val prefs = applicationContext.getSharedPreferences("push_service", Context.MODE_PRIVATE)
-            val lastPushNotification = prefs.getLong("last_notification_time", 0)
-            val timeSinceLastPush = System.currentTimeMillis() - lastPushNotification
-            
-            if (timeSinceLastPush >= 30_000) {
-                val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-                if (notificationsEnabled) {
-                    for ((accountId, emails) in newEmailsByAccount) {
-                        val account = accounts.find { it.id == accountId } ?: continue
-                        showNotification(emails, account.email, accountId)
-                    }
+            val notificationsEnabled = settingsRepo.notificationsEnabled.first()
+            if (notificationsEnabled) {
+                for ((accountId, emails) in newEmailsByAccount) {
+                    val account = accounts.find { it.id == accountId } ?: continue
+                    showNotification(emails, account.email, accountId)
                 }
             }
         }
@@ -152,6 +144,7 @@ class SyncWorker(
         
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, accountId)
             if (count == 1 && latestEmail != null) {
                 putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, latestEmail.id)
             } else {

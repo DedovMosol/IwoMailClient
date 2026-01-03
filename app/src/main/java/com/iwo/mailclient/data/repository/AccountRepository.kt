@@ -82,6 +82,12 @@ class AccountRepository(private val context: Context) {
         syncMode: SyncMode = SyncMode.PUSH,
         certificatePath: String? = null
     ): EasResult<Long> {
+        // Проверяем что аккаунт с таким email ещё не добавлен
+        val existingAccounts = accountDao.getAllAccountsList()
+        if (existingAccounts.any { it.email.equals(email, ignoreCase = true) }) {
+            return EasResult.Error("ACCOUNT_EXISTS")
+        }
+        
         // Проверяем наличие интернета
         if (!isNetworkAvailable()) {
             return EasResult.Error("NO_INTERNET")
@@ -217,6 +223,12 @@ class AccountRepository(private val context: Context) {
         
         // Очищаем кэш PushService (heartbeat и EasClient)
         com.iwo.mailclient.sync.PushService.clearAccountCache(context, accountId)
+        
+        // Очищаем кэш папок UI
+        com.iwo.mailclient.ui.FoldersCache.clearAccount(accountId)
+        
+        // Сбрасываем состояние синхронизации для этого аккаунта
+        com.iwo.mailclient.ui.InitialSyncController.resetAccount(accountId)
         
         // Удаляем файлы вложений с диска (до каскадного удаления из БД)
         withContext(Dispatchers.IO) {
@@ -440,17 +452,6 @@ class AccountRepository(private val context: Context) {
         val password = getPassword(accountId) ?: return null
         return Pop3Client(account, password)
     }
-    
-    /**
-     * @deprecated EWS больше не поддерживается, используйте createEasClient
-     */
-    @Deprecated("Use createEasClient instead", ReplaceWith("createEasClient(accountId)"))
-    suspend fun createEwsClient(accountId: Long): EasClient? = createEasClient(accountId)
-    
-    /**
-     * @deprecated Используйте createEasClient
-     */
-    suspend fun createClient(accountId: Long): EasClient? = createEasClient(accountId)
     
     suspend fun createClientForActiveAccount(): EasClient? {
         val account = accountDao.getActiveAccountSync() ?: return null

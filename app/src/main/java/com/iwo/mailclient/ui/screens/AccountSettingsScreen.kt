@@ -37,7 +37,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun AccountSettingsScreen(
     accountId: Long,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onEditCredentials: (Long) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -522,6 +523,16 @@ fun AccountSettingsScreen(
             }
             
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+            
+            // Изменить учётные данные
+            item {
+                ListItem(
+                    headlineContent = { Text(Strings.changeCredentials) },
+                    leadingContent = { Icon(AppIcons.Edit, null) },
+                    trailingContent = { Icon(AppIcons.ChevronRight, null) },
+                    modifier = Modifier.clickable { onEditCredentials(accountId) }
+                )
+            }
             
             // Сертификат (если есть)
             if (!currentAccount.certificatePath.isNullOrBlank()) {

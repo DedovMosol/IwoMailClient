@@ -1,12 +1,15 @@
 package com.iwo.mailclient.data.database
 
 import android.content.Context
+import android.util.Log
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 23,
-    exportSchema = false
+    version = 24,
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class MailDatabase : RoomDatabase() {
@@ -20,10 +23,31 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
     abstract fun calendarEventDao(): CalendarEventDao
     abstract fun taskDao(): TaskDao
+    abstract fun syncDao(): SyncDao
     
     companion object {
+        private const val TAG = "MailDatabase"
+        
         @Volatile
         private var INSTANCE: MailDatabase? = null
+        
+        /**
+         * Миграции базы данных.
+         * При добавлении новых полей в таблицы — добавлять миграцию здесь.
+         */
+        private val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Добавляем индексы для ускорения фильтров
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_flagged ON emails(flagged)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_read ON emails(read)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_importance ON emails(importance)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_accountId_folderId_dateReceived ON emails(accountId, folderId, dateReceived)")
+            }
+        }
+        
+        private val ALL_MIGRATIONS = arrayOf<Migration>(
+            MIGRATION_23_24
+        )
         
         fun getInstance(context: Context): MailDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -32,7 +56,15 @@ abstract class MailDatabase : RoomDatabase() {
                     MailDatabase::class.java,
                     "mail_database"
                 )
+                .addMigrations(*ALL_MIGRATIONS)
+                // Если миграция не найдена — пересоздать БД (данные потеряются, но не крашнется)
                 .fallbackToDestructiveMigration()
+                .addCallback(object : Callback() {
+                    override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
+                        super.onDestructiveMigration(db)
+                        Log.w(TAG, "Database was recreated due to missing migration. User data was lost.")
+                    }
+                })
                 .build().also { INSTANCE = it }
             }
         }
@@ -151,7 +183,15 @@ data class FolderEntity(
         childColumns = ["folderId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("folderId"), Index("accountId"), Index("dateReceived")]
+    indices = [
+        Index("folderId"),
+        Index("accountId"),
+        Index("dateReceived"),
+        Index("flagged"),  // Для фильтра "Избранные"
+        Index("read"),     // Для фильтра "Непрочитанные"
+        Index("importance"), // Для фильтра "Важные"
+        Index(value = ["accountId", "folderId", "dateReceived"]) // Составной для сортировки
+    ]
 )
 data class EmailEntity(
     @PrimaryKey val id: String, // accountId_serverId

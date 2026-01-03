@@ -31,6 +31,7 @@ class MailRepository(context: Context) {
     private val emailDao = database.emailDao()
     private val attachmentDao = database.attachmentDao()
     private val accountDao = database.accountDao()
+    private val syncDao = database.syncDao()
     
     /**
      * Безопасное обновление папки без удаления связанных писем
@@ -44,16 +45,11 @@ class MailRepository(context: Context) {
     
     /**
      * Безопасное обновление списка папок без удаления связанных писем
+     * Использует batch операцию в DAO с @Transaction
      */
     private suspend fun upsertFolders(folders: List<FolderEntity>) {
-        for (folder in folders) {
-            folderDao.insert(folder)
-            // Обновляем существующие папки
-            val existing = folderDao.getFolder(folder.id)
-            if (existing != null) {
-                folderDao.updateFolder(folder.id, folder.displayName, folder.parentId, folder.type)
-            }
-        }
+        if (folders.isEmpty()) return
+        folderDao.upsertFolders(folders)
     }
     
     fun getFolders(accountId: Long): Flow<List<FolderEntity>> {
@@ -161,17 +157,22 @@ class MailRepository(context: Context) {
         // 1. Синхронизируем папку черновиков для получения актуального syncKey
         syncEmailsEas(accountId, draftsFolder.id)
         
-        // Перечитываем папку после синхронизации
+        // Перечитываем папку после синхронизации чтобы получить НОВЫЙ syncKey
         draftsFolder = folderDao.getFolderByType(accountId, 3)
             ?: return EasResult.Error("Папка черновиков не найдена")
         
-        // 2. Удаляем старый черновик локально
+        // 2. Удаляем старый черновик на сервере через EAS с актуальным syncKey
+        val syncKey = draftsFolder.syncKey
+        val deleteResult = easClient.deleteEmailPermanently(draftsFolder.serverId, serverId, syncKey)
+        
+        // Обновляем syncKey после удаления (даже если ошибка — syncKey мог измениться)
+        if (deleteResult is EasResult.Success) {
+            folderDao.updateSyncKey(draftsFolder.id, deleteResult.data)
+        }
+        
+        // 3. Удаляем локально (независимо от результата удаления на сервере)
         val oldEmailId = "${accountId}_${serverId}"
         emailDao.delete(oldEmailId)
-        
-        // 3. Удаляем на сервере через EAS с актуальным syncKey
-        val syncKey = draftsFolder.syncKey
-        easClient.deleteEmailPermanently(draftsFolder.serverId, serverId, syncKey)
         
         // 4. Создаём новый через EWS
         val createResult = easClient.createDraft(to, cc, "", subject, body)
@@ -703,14 +704,16 @@ class MailRepository(context: Context) {
                     }
                     
                     syncKey = result.data.syncKey
-                    folderDao.updateSyncKey(folderId, syncKey)
                     moreAvailable = result.data.moreAvailable
                     
+                    // Собираем данные для батчевой вставки
+                    val emailEntities = mutableListOf<EmailEntity>()
+                    val allAttachments = mutableListOf<AttachmentEntity>()
+                    
                     if (result.data.emails.isNotEmpty()) {
-                        // Вставляем письма батчем
-                        val emailEntities = result.data.emails.map { email ->
+                        for (email in result.data.emails) {
                             val parsedDate = parseDate(email.dateReceived)
-                            EmailEntity(
+                            emailEntities.add(EmailEntity(
                                 id = "${accountId}_${email.serverId}",
                                 accountId = accountId,
                                 folderId = folderId,
@@ -727,17 +730,10 @@ class MailRepository(context: Context) {
                                 read = email.read,
                                 importance = email.importance,
                                 hasAttachments = email.attachments.isNotEmpty()
-                            )
-                        }
-                        
-                        // INSERT OR IGNORE - не дублируем существующие
-                        emailDao.insertAllIgnore(emailEntities)
-                        newEmailsCount += result.data.emails.size
-                        
-                        // Сохраняем вложения батчем
-                        val allAttachments = result.data.emails.flatMap { email ->
-                            email.attachments.map { att ->
-                                AttachmentEntity(
+                            ))
+                            
+                            for (att in email.attachments) {
+                                allAttachments.add(AttachmentEntity(
                                     emailId = "${accountId}_${email.serverId}",
                                     fileReference = att.fileReference,
                                     displayName = att.displayName,
@@ -745,27 +741,21 @@ class MailRepository(context: Context) {
                                     estimatedSize = att.estimatedSize,
                                     isInline = att.isInline,
                                     contentId = att.contentId
-                                )
+                                ))
                             }
                         }
-                        if (allAttachments.isNotEmpty()) {
-                            attachmentDao.insertAll(allAttachments)
-                        }
+                        newEmailsCount += result.data.emails.size
                     }
                     
-                    // Удаляем письма которые были удалены/перемещены на сервере
-                    if (result.data.deletedIds.isNotEmpty()) {
-                        result.data.deletedIds.forEach { serverId ->
-                            val emailId = "${accountId}_$serverId"
-                            attachmentDao.deleteByEmail(emailId)
-                            emailDao.delete(emailId)
-                        }
-                    }
-                    
-                    // Обновляем счётчики из БД (реальные значения)
-                    val totalCount = emailDao.getCountByFolder(folderId)
-                    val unreadCount = emailDao.getUnreadCount(folderId)
-                    folderDao.updateCounts(folderId, unreadCount, totalCount)
+                    // Выполняем всё в одной транзакции
+                    syncDao.syncEmailsBatch(
+                        folderId = folderId,
+                        newEmails = emailEntities,
+                        newAttachments = allAttachments,
+                        deletedServerIds = result.data.deletedIds,
+                        accountId = accountId,
+                        newSyncKey = syncKey
+                    )
                 }
                 is EasResult.Error -> {
                     return if (newEmailsCount > 0) {
@@ -780,10 +770,6 @@ class MailRepository(context: Context) {
         if (iterations >= maxIterations) {
         }
         
-        // Финальное обновление счётчиков из БД
-        val totalCount = emailDao.getCountByFolder(folderId)
-        val unreadCount = emailDao.getUnreadCount(folderId)
-        folderDao.updateCounts(folderId, unreadCount, totalCount)
         return EasResult.Success(newEmailsCount)
     }
     

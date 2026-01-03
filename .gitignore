@@ -8,6 +8,9 @@ ARCHITECTURE.md
 Screenshots/
 Rustore*.png
 
+# Room database schemas (generated)
+app/schemas/
+
 # Built application files
 *.apk
 *.aar

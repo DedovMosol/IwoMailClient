@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.iwo.mailclient.data.database.CalendarEventEntity
 import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.CalendarRepository
+import com.iwo.mailclient.data.repository.RepositoryProvider
 import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.theme.AppIcons
@@ -46,6 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.delay
 
 // Предкомпилированные regex для производительности
 private val HTML_TAG_REGEX = Regex("<[^>]*>")
@@ -59,8 +62,8 @@ fun CalendarScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val calendarRepo = remember { CalendarRepository(context) }
-    val accountRepo = remember { AccountRepository(context) }
+    val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
+    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
@@ -68,6 +71,13 @@ fun CalendarScreen(
     val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsState(initial = emptyList())
     
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var debouncedSearchQuery by remember { mutableStateOf("") }
+    
+    // Debounce поиска для оптимизации
+    LaunchedEffect(searchQuery) {
+        delay(300)
+        debouncedSearchQuery = searchQuery
+    }
     var isSyncing by remember { mutableStateOf(false) }
     var selectedEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
@@ -79,15 +89,18 @@ fun CalendarScreen(
     // Состояние списка для автоскролла
     val listState = rememberLazyListState()
     
+    // Состояние сортировки (true = новые сверху, false = старые сверху)
+    var sortDescending by rememberSaveable { mutableStateOf(true) }
+    
     // Фильтрация по поиску
-    val filteredEvents = remember(events, searchQuery) {
-        if (searchQuery.isBlank()) {
+        val filteredEvents = remember(events, debouncedSearchQuery) {
+            if (debouncedSearchQuery.isBlank()) {
             events
         } else {
             events.filter { event ->
-                event.subject.contains(searchQuery, ignoreCase = true) ||
-                event.location.contains(searchQuery, ignoreCase = true) ||
-                event.body.contains(searchQuery, ignoreCase = true)
+                event.subject.contains(debouncedSearchQuery, ignoreCase = true) ||
+                event.location.contains(debouncedSearchQuery, ignoreCase = true) ||
+                event.body.contains(debouncedSearchQuery, ignoreCase = true)
             }
         }
     }
@@ -128,22 +141,26 @@ fun CalendarScreen(
     if (showCreateDialog) {
         val eventUpdatedText = Strings.eventUpdated
         val eventCreatedText = Strings.eventCreated
+        val invitationSentText = Strings.invitationSent
         val isEditing = editingEvent != null
         CreateEventDialog(
             event = editingEvent,
             initialDate = selectedDate,
             isCreating = isCreating,
+            accountId = accountId,
             onDismiss = { 
                 showCreateDialog = false
                 editingEvent = null
             },
-            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus ->
+            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees ->
                 scope.launch {
                     isCreating = true
-                    val result = if (editingEvent != null) {
+                    // Захватываем editingEvent в локальную переменную для безопасного доступа
+                    val eventToEdit = editingEvent
+                    val result = if (eventToEdit != null) {
                         withContext(Dispatchers.IO) {
                             calendarRepo.updateEvent(
-                                event = editingEvent!!,
+                                event = eventToEdit,
                                 subject = subject,
                                 startTime = startTime,
                                 endTime = endTime,
@@ -169,14 +186,37 @@ fun CalendarScreen(
                             )
                         }
                     }
+                    
+                    // Отправляем приглашения если указаны участники
+                    var invitationError: String? = null
+                    if (result is EasResult.Success && attendees.isNotBlank()) {
+                        val invResult = calendarRepo.sendMeetingInvitation(
+                            accountId = accountId,
+                            subject = subject,
+                            startTime = startTime,
+                            endTime = endTime,
+                            location = location,
+                            body = body,
+                            attendees = attendees
+                        )
+                        if (invResult is EasResult.Error) {
+                            invitationError = invResult.message
+                        }
+                    }
+                    
                     isCreating = false
                     when (result) {
                         is EasResult.Success -> {
-                            Toast.makeText(
-                                context,
-                                if (isEditing) eventUpdatedText else eventCreatedText,
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            val message = if (attendees.isNotBlank()) {
+                                if (invitationError != null) {
+                                    "${if (isEditing) eventUpdatedText else eventCreatedText}. Ошибка приглашения: $invitationError"
+                                } else {
+                                    "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
+                                }
+                            } else {
+                                if (isEditing) eventUpdatedText else eventCreatedText
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                             showCreateDialog = false
                             editingEvent = null
                             // Автоскролл вверх после создания (с задержкой для обновления списка)
@@ -293,7 +333,12 @@ fun CalendarScreen(
                         searchQuery = searchQuery,
                         onSearchQueryChange = { searchQuery = it },
                         onEventClick = { selectedEvent = it },
-                        listState = listState
+                        listState = listState,
+                        sortDescending = sortDescending,
+                        onSortToggle = { 
+                            sortDescending = !sortDescending
+                            scope.launch { listState.animateScrollToItem(0) }
+                        }
                     )
                 }
                 CalendarViewMode.MONTH -> {
@@ -322,28 +367,46 @@ private fun AgendaView(
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     onEventClick: (CalendarEventEntity) -> Unit,
-    listState: androidx.compose.foundation.lazy.LazyListState
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    sortDescending: Boolean = true,
+    onSortToggle: () -> Unit = {}
 ) {
     Column {
-        // Поле поиска
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = onSearchQueryChange,
+        // Поле поиска с кнопкой сортировки
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            placeholder = { Text(Strings.searchEvents) },
-            leadingIcon = { Icon(AppIcons.Search, null) },
-            trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { onSearchQueryChange("") }) {
-                        Icon(AppIcons.Clear, Strings.clear)
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                modifier = Modifier.weight(1f),
+                placeholder = { Text(Strings.searchEvents) },
+                leadingIcon = { Icon(AppIcons.Search, null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { onSearchQueryChange("") }) {
+                            Icon(AppIcons.Clear, Strings.clear)
+                        }
                     }
-                }
-            },
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp)
-        )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp)
+            )
+            
+            Spacer(modifier = Modifier.width(8.dp))
+            
+            // Кнопка сортировки
+            IconButton(onClick = onSortToggle) {
+                Icon(
+                    if (sortDescending) AppIcons.KeyboardArrowDown else AppIcons.KeyboardArrowUp,
+                    contentDescription = if (sortDescending) Strings.sortNewestFirst else Strings.sortOldestFirst,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
         
         // Счётчик
         Text(
@@ -376,7 +439,7 @@ private fun AgendaView(
                 }
             }
         } else {
-            // Группировка по датам
+            // Группировка по датам с учётом сортировки
             val groupedEvents = events.groupBy { event ->
                 val calendar = Calendar.getInstance()
                 calendar.timeInMillis = event.startTime
@@ -385,7 +448,13 @@ private fun AgendaView(
                 calendar.set(Calendar.SECOND, 0)
                 calendar.set(Calendar.MILLISECOND, 0)
                 calendar.time
-            }.toSortedMap()
+            }.let { map ->
+                if (sortDescending) {
+                    map.toSortedMap(compareByDescending { it })
+                } else {
+                    map.toSortedMap()
+                }
+            }
             
             LazyColumn(
                 state = listState,
@@ -857,7 +926,7 @@ private fun EventDetailDialog(
     
     // Диалог подтверждения удаления
     if (showDeleteConfirm) {
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text(Strings.deleteEvent) },
             text = { Text(Strings.deleteEventConfirm) },
@@ -880,7 +949,7 @@ private fun EventDetailDialog(
         )
     }
     
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
@@ -971,6 +1040,20 @@ private fun EventDetailDialog(
                 
                 // Расширенный вид
                 if (expanded) {
+                    // Кнопка "Свернуть" вверху для удобства
+                    TextButton(
+                        onClick = { expanded = false },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Icon(
+                            AppIcons.ExpandLess,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(Strings.showLess)
+                    }
+                    
                     // Организатор
                     if (event.organizer.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -1044,24 +1127,12 @@ private fun EventDetailDialog(
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
                         
-                        com.iwo.mailclient.ui.components.RichTextWithImages(
-                            htmlContent = event.body,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    
-                    // Кнопка "Свернуть"
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(
-                        onClick = { expanded = false },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) {
-                        Text(Strings.showLess)
-                        Icon(
-                            AppIcons.ExpandLess,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        SelectionContainer {
+                            com.iwo.mailclient.ui.components.RichTextWithImages(
+                                htmlContent = event.body,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             }
@@ -1442,6 +1513,7 @@ private fun CreateEventDialog(
     event: CalendarEventEntity?,
     initialDate: Date,
     isCreating: Boolean,
+    accountId: Long,
     onDismiss: () -> Unit,
     onSave: (
         subject: String,
@@ -1451,9 +1523,11 @@ private fun CreateEventDialog(
         body: String,
         allDayEvent: Boolean,
         reminder: Int,
-        busyStatus: Int
+        busyStatus: Int,
+        attendees: String
     ) -> Unit
 ) {
+    val context = LocalContext.current
     val isEditing = event != null
     
     // Состояния полей
@@ -1463,6 +1537,10 @@ private fun CreateEventDialog(
     var allDayEvent by rememberSaveable { mutableStateOf(event?.allDayEvent ?: false) }
     var reminder by rememberSaveable { mutableStateOf(event?.reminder ?: 15) }
     var busyStatus by rememberSaveable { mutableStateOf(event?.busyStatus ?: 2) }
+    var attendees by rememberSaveable { mutableStateOf("") }
+    
+    // Диалог выбора контактов
+    var showContactPicker by rememberSaveable { mutableStateOf(false) }
     
     // Даты и время
     val calendar = Calendar.getInstance()
@@ -1476,7 +1554,8 @@ private fun CreateEventDialog(
         calendar.add(Calendar.HOUR_OF_DAY, 1)
     }
     
-    var startDate by remember { mutableStateOf(calendar.time) }
+    var startDateMillis by rememberSaveable { mutableStateOf(calendar.timeInMillis) }
+    val startDate = Date(startDateMillis)
     var startHour by rememberSaveable { mutableStateOf(calendar.get(Calendar.HOUR_OF_DAY)) }
     var startMinute by rememberSaveable { mutableStateOf(calendar.get(Calendar.MINUTE)) }
     
@@ -1485,16 +1564,17 @@ private fun CreateEventDialog(
     } else {
         calendar.add(Calendar.HOUR_OF_DAY, 1)
     }
-    var endDate by remember { mutableStateOf(calendar.time) }
+    var endDateMillis by rememberSaveable { mutableStateOf(calendar.timeInMillis) }
+    val endDate = Date(endDateMillis)
     var endHour by rememberSaveable { mutableStateOf(calendar.get(Calendar.HOUR_OF_DAY)) }
     var endMinute by rememberSaveable { mutableStateOf(calendar.get(Calendar.MINUTE)) }
     
-    var showStartDatePicker by remember { mutableStateOf(false) }
-    var showEndDatePicker by remember { mutableStateOf(false) }
-    var showStartTimePicker by remember { mutableStateOf(false) }
-    var showEndTimePicker by remember { mutableStateOf(false) }
-    var showReminderMenu by remember { mutableStateOf(false) }
-    var showStatusMenu by remember { mutableStateOf(false) }
+    var showStartDatePicker by rememberSaveable { mutableStateOf(false) }
+    var showEndDatePicker by rememberSaveable { mutableStateOf(false) }
+    var showStartTimePicker by rememberSaveable { mutableStateOf(false) }
+    var showEndTimePicker by rememberSaveable { mutableStateOf(false) }
+    var showReminderMenu by rememberSaveable { mutableStateOf(false) }
+    var showStatusMenu by rememberSaveable { mutableStateOf(false) }
     
     val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
@@ -1504,16 +1584,16 @@ private fun CreateEventDialog(
     
     // Date Pickers
     if (showStartDatePicker) {
-        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = startDate.time)
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = startDateMillis)
         DatePickerDialog(
             onDismissRequest = { showStartDatePicker = false },
             confirmButton = {
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { millis ->
-                        startDate = Date(millis)
+                        startDateMillis = millis
                         // Если дата окончания раньше — сдвигаем
-                        if (endDate.before(startDate)) {
-                            endDate = startDate
+                        if (endDateMillis < startDateMillis) {
+                            endDateMillis = startDateMillis
                         }
                     }
                     showStartDatePicker = false
@@ -1528,13 +1608,13 @@ private fun CreateEventDialog(
     }
     
     if (showEndDatePicker) {
-        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = endDate.time)
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = endDateMillis)
         DatePickerDialog(
             onDismissRequest = { showEndDatePicker = false },
             confirmButton = {
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { millis ->
-                        endDate = Date(millis)
+                        endDateMillis = millis
                     }
                     showEndDatePicker = false
                 }) { Text(Strings.ok) }
@@ -1550,7 +1630,7 @@ private fun CreateEventDialog(
     // Time Pickers
     if (showStartTimePicker) {
         val timePickerState = rememberTimePickerState(initialHour = startHour, initialMinute = startMinute)
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showStartTimePicker = false },
             title = { Text(Strings.startTime) },
             text = { TimePicker(state = timePickerState) },
@@ -1569,7 +1649,7 @@ private fun CreateEventDialog(
     
     if (showEndTimePicker) {
         val timePickerState = rememberTimePickerState(initialHour = endHour, initialMinute = endMinute)
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showEndTimePicker = false },
             title = { Text(Strings.endTime) },
             text = { TimePicker(state = timePickerState) },
@@ -1586,11 +1666,12 @@ private fun CreateEventDialog(
         )
     }
     
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = { if (!isCreating) onDismiss() },
         title = { Text(if (isEditing) Strings.editEvent else Strings.newEvent) },
         text = {
             LazyColumn(
+                modifier = Modifier.heightIn(max = 400.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Название
@@ -1718,6 +1799,24 @@ private fun CreateEventDialog(
                         label = { Text(Strings.eventLocation) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
+                    )
+                }
+                
+                // Пригласить участников
+                item {
+                    OutlinedTextField(
+                        value = attendees,
+                        onValueChange = { attendees = it },
+                        label = { Text(Strings.inviteAttendees) },
+                        placeholder = { Text(Strings.attendeesHint) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = false,
+                        maxLines = 2,
+                        trailingIcon = {
+                            IconButton(onClick = { showContactPicker = true }) {
+                                Icon(AppIcons.PersonAdd, contentDescription = null)
+                            }
+                        }
                     )
                 }
                 
@@ -1874,7 +1973,8 @@ private fun CreateEventDialog(
                             body,
                             allDayEvent,
                             reminder,
-                            busyStatus
+                            busyStatus,
+                            attendees.trim()
                         )
                     }
                 },
@@ -1896,4 +1996,24 @@ private fun CreateEventDialog(
             }
         }
     )
+    
+    // Диалог выбора контактов
+    if (showContactPicker) {
+        val database = remember { com.iwo.mailclient.data.database.MailDatabase.getInstance(context) }
+        com.iwo.mailclient.ui.components.ContactPickerDialog(
+            accountId = accountId,
+            database = database,
+            onDismiss = { showContactPicker = false },
+            onContactsSelected = { selectedEmails ->
+                if (selectedEmails.isNotEmpty()) {
+                    attendees = if (attendees.isBlank()) {
+                        selectedEmails.joinToString(", ")
+                    } else {
+                        attendees + ", " + selectedEmails.joinToString(", ")
+                    }
+                }
+                showContactPicker = false
+            }
+        )
+    }
 }

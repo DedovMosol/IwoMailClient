@@ -12,8 +12,8 @@ android {
         applicationId = "com.iwo.mailclient"
         minSdk = 26  // Android 8.0
         targetSdk = 35  // Android 15
-        versionCode = 19
-        versionName = "1.4.2"
+        versionCode = 20
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -62,6 +62,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
@@ -76,6 +77,11 @@ android {
             excludes += "/META-INF/DEPENDENCIES"
         }
     }
+}
+
+// Room schema export - для проверки миграций при сборке
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 

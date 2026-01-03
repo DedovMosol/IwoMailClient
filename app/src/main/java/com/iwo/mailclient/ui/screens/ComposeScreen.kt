@@ -88,7 +88,25 @@ data class AttachmentInfo(
     val name: String,
     val size: Long,
     val mimeType: String
-)
+) {
+    // Для сохранения при повороте экрана
+    fun toSaveableString(): String = "${uri}|||${name}|||${size}|||${mimeType}"
+    
+    companion object {
+        fun fromSaveableString(s: String): AttachmentInfo? {
+            val parts = s.split("|||")
+            if (parts.size != 4) return null
+            return try {
+                AttachmentInfo(
+                    uri = Uri.parse(parts[0]),
+                    name = parts[1],
+                    size = parts[2].toLong(),
+                    mimeType = parts[3]
+                )
+            } catch (_: Exception) { null }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,6 +115,8 @@ fun ComposeScreen(
     forwardEmailId: String? = null,
     initialToEmail: String? = null,
     editDraftId: String? = null,
+    initialSubject: String? = null,
+    initialBody: String? = null,
     onBackClick: () -> Unit,
     onSent: () -> Unit
 ) {
@@ -119,10 +139,24 @@ fun ComposeScreen(
     var body by rememberSaveable { mutableStateOf("") }
     var isSending by rememberSaveable { mutableStateOf(false) }
     var showCcBcc by rememberSaveable { mutableStateOf(false) }
-    var attachments by remember { mutableStateOf<List<AttachmentInfo>>(emptyList()) }
+    // Сохраняем вложения как строки для переживания поворота экрана
+    var attachmentStrings by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    val attachments = remember(attachmentStrings) { 
+        attachmentStrings.mapNotNull { AttachmentInfo.fromSaveableString(it) } 
+    }
     var requestReadReceipt by rememberSaveable { mutableStateOf(false) }
     var requestDeliveryReceipt by rememberSaveable { mutableStateOf(false) }
     var highPriority by rememberSaveable { mutableStateOf(false) }
+    
+    // Инициализация из mailto: параметров
+    var initialDataApplied by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(initialSubject, initialBody) {
+        if (!initialDataApplied && (initialSubject != null || initialBody != null)) {
+            initialDataApplied = true
+            if (initialSubject != null && subject.isBlank()) subject = initialSubject
+            if (initialBody != null && body.isBlank()) body = initialBody
+        }
+    }
     
     // Подписи
     var signatures by remember { mutableStateOf<List<SignatureEntity>>(emptyList()) }
@@ -180,18 +214,27 @@ fun ComposeScreen(
             return
         }
         
+        // Email текущего аккаунта — не предлагаем самого себя
+        val ownEmail = activeAccount?.email?.lowercase() ?: ""
+        
         suggestionSearchJob = scope.launch {
             val suggestions = mutableListOf<EmailSuggestion>()
+            val seenEmails = mutableSetOf<String>() // Для отслеживания дубликатов
             
             // 1. Поиск по локальным контактам (мгновенно)
             withContext(Dispatchers.IO) {
                 val contacts = database.contactDao().searchForAutocomplete(accountId, query, 5)
                 contacts.forEach { contact ->
-                    suggestions.add(EmailSuggestion(
-                        email = contact.email,
-                        name = contact.displayName,
-                        source = SuggestionSource.CONTACT
-                    ))
+                    val emailLower = contact.email.lowercase()
+                    // Не добавляем дубликаты и самого себя
+                    if (emailLower !in seenEmails && emailLower != ownEmail) {
+                        seenEmails.add(emailLower)
+                        suggestions.add(EmailSuggestion(
+                            email = contact.email,
+                            name = contact.displayName,
+                            source = SuggestionSource.CONTACT
+                        ))
+                    }
                 }
             }
             
@@ -199,8 +242,10 @@ fun ComposeScreen(
             withContext(Dispatchers.IO) {
                 val history = database.emailDao().searchEmailHistory(accountId, query, 5)
                 history.forEach { result ->
-                    // Не добавляем дубликаты
-                    if (suggestions.none { it.email.equals(result.email, ignoreCase = true) }) {
+                    val emailLower = result.email.lowercase()
+                    // Не добавляем дубликаты и самого себя
+                    if (emailLower !in seenEmails && emailLower != ownEmail) {
+                        seenEmails.add(emailLower)
                         suggestions.add(EmailSuggestion(
                             email = result.email,
                             name = result.name,
@@ -224,7 +269,10 @@ fun ComposeScreen(
                         }
                         if (galResult is EasResult.Success) {
                             val galSuggestions = galResult.data.take(5).mapNotNull { gal ->
-                                if (suggestions.none { it.email.equals(gal.email, ignoreCase = true) }) {
+                                val emailLower = gal.email.lowercase()
+                                // Не добавляем дубликаты и самого себя
+                                if (emailLower !in seenEmails && emailLower != ownEmail) {
+                                    seenEmails.add(emailLower)
                                     EmailSuggestion(
                                         email = gal.email,
                                         name = gal.displayName,
@@ -278,7 +326,8 @@ fun ComposeScreen(
                     val name = if (nameIndex >= 0) cursor.getString(nameIndex) else "file"
                     val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
                     val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                    attachments = attachments + AttachmentInfo(uri, name, size, mimeType)
+                    val newAtt = AttachmentInfo(uri, name, size, mimeType)
+                    attachmentStrings = attachmentStrings + newAtt.toSaveableString()
                 }
             }
         }
@@ -519,6 +568,20 @@ fun ComposeScreen(
                     val isRussian = currentLanguage == AppLanguage.RUSSIAN
                     Toast.makeText(context, NotificationStrings.getEmailSent(isRussian), Toast.LENGTH_SHORT).show()
                     com.iwo.mailclient.util.SoundPlayer.playSendSound(context)
+                    
+                    // Синхронизируем папку "Отправленные" в фоне (не блокируем UI)
+                    val accountId = account.id
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            kotlinx.coroutines.delay(2000) // Даём серверу время обработать
+                            val sentFolder = database.folderDao().getFoldersByAccountList(accountId)
+                                .find { it.type == 5 } // type 5 = Sent
+                            sentFolder?.let { folder ->
+                                mailRepo.syncEmails(accountId, folder.serverId)
+                            }
+                        } catch (_: Exception) { }
+                    }
+                    
                     onSent()
                 }
                 is EasResult.Error -> {
@@ -1123,7 +1186,9 @@ fun ComposeScreen(
                                     Text(formatFileSize(att.size), style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                IconButton(onClick = { attachments = attachments - att }) {
+                                IconButton(onClick = { 
+                                    attachmentStrings = attachmentStrings - att.toSaveableString() 
+                                }) {
                                     Icon(AppIcons.Close, Strings.delete, modifier = Modifier.size(20.dp))
                                 }
                             }

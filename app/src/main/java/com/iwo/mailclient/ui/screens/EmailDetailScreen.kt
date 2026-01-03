@@ -27,6 +27,7 @@ import com.iwo.mailclient.data.database.AttachmentEntity
 import com.iwo.mailclient.data.database.EmailEntity
 import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.MailRepository
+import com.iwo.mailclient.data.repository.RepositoryProvider
 import com.iwo.mailclient.eas.AttachmentManager
 import com.iwo.mailclient.eas.EasClient
 import com.iwo.mailclient.eas.EasResult
@@ -36,8 +37,12 @@ import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileOutputStream
 
@@ -47,6 +52,17 @@ private val NAME_BEFORE_BRACKET_REGEX = Regex("^\"?([^\"<]+)\"?\\s*<")
 private val EMAIL_IN_BRACKETS_REGEX = Regex("<([^>]+@[^>]+)>")
 private val CID_REGEX = Regex("cid:([^\"'\\s>]+)")
 private val SAFE_FILENAME_REGEX = Regex("[^a-zA-Z0-9._-]")
+// Regex для парсинга задачи из письма
+private val TASK_SUBJECT_REGEX = Regex("^Задача:\\s*(.+)$|^Task:\\s*(.+)$", RegexOption.IGNORE_CASE)
+private val TASK_DUE_DATE_REGEX = Regex("Срок выполнения:\\s*(\\d{2}\\.\\d{2}\\.\\d{4}\\s+\\d{2}:\\d{2})|Due date:\\s*(\\d{2}\\.\\d{2}\\.\\d{4}\\s+\\d{2}:\\d{2})", RegexOption.IGNORE_CASE)
+private val TASK_DESCRIPTION_REGEX = Regex("Описание:\\s*(.+?)(?=\\n\\n|Срок|Due|$)|Description:\\s*(.+?)(?=\\n\\n|Срок|Due|$)", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+// Regex для парсинга iCalendar приглашений
+private val ICAL_SUMMARY_REGEX = Regex("SUMMARY[^:]*:(.+?)(?=\\r?\\n[A-Z])", setOf(RegexOption.DOT_MATCHES_ALL))
+private val ICAL_DTSTART_REGEX = Regex("DTSTART[^:]*:(\\d{8}T\\d{6}Z?|\\d{8})")
+private val ICAL_DTEND_REGEX = Regex("DTEND[^:]*:(\\d{8}T\\d{6}Z?|\\d{8})")
+private val ICAL_LOCATION_REGEX = Regex("LOCATION[^:]*:(.+?)(?=\\r?\\n[A-Z])", setOf(RegexOption.DOT_MATCHES_ALL))
+private val ICAL_DESCRIPTION_REGEX = Regex("DESCRIPTION[^:]*:(.+?)(?=\\r?\\n[A-Z])", setOf(RegexOption.DOT_MATCHES_ALL))
+private val ICAL_ORGANIZER_REGEX = Regex("ORGANIZER[^:]*:mailto:([^\\r\\n]+)", RegexOption.IGNORE_CASE)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,25 +81,19 @@ fun EmailDetailScreen(
     
     val email by mailRepo.getEmail(emailId).collectAsState(initial = null)
     
-    // Вложения - используем remember для сохранения при повороте
-    var attachmentsState by remember { mutableStateOf<List<AttachmentEntity>>(emptyList()) }
+    // Вложения - используем Flow напрямую, сохраняем ID для восстановления после поворота
+    var attachmentIds by rememberSaveable { mutableStateOf<List<Long>>(emptyList()) }
     val attachmentsFlow by mailRepo.getAttachments(emailId).collectAsState(initial = emptyList())
     
-    // Обновляем состояние когда Flow возвращает данные
-    // Всегда синхронизируем с Flow, но сохраняем предыдущее значение при пустом ответе во время загрузки
-    LaunchedEffect(attachmentsFlow, email?.id) {
-        // Если Flow вернул данные - используем их
+    // Синхронизируем ID при получении данных из Flow
+    LaunchedEffect(attachmentsFlow) {
         if (attachmentsFlow.isNotEmpty()) {
-            attachmentsState = attachmentsFlow
-        } else if (email != null && !email!!.hasAttachments) {
-            // Если письмо загружено и у него нет вложений - очищаем
-            attachmentsState = emptyList()
+            attachmentIds = attachmentsFlow.map { it.id }
         }
-        // Иначе сохраняем предыдущее состояние (защита от race condition при повороте)
     }
     
-    // Используем attachmentsState вместо attachmentsFlow
-    val attachments = attachmentsState
+    // Используем Flow напрямую - он автоматически обновится после поворота
+    val attachments = attachmentsFlow
     
     var downloadingId by rememberSaveable { mutableStateOf<Long?>(null) }
     var isLoadingBody by remember { mutableStateOf(false) } // НЕ saveable - сбрасывается при входе
@@ -112,7 +122,7 @@ fun EmailDetailScreen(
     var inlineImages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var isLoadingInlineImages by remember { mutableStateOf(false) }
     
-    // Загружаем inline изображения
+    // Загружаем inline изображения ПАРАЛЛЕЛЬНО
     LaunchedEffect(email?.body, attachments) {
         val body = email?.body ?: return@LaunchedEffect
         if (body.isEmpty() || isLoadingInlineImages) return@LaunchedEffect
@@ -134,26 +144,34 @@ fun EmailDetailScreen(
         val password = account?.let { accountRepo.getPassword(it.id) }
         
         if (account != null && password != null) {
-            val newImages = mutableMapOf<String, String>()
-            
-            for (att in inlineAttachments) {
-                try {
-                    val easClient = accountRepo.createEasClient(account.id) ?: continue
-                    
-                    when (val result = easClient.downloadAttachment(att.fileReference)) {
-                        is EasResult.Success -> {
-                            val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
-                            val dataUrl = "data:${att.contentType};base64,$base64"
-                            att.contentId?.let { newImages[it] = dataUrl }
-                            newImages[att.displayName] = dataUrl
+            // Загружаем все картинки параллельно
+            val results = withContext(Dispatchers.IO) {
+                supervisorScope {
+                    inlineAttachments.map { att ->
+                        async {
+                            try {
+                                val easClient = accountRepo.createEasClient(account.id) ?: return@async null
+                                when (val result = easClient.downloadAttachment(att.fileReference)) {
+                                    is EasResult.Success -> {
+                                        val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
+                                        val dataUrl = "data:${att.contentType};base64,$base64"
+                                        Pair(att, dataUrl)
+                                    }
+                                    is EasResult.Error -> null
+                                }
+                            } catch (_: Exception) {
+                                null
+                            }
                         }
-                        is EasResult.Error -> {
-                        }
-                    }
-                } catch (e: Exception) {
+                    }.awaitAll()
                 }
             }
             
+            val newImages = mutableMapOf<String, String>()
+            results.filterNotNull().forEach { pair ->
+                pair.first.contentId?.let { newImages[it] = pair.second }
+                newImages[pair.first.displayName] = pair.second
+            }
             inlineImages = newImages
         }
         isLoadingInlineImages = false
@@ -208,7 +226,8 @@ fun EmailDetailScreen(
     }
     
     // Диалог MDN
-    if (showMdnDialog && email != null && !email!!.mdnRequestedBy.isNullOrBlank()) {
+    if (showMdnDialog && email != null && !email?.mdnRequestedBy.isNullOrBlank()) {
+        val mdnEmail = email!!
         val readReceiptSentText = Strings.readReceiptSent
         com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { 
@@ -513,6 +532,9 @@ fun EmailDetailScreen(
                 CircularProgressIndicator()
             }
         } else {
+            // Используем локальную переменную для безопасного доступа
+            // email гарантированно не null в этом блоке
+            val currentEmail = email!!
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -521,7 +543,7 @@ fun EmailDetailScreen(
             ) {
                 // Тема
                 Text(
-                    text = email!!.subject,
+                    text = currentEmail.subject,
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
@@ -543,8 +565,8 @@ fun EmailDetailScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         // Берём первую букву из имени или email
-                        val displayName = email!!.fromName.ifEmpty { extractDisplayName(email!!.from) }
-                        val displayEmail = extractEmailAddress(email!!.from)
+                        val displayName = currentEmail.fromName.ifEmpty { extractDisplayName(currentEmail.from) }
+                        val displayEmail = extractEmailAddress(currentEmail.from)
                         val avatarLetter = when {
                             displayName.isNotEmpty() && !displayName.contains("@") -> displayName.first().uppercase()
                             displayEmail.isNotEmpty() -> displayEmail.first().uppercase()
@@ -560,8 +582,8 @@ fun EmailDetailScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     
                     Column(modifier = Modifier.weight(1f)) {
-                        val displayName = email!!.fromName.ifEmpty { extractDisplayName(email!!.from) }
-                        val displayEmail = extractEmailAddress(email!!.from)
+                        val displayName = currentEmail.fromName.ifEmpty { extractDisplayName(currentEmail.from) }
+                        val displayEmail = extractEmailAddress(currentEmail.from)
                         
                         // Показываем имя только если оно отличается от email
                         val showName = displayName.isNotEmpty() && 
@@ -587,7 +609,7 @@ fun EmailDetailScreen(
                     }
                     
                     Text(
-                        text = formatFullDate(email!!.dateReceived),
+                        text = formatFullDate(currentEmail.dateReceived),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -598,9 +620,9 @@ fun EmailDetailScreen(
                             scope.launch { mailRepo.toggleFlag(emailId) }
                         }) {
                             Icon(
-                                imageVector = if (email!!.flagged) AppIcons.Star else AppIcons.StarOutline,
+                                imageVector = if (currentEmail.flagged) AppIcons.Star else AppIcons.StarOutline,
                                 contentDescription = Strings.favorites,
-                                tint = if (email!!.flagged) MaterialTheme.colorScheme.primary 
+                                tint = if (currentEmail.flagged) MaterialTheme.colorScheme.primary 
                                        else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -608,7 +630,7 @@ fun EmailDetailScreen(
                 }
                 
                 // Получатели - кликабельные для написания письма
-                if (email!!.to.isNotEmpty() || email!!.cc.isNotEmpty()) {
+                if (currentEmail.to.isNotEmpty() || currentEmail.cc.isNotEmpty()) {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -624,19 +646,382 @@ fun EmailDetailScreen(
                                     text = "${Strings.to}: ",
                                     style = MaterialTheme.typography.bodySmall
                                 )
-                                val toEmail = extractEmailAddress(email!!.to)
+                                val toEmail = extractEmailAddress(currentEmail.to)
                                 Text(
-                                    text = formatRecipients(email!!.to),
+                                    text = formatRecipients(currentEmail.to),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (toEmail.contains("@")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                     modifier = if (toEmail.contains("@")) Modifier.clickable { onComposeToEmail(toEmail) } else Modifier
                                 )
                             }
-                            if (email!!.cc.isNotEmpty()) {
+                            if (currentEmail.cc.isNotEmpty()) {
                                 Text(
-                                    text = "${Strings.cc}: ${formatRecipients(email!!.cc)}",
+                                    text = "${Strings.cc}: ${formatRecipients(currentEmail.cc)}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
+                            }
+                        }
+                    }
+                }
+                
+                // Кнопка "Добавить в задачи" для писем с задачами
+                val isTaskEmail = currentEmail.subject.startsWith("Задача:") || currentEmail.subject.startsWith("Task:")
+                if (isTaskEmail) {
+                    val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
+                    var isAddingTask by rememberSaveable { mutableStateOf(false) }
+                    var taskAdded by rememberSaveable { mutableStateOf(false) }
+                    val taskAddedMsg = Strings.taskAddedToTasks
+                    
+                    if (!taskAdded) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                                .clickable(enabled = !isAddingTask) {
+                                    scope.launch {
+                                        isAddingTask = true
+                                        try {
+                                            val accountId = activeAccount?.id ?: return@launch
+                                            
+                                            // Парсим данные задачи из письма
+                                            val taskTitle = TASK_SUBJECT_REGEX.find(currentEmail.subject)?.let {
+                                                it.groupValues[1].ifEmpty { it.groupValues[2] }
+                                            } ?: currentEmail.subject.removePrefix("Задача:").removePrefix("Task:").trim()
+                                            
+                                            val bodyText = currentEmail.body
+                                                .replace(Regex("<[^>]+>"), "") // Убираем HTML теги
+                                                .replace("&nbsp;", " ")
+                                                .replace("&amp;", "&")
+                                                .replace("&lt;", "<")
+                                                .replace("&gt;", ">")
+                                            
+                                            // Парсим срок выполнения
+                                            val dueDateMatch = TASK_DUE_DATE_REGEX.find(bodyText)
+                                            val dueDate = dueDateMatch?.let {
+                                                val dateStr = it.groupValues[1].ifEmpty { it.groupValues[2] }
+                                                try {
+                                                    val format = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
+                                                    format.parse(dateStr)?.time ?: System.currentTimeMillis()
+                                                } catch (_: Exception) {
+                                                    System.currentTimeMillis() + 24 * 60 * 60 * 1000 // +1 день
+                                                }
+                                            } ?: (System.currentTimeMillis() + 24 * 60 * 60 * 1000)
+                                            
+                                            // Парсим описание
+                                            val descMatch = TASK_DESCRIPTION_REGEX.find(bodyText)
+                                            val description = descMatch?.let {
+                                                it.groupValues[1].ifEmpty { it.groupValues[2] }.trim()
+                                            } ?: "Задача из письма от ${currentEmail.fromName.ifEmpty { currentEmail.from }}"
+                                            
+                                            // Напоминание за 15 минут до срока, но только если это в будущем
+                                            val now = System.currentTimeMillis()
+                                            val reminderTime = dueDate - 15 * 60 * 1000
+                                            val shouldRemind = reminderTime > now
+                                            
+                                            // Создаём задачу
+                                            val result = withContext(Dispatchers.IO) {
+                                                taskRepo.createTask(
+                                                    accountId = accountId,
+                                                    subject = taskTitle,
+                                                    body = description,
+                                                    dueDate = dueDate,
+                                                    reminderSet = shouldRemind,
+                                                    reminderTime = if (shouldRemind) reminderTime else 0
+                                                )
+                                            }
+                                            
+                                            when (result) {
+                                                is EasResult.Success -> {
+                                                    taskAdded = true
+                                                    Toast.makeText(context, taskAddedMsg, Toast.LENGTH_SHORT).show()
+                                                }
+                                                is EasResult.Error -> {
+                                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
+                                                    Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, e.message ?: "Error", Toast.LENGTH_LONG).show()
+                                        } finally {
+                                            isAddingTask = false
+                                        }
+                                    }
+                                },
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                if (isAddingTask) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                } else {
+                                    Icon(
+                                        AppIcons.Task,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text = Strings.addToTasks,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // Приглашение на встречу (iCalendar в теле письма или вложении)
+                val calendarAttachment = attachments.find { 
+                    it.contentType.contains("text/calendar", ignoreCase = true) ||
+                    it.contentType.contains("application/ics", ignoreCase = true) ||
+                    it.displayName.endsWith(".ics", ignoreCase = true)
+                }
+                val hasCalendarAttachment = calendarAttachment != null
+                val bodyHasVEvent = currentEmail.body.contains("BEGIN:VEVENT", ignoreCase = true) ||
+                    currentEmail.body.contains("BEGIN:VCALENDAR", ignoreCase = true)
+                // Проверяем типичные признаки приглашения в теме
+                val subjectHasInvitation = currentEmail.subject.contains("Приглашение:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Invitation:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Meeting:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Встреча:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Accepted:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Declined:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Tentative:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Принято:", ignoreCase = true) ||
+                    currentEmail.subject.contains("Отклонено:", ignoreCase = true)
+                val isMeetingInvitation = hasCalendarAttachment || bodyHasVEvent || subjectHasInvitation
+                
+                if (isMeetingInvitation && !isTaskEmail) {
+                    val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
+                    var isAccepting by rememberSaveable { mutableStateOf(false) }
+                    var eventAdded by rememberSaveable { mutableStateOf(false) }
+                    val invitationAcceptedMsg = Strings.invitationAccepted
+                    
+                    // Состояние для загруженных iCalendar данных из вложения
+                    var loadedIcalData by remember { mutableStateOf<String?>(null) }
+                    var isLoadingIcal by remember { mutableStateOf(false) }
+                    
+                    // Загружаем iCalendar из вложения если нужно
+                    LaunchedEffect(calendarAttachment?.id, bodyHasVEvent) {
+                        if (!bodyHasVEvent && calendarAttachment != null && loadedIcalData == null && !isLoadingIcal) {
+                            isLoadingIcal = true
+                            try {
+                                val account = accountRepo.getActiveAccountSync()
+                                if (account != null) {
+                                    val easClient = accountRepo.createEasClient(account.id)
+                                    if (easClient != null) {
+                                        when (val result = easClient.downloadAttachment(calendarAttachment.fileReference)) {
+                                            is EasResult.Success -> {
+                                                loadedIcalData = String(result.data, Charsets.UTF_8)
+                                            }
+                                            is EasResult.Error -> { }
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) { }
+                            isLoadingIcal = false
+                        }
+                    }
+                    
+                    // Используем данные из тела или из загруженного вложения
+                    val icalData = when {
+                        bodyHasVEvent -> currentEmail.body
+                        loadedIcalData != null -> loadedIcalData!!
+                        else -> ""
+                    }
+                    
+                    if (!eventAdded) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        AppIcons.CalendarMonth,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = Strings.meetingInvitation,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                            
+                                // Индикатор загрузки iCalendar из вложения
+                                if (isLoadingIcal) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (isRussian) "Загрузка данных..." else "Loading data...",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                } else {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                            
+                                    // Кнопки принять/под вопросом
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        // Принять
+                                        Button(
+                                            onClick = {
+                                                scope.launch {
+                                                    isAccepting = true
+                                                    try {
+                                                        val accountId = activeAccount?.id ?: return@launch
+                                                
+                                                        // Парсим iCalendar данные
+                                                        val summary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
+                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
+                                                            ?: currentEmail.subject
+                                                
+                                                        val dtStart = ICAL_DTSTART_REGEX.find(icalData)?.groupValues?.get(1)
+                                                        val dtEnd = ICAL_DTEND_REGEX.find(icalData)?.groupValues?.get(1)
+                                                        val location = ICAL_LOCATION_REGEX.find(icalData)?.groupValues?.get(1)
+                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim() ?: ""
+                                                        val description = ICAL_DESCRIPTION_REGEX.find(icalData)?.groupValues?.get(1)
+                                                            ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
+                                                
+                                                        // Парсим даты
+                                                        val startTime = parseICalDate(dtStart) ?: System.currentTimeMillis()
+                                                        val endTime = parseICalDate(dtEnd) ?: (startTime + 60 * 60 * 1000)
+                                                
+                                                        // Создаём событие
+                                                        val result = withContext(Dispatchers.IO) {
+                                                            calendarRepo.createEvent(
+                                                                accountId = accountId,
+                                                                subject = summary,
+                                                                startTime = startTime,
+                                                                endTime = endTime,
+                                                                location = location,
+                                                                body = description.ifEmpty { "Приглашение от ${currentEmail.fromName.ifEmpty { currentEmail.from }}" },
+                                                                reminder = 15,
+                                                                busyStatus = 2
+                                                            )
+                                                        }
+                                                
+                                                        when (result) {
+                                                            is EasResult.Success -> {
+                                                                eventAdded = true
+                                                                Toast.makeText(context, invitationAcceptedMsg, Toast.LENGTH_SHORT).show()
+                                                            }
+                                                            is EasResult.Error -> {
+                                                                val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
+                                                                Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                            }
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, e.message ?: "Error", Toast.LENGTH_LONG).show()
+                                                    } finally {
+                                                        isAccepting = false
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isAccepting,
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary
+                                            )
+                                        ) {
+                                            if (isAccepting) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = Color.White
+                                                )
+                                            } else {
+                                                Text(Strings.acceptInvitation)
+                                            }
+                                        }
+                                
+                                        // Под вопросом
+                                        OutlinedButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    isAccepting = true
+                                                    try {
+                                                        val accountId = activeAccount?.id ?: return@launch
+                                                        val summary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
+                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
+                                                            ?: currentEmail.subject
+                                                        val dtStart = ICAL_DTSTART_REGEX.find(icalData)?.groupValues?.get(1)
+                                                        val dtEnd = ICAL_DTEND_REGEX.find(icalData)?.groupValues?.get(1)
+                                                        val location = ICAL_LOCATION_REGEX.find(icalData)?.groupValues?.get(1)
+                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim() ?: ""
+                                                        val description = ICAL_DESCRIPTION_REGEX.find(icalData)?.groupValues?.get(1)
+                                                            ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
+                                                        val startTime = parseICalDate(dtStart) ?: System.currentTimeMillis()
+                                                        val endTime = parseICalDate(dtEnd) ?: (startTime + 60 * 60 * 1000)
+                                                
+                                                        val result = withContext(Dispatchers.IO) {
+                                                            calendarRepo.createEvent(
+                                                                accountId = accountId,
+                                                                subject = summary,
+                                                                startTime = startTime,
+                                                                endTime = endTime,
+                                                                location = location,
+                                                                body = description.ifEmpty { "Приглашение от ${currentEmail.fromName.ifEmpty { currentEmail.from }}" },
+                                                                reminder = 15,
+                                                                busyStatus = 1 // Tentative
+                                                            )
+                                                        }
+                                                        when (result) {
+                                                            is EasResult.Success -> {
+                                                                eventAdded = true
+                                                                Toast.makeText(context, invitationAcceptedMsg, Toast.LENGTH_SHORT).show()
+                                                            }
+                                                            is EasResult.Error -> Toast.makeText(context, NotificationStrings.localizeError(result.message, isRussian), Toast.LENGTH_LONG).show()
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, e.message ?: "Error", Toast.LENGTH_LONG).show()
+                                                    } finally {
+                                                        isAccepting = false
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isAccepting,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text(Strings.tentativeInvitation)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -750,7 +1135,7 @@ fun EmailDetailScreen(
                     }
                 } else {
                     // Тело письма - определяем HTML или plain text
-                    val bodyText = email!!.body.ifEmpty { Strings.noText }
+                    val bodyText = currentEmail.body.ifEmpty { Strings.noText }
                     val isHtml = bodyText.contains("<html", ignoreCase = true) || 
                                  bodyText.contains("<body", ignoreCase = true) ||
                                  bodyText.contains("<div", ignoreCase = true) ||
@@ -1072,6 +1457,33 @@ private fun formatRecipients(recipients: String): String {
             // Показываем имя, а email в скобках только если отличается
             if (email.isNotEmpty()) "$name <$email>" else name
         }
+    }
+}
+
+/**
+ * Парсит дату из iCalendar формата
+ * Поддерживает форматы: 20260115T100000Z, 20260115T100000, 20260115
+ */
+private fun parseICalDate(dateStr: String?): Long? {
+    if (dateStr.isNullOrBlank()) return null
+    
+    return try {
+        val isUtc = dateStr.endsWith("Z")
+        val cleanDate = dateStr.removeSuffix("Z")
+        
+        val format = when (cleanDate.length) {
+            8 -> java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+            15 -> java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.US)
+            else -> return null
+        }
+        
+        if (isUtc) {
+            format.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }
+        
+        format.parse(cleanDate)?.time
+    } catch (_: Exception) {
+        null
     }
 }
 

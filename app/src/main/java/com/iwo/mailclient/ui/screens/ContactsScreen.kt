@@ -109,11 +109,14 @@ fun ContactsScreen(
     
     // Множественный выбор
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
-    var selectedContactIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedContactIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     
-    // Фильтрация Exchange контактов по поиску
-    val filteredExchangeContacts = remember(exchangeContacts, exchangeSearchQuery) {
-        if (exchangeSearchQuery.isBlank()) {
+    // Email текущего аккаунта для фильтрации себя
+    val ownEmail = activeAccount?.email?.lowercase() ?: ""
+    
+    // Фильтрация Exchange контактов по поиску (исключая себя)
+    val filteredExchangeContacts = remember(exchangeContacts, exchangeSearchQuery, ownEmail) {
+        val filtered = if (exchangeSearchQuery.isBlank()) {
             exchangeContacts
         } else {
             exchangeContacts.filter { contact ->
@@ -121,6 +124,12 @@ fun ContactsScreen(
                 contact.email.contains(exchangeSearchQuery, ignoreCase = true) ||
                 contact.company.contains(exchangeSearchQuery, ignoreCase = true)
             }
+        }
+        // Исключаем себя из списка
+        if (ownEmail.isNotBlank()) {
+            filtered.filter { it.email.lowercase() != ownEmail }
+        } else {
+            filtered
         }
     }
     
@@ -260,7 +269,7 @@ fun ContactsScreen(
     
     // Диалог удаления
     showDeleteDialog?.let { contact ->
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showDeleteDialogId = null },
             icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.deleteContact) },
@@ -367,7 +376,7 @@ fun ContactsScreen(
         var newGroupName by remember { mutableStateOf("") }
         val groupCreatedMsg = Strings.groupCreated
         
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showCreateGroupDialog = false },
             icon = { 
                 Icon(
@@ -379,41 +388,35 @@ fun ContactsScreen(
             },
             title = { Text(Strings.createGroup) },
             text = {
-                Column {
-                    OutlinedTextField(
-                        value = newGroupName,
-                        onValueChange = { newGroupName = it },
-                        label = { Text(Strings.groupName) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        TextButton(onClick = { showCreateGroupDialog = false }) {
-                            Text(Strings.cancel)
+                OutlinedTextField(
+                    value = newGroupName,
+                    onValueChange = { newGroupName = it },
+                    label = { Text(Strings.groupName) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (newGroupName.isNotBlank()) {
+                            scope.launch {
+                                contactRepo.createGroup(accountId, newGroupName)
+                                Toast.makeText(context, groupCreatedMsg, Toast.LENGTH_SHORT).show()
+                            }
+                            showCreateGroupDialog = false
                         }
-                        TextButton(
-                            onClick = {
-                                if (newGroupName.isNotBlank()) {
-                                    scope.launch {
-                                        contactRepo.createGroup(accountId, newGroupName)
-                                        Toast.makeText(context, groupCreatedMsg, Toast.LENGTH_SHORT).show()
-                                    }
-                                    showCreateGroupDialog = false
-                                }
-                            },
-                            enabled = newGroupName.isNotBlank()
-                        ) {
-                            Text(Strings.save)
-                        }
-                    }
+                    },
+                    enabled = newGroupName.isNotBlank()
+                ) {
+                    Text(Strings.save)
                 }
             },
-            confirmButton = {},
-            dismissButton = {}
+            dismissButton = {
+                TextButton(onClick = { showCreateGroupDialog = false }) {
+                    Text(Strings.cancel)
+                }
+            }
         )
     }
     
@@ -422,7 +425,7 @@ fun ContactsScreen(
         var newName by remember { mutableStateOf(group.name) }
         val groupRenamedMsg = Strings.groupRenamed
         
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { groupToRename = null },
             icon = { 
                 Icon(
@@ -434,41 +437,35 @@ fun ContactsScreen(
             },
             title = { Text(Strings.renameGroup) },
             text = {
-                Column {
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        label = { Text(Strings.groupName) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        TextButton(onClick = { groupToRename = null }) {
-                            Text(Strings.cancel)
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text(Strings.groupName) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (newName.isNotBlank() && newName != group.name) {
+                            scope.launch {
+                                contactRepo.renameGroup(group.id, newName)
+                                Toast.makeText(context, groupRenamedMsg, Toast.LENGTH_SHORT).show()
+                            }
+                            groupToRename = null
                         }
-                        TextButton(
-                            onClick = {
-                                if (newName.isNotBlank() && newName != group.name) {
-                                    scope.launch {
-                                        contactRepo.renameGroup(group.id, newName)
-                                        Toast.makeText(context, groupRenamedMsg, Toast.LENGTH_SHORT).show()
-                                    }
-                                    groupToRename = null
-                                }
-                            },
-                            enabled = newName.isNotBlank() && newName != group.name
-                        ) {
-                            Text(Strings.save)
-                        }
-                    }
+                    },
+                    enabled = newName.isNotBlank() && newName != group.name
+                ) {
+                    Text(Strings.save)
                 }
             },
-            confirmButton = {},
-            dismissButton = {}
+            dismissButton = {
+                TextButton(onClick = { groupToRename = null }) {
+                    Text(Strings.cancel)
+                }
+            }
         )
     }
     
@@ -476,7 +473,7 @@ fun ContactsScreen(
     groupToDelete?.let { group ->
         val groupDeletedMsg = Strings.groupDeleted
         
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { groupToDelete = null },
             icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.deleteGroup) },
@@ -505,7 +502,7 @@ fun ContactsScreen(
     
     // Диалог перемещения контакта в группу
     showMoveToGroupDialog?.let { contact ->
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showMoveToGroupDialog = null },
             icon = { Icon(AppIcons.Folder, null) },
             title = { Text(Strings.moveToGroup) },
@@ -551,12 +548,12 @@ fun ContactsScreen(
                     }
                 }
             },
-            confirmButton = {},
-            dismissButton = {
+            confirmButton = {
                 TextButton(onClick = { showMoveToGroupDialog = null }) {
-                    Text(Strings.cancel)
+                    Text(Strings.close)
                 }
-            }
+            },
+            dismissButton = {}
         )
     }
 
@@ -607,9 +604,12 @@ fun ContactsScreen(
                         if (selectedTab == 1) {
                             IconButton(
                                 onClick = {
+                                    val contactsToCopy = selectedContacts.toList()
+                                    isSelectionMode = false
+                                    selectedContactIds = emptySet()
                                     scope.launch {
                                         var copied = 0
-                                        selectedContacts.forEach { contact ->
+                                        contactsToCopy.forEach { contact ->
                                             contactRepo.addContact(
                                                 accountId = accountId,
                                                 displayName = contact.displayName,
@@ -627,15 +627,15 @@ fun ContactsScreen(
                                         val msg = com.iwo.mailclient.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
                                         Toast.makeText(context, "$msg: $copied", Toast.LENGTH_SHORT).show()
                                     }
-                                    isSelectionMode = false
-                                    selectedContactIds = emptySet()
                                 }
                             ) {
                                 Icon(AppIcons.PersonAdd, Strings.addToContacts, tint = Color.White)
                             }
                         }
                         // Переместить в группу (только для личных)
-                        if (selectedTab == 0 && selectedContacts.all { it in localContacts }) {
+                        // localContactIds объявляется здесь для использования в обоих условиях
+                        val localContactIds = remember(localContacts) { localContacts.map { it.id }.toSet() }
+                        if (selectedTab == 0 && selectedContactIds.all { it in localContactIds }) {
                             var showGroupMenu by remember { mutableStateOf(false) }
                             Box {
                                 IconButton(onClick = { showGroupMenu = true }) {
@@ -679,26 +679,27 @@ fun ContactsScreen(
                             }
                         }
                         // Удалить (только для личных)
-                        if (selectedTab == 0 && selectedContacts.all { it in localContacts }) {
+                        if (selectedTab == 0 && selectedContactIds.all { it in localContactIds }) {
                             var showDeleteConfirm by remember { mutableStateOf(false) }
                             IconButton(onClick = { showDeleteConfirm = true }) {
                                 Icon(AppIcons.Delete, Strings.delete, tint = Color.White)
                             }
                             if (showDeleteConfirm) {
-                                AlertDialog(
+                                com.iwo.mailclient.ui.theme.ScaledAlertDialog(
                                     onDismissRequest = { showDeleteConfirm = false },
                                     icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
                                     title = { Text(Strings.deleteContacts) },
                                     text = { Text("${Strings.deleteContactsConfirm} ${selectedContactIds.size}") },
                                     confirmButton = {
                                         TextButton(onClick = {
-                                            scope.launch {
-                                                val deleted = contactRepo.deleteContacts(selectedContactIds.toList())
-                                                Toast.makeText(context, "$contactDeletedMsg: $deleted", Toast.LENGTH_SHORT).show()
-                                            }
+                                            val idsToDelete = selectedContactIds.toList()
                                             showDeleteConfirm = false
                                             isSelectionMode = false
                                             selectedContactIds = emptySet()
+                                            scope.launch {
+                                                val deleted = contactRepo.deleteContacts(idsToDelete)
+                                                Toast.makeText(context, "$contactDeletedMsg: $deleted", Toast.LENGTH_SHORT).show()
+                                            }
                                         }) {
                                             Text(Strings.delete, color = MaterialTheme.colorScheme.error)
                                         }
@@ -967,6 +968,9 @@ private fun PersonalContactsList(
 ) {
     var expandedGroupMenu by remember { mutableStateOf<String?>(null) }
     
+    // Map для быстрого поиска группы по ID
+    val groupsMap = remember(groups) { groups.associateBy { it.id } }
+    
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         // Фильтр по группам (горизонтальный скролл чипов)
         item {
@@ -1106,6 +1110,7 @@ private fun PersonalContactsList(
                 items(contacts, key = { it.id }) { contact ->
                     ContactItemWithGroup(
                         contact = contact,
+                        group = contact.groupId?.let { groupsMap[it] },
                         onClick = { onContactClick(contact) },
                         onLongClick = { onContactLongClick(contact) },
                         onMoveToGroup = { onContactMoveToGroup(contact) },
@@ -1392,6 +1397,7 @@ private fun ContactItem(
 @Composable
 private fun ContactItemWithGroup(
     contact: ContactEntity,
+    group: ContactGroupEntity? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     onMoveToGroup: () -> Unit,
@@ -1421,6 +1427,28 @@ private fun ContactItemWithGroup(
             Column {
                 if (contact.email.isNotBlank()) {
                     Text(contact.email, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                // Метка группы
+                if (group != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(group.color))
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(group.color),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
                 if (contact.company.isNotBlank()) {
                     Text(contact.company, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -1567,7 +1595,7 @@ private fun ContactEditDialog(
         }
     }
     
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (contact == null) Strings.addContact else Strings.editContact) },
         text = {
@@ -1693,30 +1721,24 @@ private fun ContactEditDialog(
                         .focusRequester(notesFocus)
                         .onFocusChanged { if (it.isFocused) focusedFieldIndex = 10 }
                 )
-                
-                // Кнопки в разных сторонах
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text(Strings.cancel)
-                    }
-                    TextButton(
-                        onClick = {
-                            val name = displayName.ifBlank { "$firstName $lastName".trim().ifBlank { email } }
-                            onSave(name, email, firstName, lastName, phone, mobilePhone, workPhone, company, department, jobTitle, notes)
-                        },
-                        enabled = displayName.isNotBlank() || email.isNotBlank() || firstName.isNotBlank() || lastName.isNotBlank()
-                    ) {
-                        Text(Strings.save)
-                    }
-                }
             }
         },
-        confirmButton = {},
-        dismissButton = {}
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val name = displayName.ifBlank { "$firstName $lastName".trim().ifBlank { email } }
+                    onSave(name, email, firstName, lastName, phone, mobilePhone, workPhone, company, department, jobTitle, notes)
+                },
+                enabled = displayName.isNotBlank() || email.isNotBlank() || firstName.isNotBlank() || lastName.isNotBlank()
+            ) {
+                Text(Strings.save)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(Strings.cancel)
+            }
+        }
     )
 }
 
@@ -2009,7 +2031,7 @@ private fun ExportDialog(
     onExportVCard: () -> Unit,
     onExportCSV: () -> Unit
 ) {
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(Strings.exportContacts) },
         text = {
@@ -2026,12 +2048,12 @@ private fun ExportDialog(
                 )
             }
         },
-        confirmButton = {},
-        dismissButton = {
+        confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(Strings.cancel)
+                Text(Strings.close)
             }
-        }
+        },
+        dismissButton = {}
     )
 }
 

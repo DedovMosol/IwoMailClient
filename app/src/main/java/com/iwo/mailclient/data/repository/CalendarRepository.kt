@@ -180,6 +180,38 @@ class CalendarRepository(private val context: Context) {
     }
     
     /**
+     * Отправка приглашений на событие календаря
+     */
+    suspend fun sendMeetingInvitation(
+        accountId: Long,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        attendees: String
+    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val account = accountRepo.getAccount(accountId)
+                ?: return@withContext EasResult.Error("Аккаунт не найден")
+            
+            val easClient = accountRepo.createEasClient(accountId)
+                ?: return@withContext EasResult.Error("Не удалось создать клиент")
+            
+            easClient.sendMeetingInvitation(
+                subject = subject,
+                startTime = startTime,
+                endTime = endTime,
+                location = location,
+                body = body,
+                attendees = attendees
+            )
+        } catch (e: Exception) {
+            EasResult.Error(e.message ?: "Ошибка отправки приглашений")
+        }
+    }
+    
+    /**
      * Обновление события календаря
      */
     suspend fun updateEvent(
@@ -321,8 +353,11 @@ class CalendarRepository(private val context: Context) {
                             calendarEventDao.delete(eventId)
                         }
                         
+                        // Фильтруем дубликаты по serverId (защита от повторной вставки)
+                        val uniqueEvents = serverEvents.distinctBy { it.serverId }
+                        
                         // Добавляем/обновляем события с сервера
-                        val eventEntities = serverEvents.map { event ->
+                        val eventEntities = uniqueEvents.map { event ->
                             CalendarEventEntity(
                                 id = "${accountId}_${event.serverId}",
                                 accountId = accountId,

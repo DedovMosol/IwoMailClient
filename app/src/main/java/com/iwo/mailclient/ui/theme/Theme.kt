@@ -158,8 +158,9 @@ fun ExchangeMailTheme(
 
 
 /**
- * AlertDialog с поддержкой масштабирования шрифта
- * Решает проблему того, что стандартный AlertDialog не наследует LocalDensity
+ * AlertDialog с поддержкой масштабирования шрифта и кнопками по разным сторонам
+ * - Кнопки разнесены: dismiss слева, confirm справа
+ * - Поддержка масштабирования шрифта
  */
 @Composable
 fun ScaledAlertDialog(
@@ -170,7 +171,7 @@ fun ScaledAlertDialog(
     icon: @Composable (() -> Unit)? = null,
     title: @Composable (() -> Unit)? = null,
     text: @Composable (() -> Unit)? = null,
-    shape: androidx.compose.ui.graphics.Shape = AlertDialogDefaults.shape,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(28.dp),
     containerColor: Color = AlertDialogDefaults.containerColor,
     iconContentColor: Color = AlertDialogDefaults.iconContentColor,
     titleContentColor: Color = AlertDialogDefaults.titleContentColor,
@@ -185,50 +186,81 @@ fun ScaledAlertDialog(
         fontScale = baseDensity.fontScale * fontScale
     )
     
-    AlertDialog(
+    androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismissRequest,
-        confirmButton = {
-            CompositionLocalProvider(LocalDensity provides scaledDensity) {
-                confirmButton()
-            }
-        },
-        modifier = modifier,
-        dismissButton = dismissButton?.let { btn ->
-            {
-                CompositionLocalProvider(LocalDensity provides scaledDensity) {
-                    btn()
-                }
-            }
-        },
-        icon = icon?.let { ic ->
-            {
-                CompositionLocalProvider(LocalDensity provides scaledDensity) {
-                    ic()
-                }
-            }
-        },
-        title = title?.let { t ->
-            {
-                CompositionLocalProvider(LocalDensity provides scaledDensity) {
-                    t()
-                }
-            }
-        },
-        text = text?.let { txt ->
-            {
-                CompositionLocalProvider(LocalDensity provides scaledDensity) {
-                    txt()
-                }
-            }
-        },
-        shape = shape,
-        containerColor = containerColor,
-        iconContentColor = iconContentColor,
-        titleContentColor = titleContentColor,
-        textContentColor = textContentColor,
-        tonalElevation = tonalElevation,
         properties = properties
-    )
+    ) {
+        CompositionLocalProvider(LocalDensity provides scaledDensity) {
+            Surface(
+                modifier = modifier,
+                shape = shape,
+                color = containerColor,
+                tonalElevation = tonalElevation
+            ) {
+                Column(
+                    modifier = androidx.compose.ui.Modifier.padding(24.dp)
+                ) {
+                    // Иконка
+                    icon?.let {
+                        Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CompositionLocalProvider(LocalContentColor provides iconContentColor) {
+                                it()
+                            }
+                        }
+                    }
+                    
+                    // Заголовок
+                    title?.let {
+                        Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 16.dp),
+                            contentAlignment = if (icon != null) Alignment.Center else Alignment.CenterStart
+                        ) {
+                            CompositionLocalProvider(LocalContentColor provides titleContentColor) {
+                                ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
+                                    it()
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Текст
+                    text?.let {
+                        Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 24.dp)
+                        ) {
+                            CompositionLocalProvider(LocalContentColor provides textContentColor) {
+                                ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
+                                    it()
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Кнопки по разным сторонам
+                    Row(
+                        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        if (dismissButton != null) {
+                            dismissButton()
+                        } else {
+                            Spacer(modifier = androidx.compose.ui.Modifier.width(1.dp))
+                        }
+                        confirmButton()
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**

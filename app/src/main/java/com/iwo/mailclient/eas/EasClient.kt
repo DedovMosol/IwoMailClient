@@ -7,10 +7,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.*
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -19,6 +16,7 @@ import android.util.Base64
 /**
  * Exchange ActiveSync клиент
  * Поддерживает EAS 12.0, 12.1, 14.0, 14.1 для Exchange 2007+
+ * Использует общий HttpClientProvider для предотвращения утечек памяти
  */
 class EasClient(
     serverUrl: String,
@@ -138,80 +136,12 @@ class EasClient(
     }
     
     init {
-        val builder = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
-            .callTimeout(120, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            // Разрешаем все TLS версии и cipher suites для совместимости
-            .connectionSpecs(listOf(
-                ConnectionSpec.COMPATIBLE_TLS,
-                ConnectionSpec.MODERN_TLS,
-                ConnectionSpec.CLEARTEXT
-            ))
-        
-        // Настраиваем SSL/TLS
-        try {
-            if (acceptAllCerts) {
-                // Принимаем все сертификаты (самоподписанные)
-                builder.hostnameVerifier { _, _ -> true }
-                val trustAllManager = createTrustAllManager()
-                val sslContext = try {
-                    SSLContext.getInstance("TLS", "Conscrypt")
-                } catch (_: Exception) {
-                    SSLContext.getInstance("TLS")
-                }
-                sslContext.init(null, arrayOf(trustAllManager), SecureRandom())
-                // Используем TlsSocketFactory для поддержки старых TLS версий
-                builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), trustAllManager)
-            } else if (certificatePath != null) {
-                // Используем указанный сертификат из файла
-                val certTrustManager = createCertificateTrustManager(certificatePath)
-                if (certTrustManager != null) {
-                    val sslContext = try {
-                        SSLContext.getInstance("TLS", "Conscrypt")
-                    } catch (_: Exception) {
-                        SSLContext.getInstance("TLS")
-                    }
-                    sslContext.init(null, arrayOf(certTrustManager), SecureRandom())
-                    // Используем TlsSocketFactory для поддержки старых TLS версий
-                    builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), certTrustManager)
-                    // Для самоподписанных сертификатов hostname может не совпадать
-                    builder.hostnameVerifier { _, _ -> true }
-                } else {
-                    // Сертификат не загрузился — используем системный TrustManager
-                    android.util.Log.e("EasClient", "Failed to load certificate from: $certificatePath")
-                    val systemTrustManager = createSystemTrustManager()
-                    val sslContext = try {
-                        SSLContext.getInstance("TLS", "Conscrypt")
-                    } catch (_: Exception) {
-                        SSLContext.getInstance("TLS")
-                    }
-                    sslContext.init(null, arrayOf(systemTrustManager), SecureRandom())
-                    builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), systemTrustManager)
-                }
-            } else {
-                // Используем системный TrustManager который учитывает:
-                // 1. Системные сертификаты
-                // 2. Пользовательские сертификаты (из network_security_config)
-                val sslContext = try {
-                    SSLContext.getInstance("TLS", "Conscrypt")
-                } catch (_: Exception) {
-                    SSLContext.getInstance("TLS")
-                }
-                
-                // Создаём TrustManager который доверяет и системным, и пользовательским сертификатам
-                val systemTrustManager = createSystemTrustManager()
-                sslContext.init(null, arrayOf(systemTrustManager), SecureRandom())
-                
-                builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), systemTrustManager)
-            }
-        } catch (_: Exception) {
-            // Если вся настройка SSL упала - OkHttp использует свои дефолты
-        }
-        
-        client = builder.build()
+        // Используем общий HttpClientProvider для предотвращения утечек памяти
+        // Каждый OkHttpClient создаёт connection pool и thread pool
+        client = com.iwo.mailclient.network.HttpClientProvider.getClient(
+            acceptAllCerts = acceptAllCerts,
+            certificatePath = certificatePath
+        )
     }
     
     companion object {
@@ -241,8 +171,12 @@ class EasClient(
         private val ITEM_OPS_PROPS_DATA_REGEX = "<Properties>.*?<Data>(.*?)</Data>.*?</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val FOLDER_REGEX = "<Folder>(.*?)</Folder>".toRegex(RegexOption.DOT_MATCHES_ALL)
         
-        // Кэш для extractValue regex паттернов
-        private val extractValueCache = mutableMapOf<String, Regex>()
+        // Кэш для extractValue regex паттернов (ограничен размером для предотвращения утечки памяти)
+        private val extractValueCache = object : LinkedHashMap<String, Regex>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Regex>?): Boolean {
+                return size > 50 // Максимум 50 паттернов в кэше
+            }
+        }
         
         /**
          * Нормализует URL сервера - добавляет схему и порт
@@ -250,9 +184,10 @@ class EasClient(
         fun normalizeUrl(url: String, port: Int = 443, useHttps: Boolean = true): String {
             var trimmed = url.trim()
             
-            // Если URL пустой - возвращаем дефолт
+            // Если URL пустой - это ошибка конфигурации, но не падаем
             if (trimmed.isEmpty()) {
-                return if (useHttps) "https://localhost:$port" else "http://localhost:$port"
+                android.util.Log.w("EasClient", "Empty server URL provided")
+                return if (useHttps) "https://exchange.local:$port" else "http://exchange.local:$port"
             }
             
             // Убираем существующую схему если есть
@@ -262,6 +197,13 @@ class EasClient(
             val hostOnly = trimmed
                 .substringBefore("/")  // убираем путь
                 .substringBefore(":")  // убираем порт если есть
+                .trim()
+            
+            // Защита от пустого хоста
+            if (hostOnly.isEmpty()) {
+                android.util.Log.w("EasClient", "Empty host after URL parsing: $url")
+                return if (useHttps) "https://exchange.local:$port" else "http://exchange.local:$port"
+            }
             
             val scheme = if (useHttps) "https" else "http"
             return "$scheme://$hostOnly:$port"
@@ -280,245 +222,6 @@ class EasClient(
         return "android${System.currentTimeMillis().toString(16)}"
     }
     
-    /**
-     * SSLSocketFactory с поддержкой TLS 1.0/1.1/1.2 для Exchange 2007
-     * Также устанавливает SNI (Server Name Indication) для серверов которые его требуют
-     */
-    private class TlsSocketFactory(private val delegate: SSLSocketFactory) : SSLSocketFactory() {
-        // Приоритет протоколов - от новых к старым, без SSLv3 (устарел и отключён)
-        private val preferredProtocols = arrayOf("TLSv1.3", "TLSv1.2", "TLSv1.1", "TLSv1")
-        
-        override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
-        override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
-        
-        override fun createSocket(s: java.net.Socket, host: String, port: Int, autoClose: Boolean): java.net.Socket {
-            return enableTls(delegate.createSocket(s, host, port, autoClose), host)
-        }
-        
-        override fun createSocket(host: String, port: Int): java.net.Socket {
-            return enableTls(delegate.createSocket(host, port), host)
-        }
-        
-        override fun createSocket(host: String, port: Int, localHost: java.net.InetAddress, localPort: Int): java.net.Socket {
-            return enableTls(delegate.createSocket(host, port, localHost, localPort), host)
-        }
-        
-        override fun createSocket(host: java.net.InetAddress, port: Int): java.net.Socket {
-            return enableTls(delegate.createSocket(host, port), host.hostName)
-        }
-        
-        override fun createSocket(address: java.net.InetAddress, port: Int, localAddress: java.net.InetAddress, localPort: Int): java.net.Socket {
-            return enableTls(delegate.createSocket(address, port, localAddress, localPort), address.hostName)
-        }
-        
-        private fun enableTls(socket: java.net.Socket, hostname: String?): java.net.Socket {
-            if (socket is SSLSocket) {
-                try {
-                    // Устанавливаем SNI (Server Name Indication) - критично для многих серверов
-                    if (!hostname.isNullOrEmpty()) {
-                        try {
-                            val sslParams = socket.sslParameters
-                            sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(hostname))
-                            socket.sslParameters = sslParams
-                        } catch (_: Exception) {
-                            // SNI не поддерживается
-                        }
-                    }
-                    
-                    // Получаем поддерживаемые протоколы
-                    val supported = socket.supportedProtocols ?: emptyArray()
-                    if (supported.isEmpty()) {
-                        // Если нет поддерживаемых - оставляем как есть
-                        return socket
-                    }
-                    
-                    // Выбираем протоколы которые поддерживаются устройством
-                    val toEnable = preferredProtocols.filter { it in supported }
-                    if (toEnable.isNotEmpty()) {
-                        socket.enabledProtocols = toEnable.toTypedArray()
-                    }
-                    
-                    // Включаем все поддерживаемые cipher suites
-                    val supportedCiphers = socket.supportedCipherSuites
-                    if (supportedCiphers != null && supportedCiphers.isNotEmpty()) {
-                        socket.enabledCipherSuites = supportedCiphers
-                    }
-                } catch (_: Exception) {
-                    // Ошибка конфигурации сокета
-                }
-            }
-            return socket
-        }
-    }
-    
-    private fun createTrustAllManager(): X509TrustManager {
-        return object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-        }
-    }
-    
-    /**
-     * Создаёт TrustManager который доверяет системным и пользовательским сертификатам
-     * Пользовательские сертификаты - это те, что установлены через Настройки Android
-     */
-    private fun createSystemTrustManager(): X509TrustManager {
-        // Получаем системный TrustManager
-        val systemTmf = javax.net.ssl.TrustManagerFactory.getInstance(
-            javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-        )
-        systemTmf.init(null as java.security.KeyStore?)
-        val systemTm = systemTmf.trustManagers
-            .filterIsInstance<X509TrustManager>()
-            .firstOrNull()
-        
-        // Пробуем получить пользовательские сертификаты из Android KeyStore
-        val userTm: X509TrustManager? = try {
-            val userKeyStore = java.security.KeyStore.getInstance("AndroidCAStore")
-            userKeyStore.load(null, null)
-            val userTmf = javax.net.ssl.TrustManagerFactory.getInstance(
-                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-            )
-            userTmf.init(userKeyStore)
-            userTmf.trustManagers.filterIsInstance<X509TrustManager>().firstOrNull()
-        } catch (_: Exception) {
-            null
-        }
-        
-        // Возвращаем комбинированный TrustManager
-        return object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
-                systemTm?.checkClientTrusted(chain, authType)
-            }
-            
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                // Сначала пробуем системные сертификаты
-                try {
-                    systemTm?.checkServerTrusted(chain, authType)
-                    return
-                } catch (_: Exception) {}
-                
-                // Потом пробуем пользовательские (AndroidCAStore)
-                try {
-                    userTm?.checkServerTrusted(chain, authType)
-                    return
-                } catch (_: Exception) {}
-                
-                // Если оба не сработали - бросаем исключение
-                throw java.security.cert.CertificateException("Trust anchor for certification path not found.")
-            }
-            
-            override fun getAcceptedIssuers(): Array<X509Certificate> {
-                val issuers = mutableListOf<X509Certificate>()
-                systemTm?.acceptedIssuers?.let { issuers.addAll(it) }
-                userTm?.acceptedIssuers?.let { issuers.addAll(it) }
-                return issuers.toTypedArray()
-            }
-        }
-    }
-    
-    /**
-     * Создаёт TrustManager который доверяет сертификату из указанного файла
-     * Поддерживает форматы: PEM (.crt, .pem), DER (.cer, .der)
-     */
-    private fun createCertificateTrustManager(certPath: String): X509TrustManager? {
-        return try {
-            val certFile = java.io.File(certPath)
-            if (!certFile.exists()) {
-                return null
-            }
-            
-            // Загружаем сертификат
-            val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
-            val certificate = certFile.inputStream().use { inputStream ->
-                certFactory.generateCertificate(inputStream) as X509Certificate
-            }
-            
-            // Создаём KeyStore с этим сертификатом
-            val keyStore = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType())
-            keyStore.load(null, null)
-            keyStore.setCertificateEntry("server_cert", certificate)
-            
-            // Создаём TrustManager на основе этого KeyStore
-            val tmf = javax.net.ssl.TrustManagerFactory.getInstance(
-                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-            )
-            tmf.init(keyStore)
-            
-            // Получаем системный TrustManager для fallback
-            val systemTmf = javax.net.ssl.TrustManagerFactory.getInstance(
-                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-            )
-            systemTmf.init(null as java.security.KeyStore?)
-            val systemTm = systemTmf.trustManagers.filterIsInstance<X509TrustManager>().firstOrNull()
-            val certTm = tmf.trustManagers.filterIsInstance<X509TrustManager>().firstOrNull()
-            
-            // Возвращаем комбинированный TrustManager
-            object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
-                    systemTm?.checkClientTrusted(chain, authType)
-                }
-                
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                    // Для самоподписанных сертификатов — сравниваем напрямую
-                    if (chain.isNotEmpty()) {
-                        val serverCert = chain[0]
-                        
-                        // Сравниваем публичные ключи
-                        if (serverCert.publicKey == certificate.publicKey) {
-                            try {
-                                serverCert.checkValidity()
-                            } catch (_: Exception) {
-                                // Сертификат истёк, но принимаем
-                            }
-                            return
-                        }
-                        
-                        // Альтернативная проверка — сравниваем encoded форму
-                        try {
-                            if (serverCert.encoded.contentEquals(certificate.encoded)) {
-                                return
-                            }
-                        } catch (_: Exception) {}
-                        
-                        // Проверяем всю цепочку
-                        for (cert in chain) {
-                            if (cert.publicKey == certificate.publicKey || 
-                                cert.encoded.contentEquals(certificate.encoded)) {
-                                return
-                            }
-                        }
-                    }
-                    
-                    // Пробуем через TrustManager с нашим KeyStore
-                    try {
-                        certTm?.checkServerTrusted(chain, authType)
-                        return
-                    } catch (_: Exception) {}
-                    
-                    // Потом пробуем системные
-                    try {
-                        systemTm?.checkServerTrusted(chain, authType)
-                        return
-                    } catch (_: Exception) {}
-                    
-                    throw java.security.cert.CertificateException("Certificate not trusted")
-                }
-                
-                override fun getAcceptedIssuers(): Array<X509Certificate> {
-                    val issuers = mutableListOf<X509Certificate>()
-                    issuers.add(certificate)
-                    certTm?.acceptedIssuers?.let { issuers.addAll(it) }
-                    systemTm?.acceptedIssuers?.let { issuers.addAll(it) }
-                    return issuers.toTypedArray()
-                }
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-    
     private fun getAuthHeader(): String {
         val credentials = if (domain.isNotEmpty()) {
             "$domain\\$username:$password"
@@ -530,6 +233,18 @@ class EasClient(
     
     private fun buildUrl(command: String): String {
         val baseUrl = normalizedServerUrl.trimEnd('/')
+        
+        // Проверка что URL содержит схему
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+            android.util.Log.e("EasClient", "Invalid baseUrl (no scheme): $baseUrl, normalizing...")
+            val fixedUrl = if (useHttps) "https://$baseUrl" else "http://$baseUrl"
+            return buildUrlInternal(fixedUrl, command)
+        }
+        
+        return buildUrlInternal(baseUrl, command)
+    }
+    
+    private fun buildUrlInternal(baseUrl: String, command: String): String {
         // User в URL должен быть с доменом (URL-encoded)
         val userParam = if (domain.isNotEmpty()) {
             java.net.URLEncoder.encode("$domain\\$username", "UTF-8")
@@ -687,7 +402,13 @@ class EasClient(
         }
         
         sendDeviceSettings()
-        return EasResult.Success(finalKey ?: tempPolicyKey!!)
+        // Возвращаем finalKey, tempPolicyKey или ошибку если оба null
+        val resultKey = finalKey ?: tempPolicyKey
+        return if (resultKey != null) {
+            EasResult.Success(resultKey)
+        } else {
+            EasResult.Error("Provision failed: no policy key received")
+        }
     }
     
     /**
@@ -1066,9 +787,21 @@ class EasClient(
         importance: Int = 1,
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false
-    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
+    ): EasResult<Boolean> {
+        // Проверка получателя
+        if (to.isBlank() || !to.contains("@")) {
+            return EasResult.Error("Неверный адрес получателя: $to")
+        }
+        
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        return withContext(Dispatchers.IO) {
         try {
             val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance)
+            // Для EAS 14+ SaveInSent в URL, для EAS 12.x тоже поддерживается
+            val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
             val url = buildUrl("SendMail") + "&SaveInSent=T"
             val contentType = "message/rfc822"
             
@@ -1088,6 +821,20 @@ class EasClient(
             val response = executeRequest(request)
             
             if (response.isSuccessful || response.code == 200) {
+                // Для SendMail успешный ответ — пустое тело
+                // Если есть тело, это может быть WBXML с ошибкой
+                val responseBody = response.body?.bytes()
+                if (responseBody != null && responseBody.isNotEmpty()) {
+                    // Проверяем на WBXML ошибку (первый байт 0x03 = WBXML)
+                    if (responseBody[0] == 0x03.toByte()) {
+                        // Это WBXML ответ, возможно ошибка
+                        val xml = wbxmlParser.parse(responseBody)
+                        val status = extractValue(xml, "Status")
+                        if (status != null && status != "1") {
+                            return@withContext EasResult.Error("Ошибка отправки: Status=$status")
+                        }
+                    }
+                }
                 EasResult.Success(true)
             } else {
                 val errorBody = response.body?.string() ?: ""
@@ -1118,6 +865,7 @@ class EasClient(
             }
         } catch (e: Exception) {
             EasResult.Error("Ошибка отправки: ${e.message}")
+        }
         }
     }
     
@@ -5266,6 +5014,9 @@ $foldersXml
     
     /**
      * Создание задачи на сервере Exchange
+     * EAS 14.x — через Sync Add
+     * EAS 12.x — через EWS CreateItem
+     * @param assignTo — email пользователя для назначения задачи (опционально)
      */
     suspend fun createTask(
         subject: String,
@@ -5274,11 +5025,46 @@ $foldersXml
         dueDate: Long = 0,
         importance: Int = 1, // 0=Low, 1=Normal, 2=High
         reminderSet: Boolean = false,
-        reminderTime: Long = 0
+        reminderTime: Long = 0,
+        assignTo: String? = null
     ): EasResult<String> {
         if (!versionDetected) {
             detectEasVersion()
         }
+        
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+        
+        // Если назначаем задачу другому пользователю — используем EWS
+        if (!assignTo.isNullOrBlank()) {
+            return createTaskEws(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo)
+        }
+        
+        // Для Exchange 2010+ (EAS 14+) используем EAS
+        // Для Exchange 2007 (EAS 12.x) используем EWS
+        return if (majorVersion >= 14) {
+            createTaskEas(subject, body, startDate, dueDate, importance, reminderSet, reminderTime)
+        } else {
+            createTaskEws(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo)
+        }
+    }
+    
+    /**
+     * Создание задачи через EAS (Exchange 2010+)
+     */
+    private suspend fun createTaskEas(
+        subject: String,
+        body: String,
+        startDate: Long,
+        dueDate: Long,
+        importance: Int,
+        reminderSet: Boolean,
+        reminderTime: Long
+    ): EasResult<String> {
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
         
         // Получаем папку задач с кэшированием
         val tasksFolderId = getTasksFolderId()
@@ -5320,9 +5106,16 @@ $foldersXml
         val escapedBody = escapeXml(body)
         
         // Формируем XML для создания задачи
+        // Для EAS 12.x (Exchange 2007) используем упрощённый формат без AirSyncBase
         val createXml = buildString {
             append("""<?xml version="1.0" encoding="UTF-8"?>""")
-            append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
+            if (majorVersion >= 14) {
+                // Exchange 2010+ с AirSyncBase
+                append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
+            } else {
+                // Exchange 2007 без AirSyncBase
+                append("""<Sync xmlns="AirSync" xmlns:tasks="Tasks">""")
+            }
             append("<Collections><Collection>")
             append("<SyncKey>$syncKey</SyncKey>")
             append("<CollectionId>$tasksFolderId</CollectionId>")
@@ -5330,10 +5123,16 @@ $foldersXml
             append("<ClientId>$clientId</ClientId>")
             append("<ApplicationData>")
             append("<tasks:Subject>$escapedSubject</tasks:Subject>")
-            append("<airsyncbase:Body>")
-            append("<airsyncbase:Type>1</airsyncbase:Type>")
-            append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
-            append("</airsyncbase:Body>")
+            if (majorVersion >= 14) {
+                // Exchange 2010+ - используем AirSyncBase:Body
+                append("<airsyncbase:Body>")
+                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
+                append("</airsyncbase:Body>")
+            } else if (escapedBody.isNotBlank()) {
+                // Exchange 2007 - используем tasks:Body напрямую
+                append("<tasks:Body>$escapedBody</tasks:Body>")
+            }
             append("<tasks:Importance>$importance</tasks:Importance>")
             append("<tasks:Complete>0</tasks:Complete>")
             if (startDate > 0) {
@@ -5368,6 +5167,393 @@ $foldersXml
     }
     
     /**
+     * Создание задачи через EWS (Exchange 2007+ и назначение задач)
+     * @param assignTo — email пользователя для назначения задачи (опционально)
+     */
+    private suspend fun createTaskEws(
+        subject: String,
+        body: String,
+        startDate: Long,
+        dueDate: Long,
+        importance: Int,
+        reminderSet: Boolean,
+        reminderTime: Long,
+        assignTo: String?
+    ): EasResult<String> {
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                val escapedSubject = escapeXml(subject)
+                val escapedBody = escapeXml(body)
+                
+                val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                
+                // Маппинг важности: 0=Low, 1=Normal, 2=High
+                val ewsImportance = when (importance) {
+                    0 -> "Low"
+                    2 -> "High"
+                    else -> "Normal"
+                }
+                
+                // Формируем SOAP запрос для создания задачи
+                // Используем t:Message с ItemClass как для заметок (работает на Exchange 2007)
+                val soapRequest = buildString {
+                    append("""<?xml version="1.0" encoding="utf-8"?>""")
+                    append("""<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" """)
+                    append("""xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" """)
+                    append("""xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">""")
+                    append("<soap:Header>")
+                    append("""<t:RequestServerVersion Version="Exchange2007_SP1"/>""")
+                    append("</soap:Header>")
+                    append("<soap:Body>")
+                    append("""<m:CreateItem MessageDisposition="SaveOnly">""")
+                    append("<m:SavedItemFolderId>")
+                    append("""<t:DistinguishedFolderId Id="tasks"/>""")
+                    append("</m:SavedItemFolderId>")
+                    append("<m:Items>")
+                    append("<t:Message>")
+                    append("<t:ItemClass>IPM.Task</t:ItemClass>")
+                    append("<t:Subject>$escapedSubject</t:Subject>")
+                    append("""<t:Body BodyType="Text">$escapedBody</t:Body>""")
+                    append("<t:Importance>$ewsImportance</t:Importance>")
+                    append("</t:Message>")
+                    append("</m:Items>")
+                    append("</m:CreateItem>")
+                    append("</soap:Body>")
+                    append("</soap:Envelope>")
+                }
+                
+                // Пробуем NTLM аутентификацию (как в createNoteEws)
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+                if (ntlmAuth == null) {
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                // Проверяем на ошибки
+                if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
+                    return@withContext EasResult.Error("Ошибка схемы EWS")
+                }
+                
+                // Извлекаем ItemId
+                val itemId = EWS_ITEM_ID_REGEX.find(responseXml)?.groupValues?.get(1)
+                
+                val taskId = if (itemId != null) {
+                    itemId
+                } else if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+                    java.util.UUID.randomUUID().toString()
+                } else {
+                    return@withContext EasResult.Error("Не удалось создать задачу через EWS")
+                }
+                
+                EasResult.Success(taskId)
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка создания задачи через EWS")
+            }
+        }
+        
+        // Если нужно назначить задачу другому пользователю — отправляем email-уведомление
+        // Отправляем независимо от результата создания задачи на сервере
+        if (!assignTo.isNullOrBlank()) {
+            val emailResult = sendTaskRequest(assignTo, subject, body, startDate, dueDate, importance)
+            if (emailResult is EasResult.Error) {
+                // Если задача создана, но письмо не отправлено — сообщаем об этом
+                if (result is EasResult.Success) {
+                    return EasResult.Error("Задача создана, но уведомление не отправлено: ${emailResult.message}")
+                }
+                // Если и задача не создана, и письмо не отправлено — возвращаем ошибку письма
+                return EasResult.Error("Не удалось отправить уведомление: ${emailResult.message}")
+            }
+        }
+        
+        return result
+    }
+    
+    /**
+     * Отправка Task Request по email (назначение задачи другому пользователю)
+     * Отправляет простое email-уведомление о назначенной задаче
+     */
+    private suspend fun sendTaskRequest(
+        assignTo: String,
+        subject: String,
+        body: String,
+        startDate: Long,
+        dueDate: Long,
+        importance: Int
+    ): EasResult<Boolean> {
+        // Отправляем письмо с уведомлением о задаче
+        val taskSubject = "Задача: $subject"
+        val taskBody = buildString {
+            append("Вам назначена задача: $subject\r\n\r\n")
+            if (body.isNotBlank()) {
+                append("Описание: $body\r\n\r\n")
+            }
+            if (dueDate > 0) {
+                val dateFormat = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
+                append("Срок выполнения: ${dateFormat.format(java.util.Date(dueDate))}\r\n")
+            }
+        }
+        
+        // Используем существующий метод отправки письма
+        return sendMail(
+            to = assignTo,
+            subject = taskSubject,
+            body = taskBody,
+            cc = "",
+            bcc = "",
+            importance = importance
+        )
+    }
+    
+    /**
+     * Экранирование текста для iCalendar
+     */
+    private fun escapeIcal(text: String): String {
+        return text
+            .replace("\\", "\\\\")
+            .replace(",", "\\,")
+            .replace(";", "\\;")
+            .replace("\n", "\\n")
+            .replace("\r", "")
+    }
+    
+    /**
+     * Отправка приглашений на событие календаря
+     */
+    suspend fun sendMeetingInvitation(
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        attendees: String
+    ): EasResult<Boolean> {
+        val attendeeList = attendees.split(",", ";")
+            .map { it.trim() }
+            .filter { it.contains("@") }
+        
+        if (attendeeList.isEmpty()) {
+            return EasResult.Success(true)
+        }
+        
+        val dateFormat = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", java.util.Locale.US)
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        
+        val now = System.currentTimeMillis()
+        val uid = java.util.UUID.randomUUID().toString()
+        
+        // Получаем email отправителя
+        val fromEmail = if (deviceIdSuffix.contains("@")) {
+            deviceIdSuffix
+        } else if (domain.isNotEmpty() && !username.contains("@")) {
+            "$username@$domain"
+        } else {
+            username
+        }
+        
+        // Формируем iCalendar VEVENT
+        val vevent = buildString {
+            append("BEGIN:VCALENDAR\r\n")
+            append("VERSION:2.0\r\n")
+            append("PRODID:-//iwo Mail Client//Calendar//EN\r\n")
+            append("METHOD:REQUEST\r\n")
+            append("BEGIN:VEVENT\r\n")
+            append("UID:$uid\r\n")
+            append("DTSTAMP:${dateFormat.format(java.util.Date(now))}\r\n")
+            append("DTSTART:${dateFormat.format(java.util.Date(startTime))}\r\n")
+            append("DTEND:${dateFormat.format(java.util.Date(endTime))}\r\n")
+            append("SUMMARY:${escapeIcal(subject)}\r\n")
+            if (location.isNotBlank()) {
+                append("LOCATION:${escapeIcal(location)}\r\n")
+            }
+            if (body.isNotBlank()) {
+                append("DESCRIPTION:${escapeIcal(body)}\r\n")
+            }
+            append("ORGANIZER:mailto:$fromEmail\r\n")
+            for (attendee in attendeeList) {
+                append("ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:$attendee\r\n")
+            }
+            append("STATUS:CONFIRMED\r\n")
+            append("SEQUENCE:0\r\n")
+            append("END:VEVENT\r\n")
+            append("END:VCALENDAR\r\n")
+        }
+        
+        // Формируем тело письма
+        val dateFormatDisplay = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
+        val emailBodyText = buildString {
+            append("Вы приглашены на встречу: $subject\r\n\r\n")
+            append("Время: ${dateFormatDisplay.format(java.util.Date(startTime))} - ${dateFormatDisplay.format(java.util.Date(endTime))}\r\n")
+            if (location.isNotBlank()) {
+                append("Место: $location\r\n")
+            }
+            if (body.isNotBlank()) {
+                append("\r\nОписание:\r\n$body\r\n")
+            }
+        }
+        
+        // Отправляем каждому участнику с iCalendar вложением
+        var lastError: String? = null
+        for (attendee in attendeeList) {
+            val result = sendMailWithCalendar(
+                to = attendee,
+                subject = "Приглашение: $subject",
+                body = emailBodyText,
+                icalendar = vevent
+            )
+            if (result is EasResult.Error) {
+                lastError = result.message
+            }
+        }
+        
+        return if (lastError != null) {
+            EasResult.Error(lastError)
+        } else {
+            EasResult.Success(true)
+        }
+    }
+    
+    /**
+     * Отправка письма с iCalendar вложением (для приглашений на встречи)
+     */
+    private suspend fun sendMailWithCalendar(
+        to: String,
+        subject: String,
+        body: String,
+        icalendar: String
+    ): EasResult<Boolean> {
+        // Проверка получателя
+        if (to.isBlank() || !to.contains("@")) {
+            return EasResult.Error("Неверный адрес получателя: $to")
+        }
+        
+        if (!versionDetected) {
+            detectEasVersion()
+        }
+        
+        return withContext(Dispatchers.IO) {
+        try {
+            val fromEmail = if (deviceIdSuffix.contains("@")) {
+                deviceIdSuffix
+            } else if (domain.isNotEmpty() && !username.contains("@")) {
+                "$username@$domain"
+            } else {
+                username
+            }
+            
+            val messageId = "<${System.currentTimeMillis()}.${System.nanoTime()}@$deviceId>"
+            val boundary = "----=_Part_${System.currentTimeMillis()}"
+            
+            val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
+            val date = dateFormat.format(java.util.Date())
+            
+            val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
+            
+            // Формируем MIME multipart сообщение с text/calendar
+            val mimeMessage = buildString {
+                append("Date: $date\r\n")
+                append("From: $fromEmail\r\n")
+                append("To: $to\r\n")
+                append("Message-ID: $messageId\r\n")
+                append("Subject: $encodedSubject\r\n")
+                append("MIME-Version: 1.0\r\n")
+                append("Content-Type: multipart/alternative; boundary=\"$boundary\"\r\n")
+                append("\r\n")
+                
+                // Текстовая часть
+                append("--$boundary\r\n")
+                append("Content-Type: text/plain; charset=UTF-8\r\n")
+                append("Content-Transfer-Encoding: 8bit\r\n")
+                append("\r\n")
+                append(body)
+                append("\r\n")
+                
+                // iCalendar часть (METHOD:REQUEST для приглашения)
+                append("--$boundary\r\n")
+                append("Content-Type: text/calendar; charset=UTF-8; method=REQUEST\r\n")
+                append("Content-Transfer-Encoding: 8bit\r\n")
+                append("\r\n")
+                append(icalendar)
+                append("\r\n")
+                
+                append("--$boundary--\r\n")
+            }
+            
+            val mimeBytes = mimeMessage.toByteArray(Charsets.UTF_8)
+            val url = buildUrl("SendMail") + "&SaveInSent=T"
+            val contentType = "message/rfc822"
+            
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .post(mimeBytes.toRequestBody(contentType.toMediaType()))
+                .header("Authorization", getAuthHeader())
+                .header("MS-ASProtocolVersion", easVersion)
+                .header("Content-Type", contentType)
+                .header("User-Agent", "Android/12-EAS-2.0")
+            
+            policyKey?.let { key ->
+                requestBuilder.header("X-MS-PolicyKey", key)
+            }
+            
+            val request = requestBuilder.build()
+            val response = executeRequest(request)
+            
+            if (response.isSuccessful || response.code == 200) {
+                // Для SendMail успешный ответ — пустое тело
+                val responseBody = response.body?.bytes()
+                if (responseBody != null && responseBody.isNotEmpty()) {
+                    if (responseBody[0] == 0x03.toByte()) {
+                        val xml = wbxmlParser.parse(responseBody)
+                        val status = extractValue(xml, "Status")
+                        if (status != null && status != "1") {
+                            return@withContext EasResult.Error("Ошибка отправки: Status=$status")
+                        }
+                    }
+                }
+                EasResult.Success(true)
+            } else if (response.code == 449) {
+                // Provision required
+                when (val provResult = provision()) {
+                    is EasResult.Success -> {
+                        val retryRequest = Request.Builder()
+                            .url(url)
+                            .post(mimeBytes.toRequestBody(contentType.toMediaType()))
+                            .header("Authorization", getAuthHeader())
+                            .header("MS-ASProtocolVersion", easVersion)
+                            .header("Content-Type", contentType)
+                            .header("User-Agent", "Android/12-EAS-2.0")
+                            .apply { policyKey?.let { header("X-MS-PolicyKey", it) } }
+                            .build()
+                        
+                        val retryResponse = executeRequest(retryRequest)
+                        if (retryResponse.isSuccessful) {
+                            EasResult.Success(true)
+                        } else {
+                            EasResult.Error("Ошибка отправки: HTTP ${retryResponse.code}")
+                        }
+                    }
+                    is EasResult.Error -> EasResult.Error(provResult.message)
+                }
+            } else {
+                EasResult.Error("Ошибка отправки: HTTP ${response.code}")
+            }
+        } catch (e: Exception) {
+            EasResult.Error("Ошибка отправки: ${e.message}")
+        }
+        }
+    }
+    
+    /**
      * Обновление задачи на сервере Exchange
      */
     suspend fun updateTask(
@@ -5384,6 +5570,8 @@ $foldersXml
         if (!versionDetected) {
             detectEasVersion()
         }
+        
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
         
         // Получаем папку задач с кэшированием
         val tasksFolderId = getTasksFolderId()
@@ -5423,9 +5611,14 @@ $foldersXml
         val escapedBody = escapeXml(body)
         
         // Формируем XML для обновления
+        // Для EAS 12.x (Exchange 2007) используем упрощённый формат без AirSyncBase
         val updateXml = buildString {
             append("""<?xml version="1.0" encoding="UTF-8"?>""")
-            append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
+            if (majorVersion >= 14) {
+                append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
+            } else {
+                append("""<Sync xmlns="AirSync" xmlns:tasks="Tasks">""")
+            }
             append("<Collections><Collection>")
             append("<SyncKey>$syncKey</SyncKey>")
             append("<CollectionId>$tasksFolderId</CollectionId>")
@@ -5433,10 +5626,14 @@ $foldersXml
             append("<ServerId>$serverId</ServerId>")
             append("<ApplicationData>")
             append("<tasks:Subject>$escapedSubject</tasks:Subject>")
-            append("<airsyncbase:Body>")
-            append("<airsyncbase:Type>1</airsyncbase:Type>")
-            append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
-            append("</airsyncbase:Body>")
+            if (majorVersion >= 14) {
+                append("<airsyncbase:Body>")
+                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
+                append("</airsyncbase:Body>")
+            } else if (escapedBody.isNotBlank()) {
+                append("<tasks:Body>$escapedBody</tasks:Body>")
+            }
             append("<tasks:Importance>$importance</tasks:Importance>")
             append("<tasks:Complete>${if (complete) "1" else "0"}</tasks:Complete>")
             if (complete) {

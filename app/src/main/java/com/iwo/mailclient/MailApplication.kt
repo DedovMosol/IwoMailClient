@@ -40,53 +40,60 @@ class MailApplication : Application() {
     private fun createNotificationChannels() {
         val notificationManager = getSystemService(NotificationManager::class.java)
         
-        // Удаляем старые каналы чтобы применить новые настройки
-        // ВАЖНО: Android кэширует настройки каналов, поэтому нужно удалить и пересоздать
-        try {
-            notificationManager.deleteNotificationChannel(CHANNEL_SYNC)
-            notificationManager.deleteNotificationChannel(CHANNEL_NEW_MAIL)
-            notificationManager.deleteNotificationChannel(CHANNEL_CALENDAR)
-        } catch (_: Exception) { }
+        // Создаём каналы только если их нет (не сбрасываем пользовательские настройки)
+        // При первом запуске используем русский по умолчанию
+        // Названия каналов не критичны — пользователь видит их только в настройках Android
+        val existingChannels = notificationManager.notificationChannels.map { it.id }.toSet()
+        
+        // Для новых каналов используем русский (дефолт), т.к. runBlocking в onCreate нежелателен
+        val isRussian = true
         
         // Канал для новых писем - ВЫСОКИЙ приоритет для показа на заблокированном экране
-        val newMailChannel = NotificationChannel(
-            CHANNEL_NEW_MAIL,
-            "Новые письма",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Уведомления о новых письмах"
-            enableLights(true)
-            enableVibration(true)
-            setShowBadge(true)
-            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
-            setBypassDnd(false)
+        if (CHANNEL_NEW_MAIL !in existingChannels) {
+            val newMailChannel = NotificationChannel(
+                CHANNEL_NEW_MAIL,
+                if (isRussian) "Новые письма" else "New emails",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = if (isRussian) "Уведомления о новых письмах" else "New email notifications"
+                enableLights(true)
+                enableVibration(true)
+                setShowBadge(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                setBypassDnd(false)
+            }
+            notificationManager.createNotificationChannel(newMailChannel)
         }
         
         // Канал для синхронизации - минимальный приоритет (только иконка в статус-баре)
-        val syncChannel = NotificationChannel(
-            CHANNEL_SYNC,
-            "Синхронизация",
-            NotificationManager.IMPORTANCE_MIN
-        ).apply {
-            description = "Статус синхронизации"
-            setShowBadge(false)
-            lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
+        if (CHANNEL_SYNC !in existingChannels) {
+            val syncChannel = NotificationChannel(
+                CHANNEL_SYNC,
+                if (isRussian) "Синхронизация" else "Sync",
+                NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                description = if (isRussian) "Статус синхронизации" else "Sync status"
+                setShowBadge(false)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
+            }
+            notificationManager.createNotificationChannel(syncChannel)
         }
         
         // Канал для напоминаний календаря - ВЫСОКИЙ приоритет
-        val calendarChannel = NotificationChannel(
-            CHANNEL_CALENDAR,
-            "Напоминания календаря",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Напоминания о событиях календаря"
-            enableLights(true)
-            enableVibration(true)
-            setShowBadge(true)
-            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+        if (CHANNEL_CALENDAR !in existingChannels) {
+            val calendarChannel = NotificationChannel(
+                CHANNEL_CALENDAR,
+                if (isRussian) "Напоминания календаря" else "Calendar reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = if (isRussian) "Напоминания о событиях календаря" else "Calendar event reminders"
+                enableLights(true)
+                enableVibration(true)
+                setShowBadge(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            }
+            notificationManager.createNotificationChannel(calendarChannel)
         }
-        
-        notificationManager.createNotificationChannels(listOf(newMailChannel, syncChannel, calendarChannel))
     }
     
     private fun scheduleSync() {
@@ -124,10 +131,13 @@ class MailApplication : Application() {
                 
                 if (hasExchangePushAccounts) {
                     PushService.start(this@MailApplication)
-                    val minInterval = SyncWorker.getMinSyncInterval(this@MailApplication)
-                    val intervalMinutes = if (minInterval > 0) minInterval else 5
-                    PushService.scheduleSyncAlarm(this@MailApplication, intervalMinutes)
                 }
+                
+                // Планируем AlarmManager как fallback для ВСЕХ аккаунтов (и PUSH и SCHEDULED)
+                // Это гарантирует синхронизацию даже если WorkManager не сработает
+                val minInterval = SyncWorker.getMinSyncInterval(this@MailApplication)
+                val intervalMinutes = if (minInterval > 0) minInterval else 15
+                PushService.scheduleSyncAlarm(this@MailApplication, intervalMinutes)
             } catch (_: Exception) { }
         }
     }

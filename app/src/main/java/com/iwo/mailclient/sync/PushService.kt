@@ -50,15 +50,14 @@ class PushService : Service() {
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var accountRepo: AccountRepository
     
-    // Кэшированные EasClient для каждого аккаунта (избегаем создания нового клиента на каждый Ping)
-    private val easClientCache = mutableMapOf<Long, com.iwo.mailclient.eas.EasClient>()
+    //исправляем race condition при одновременном доступе из разных корутин
+    private val easClientCache = java.util.Collections.synchronizedMap(mutableMapOf<Long, com.iwo.mailclient.eas.EasClient>())
+    
+    private val accountPingJobs = java.util.Collections.synchronizedMap(mutableMapOf<Long, Job>())
     
     // Сохранённые heartbeat для каждого аккаунта (восстанавливаются между перезапусками)
-    private val accountHeartbeats = mutableMapOf<Long, Int>()
-    
-    // Состояние для каждого аккаунта
-    private val accountPingJobs = mutableMapOf<Long, Job>()
-    
+    private val accountHeartbeats = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
+        
     // NetworkCallback для отслеживания состояния сети
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var isNetworkAvailable = true
@@ -66,7 +65,7 @@ class PushService : Service() {
     companion object {
         // Адаптивный heartbeat: начинаем с большого значения, уменьшаем при ошибках
         private const val MIN_HEARTBEAT = 120      // Минимум 2 минуты
-        private const val DEFAULT_HEARTBEAT = 300  // Начинаем с 5 минут
+        private const val DEFAULT_HEARTBEAT = 480  // Начинаем с 8 минут (оптимизация батареи)
         private const val MAX_HEARTBEAT = 900      // Максимум 15 минут
         private const val HEARTBEAT_INCREASE_STEP = 60  // Увеличиваем на 1 минуту
         private const val SUCCESS_COUNT_TO_INCREASE = 3 // После 3 успехов увеличиваем
@@ -232,7 +231,9 @@ class PushService : Service() {
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         
-        connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
+        networkCallback?.let { callback ->
+            connectivityManager.registerNetworkCallback(networkRequest, callback)
+        }
         
         // Проверяем начальное состояние сети
         isNetworkAvailable = connectivityManager.activeNetwork != null
@@ -615,6 +616,7 @@ class PushService : Service() {
         
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, accountId)
             if (count == 1 && latestEmail != null) {
                 putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, latestEmail.id)
             } else {

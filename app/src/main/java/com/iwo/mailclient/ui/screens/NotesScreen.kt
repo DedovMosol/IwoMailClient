@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -16,12 +19,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iwo.mailclient.data.database.NoteEntity
 import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.NoteRepository
+import com.iwo.mailclient.data.repository.RepositoryProvider
 import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.theme.AppIcons
@@ -31,6 +37,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.delay
+
+// Паттерн для URL (компилируется один раз)
+private val urlPattern = Regex("https?://[\\w\\-.]+\\.[a-z]{2,}[\\w\\-._~:/?#\\[\\]@!%&'()*+,;=]*", RegexOption.IGNORE_CASE)
+// Паттерн для email
+private val emailPattern = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+// Паттерн для телефонов (российские и международные)
+private val phonePattern = Regex("(?:\\+7|8)[\\s-]?\\(?\\d{3}\\)?[\\s-]?\\d{3}[\\s-]?\\d{2}[\\s-]?\\d{2}|\\+?\\d{1,3}[\\s-]?\\(?\\d{2,4}\\)?[\\s-]?\\d{2,4}[\\s-]?\\d{2,4}")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,15 +53,22 @@ fun NotesScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val noteRepo = remember { NoteRepository(context) }
-    val accountRepo = remember { AccountRepository(context) }
+    val noteRepo = remember { RepositoryProvider.getNoteRepository(context) }
+    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
     
     val notes by remember(accountId) { noteRepo.getNotes(accountId) }.collectAsState(initial = emptyList())
     
-    var searchQuery by rememberSaveable { mutableStateOf("") }
+ var searchQuery by rememberSaveable { mutableStateOf("") }
+    var debouncedSearchQuery by remember { mutableStateOf("") }
+    
+    // Debounce поиска для оптимизации
+    LaunchedEffect(searchQuery) {
+        delay(300)
+        debouncedSearchQuery = searchQuery
+    }
     var isSyncing by remember { mutableStateOf(false) }
     var selectedNote by remember { mutableStateOf<NoteEntity?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -56,19 +77,27 @@ fun NotesScreen(
     
     // Состояние списка для автоскролла
     val listState = rememberLazyListState()
+    
+    // Состояние сортировки (true = новые сверху, false = старые сверху)
+    var sortDescending by rememberSaveable { mutableStateOf(true) }
 
     // Фильтрация по поиску
-    val filteredNotes = remember(notes, searchQuery) {
-        if (searchQuery.isBlank()) {
+    val filteredNotes = remember(notes, debouncedSearchQuery, sortDescending) {
+        val filtered = if (debouncedSearchQuery.isBlank()) {
             notes
         } else {
             notes.filter { note ->
-                note.subject.contains(searchQuery, ignoreCase = true) ||
-                note.body.contains(searchQuery, ignoreCase = true)
+                note.subject.contains(debouncedSearchQuery, ignoreCase = true) ||
+                note.body.contains(debouncedSearchQuery, ignoreCase = true)
             }
         }
+        if (sortDescending) {
+            filtered.sortedByDescending { it.lastModified }
+        } else {
+            filtered.sortedBy { it.lastModified }
+        }
     }
-    
+
     // Диалог просмотра заметки
     selectedNote?.let { note ->
         val noteDeletedText = Strings.noteDeleted
@@ -114,9 +143,11 @@ fun NotesScreen(
             onSave = { subject, body ->
                 scope.launch {
                     isCreating = true
-                    val result = if (editingNote != null) {
+                    // Захватываем editingNote в локальную переменную для безопасного доступа
+                    val noteToEdit = editingNote
+                    val result = if (noteToEdit != null) {
                         withContext(Dispatchers.IO) {
-                            noteRepo.updateNote(editingNote!!, subject, body)
+                            noteRepo.updateNote(noteToEdit, subject, body)
                         }
                     } else {
                         withContext(Dispatchers.IO) {
@@ -223,25 +254,44 @@ fun NotesScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Поле поиска
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
+            // Поле поиска с кнопкой сортировки
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                placeholder = { Text(Strings.searchNotes) },
-                leadingIcon = { Icon(AppIcons.Search, null) },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(AppIcons.Clear, Strings.clear)
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text(Strings.searchNotes) },
+                    leadingIcon = { Icon(AppIcons.Search, null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(AppIcons.Clear, Strings.clear)
+                            }
                         }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp)
-            )
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                // Кнопка сортировки
+                IconButton(onClick = { 
+                    sortDescending = !sortDescending
+                    scope.launch { listState.animateScrollToItem(0) }
+                }) {
+                    Icon(
+                        if (sortDescending) AppIcons.KeyboardArrowDown else AppIcons.KeyboardArrowUp,
+                        contentDescription = if (sortDescending) Strings.sortNewestFirst else Strings.sortOldestFirst,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
             
             // Счётчик
             Text(
@@ -373,7 +423,7 @@ private fun NoteDetailDialog(
     
     // Диалог подтверждения удаления
     if (showDeleteConfirm) {
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text(Strings.deleteNote) },
             text = { Text(Strings.deleteNoteConfirm) },
@@ -396,7 +446,7 @@ private fun NoteDetailDialog(
         )
     }
     
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
@@ -405,7 +455,9 @@ private fun NoteDetailDialog(
             )
         },
         text = {
-            Column {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 // Дата
                 Text(
                     text = dateFormat.format(Date(note.lastModified)),
@@ -423,13 +475,15 @@ private fun NoteDetailDialog(
                     )
                 }
                 
-                // Текст заметки (если есть)
+                // Текст заметки с кликабельными ссылками
                 if (note.body.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = note.body,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    SelectionContainer {
+                        ClickableNoteText(
+                            text = note.body,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
         },
@@ -455,6 +509,123 @@ private fun NoteDetailDialog(
     )
 }
 
+/**
+ * Текст с кликабельными ссылками
+ */
+@Composable
+private fun ClickableNoteText(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle
+) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+    val couldNotOpenLinkText = Strings.couldNotOpenLink
+    
+    // Тип ссылки
+    data class Part(val content: String, val isLink: Boolean, val url: String = "")
+    
+    // Функция для поиска всех ссылок в строке (URL, email, телефон)
+    fun findAllLinks(line: String): List<Part> {
+        data class LinkMatch(val range: IntRange, val text: String, val url: String)
+        val allMatches = mutableListOf<LinkMatch>()
+        
+        // URL
+        urlPattern.findAll(line).forEach { match ->
+            allMatches.add(LinkMatch(match.range, match.value, match.value))
+        }
+        
+        // Email
+        emailPattern.findAll(line).forEach { match ->
+            // Проверяем что не пересекается с URL
+            val overlaps = allMatches.any { it.range.first <= match.range.last && it.range.last >= match.range.first }
+            if (!overlaps) {
+                allMatches.add(LinkMatch(match.range, match.value, "mailto:${match.value}"))
+            }
+        }
+        
+        // Телефон
+        phonePattern.findAll(line).forEach { match ->
+            // Проверяем что не пересекается с другими ссылками
+            val overlaps = allMatches.any { it.range.first <= match.range.last && it.range.last >= match.range.first }
+            if (!overlaps) {
+                val cleanPhone = match.value.replace(Regex("[\\s()-]"), "")
+                allMatches.add(LinkMatch(match.range, match.value, "tel:$cleanPhone"))
+            }
+        }
+        
+        // Сортируем по позиции
+        allMatches.sortBy { it.range.first }
+        
+        // Собираем части
+        val parts = mutableListOf<Part>()
+        var lastIdx = 0
+        
+        allMatches.forEach { match ->
+            if (match.range.first > lastIdx) {
+                parts.add(Part(line.substring(lastIdx, match.range.first), false))
+            }
+            parts.add(Part(match.text, true, match.url))
+            lastIdx = match.range.last + 1
+        }
+        
+        if (lastIdx < line.length) {
+            parts.add(Part(line.substring(lastIdx), false))
+        }
+        
+        if (parts.isEmpty()) {
+            parts.add(Part(line, false))
+        }
+        
+        return parts
+    }
+    
+    Column {
+        val lines = text.split("\n")
+        lines.forEachIndexed { lineIndex, line ->
+            if (line.isBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+            } else {
+                val lineParts = findAllLinks(line)
+                
+                // Отображаем строку
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    lineParts.forEach { part ->
+                        if (part.isLink) {
+                            Text(
+                                text = part.content,
+                                style = style.copy(
+                                    color = primaryColor,
+                                    textDecoration = TextDecoration.Underline
+                                ),
+                                modifier = Modifier.clickable {
+                                    try {
+                                        uriHandler.openUri(part.url)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, couldNotOpenLinkText, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                        } else {
+                            Text(
+                                text = part.content,
+                                style = style,
+                                color = onSurfaceColor
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Добавляем отступ между строками (кроме последней)
+            if (lineIndex < lines.size - 1 && lines[lineIndex + 1].isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+            }
+        }
+    }
+}
+
 
 /**
  * Диалог создания/редактирования заметки
@@ -473,7 +644,7 @@ private fun CreateNoteDialog(
     
     val isValid = subject.isNotBlank()
     
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = { if (!isCreating) onDismiss() },
         title = { Text(if (isEditing) Strings.editNote else Strings.newNote) },
         text = {

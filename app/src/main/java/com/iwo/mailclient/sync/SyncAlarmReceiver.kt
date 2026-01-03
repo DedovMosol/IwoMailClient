@@ -7,7 +7,6 @@ import com.iwo.mailclient.data.database.AccountType
 import com.iwo.mailclient.data.database.MailDatabase
 import com.iwo.mailclient.data.repository.MailRepository
 import com.iwo.mailclient.data.repository.SettingsRepository
-import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.NotificationStrings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +22,13 @@ import kotlinx.coroutines.launch
  * Выполняет синхронизацию напрямую, не полагаясь только на WorkManager
  */
 class SyncAlarmReceiver : BroadcastReceiver() {
+    
+    private data class NewEmailInfo(
+        val id: String,
+        val senderName: String?,
+        val senderEmail: String?,
+        val subject: String?
+    )
     
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == PushService.ACTION_SYNC_ALARM) {
@@ -45,9 +51,9 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                     if (lastNotificationCheck == 0L) {
                         lastNotificationCheck = System.currentTimeMillis() - 60_000
                     }
-                    var newEmailCount = 0
-                    var latestSenderName: String? = null
-                    var latestSubject: String? = null
+                    
+                    // Собираем новые письма по аккаунтам
+                    val newEmailsByAccount = mutableMapOf<Long, MutableList<NewEmailInfo>>()
                     
                     for (account in accounts) {
                         // Синхронизируем папки
@@ -65,21 +71,21 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                         // Проверяем новые письма
                         val newEmails = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
                         if (newEmails.isNotEmpty()) {
-                            newEmailCount += newEmails.size
-                            val latest = newEmails.maxByOrNull { it.dateReceived }
-                            if (latest != null) {
-                                latestSenderName = latest.fromName.takeIf { it.isNotBlank() } 
-                                    ?: latest.from.substringBefore("@")
-                                latestSubject = latest.subject
+                            val accountEmails = newEmailsByAccount.getOrPut(account.id) { mutableListOf() }
+                            for (email in newEmails) {
+                                accountEmails.add(NewEmailInfo(email.id, email.fromName, email.from, email.subject))
                             }
                         }
                     }
                     
-                    // Показываем уведомление если есть новые письма
-                    if (newEmailCount > 0) {
+                    // Показываем уведомления для каждого аккаунта отдельно
+                    if (newEmailsByAccount.isNotEmpty()) {
                         val notificationsEnabled = settingsRepo.notificationsEnabled.first()
                         if (notificationsEnabled) {
-                            showNotification(context, newEmailCount, latestSenderName, latestSubject, settingsRepo)
+                            for ((accountId, emails) in newEmailsByAccount) {
+                                val account = accounts.find { it.id == accountId } ?: continue
+                                showNotification(context, emails, account.email, accountId, settingsRepo)
+                            }
                         }
                     }
                     
@@ -114,23 +120,33 @@ class SyncAlarmReceiver : BroadcastReceiver() {
     
     private suspend fun showNotification(
         context: Context, 
-        count: Int, 
-        senderName: String?, 
-        subject: String?,
+        newEmails: List<NewEmailInfo>,
+        accountEmail: String,
+        accountId: Long,
         settingsRepo: SettingsRepository
     ) {
+        val count = newEmails.size
+        
         val languageCode = settingsRepo.language.first()
         val isRussian = languageCode == "ru"
         
+        val latestEmail = newEmails.maxByOrNull { it.id }
+        val senderName = latestEmail?.senderName?.takeIf { it.isNotBlank() }
+            ?: latestEmail?.senderEmail?.substringBefore("@")
+        val subject = latestEmail?.subject?.takeIf { it.isNotBlank() }
+        
         val intent = Intent(context, com.iwo.mailclient.MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            if (count > 1) {
+            putExtra(com.iwo.mailclient.MainActivity.EXTRA_SWITCH_ACCOUNT_ID, accountId)
+            if (count == 1 && latestEmail != null) {
+                putExtra(com.iwo.mailclient.MainActivity.EXTRA_OPEN_EMAIL_ID, latestEmail.id)
+            } else {
                 putExtra(com.iwo.mailclient.MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
             }
         }
         
         val pendingIntent = android.app.PendingIntent.getActivity(
-            context, System.currentTimeMillis().toInt(), intent,
+            context, accountId.toInt(), intent,
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
         )
         
@@ -145,9 +161,17 @@ class SyncAlarmReceiver : BroadcastReceiver() {
             .setDefaults(androidx.core.app.NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            .setSubText(accountEmail)
+            .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(androidx.core.app.NotificationCompat.CATEGORY_EMAIL)
             .build()
         
         val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
-        notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+        // Уникальный ID для каждого аккаунта
+        val notificationId = 4000 + accountId.toInt()
+        notificationManager.notify(notificationId, notification)
+        
+        // Воспроизводим звук
+        com.iwo.mailclient.util.SoundPlayer.playReceiveSound(context)
     }
 }

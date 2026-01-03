@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-
+import com.iwo.mailclient.BuildConfig
 import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,13 +34,16 @@ import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.isRussian
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import com.iwo.mailclient.ui.theme.AppColorTheme
+import com.iwo.mailclient.update.UpdateChecker
+import com.iwo.mailclient.update.UpdateResult
+import com.iwo.mailclient.update.DownloadProgress
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBackClick: () -> Unit,
-    onEditAccount: (Long) -> Unit,
     onAddAccount: () -> Unit = {},
     onNavigateToPersonalization: () -> Unit = {},
     onNavigateToAccountSettings: (Long) -> Unit = {}
@@ -60,14 +63,8 @@ fun SettingsScreen(
     val nightModeEnabled by settingsRepo.nightModeEnabled.collectAsState(initial = false)
     val ignoreBatterySaver by settingsRepo.ignoreBatterySaver.collectAsState(initial = false)
     
-    // Проверяем активен ли Battery Saver с периодическим обновлением
-    var isBatterySaverActive by remember { mutableStateOf(settingsRepo.isBatterySaverActive()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(5000)
-            isBatterySaverActive = settingsRepo.isBatterySaverActive()
-        }
-    }
+    // Отслеживаем состояние Battery Saver через BroadcastReceiver (мгновенная реакция)
+    val isBatterySaverActive by settingsRepo.batterySaverState.collectAsState(initial = settingsRepo.isBatterySaverActive())
     
     // Диалог подтверждения удаления
     accountToDelete?.let { account ->
@@ -144,7 +141,6 @@ fun SettingsScreen(
             items(accounts) { account ->
                 AccountCard(
                     account = account,
-                    onEditClick = { onEditAccount(account.id) },
                     onDeleteClick = { accountToDelete = account },
                     onSettingsClick = { onNavigateToAccountSettings(account.id) }
                 )
@@ -306,7 +302,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("iwo Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.4.2") },
+                    supportingContent = { Text("${Strings.version} 1.5.0") },
                     leadingContent = { Icon(AppIcons.Info, null) }
                 )
             }
@@ -320,6 +316,75 @@ fun SettingsScreen(
                     trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.clickable {
                         uriHandler.openUri("https://github.com/DedovMosol/")
+                    }
+                )
+            }
+            
+            // Проверка обновлений
+            item {
+                val updateChecker = remember { UpdateChecker(context) }
+                var updateState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
+                var showUpdateDialog by remember { mutableStateOf(false) }
+                var updateInfo by remember { mutableStateOf<com.iwo.mailclient.update.UpdateInfo?>(null) }
+                
+                // Диалог обновления
+                if (showUpdateDialog && updateInfo != null) {
+                    UpdateDialog(
+                        updateInfo = updateInfo!!,
+                        updateChecker = updateChecker,
+                        onDismiss = { 
+                            showUpdateDialog = false
+                            updateState = UpdateCheckState.Idle
+                        }
+                    )
+                }
+                
+                ListItem(
+                    headlineContent = { Text(Strings.checkForUpdates) },
+                    supportingContent = { 
+                        Text(
+                            when (updateState) {
+                                is UpdateCheckState.Idle -> "${Strings.currentVersion}: ${com.iwo.mailclient.BuildConfig.VERSION_NAME}"
+                                is UpdateCheckState.Checking -> Strings.checkingForUpdates
+                                is UpdateCheckState.UpToDate -> Strings.noUpdatesAvailable
+                                is UpdateCheckState.Error -> "${Strings.updateError}: ${(updateState as UpdateCheckState.Error).message}"
+                                is UpdateCheckState.Available -> "${Strings.updateAvailable}: ${(updateState as UpdateCheckState.Available).info.versionName}"
+                            }
+                        )
+                    },
+                    leadingContent = { 
+                        if (updateState is UpdateCheckState.Checking) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(AppIcons.Update, null)
+                        }
+                    },
+                    trailingContent = {
+                        if (updateState is UpdateCheckState.Available) {
+                            Icon(AppIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    },
+                    modifier = Modifier.clickable(enabled = updateState !is UpdateCheckState.Checking) {
+                        if (updateState is UpdateCheckState.Available) {
+                            showUpdateDialog = true
+                        } else {
+                            scope.launch {
+                                updateState = UpdateCheckState.Checking
+                                when (val result = updateChecker.checkForUpdate()) {
+                                    is UpdateResult.Available -> {
+                                        updateInfo = result.info
+                                        updateState = UpdateCheckState.Available(result.info)
+                                        showUpdateDialog = true
+                                    }
+                                    is UpdateResult.UpToDate -> {
+                                        updateState = UpdateCheckState.UpToDate
+                                    }
+                                    is UpdateResult.Error -> {
+                                        updateState = UpdateCheckState.Error(result.message)
+                                    }
+                                }
+                            }
+                        }
                     }
                 )
             }
@@ -354,7 +419,6 @@ fun SettingsScreen(
 @Composable
 private fun AccountCard(
     account: AccountEntity,
-    onEditClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
@@ -428,8 +492,8 @@ private fun AccountCard(
                 },
                 trailingContent = {
                     Row {
-                        IconButton(onClick = onEditClick) {
-                            Icon(AppIcons.Edit, Strings.edit)
+                        IconButton(onClick = onSettingsClick) {
+                            Icon(AppIcons.Settings, Strings.accountSettings)
                         }
                         IconButton(onClick = onDeleteClick) {
                             Icon(
@@ -441,17 +505,231 @@ private fun AccountCard(
                     }
                 }
             )
-            
-            // Кнопка настроек аккаунта
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            ListItem(
-                headlineContent = { Text(Strings.accountSettings, style = MaterialTheme.typography.bodyMedium) },
-                leadingContent = { Icon(AppIcons.Settings, null, modifier = Modifier.size(20.dp)) },
-                trailingContent = { Icon(AppIcons.ChevronRight, null, modifier = Modifier.size(18.dp)) },
-                modifier = Modifier.clickable(onClick = onSettingsClick)
-            )
         }
     }
+}
+
+/**
+ * Состояние проверки обновлений
+ */
+private sealed class UpdateCheckState {
+    object Idle : UpdateCheckState()
+    object Checking : UpdateCheckState()
+    object UpToDate : UpdateCheckState()
+    data class Available(val info: com.iwo.mailclient.update.UpdateInfo) : UpdateCheckState()
+    data class Error(val message: String) : UpdateCheckState()
+}
+
+/**
+ * Диалог обновления с прогрессом скачивания
+ */
+@Composable
+private fun UpdateDialog(
+    updateInfo: com.iwo.mailclient.update.UpdateInfo,
+    updateChecker: UpdateChecker,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
+    var downloadedFile by remember { mutableStateOf<File?>(null) }
+    
+    com.iwo.mailclient.ui.theme.StyledAlertDialog(
+        onDismissRequest = { 
+            if (downloadState !is DownloadState.Downloading) {
+                onDismiss()
+            }
+        },
+        icon = { Icon(AppIcons.Update, null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text(Strings.updateAvailable) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Версии
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "${Strings.currentVersion}:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        com.iwo.mailclient.BuildConfig.VERSION_NAME,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "${Strings.newVersion}:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        updateInfo.versionName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                
+                // Changelog
+                if (updateInfo.changelog.isNotBlank()) {
+                    HorizontalDivider()
+                    Text(
+                        Strings.whatsNew,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        updateInfo.changelog,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                // Прогресс скачивания
+                when (val state = downloadState) {
+                    is DownloadState.Downloading -> {
+                        HorizontalDivider()
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                Strings.downloading,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            LinearProgressIndicator(
+                                progress = { state.progress / 100f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                Strings.downloadProgress(state.downloadedMb, state.totalMb),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    is DownloadState.Completed -> {
+                        HorizontalDivider()
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                AppIcons.CheckCircle,
+                                null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                Strings.downloadComplete,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    is DownloadState.Error -> {
+                        HorizontalDivider()
+                        Text(
+                            "${Strings.downloadError}: ${state.message}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    else -> {}
+                }
+                
+                // Кнопки
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                ) {
+                    if (downloadState !is DownloadState.Downloading) {
+                        TextButton(onClick = onDismiss) {
+                            Text(Strings.later)
+                        }
+                    }
+                    
+                    when (downloadState) {
+                        is DownloadState.Idle, is DownloadState.Error -> {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        updateChecker.downloadUpdate(updateInfo.apkUrl).collect { progress ->
+                                            when (progress) {
+                                                is DownloadProgress.Starting -> {
+                                                    downloadState = DownloadState.Downloading(0, 0f, 0f)
+                                                }
+                                                is DownloadProgress.Downloading -> {
+                                                    downloadState = DownloadState.Downloading(
+                                                        progress.progress,
+                                                        progress.downloadedMb,
+                                                        progress.totalMb
+                                                    )
+                                                }
+                                                is DownloadProgress.Completed -> {
+                                                    downloadedFile = progress.file
+                                                    downloadState = DownloadState.Completed
+                                                }
+                                                is DownloadProgress.Error -> {
+                                                    downloadState = DownloadState.Error(progress.message)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(AppIcons.Download, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(Strings.downloadUpdate)
+                            }
+                        }
+                        is DownloadState.Downloading -> {
+                            // Кнопка неактивна во время скачивания
+                            Button(onClick = {}, enabled = false) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(Strings.downloading)
+                            }
+                        }
+                        is DownloadState.Completed -> {
+                            Button(
+                                onClick = {
+                                    downloadedFile?.let { file ->
+                                        updateChecker.installApk(file)
+                                    }
+                                }
+                            ) {
+                                Icon(AppIcons.Install, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(Strings.install)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {}
+    )
+}
+
+/**
+ * Состояние скачивания
+ */
+private sealed class DownloadState {
+    object Idle : DownloadState()
+    data class Downloading(val progress: Int, val downloadedMb: Float, val totalMb: Float) : DownloadState()
+    object Completed : DownloadState()
+    data class Error(val message: String) : DownloadState()
 }
 
 @Composable

@@ -70,6 +70,7 @@ class TaskRepository(private val context: Context) {
     
     /**
      * Создание задачи на сервере и в локальной БД
+     * @param assignTo — email пользователя для назначения задачи (опционально)
      */
     suspend fun createTask(
         accountId: Long,
@@ -79,7 +80,8 @@ class TaskRepository(private val context: Context) {
         dueDate: Long = 0,
         importance: Int = TaskImportance.NORMAL.value,
         reminderSet: Boolean = false,
-        reminderTime: Long = 0
+        reminderTime: Long = 0,
+        assignTo: String? = null
     ): EasResult<TaskEntity> {
         return withContext(Dispatchers.IO) {
             try {
@@ -100,7 +102,8 @@ class TaskRepository(private val context: Context) {
                     dueDate = dueDate,
                     importance = importance,
                     reminderSet = reminderSet,
-                    reminderTime = reminderTime
+                    reminderTime = reminderTime,
+                    assignTo = assignTo
                 )
                 
                 when (result) {
@@ -284,8 +287,11 @@ class TaskRepository(private val context: Context) {
                             taskDao.delete(taskId)
                         }
                         
+                        // Фильтруем дубликаты по serverId (защита от повторной вставки)
+                        val uniqueTasks = serverTasks.distinctBy { it.serverId }
+                        
                         // Добавляем/обновляем задачи с сервера
-                        val taskEntities = serverTasks.map { task ->
+                        val taskEntities = uniqueTasks.map { task ->
                             TaskEntity(
                                 id = "${accountId}_${task.serverId}",
                                 accountId = accountId,

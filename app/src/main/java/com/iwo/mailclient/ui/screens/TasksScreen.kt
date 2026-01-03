@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -21,12 +22,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.iwo.mailclient.data.database.MailDatabase
 import com.iwo.mailclient.data.database.TaskEntity
 import com.iwo.mailclient.data.database.TaskImportance
 import com.iwo.mailclient.data.repository.AccountRepository
+import com.iwo.mailclient.data.repository.RepositoryProvider
 import com.iwo.mailclient.data.repository.TaskRepository
 import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.Strings
+import com.iwo.mailclient.ui.components.ContactPickerDialog
 import com.iwo.mailclient.ui.theme.AppIcons
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +38,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.delay
 
 enum class TaskFilter {
     ALL, ACTIVE, COMPLETED, HIGH_PRIORITY, OVERDUE
@@ -46,8 +51,8 @@ fun TasksScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val taskRepo = remember { TaskRepository(context) }
-    val accountRepo = remember { AccountRepository(context) }
+    val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
+    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
@@ -55,6 +60,13 @@ fun TasksScreen(
     val allTasks by remember(accountId) { taskRepo.getTasks(accountId) }.collectAsState(initial = emptyList())
     
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var debouncedSearchQuery by remember { mutableStateOf("") }
+    
+    // Debounce поиска для оптимизации
+    LaunchedEffect(searchQuery) {
+        delay(300)
+        debouncedSearchQuery = searchQuery
+    }
     var isSyncing by remember { mutableStateOf(false) }
     var selectedTask by remember { mutableStateOf<TaskEntity?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -63,19 +75,22 @@ fun TasksScreen(
     var currentFilter by rememberSaveable { mutableStateOf(TaskFilter.ALL) }
     
     val listState = rememberLazyListState()
+    
+    // Состояние сортировки (true = новые сверху, false = старые сверху)
+    var sortDescending by rememberSaveable { mutableStateOf(true) }
 
     // Фильтрация задач
-    val filteredTasks = remember(allTasks, searchQuery, currentFilter) {
-        var tasks = if (searchQuery.isBlank()) {
+    val filteredTasks = remember(allTasks, debouncedSearchQuery, currentFilter, sortDescending) {
+        var tasks = if (debouncedSearchQuery.isBlank()) {
             allTasks
         } else {
             allTasks.filter { task ->
-                task.subject.contains(searchQuery, ignoreCase = true) ||
-                task.body.contains(searchQuery, ignoreCase = true)
+                task.subject.contains(debouncedSearchQuery, ignoreCase = true) ||
+                task.body.contains(debouncedSearchQuery, ignoreCase = true)
             }
         }
         
-        when (currentFilter) {
+        val filtered = when (currentFilter) {
             TaskFilter.ALL -> tasks
             TaskFilter.ACTIVE -> tasks.filter { !it.complete }
             TaskFilter.COMPLETED -> tasks.filter { it.complete }
@@ -83,6 +98,13 @@ fun TasksScreen(
             TaskFilter.OVERDUE -> tasks.filter { 
                 it.dueDate > 0 && it.dueDate < System.currentTimeMillis() && !it.complete 
             }
+        }
+        
+        // Сортировка по дате (dueDate если есть, иначе по id)
+        if (sortDescending) {
+            filtered.sortedByDescending { if (it.dueDate > 0) it.dueDate else it.startDate }
+        } else {
+            filtered.sortedBy { if (it.dueDate > 0) it.dueDate else it.startDate }
         }
     }
     
@@ -141,25 +163,30 @@ fun TasksScreen(
         val taskUpdatedText = Strings.taskUpdated
         val taskCreatedText = Strings.taskCreated
         val isEditing = editingTask != null
+        val database = remember { MailDatabase.getInstance(context) }
         CreateTaskDialog(
             task = editingTask,
             isCreating = isCreating,
+            accountId = accountId,
+            database = database,
             onDismiss = {
                 showCreateDialog = false
                 editingTask = null
             },
-            onSave = { subject, body, startDate, dueDate, importance, reminderSet, reminderTime ->
+            onSave = { subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo ->
                 scope.launch {
                     isCreating = true
-                    val result = if (editingTask != null) {
+                    // Захватываем editingTask в локальную переменную для безопасного доступа
+                    val taskToEdit = editingTask
+                    val result = if (taskToEdit != null) {
                         withContext(Dispatchers.IO) {
                             taskRepo.updateTask(
-                                task = editingTask!!,
+                                task = taskToEdit,
                                 subject = subject,
                                 body = body,
                                 startDate = startDate,
                                 dueDate = dueDate,
-                                complete = editingTask!!.complete,
+                                complete = taskToEdit.complete,
                                 importance = importance,
                                 reminderSet = reminderSet,
                                 reminderTime = reminderTime
@@ -175,7 +202,8 @@ fun TasksScreen(
                                 dueDate = dueDate,
                                 importance = importance,
                                 reminderSet = reminderSet,
-                                reminderTime = reminderTime
+                                reminderTime = reminderTime,
+                                assignTo = assignTo
                             )
                         }
                     }
@@ -274,25 +302,44 @@ fun TasksScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Поле поиска
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
+            // Поле поиска с кнопкой сортировки
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                placeholder = { Text(Strings.searchTasks) },
-                leadingIcon = { Icon(AppIcons.Search, null) },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(AppIcons.Clear, Strings.clear)
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text(Strings.searchTasks) },
+                    leadingIcon = { Icon(AppIcons.Search, null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(AppIcons.Clear, Strings.clear)
+                            }
                         }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp)
-            )
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                // Кнопка сортировки
+                IconButton(onClick = { 
+                    sortDescending = !sortDescending
+                    scope.launch { listState.animateScrollToItem(0) }
+                }) {
+                    Icon(
+                        if (sortDescending) AppIcons.KeyboardArrowDown else AppIcons.KeyboardArrowUp,
+                        contentDescription = if (sortDescending) Strings.sortNewestFirst else Strings.sortOldestFirst,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
             
             // Фильтры
             TaskFilterChips(
@@ -533,7 +580,7 @@ private fun TaskDetailDialog(
 ) {
     val dateTimeFormat = remember { SimpleDateFormat("d MMMM yyyy, HH:mm", Locale.getDefault()) }
     
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -608,26 +655,23 @@ private fun TaskDetailDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = task.body,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    SelectionContainer {
+                        com.iwo.mailclient.ui.components.RichTextWithImages(
+                            htmlContent = task.body,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                TextButton(onClick = onDeleteClick) {
-                    Text(Strings.delete, color = Color(0xFFF44336), maxLines = 1, softWrap = false)
-                }
-                TextButton(onClick = onEditClick) {
-                    Text(Strings.edit, maxLines = 1, softWrap = false)
-                }
-                TextButton(onClick = onDismiss) {
-                    Text(Strings.close, maxLines = 1, softWrap = false)
-                }
+            TextButton(onClick = onEditClick) {
+                Text(Strings.edit)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDeleteClick) {
+                Text(Strings.delete, color = Color(0xFFF44336))
             }
         }
     )
@@ -639,26 +683,30 @@ private fun TaskDetailDialog(
 private fun CreateTaskDialog(
     task: TaskEntity?,
     isCreating: Boolean,
+    accountId: Long,
+    database: MailDatabase,
     onDismiss: () -> Unit,
-    onSave: (subject: String, body: String, startDate: Long, dueDate: Long, importance: Int, reminderSet: Boolean, reminderTime: Long) -> Unit
+    onSave: (subject: String, body: String, startDate: Long, dueDate: Long, importance: Int, reminderSet: Boolean, reminderTime: Long, assignTo: String?) -> Unit
 ) {
     var subject by rememberSaveable { mutableStateOf(task?.subject ?: "") }
     var body by rememberSaveable { mutableStateOf(task?.body ?: "") }
-    var startDate by remember { mutableStateOf(task?.startDate ?: 0L) }
-    var dueDate by remember { mutableStateOf(task?.dueDate ?: 0L) }
+    var startDate by rememberSaveable { mutableStateOf(task?.startDate ?: 0L) }
+    var dueDate by rememberSaveable { mutableStateOf(task?.dueDate ?: 0L) }
     var importance by rememberSaveable { mutableStateOf(task?.importance ?: TaskImportance.NORMAL.value) }
     var reminderSet by rememberSaveable { mutableStateOf(task?.reminderSet ?: false) }
-    var reminderTime by remember { mutableStateOf(task?.reminderTime ?: 0L) }
+    var reminderTime by rememberSaveable { mutableStateOf(task?.reminderTime ?: 0L) }
+    var assignTo by rememberSaveable { mutableStateOf("") }
+    var showContactPicker by rememberSaveable { mutableStateOf(false) }
     
-    var showStartDatePicker by remember { mutableStateOf(false) }
-    var showStartTimePicker by remember { mutableStateOf(false) }
-    var tempStartDate by remember { mutableStateOf(0L) }
-    var showDueDatePicker by remember { mutableStateOf(false) }
-    var showDueTimePicker by remember { mutableStateOf(false) }
-    var tempDueDate by remember { mutableStateOf(0L) }
-    var showReminderPicker by remember { mutableStateOf(false) }
-    var showReminderTimePicker by remember { mutableStateOf(false) }
-    var tempReminderDate by remember { mutableStateOf(0L) }
+    var showStartDatePicker by rememberSaveable { mutableStateOf(false) }
+    var showStartTimePicker by rememberSaveable { mutableStateOf(false) }
+    var tempStartDate by rememberSaveable { mutableStateOf(0L) }
+    var showDueDatePicker by rememberSaveable { mutableStateOf(false) }
+    var showDueTimePicker by rememberSaveable { mutableStateOf(false) }
+    var tempDueDate by rememberSaveable { mutableStateOf(0L) }
+    var showReminderPicker by rememberSaveable { mutableStateOf(false) }
+    var showReminderTimePicker by rememberSaveable { mutableStateOf(false) }
+    var tempReminderDate by rememberSaveable { mutableStateOf(0L) }
     
     val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
     val dateTimeFormat = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
@@ -699,7 +747,7 @@ private fun CreateTaskDialog(
             initialHour = calendar.get(Calendar.HOUR_OF_DAY),
             initialMinute = calendar.get(Calendar.MINUTE)
         )
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showStartTimePicker = false },
             title = { Text(Strings.selectTime) },
             text = {
@@ -768,7 +816,7 @@ private fun CreateTaskDialog(
             initialHour = calendar.get(Calendar.HOUR_OF_DAY),
             initialMinute = calendar.get(Calendar.MINUTE)
         )
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showDueTimePicker = false },
             title = { Text(Strings.selectTime) },
             text = {
@@ -847,7 +895,7 @@ private fun CreateTaskDialog(
             is24Hour = true
         )
         
-        AlertDialog(
+        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showReminderTimePicker = false },
             title = { Text(Strings.selectTime) },
             text = {
@@ -885,7 +933,7 @@ private fun CreateTaskDialog(
         )
     }
     
-    AlertDialog(
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (task != null) Strings.editTask else Strings.newTask) },
         text = {
@@ -911,6 +959,41 @@ private fun CreateTaskDialog(
                     minLines = 2,
                     maxLines = 4
                 )
+                
+                // Назначить задачу (только для новых задач)
+                if (task == null) {
+                    OutlinedTextField(
+                        value = assignTo,
+                        onValueChange = { assignTo = it },
+                        label = { Text(Strings.assignTo) },
+                        placeholder = { Text(Strings.assignToHint) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = {
+                            Icon(AppIcons.Person, null, modifier = Modifier.size(20.dp))
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { showContactPicker = true }) {
+                                Icon(AppIcons.Contacts, Strings.selectContact, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    )
+                }
+                
+                // Диалог выбора контакта
+                if (showContactPicker) {
+                    ContactPickerDialog(
+                        accountId = accountId,
+                        database = database,
+                        onDismiss = { showContactPicker = false },
+                        onContactsSelected = { emails ->
+                            if (emails.isNotEmpty()) {
+                                assignTo = emails.first()
+                            }
+                            showContactPicker = false
+                        }
+                    )
+                }
                 
                 // Приоритет
                 Text(
@@ -1006,7 +1089,7 @@ private fun CreateTaskDialog(
             Button(
                 onClick = {
                     if (subject.isNotBlank()) {
-                        onSave(subject, body, startDate, dueDate, importance, reminderSet, reminderTime)
+                        onSave(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo.trim().ifBlank { null })
                     }
                 },
                 enabled = subject.isNotBlank() && !isCreating

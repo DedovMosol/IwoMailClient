@@ -169,6 +169,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_OPEN_INBOX_UNREAD = "open_inbox_unread"
         const val EXTRA_OPEN_EMAIL_ID = "open_email_id"
+        const val EXTRA_SWITCH_ACCOUNT_ID = "switch_account_id"
     }
     
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -177,9 +178,15 @@ class MainActivity : ComponentActivity() {
     
     private var openInboxUnread = mutableStateOf(false)
     private var openEmailId = mutableStateOf<String?>(null)
+    private var switchToAccountId = mutableStateOf<Long?>(null)
     private var showBatteryDialog = mutableStateOf(false)
     private var showAlarmDialog = mutableStateOf(false)
     private var permissionsChecked = false
+    
+    // Данные из mailto: или SEND intent
+    private var composeEmail = mutableStateOf<String?>(null)
+    private var composeSubject = mutableStateOf<String?>(null)
+    private var composeBody = mutableStateOf<String?>(null)
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -222,6 +229,10 @@ class MainActivity : ComponentActivity() {
             
             val shouldOpenInboxUnread by openInboxUnread
             val emailIdToOpen by openEmailId
+            val accountIdToSwitch by switchToAccountId
+            val emailToCompose by composeEmail
+            val subjectToCompose by composeSubject
+            val bodyToCompose by composeBody
             
             // Контроллер отложенного удаления
             val deletionController = remember { com.iwo.mailclient.ui.components.DeletionController() }
@@ -243,7 +254,19 @@ class MainActivity : ComponentActivity() {
                         ) {
                             AppNavigation(
                                 openInboxUnread = shouldOpenInboxUnread,
-                                openEmailId = emailIdToOpen
+                                openEmailId = emailIdToOpen,
+                                switchToAccountId = accountIdToSwitch,
+                                composeToEmail = emailToCompose,
+                                composeSubject = subjectToCompose,
+                                composeBody = bodyToCompose,
+                                onComposeHandled = {
+                                    composeEmail.value = null
+                                    composeSubject.value = null
+                                    composeBody.value = null
+                                },
+                                onAccountSwitched = {
+                                    switchToAccountId.value = null
+                                }
                             )
                         }
                         
@@ -311,11 +334,74 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun handleIntent(intent: Intent?) {
-        val emailId = intent?.getStringExtra(EXTRA_OPEN_EMAIL_ID)
+        if (intent == null) return
+        
+        // Проверяем нужно ли переключить аккаунт
+        val accountId = intent.getLongExtra(EXTRA_SWITCH_ACCOUNT_ID, -1L)
+        if (accountId > 0) {
+            switchToAccountId.value = accountId
+        }
+        
+        val emailId = intent.getStringExtra(EXTRA_OPEN_EMAIL_ID)
         if (emailId != null) {
             openEmailId.value = emailId
-        } else if (intent?.getBooleanExtra(EXTRA_OPEN_INBOX_UNREAD, false) == true) {
+            return
+        }
+        
+        if (intent.getBooleanExtra(EXTRA_OPEN_INBOX_UNREAD, false)) {
             openInboxUnread.value = true
+            return
+        }
+        
+        // Обработка mailto: ссылок
+        when (intent.action) {
+            Intent.ACTION_SENDTO, Intent.ACTION_VIEW -> {
+                try {
+                    intent.data?.let { uri ->
+                        if (uri.scheme == "mailto") {
+                            parseMailtoUri(uri)
+                        }
+                    }
+                } catch (_: Exception) { }
+            }
+            Intent.ACTION_SEND -> {
+                try {
+                    // Получаем данные из SEND intent
+                    composeEmail.value = intent.getStringExtra(Intent.EXTRA_EMAIL)
+                        ?: intent.getStringArrayExtra(Intent.EXTRA_EMAIL)?.firstOrNull()
+                    composeSubject.value = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+                    composeBody.value = intent.getStringExtra(Intent.EXTRA_TEXT)
+                } catch (_: Exception) { }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                try {
+                    composeSubject.value = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+                    composeBody.value = intent.getStringExtra(Intent.EXTRA_TEXT)
+                } catch (_: Exception) { }
+            }
+        }
+    }
+    
+    private fun parseMailtoUri(uri: android.net.Uri) {
+        try {
+            // mailto:user@example.com?subject=Test&body=Hello
+            // schemeSpecificPart = "user@example.com?subject=Test&body=Hello"
+            val ssp = uri.schemeSpecificPart ?: ""
+            val email = ssp.substringBefore("?").trim()
+            composeEmail.value = email.ifBlank { null }
+            
+            // Парсим query параметры безопасно
+            try {
+                uri.getQueryParameter("subject")?.let { composeSubject.value = it }
+                uri.getQueryParameter("body")?.let { composeBody.value = it }
+                uri.getQueryParameter("to")?.let { if (composeEmail.value == null) composeEmail.value = it }
+                uri.getQueryParameter("cc")?.let { /* можно добавить поддержку cc */ }
+                uri.getQueryParameter("bcc")?.let { /* можно добавить поддержку bcc */ }
+            } catch (_: Exception) {
+                // Если query параметры не парсятся - игнорируем
+            }
+        } catch (_: Exception) {
+            // Если URI некорректный - просто открываем пустой compose
         }
     }
     

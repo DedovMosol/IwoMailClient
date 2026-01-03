@@ -16,6 +16,7 @@ import com.iwo.mailclient.data.database.MailDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -33,8 +34,9 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         
         val eventId = intent.getStringExtra(EXTRA_EVENT_ID) ?: return
         val pendingResult = goAsync()
+        val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        localScope.launch {
             try {
                 val database = MailDatabase.getInstance(context)
                 val event = database.calendarEventDao().getEvent(eventId)
@@ -45,6 +47,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
                 }
                 // Если событие уже прошло - не показываем уведомление
             } finally {
+                localScope.cancel()
                 pendingResult.finish()
             }
         }
@@ -53,10 +56,11 @@ class CalendarReminderReceiver : BroadcastReceiver() {
     private fun showNotification(context: Context, event: CalendarEventEntity) {
         val notificationManager = context.getSystemService(NotificationManager::class.java)
         
-        // Intent для открытия приложения при клике
+        // Intent для открытия приложения при клике - с переключением на нужный аккаунт
         val contentIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("open_calendar", true)
+            putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, event.accountId)
         }
         val contentPendingIntent = PendingIntent.getActivity(
             context,
@@ -106,7 +110,8 @@ class CalendarReminderReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_CALENDAR_REMINDER = "com.iwo.mailclient.CALENDAR_REMINDER"
         const val EXTRA_EVENT_ID = "event_id"
-        private const val NOTIFICATION_ID_BASE = 3000
+        // Уникальный диапазон ID: 5000+ (SyncWorker использует 3000+, SyncAlarmReceiver 4000+)
+        private const val NOTIFICATION_ID_BASE = 5000
         
         /**
          * Планирует напоминание для события.

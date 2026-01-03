@@ -18,21 +18,28 @@ import kotlinx.coroutines.launch
  */
 class BootReceiver : BroadcastReceiver() {
     
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             
-            scope.launch {
+            val pendingResult = goAsync()
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                 try {
                     val database = MailDatabase.getInstance(context)
                     val accounts = database.accountDao().getAllAccountsList()
                     
-                    if (accounts.isEmpty()) return@launch
+                    if (accounts.isEmpty()) {
+                        pendingResult.finish()
+                        return@launch
+                    }
                     
                     // Используем эффективный интервал с учётом ночного режима
                     SyncWorker.scheduleWithNightMode(context)
+                    
+                    // Планируем AlarmManager как fallback для всех аккаунтов
+                    val minInterval = SyncWorker.getMinSyncInterval(context)
+                    val intervalMinutes = if (minInterval > 0) minInterval else 15
+                    PushService.scheduleSyncAlarm(context, intervalMinutes)
                     
                     // Запускаем PushService только если есть Exchange аккаунты с режимом PUSH
                     val hasExchangePushAccounts = accounts.any { 
@@ -47,7 +54,10 @@ class BootReceiver : BroadcastReceiver() {
                     // Перепланируем напоминания календаря для всех аккаунтов
                     rescheduleCalendarReminders(context, database)
                     
-                } catch (_: Exception) { }
+                } catch (_: Exception) {
+                } finally {
+                    pendingResult.finish()
+                }
             }
         }
     }
