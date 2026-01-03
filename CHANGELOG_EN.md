@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.5.0 (03.01.2026)
+
+### New Features
+- **Check for updates** — button in settings to check and install new versions
+- **Task assignment** — ability to assign tasks to other users with email notification
+- **Meeting invitations** — send and receive calendar event invitations (iCalendar)
+- **Default email app** — handles mailto: links and Share from other apps
+- **Clickable contacts** — emails and phones in calendar, notes and tasks are now clickable
+
+### Improvements
+- **Battery optimization** — instant Battery Saver response via BroadcastReceiver, increased PushService heartbeat
+- **Sync after send** — "Sent" folder updates automatically
+- **Self-filtering in contacts** — own email not shown in organization list
+- **Change credentials** — new menu item in account settings
+- Memory and performance optimizations (singleton repositories, DB batching, indexes)
+
+### Fixes
+- Fixed potential crashes and memory leaks
+- Fixed infinite sync when switching accounts
+- Fixed attachments and drafts preservation on screen rotation
+- Duplicate protection in calendar, tasks and email suggestions
+
+---
+
 ## v1.4.2 (01.01.2026)
 
 ### New Features
@@ -524,5 +548,6 @@
 - Auto-start after reboot
 - Dark theme
 - Two languages (RU/EN)
+
 
 
