@@ -15,7 +15,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 - 🔄 **EWS for Exchange 2007** — notes sync and creation via EWS with NTLMv2 (fallback for EAS 12.x)
 - 📬 **IMAP/POP3** — works with any mail server (beta)
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
-- 🔒 **Exchange 2007 compatibility** — TLS 1.0/1.1 support via Conscrypt
+- 🔒 **Exchange 2007 compatibility** — TLS 1.0-1.3 support via Conscrypt
 - 🔐 **Server certificates** — self-signed certificate support for corporate servers
 - 🌍 **Two languages** — 🇷🇺 Russian / 🇬🇧 English
 - 🎨 **Material Design 3** — modern interface with color themes
