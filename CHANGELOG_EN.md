@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.5.1 (05.01.2026)
+
+### New Features
+- **Undo send** — 3 seconds to cancel after pressing "Send" (green progress bar)
+
+### Improvements
+- **Account switch in compose** — when selecting different sender, their signature and contacts are automatically loaded
+- **Architecture-specific updates** — downloads APK for your architecture (arm64, arm32, x86)
+- **Deletion progress bar** — moved to bottom of screen, doesn't overlap content
+- **Task reminders** — added reminder scheduling when creating and editing tasks
+
+### Fixes
+- Fixed ComposeScreen reopening on screen rotation after mailto:
+- Fixed button display in "Support developer" dialog in landscape mode
+- Fixed draft save prompt when changing sender
+- Fixed navigation to setup screen after deleting last account
+
+### Bug Fixes from v1.5.0
+- Fixed scheduled sync — interval now applies correctly
+- Fixed calendar event deletion from server
+- Fixed meeting response — uses correct account
+- Fixed duplicate attendees in calendar events
+- Fixed meeting invitation sending
+- Fixed body text duplication when accepting meeting invitation
+- Fixed opening email from notification and account switching
+- Fixed tasks loading on main screen
+
+### Exchange 2007 Fixes
+- **Tasks with dates** — fixed task creation with dates on Exchange 2007:
+  - Uses EWS instead of EAS for creating tasks with dates
+  - Due date and body are saved to server
+  - Start date is saved locally only (Exchange 2007 limitation)
+  - Tasks without dates are created via EAS as before
+- **Calendar event creation** — updated EWS request format to match official Microsoft documentation
+- **Meetings with attendees** — invitations are now sent through Exchange (not as separate email)
+- **Task sync** — fixed WBXML parsing (added Code Page 9 for Tasks)
+- **Task/calendar body** — added BodyPreference to sync requests
+
+### Note
+⚠️ **Calendar and Tasks are in beta mode** — bugs and instability may occur
+
+---
+
 ## v1.5.0 (03.01.2026)
 
 ### New Features
@@ -548,6 +591,7 @@
 - Auto-start after reboot
 - Dark theme
 - Two languages (RU/EN)
+
 
 
 
