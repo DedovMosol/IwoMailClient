@@ -4,7 +4,7 @@
 
 Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
 
-**Version:** 1.5.0  
+**Version:** 1.5.1  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -39,7 +39,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Contact groups | ✅ |
 | Favorite contacts | ✅ |
 | Exchange Notes (create/edit/delete) | ✅ |
-| Exchange Calendar (create/edit/delete) | ✅ |
+| Exchange Calendar (create/edit/delete) | ⚠️ Beta |
 | Email autocomplete | ✅ |
 | Multiple accounts | ✅ |
 | Multiple signatures | ✅ |
@@ -50,19 +50,16 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 | Interface personalization | ✅ |
 | Read/delivery receipt request (MDN/DSN) | ✅ |
 | Calendar event reminders | ✅ |
-| Exchange Tasks (create/edit/delete) | ✅ |
+| Exchange Tasks (create/edit/delete) | ⚠️ Beta |
 | "Important" filter (high priority) | ✅ |
 | Night sync mode | ✅ |
 | Battery saver mode | ✅ |
 
-## 🆕 What's New in v1.5.0
+## 🆕 What's New in v1.5.1
 
-- **Check for updates** — button in settings to check and install new versions
-- **Task assignment** — ability to assign tasks to other users
-- **Tasks for Exchange 2007** — task creation works on Exchange 2007 via EWS
-- **Meeting invitations** — accept iCalendar invitations and add to calendar
-- **Invite attendees** — invite attendees when creating calendar events
-- **Default email app** — handles mailto: links and Share
+- **Undo send** — 3 seconds to cancel after pressing "Send"
+- **Bug fixes from v1.5.0** — sync, calendar, tasks, notifications
+- ⚠️ **Calendar and Tasks in beta mode** — bugs may occur
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 
