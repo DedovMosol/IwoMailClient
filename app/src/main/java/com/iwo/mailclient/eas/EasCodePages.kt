@@ -86,7 +86,18 @@ object EasCodePages {
     
     // Code Page 2: Email
     private val PAGE_EMAIL = mapOf(
+        0x05 to "Attachment",
+        0x06 to "Attachments",
+        0x07 to "AttName",
+        0x08 to "AttSize",
+        0x09 to "Att0Id",
+        0x0A to "AttMethod",
+        0x0B to "AttRemoved",
+        0x0C to "Body",
+        0x0D to "BodySize",
+        0x0E to "BodyTruncated",
         0x0F to "DateReceived",
+        0x10 to "DisplayName",
         0x11 to "DisplayTo",
         0x12 to "Importance",
         0x13 to "MessageClass",
@@ -124,14 +135,29 @@ object EasCodePages {
         0x33 to "TimeZone",
         0x34 to "GlobalObjId",
         0x35 to "ThreadTopic",
+        0x36 to "MimeData",
+        0x37 to "MimeTruncated",
+        0x38 to "MimeSize",
         0x39 to "InternetCPID",
         0x3A to "Flag",
         0x3B to "FlagStatus",
         0x3C to "ContentClass",
         0x3D to "FlagType",
-        0x3E to "CompleteTime"
+        0x3E to "CompleteTime",
+        0x3F to "DisallowNewTimeProposal"
     )
 
+    // Code Page 5: Move
+    private val PAGE_MOVE = mapOf(
+        0x05 to "MoveItems",
+        0x06 to "Move",
+        0x07 to "SrcMsgId",
+        0x08 to "SrcFldId",
+        0x09 to "DstFldId",
+        0x0A to "Response",
+        0x0B to "Status",
+        0x0C to "DstMsgId"
+    )
     
     // Code Page 4: Calendar
     private val PAGE_CALENDAR = mapOf(
@@ -194,19 +220,45 @@ object EasCodePages {
         0x17 to "Count"
     )
     
-    // Code Page 9: Move
-    private val PAGE_MOVE = mapOf(
-        0x05 to "MoveItems",
-        0x06 to "Move",
-        0x07 to "SrcMsgId",
-        0x08 to "SrcFldId",
-        0x09 to "DstFldId",
-        0x0A to "Response",
-        0x0B to "Status",
-        0x0C to "DstMsgId"
+    // Code Page 9: Tasks
+    private val PAGE_TASKS = mapOf(
+        0x05 to "Body",
+        0x06 to "BodySize",
+        0x07 to "BodyTruncated",
+        0x08 to "Categories",
+        0x09 to "Category",
+        0x0A to "Complete",
+        0x0B to "DateCompleted",
+        0x0C to "DueDate",
+        0x0D to "UtcDueDate",
+        0x0E to "Importance",
+        0x0F to "Recurrence",
+        0x10 to "Type",
+        0x11 to "Start",
+        0x12 to "Until",
+        0x13 to "Occurrences",
+        0x14 to "Interval",
+        0x15 to "DayOfMonth",
+        0x16 to "DayOfWeek",
+        0x17 to "WeekOfMonth",
+        0x18 to "MonthOfYear",
+        0x19 to "Regenerate",
+        0x1A to "DeadOccur",
+        0x1B to "ReminderSet",
+        0x1C to "ReminderTime",
+        0x1D to "Sensitivity",
+        0x1E to "StartDate",
+        0x1F to "UtcStartDate",
+        0x20 to "Subject",
+        0x21 to "CompressedRTF",
+        0x22 to "OrdinalDate",
+        0x23 to "SubOrdinalDate",
+        0x24 to "CalendarType",
+        0x25 to "IsLeapMonth",
+        0x26 to "FirstDayOfWeek"
     )
     
-    // Code Page 10: GetItemEstimate
+    // Code Page 6: GetItemEstimate
     private val PAGE_ESTIMATE = mapOf(
         0x05 to "GetItemEstimate",
         0x06 to "Version",
@@ -218,6 +270,19 @@ object EasCodePages {
         0x0C to "Estimate",
         0x0D to "Response",
         0x0E to "Status"
+    )
+    
+    // Code Page 13: Ping
+    private val PAGE_PING = mapOf(
+        0x05 to "Ping",
+        0x06 to "AutdState",
+        0x07 to "Status",
+        0x08 to "HeartbeatInterval",
+        0x09 to "Folders",
+        0x0A to "Folder",
+        0x0B to "Id",
+        0x0C to "Class",
+        0x0D to "MaxFolders"
     )
     
     // Code Page 14: Provision
@@ -391,9 +456,11 @@ object EasCodePages {
         1 to PAGE_CONTACTS,
         2 to PAGE_EMAIL,
         4 to PAGE_CALENDAR,
-        5 to PAGE_MOVE,  // Move code page = 5 (согласно MS-ASWBXML и AOSP)
+        5 to PAGE_MOVE,
+        6 to PAGE_ESTIMATE,
         7 to PAGE_FOLDER,
-        10 to PAGE_ESTIMATE,
+        9 to PAGE_TASKS,
+        13 to PAGE_PING,
         14 to PAGE_PROVISION,
         15 to PAGE_SEARCH,
         16 to PAGE_GAL,

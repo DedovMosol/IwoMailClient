@@ -181,7 +181,12 @@ fun EmailDetailScreen(
     LaunchedEffect(email?.id) {
         email?.let {
             if (!it.read) {
-                mailRepo.markAsRead(emailId, true)
+                when (val result = mailRepo.markAsRead(emailId, true)) {
+                    is EasResult.Success -> { /* OK */ }
+                    is EasResult.Error -> {
+                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    }
+                }
             }
             // Ленивая загрузка тела если пустое
             if (it.body.isEmpty() && !isLoadingBody) {
@@ -194,7 +199,19 @@ fun EmailDetailScreen(
                     }
                     when (result) {
                         is EasResult.Success -> { /* тело обновится через Flow */ }
-                        is EasResult.Error -> bodyLoadError = result.message
+                        is EasResult.Error -> {
+                            if (result.message == "OBJECT_NOT_FOUND") {
+                                // Письмо удалено на сервере - показываем Toast и возвращаемся
+                                android.widget.Toast.makeText(
+                                    context,
+                                    if (isRussian) "Письмо удалено на сервере" else "Email deleted on server",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                                onBackClick()
+                            } else {
+                                bodyLoadError = result.message
+                            }
+                        }
                         null -> bodyLoadError = if (isRussian) "Таймаут загрузки" else "Loading timeout"
                     }
                 } catch (e: Exception) {
@@ -353,7 +370,7 @@ fun EmailDetailScreen(
                     }
                 } else {
                     Column(
-                        modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())
+                        modifier = Modifier.heightIn(max = 300.dp)
                     ) {
                         availableFolders.forEach { folder ->
                             ListItem(
@@ -465,7 +482,14 @@ fun EmailDetailScreen(
                                 text = { Text(Strings.markUnread) },
                                 onClick = { 
                                     showMoreMenu = false
-                                    scope.launch { mailRepo.markAsRead(emailId, false) }
+                                    scope.launch { 
+                                        when (val result = mailRepo.markAsRead(emailId, false)) {
+                                            is EasResult.Success -> { /* OK */ }
+                                            is EasResult.Error -> {
+                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
                                 },
                                 leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
                             )
@@ -791,17 +815,162 @@ fun EmailDetailScreen(
                 val hasCalendarAttachment = calendarAttachment != null
                 val bodyHasVEvent = currentEmail.body.contains("BEGIN:VEVENT", ignoreCase = true) ||
                     currentEmail.body.contains("BEGIN:VCALENDAR", ignoreCase = true)
+                
+                // Проверяем признаки приглашения Exchange в теле (Когда: ... Где: ...)
+                val bodyHasMeetingInfo = (currentEmail.body.contains("Когда:", ignoreCase = true) || 
+                    currentEmail.body.contains("When:", ignoreCase = true)) &&
+                    (currentEmail.body.contains("Где:", ignoreCase = true) || 
+                    currentEmail.body.contains("Where:", ignoreCase = true))
+                
+                // Определяем тип письма: приглашение или ответ на приглашение
+                val isAcceptedResponse = currentEmail.subject.startsWith("Принято:", ignoreCase = true) ||
+                    currentEmail.subject.startsWith("Accepted:", ignoreCase = true)
+                val isDeclinedResponse = currentEmail.subject.startsWith("Отклонено:", ignoreCase = true) ||
+                    currentEmail.subject.startsWith("Declined:", ignoreCase = true)
+                val isTentativeResponse = currentEmail.subject.startsWith("Под вопросом:", ignoreCase = true) ||
+                    currentEmail.subject.startsWith("Tentative:", ignoreCase = true)
+                val isMeetingResponse = isAcceptedResponse || isDeclinedResponse || isTentativeResponse
+                
                 // Проверяем типичные признаки приглашения в теме
                 val subjectHasInvitation = currentEmail.subject.contains("Приглашение:", ignoreCase = true) ||
                     currentEmail.subject.contains("Invitation:", ignoreCase = true) ||
                     currentEmail.subject.contains("Meeting:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Встреча:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Accepted:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Declined:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Tentative:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Принято:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Отклонено:", ignoreCase = true)
-                val isMeetingInvitation = hasCalendarAttachment || bodyHasVEvent || subjectHasInvitation
+                    currentEmail.subject.contains("Встреча:", ignoreCase = true)
+                val isMeetingInvitation = (hasCalendarAttachment || bodyHasVEvent || subjectHasInvitation || bodyHasMeetingInfo) && !isMeetingResponse
+                
+                // UI для ответа на приглашение (организатор видит ответ участника)
+                if (isMeetingResponse && !isTaskEmail) {
+                    val responseStatus = when {
+                        isAcceptedResponse -> if (isRussian) "принял приглашение" else "accepted the invitation"
+                        isDeclinedResponse -> if (isRussian) "отклонил приглашение" else "declined the invitation"
+                        isTentativeResponse -> if (isRussian) "ответил \"Под вопросом\"" else "responded \"Tentative\""
+                        else -> ""
+                    }
+                    val senderName = currentEmail.fromName.ifEmpty { currentEmail.from.substringBefore("@") }
+                    val senderEmail = currentEmail.from
+                    val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
+                    var isUpdating by rememberSaveable { mutableStateOf(false) }
+                    
+                    // Извлекаем название события из темы (после "Принято:", "Отклонено:" и т.д.)
+                    val meetingSubject = currentEmail.subject
+                        .removePrefix("Принято:").removePrefix("Accepted:")
+                        .removePrefix("Отклонено:").removePrefix("Declined:")
+                        .removePrefix("Под вопросом:").removePrefix("Tentative:")
+                        .trim()
+                    
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = when {
+                                isAcceptedResponse -> MaterialTheme.colorScheme.primaryContainer
+                                isDeclinedResponse -> MaterialTheme.colorScheme.errorContainer
+                                else -> MaterialTheme.colorScheme.tertiaryContainer
+                            }
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    when {
+                                        isAcceptedResponse -> AppIcons.CheckCircle
+                                        isTentativeResponse -> AppIcons.Info
+                                        else -> AppIcons.Info // Для отклонённых тоже Info, не крестик
+                                    },
+                                    contentDescription = null,
+                                    tint = when {
+                                        isAcceptedResponse -> MaterialTheme.colorScheme.onPrimaryContainer
+                                        isDeclinedResponse -> MaterialTheme.colorScheme.onErrorContainer
+                                        else -> MaterialTheme.colorScheme.onTertiaryContainer
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "$senderName $responseStatus",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = when {
+                                        isAcceptedResponse -> MaterialTheme.colorScheme.onPrimaryContainer
+                                        isDeclinedResponse -> MaterialTheme.colorScheme.onErrorContainer
+                                        else -> MaterialTheme.colorScheme.onTertiaryContainer
+                                    }
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            // Кнопка ОК для подтверждения и обновления статуса участника
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isUpdating = true
+                                        try {
+                                            val accountId = currentEmail.accountId
+                                            
+                                            // Определяем статус участника
+                                            val attendeeStatus = when {
+                                                isAcceptedResponse -> 3 // Accepted
+                                                isDeclinedResponse -> 4 // Declined
+                                                isTentativeResponse -> 2 // Tentative
+                                                else -> 0
+                                            }
+                                            
+                                            // Обновляем статус участника в событии
+                                            val result = withContext(Dispatchers.IO) {
+                                                calendarRepo.updateAttendeeStatus(
+                                                    accountId = accountId,
+                                                    meetingSubject = meetingSubject,
+                                                    attendeeEmail = senderEmail,
+                                                    status = attendeeStatus
+                                                )
+                                            }
+                                            
+                                            when (result) {
+                                                is EasResult.Success -> {
+                                                    Toast.makeText(
+                                                        context,
+                                                        if (isRussian) "Статус обновлён" else "Status updated",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                                is EasResult.Error -> {
+                                                    Toast.makeText(
+                                                        context,
+                                                        NotificationStrings.localizeError(result.message, isRussian),
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, e.message ?: "Error", Toast.LENGTH_LONG).show()
+                                        } finally {
+                                            isUpdating = false
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.align(Alignment.End),
+                                enabled = !isUpdating
+                            ) {
+                                if (isUpdating) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text("OK")
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // UI для приглашения на встречу (участник получает приглашение)
                 
                 if (isMeetingInvitation && !isTaskEmail) {
                     val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
@@ -892,8 +1061,49 @@ fun EmailDetailScreen(
                                     }
                                 } else {
                                     Spacer(modifier = Modifier.height(8.dp))
+                                    
+                                    // Получаем email организатора для отправки ответа
+                                    val organizerEmail = ICAL_ORGANIZER_REGEX.find(icalData)?.groupValues?.get(1)
+                                        ?: currentEmail.from
+                                    
+                                    // Парсим данные встречи заранее
+                                    val meetingSummary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
+                                        ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
+                                        ?: currentEmail.subject
+                                    val dtStart = ICAL_DTSTART_REGEX.find(icalData)?.groupValues?.get(1)
+                                    val dtEnd = ICAL_DTEND_REGEX.find(icalData)?.groupValues?.get(1)
+                                    val meetingLocation = ICAL_LOCATION_REGEX.find(icalData)?.groupValues?.get(1)
+                                        ?.replace("\\n", " ")?.replace("\\,", ",")?.trim() ?: ""
+                                    val meetingDescription = ICAL_DESCRIPTION_REGEX.find(icalData)?.groupValues?.get(1)
+                                        ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
+                                    val meetingStartTime = parseICalDate(dtStart) ?: System.currentTimeMillis()
+                                    val meetingEndTime = parseICalDate(dtEnd) ?: (meetingStartTime + 60 * 60 * 1000)
+                                    
+                                    // Функция для отправки ответа организатору
+                                    suspend fun sendResponseToOrganizer(responseType: String, statusText: String) {
+                                        // Используем аккаунт владельца письма, а не activeAccount
+                                        val account = withContext(Dispatchers.IO) {
+                                            accountRepo.getAccount(currentEmail.accountId)
+                                        } ?: return
+                                        val myName = account.displayName.ifEmpty { account.email.substringBefore("@") }
+                                        val subject = "$statusText: $meetingSummary"
+                                        val body = if (isRussian) {
+                                            "$myName ${responseType.lowercase()} приглашение на встречу \"$meetingSummary\""
+                                        } else {
+                                            "$myName ${responseType.lowercase()} the meeting invitation \"$meetingSummary\""
+                                        }
+                                        
+                                        withContext(Dispatchers.IO) {
+                                            val easClient = accountRepo.createEasClient(account.id)
+                                            easClient?.sendMail(
+                                                to = organizerEmail,
+                                                subject = subject,
+                                                body = body
+                                            )
+                                        }
+                                    }
                             
-                                    // Кнопки принять/под вопросом
+                                    // Первый ряд: Принять и Отклонить
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -904,40 +1114,30 @@ fun EmailDetailScreen(
                                                 scope.launch {
                                                     isAccepting = true
                                                     try {
-                                                        val accountId = activeAccount?.id ?: return@launch
+                                                        // Используем аккаунт владельца письма
+                                                        val accountId = currentEmail.accountId
                                                 
-                                                        // Парсим iCalendar данные
-                                                        val summary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
-                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
-                                                            ?: currentEmail.subject
-                                                
-                                                        val dtStart = ICAL_DTSTART_REGEX.find(icalData)?.groupValues?.get(1)
-                                                        val dtEnd = ICAL_DTEND_REGEX.find(icalData)?.groupValues?.get(1)
-                                                        val location = ICAL_LOCATION_REGEX.find(icalData)?.groupValues?.get(1)
-                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim() ?: ""
-                                                        val description = ICAL_DESCRIPTION_REGEX.find(icalData)?.groupValues?.get(1)
-                                                            ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
-                                                
-                                                        // Парсим даты
-                                                        val startTime = parseICalDate(dtStart) ?: System.currentTimeMillis()
-                                                        val endTime = parseICalDate(dtEnd) ?: (startTime + 60 * 60 * 1000)
-                                                
-                                                        // Создаём событие
+                                                        // Создаём событие в календаре
                                                         val result = withContext(Dispatchers.IO) {
                                                             calendarRepo.createEvent(
                                                                 accountId = accountId,
-                                                                subject = summary,
-                                                                startTime = startTime,
-                                                                endTime = endTime,
-                                                                location = location,
-                                                                body = description.ifEmpty { "Приглашение от ${currentEmail.fromName.ifEmpty { currentEmail.from }}" },
+                                                                subject = meetingSummary,
+                                                                startTime = meetingStartTime,
+                                                                endTime = meetingEndTime,
+                                                                location = meetingLocation,
+                                                                body = meetingDescription.ifEmpty { "Приглашение от ${currentEmail.fromName.ifEmpty { currentEmail.from }}" },
                                                                 reminder = 15,
-                                                                busyStatus = 2
+                                                                busyStatus = 2 // Busy
                                                             )
                                                         }
                                                 
                                                         when (result) {
                                                             is EasResult.Success -> {
+                                                                // Отправляем ответ организатору
+                                                                sendResponseToOrganizer(
+                                                                    if (isRussian) "принял" else "accepted",
+                                                                    if (isRussian) "Принято" else "Accepted"
+                                                                )
                                                                 eventAdded = true
                                                                 Toast.makeText(context, invitationAcceptedMsg, Toast.LENGTH_SHORT).show()
                                                             }
@@ -970,39 +1170,76 @@ fun EmailDetailScreen(
                                             }
                                         }
                                 
-                                        // Под вопросом
+                                        // Отклонить
                                         OutlinedButton(
                                             onClick = {
                                                 scope.launch {
                                                     isAccepting = true
                                                     try {
-                                                        val accountId = activeAccount?.id ?: return@launch
-                                                        val summary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
-                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
-                                                            ?: currentEmail.subject
-                                                        val dtStart = ICAL_DTSTART_REGEX.find(icalData)?.groupValues?.get(1)
-                                                        val dtEnd = ICAL_DTEND_REGEX.find(icalData)?.groupValues?.get(1)
-                                                        val location = ICAL_LOCATION_REGEX.find(icalData)?.groupValues?.get(1)
-                                                            ?.replace("\\n", " ")?.replace("\\,", ",")?.trim() ?: ""
-                                                        val description = ICAL_DESCRIPTION_REGEX.find(icalData)?.groupValues?.get(1)
-                                                            ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
-                                                        val startTime = parseICalDate(dtStart) ?: System.currentTimeMillis()
-                                                        val endTime = parseICalDate(dtEnd) ?: (startTime + 60 * 60 * 1000)
-                                                
+                                                        // Отправляем ответ организатору (без добавления в календарь)
+                                                        sendResponseToOrganizer(
+                                                            if (isRussian) "отклонил" else "declined",
+                                                            if (isRussian) "Отклонено" else "Declined"
+                                                        )
+                                                        eventAdded = true
+                                                        Toast.makeText(
+                                                            context,
+                                                            if (isRussian) "Приглашение отклонено" else "Invitation declined",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, e.message ?: "Error", Toast.LENGTH_LONG).show()
+                                                    } finally {
+                                                        isAccepting = false
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isAccepting,
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.outlinedButtonColors(
+                                                contentColor = MaterialTheme.colorScheme.error
+                                            )
+                                        ) {
+                                            Text(Strings.declineInvitation)
+                                        }
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    
+                                    // Второй ряд: Под вопросом (по центру, жёлтая)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                scope.launch {
+                                                    isAccepting = true
+                                                    try {
+                                                        // Используем аккаунт владельца письма
+                                                        val accountId = currentEmail.accountId
+                                                    
+                                                        // Создаём событие в календаре со статусом Tentative
                                                         val result = withContext(Dispatchers.IO) {
                                                             calendarRepo.createEvent(
                                                                 accountId = accountId,
-                                                                subject = summary,
-                                                                startTime = startTime,
-                                                                endTime = endTime,
-                                                                location = location,
-                                                                body = description.ifEmpty { "Приглашение от ${currentEmail.fromName.ifEmpty { currentEmail.from }}" },
+                                                                subject = meetingSummary,
+                                                                startTime = meetingStartTime,
+                                                                endTime = meetingEndTime,
+                                                                location = meetingLocation,
+                                                                body = meetingDescription.ifEmpty { "Приглашение от ${currentEmail.fromName.ifEmpty { currentEmail.from }}" },
                                                                 reminder = 15,
                                                                 busyStatus = 1 // Tentative
                                                             )
                                                         }
+                                                        
                                                         when (result) {
                                                             is EasResult.Success -> {
+                                                                // Отправляем ответ организатору
+                                                                sendResponseToOrganizer(
+                                                                    if (isRussian) "ответил \"Под вопросом\" на" else "tentatively accepted",
+                                                                    if (isRussian) "Под вопросом" else "Tentative"
+                                                                )
                                                                 eventAdded = true
                                                                 Toast.makeText(context, invitationAcceptedMsg, Toast.LENGTH_SHORT).show()
                                                             }
@@ -1016,7 +1253,10 @@ fun EmailDetailScreen(
                                                 }
                                             },
                                             enabled = !isAccepting,
-                                            modifier = Modifier.weight(1f)
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = androidx.compose.ui.graphics.Color(0xFFFFC107), // Жёлтый
+                                                contentColor = androidx.compose.ui.graphics.Color.Black
+                                            )
                                         ) {
                                             Text(Strings.tentativeInvitation)
                                         }
@@ -1135,7 +1375,14 @@ fun EmailDetailScreen(
                     }
                 } else {
                     // Тело письма - определяем HTML или plain text
-                    val bodyText = currentEmail.body.ifEmpty { Strings.noText }
+                    // Убираем разделители Exchange из тела (включая частичные остатки типа ~*)
+                    val cleanedBody = currentEmail.body
+                        .replace(Regex("\\*~\\*~\\*~\\*~\\*~\\*~\\*~\\*~\\*?"), "")
+                        .replace(Regex("~\\*~\\*~\\*~\\*~\\*~\\*~\\*~\\*?"), "")
+                        .replace(Regex("~\\*+"), "") // Убираем остатки типа ~* или ~**
+                        .replace(Regex("\\*~+"), "") // Убираем остатки типа *~ или *~~
+                        .trim()
+                    val bodyText = cleanedBody.ifEmpty { Strings.noText }
                     val isHtml = bodyText.contains("<html", ignoreCase = true) || 
                                  bodyText.contains("<body", ignoreCase = true) ||
                                  bodyText.contains("<div", ignoreCase = true) ||

@@ -237,6 +237,9 @@ class MainActivity : ComponentActivity() {
             // Контроллер отложенного удаления
             val deletionController = remember { com.iwo.mailclient.ui.components.DeletionController() }
             
+            // Контроллер отложенной отправки
+            val sendController = remember { com.iwo.mailclient.ui.components.SendController() }
+            
             // Кастомный TextToolbar с правильным порядком кнопок
             val view = androidx.compose.ui.platform.LocalView.current
             val customTextToolbar = remember(view) { com.iwo.mailclient.ui.theme.CustomTextToolbar(view) }
@@ -244,6 +247,7 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(
                 LocalLanguage provides currentLanguage,
                 com.iwo.mailclient.ui.components.LocalDeletionController provides deletionController,
+                com.iwo.mailclient.ui.components.LocalSendController provides sendController,
                 androidx.compose.ui.platform.LocalTextToolbar provides customTextToolbar
             ) {
                 ExchangeMailTheme(fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled) {
@@ -270,10 +274,16 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         
-                        // Плашка прогресса удаления поверх всего
+                        // Плашка прогресса удаления (внизу экрана)
                         com.iwo.mailclient.ui.components.DeletionProgressBar(
                             controller = deletionController,
-                            modifier = Modifier.align(Alignment.TopCenter)
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                        
+                        // Плашка прогресса отправки (внизу экрана, зелёная)
+                        com.iwo.mailclient.ui.components.SendProgressBar(
+                            controller = sendController,
+                            modifier = Modifier.align(Alignment.BottomCenter)
                         )
                     }
                     
@@ -340,16 +350,19 @@ class MainActivity : ComponentActivity() {
         val accountId = intent.getLongExtra(EXTRA_SWITCH_ACCOUNT_ID, -1L)
         if (accountId > 0) {
             switchToAccountId.value = accountId
+            intent.removeExtra(EXTRA_SWITCH_ACCOUNT_ID)
         }
         
         val emailId = intent.getStringExtra(EXTRA_OPEN_EMAIL_ID)
         if (emailId != null) {
             openEmailId.value = emailId
+            intent.removeExtra(EXTRA_OPEN_EMAIL_ID)
             return
         }
         
         if (intent.getBooleanExtra(EXTRA_OPEN_INBOX_UNREAD, false)) {
             openInboxUnread.value = true
+            intent.removeExtra(EXTRA_OPEN_INBOX_UNREAD)
             return
         }
         
@@ -360,6 +373,9 @@ class MainActivity : ComponentActivity() {
                     intent.data?.let { uri ->
                         if (uri.scheme == "mailto") {
                             parseMailtoUri(uri)
+                            // Очищаем intent чтобы не обрабатывать повторно при повороте экрана
+                            intent.data = null
+                            intent.action = null
                         }
                     }
                 } catch (_: Exception) { }
@@ -371,12 +387,16 @@ class MainActivity : ComponentActivity() {
                         ?: intent.getStringArrayExtra(Intent.EXTRA_EMAIL)?.firstOrNull()
                     composeSubject.value = intent.getStringExtra(Intent.EXTRA_SUBJECT)
                     composeBody.value = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    // Очищаем intent
+                    intent.action = null
                 } catch (_: Exception) { }
             }
             Intent.ACTION_SEND_MULTIPLE -> {
                 try {
                     composeSubject.value = intent.getStringExtra(Intent.EXTRA_SUBJECT)
                     composeBody.value = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    // Очищаем intent
+                    intent.action = null
                 } catch (_: Exception) { }
             }
         }

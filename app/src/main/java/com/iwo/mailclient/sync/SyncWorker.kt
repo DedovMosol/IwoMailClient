@@ -485,6 +485,7 @@ class SyncWorker(
             }
             
             schedule(context, effectiveInterval.toLong(), wifiOnly)
+            PushService.scheduleSyncAlarm(context, effectiveInterval)
         }
         
         fun cancel(context: Context) {

@@ -32,7 +32,10 @@ import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.theme.AppIcons
 import com.iwo.mailclient.ui.theme.LocalColorTheme
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -56,6 +59,12 @@ fun NotesScreen(
     val noteRepo = remember { RepositoryProvider.getNoteRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     
+    // Отдельный scope для синхронизации, чтобы не отменялась при навигации
+    val syncScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
+    DisposableEffect(Unit) {
+        onDispose { syncScope.cancel() }
+    }
+    
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
     
@@ -69,9 +78,22 @@ fun NotesScreen(
         delay(300)
         debouncedSearchQuery = searchQuery
     }
-    var isSyncing by remember { mutableStateOf(false) }
+    var isSyncing by rememberSaveable { mutableStateOf(false) }
+    
+    // Автоматическая синхронизация при первом открытии если нет данных
+    LaunchedEffect(accountId, notes.isEmpty()) {
+        if (accountId > 0 && notes.isEmpty() && !isSyncing) {
+            isSyncing = true
+            syncScope.launch {
+                withContext(Dispatchers.IO) {
+                    noteRepo.syncNotes(accountId)
+                }
+                isSyncing = false
+            }
+        }
+    }
     var selectedNote by remember { mutableStateOf<NoteEntity?>(null) }
-    var showCreateDialog by remember { mutableStateOf(false) }
+    var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var editingNote by remember { mutableStateOf<NoteEntity?>(null) }
     var isCreating by remember { mutableStateOf(false) }
     
@@ -193,7 +215,7 @@ fun NotesScreen(
                     val notesSyncedText = Strings.notesSynced
                     IconButton(
                         onClick = {
-                            scope.launch {
+                            syncScope.launch {
                                 isSyncing = true
                                 val result = withContext(Dispatchers.IO) {
                                     noteRepo.syncNotes(accountId)
@@ -455,9 +477,7 @@ private fun NoteDetailDialog(
             )
         },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState())
-            ) {
+            Column {
                 // Дата
                 Text(
                     text = dateFormat.format(Date(note.lastModified)),

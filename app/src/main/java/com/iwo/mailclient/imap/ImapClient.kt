@@ -97,6 +97,97 @@ class ImapClient(
             Result.failure(e)
         }
     }
+    
+    suspend fun createFolder(folderName: String): Result<FolderEntity> = withContext(Dispatchers.IO) {
+        try {
+            val store = store ?: return@withContext Result.failure(Exception("Not connected"))
+            val newFolder = store.getFolder(folderName)
+            
+            if (newFolder.exists()) {
+                return@withContext Result.failure(Exception("Папка уже существует"))
+            }
+            
+            val created = newFolder.create(Folder.HOLDS_MESSAGES)
+            if (!created) {
+                return@withContext Result.failure(Exception("Не удалось создать папку"))
+            }
+            
+            Result.success(FolderEntity(
+                id = "${account.id}_$folderName",
+                accountId = account.id,
+                serverId = folderName,
+                displayName = folderName,
+                parentId = "",
+                type = 1, // User folder
+                syncKey = "0",
+                unreadCount = 0
+            ))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun deleteFolder(folderName: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val store = store ?: return@withContext Result.failure(Exception("Not connected"))
+            val folder = store.getFolder(folderName)
+            
+            if (!folder.exists()) {
+                return@withContext Result.failure(Exception("Папка не найдена"))
+            }
+            
+            if (folder.isOpen) {
+                folder.close(false)
+            }
+            
+            val deleted = folder.delete(true)
+            if (!deleted) {
+                return@withContext Result.failure(Exception("Не удалось удалить папку"))
+            }
+            
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+    
+    suspend fun renameFolder(oldName: String, newName: String): Result<FolderEntity> = withContext(Dispatchers.IO) {
+        try {
+            val store = store ?: return@withContext Result.failure(Exception("Not connected"))
+            val oldFolder = store.getFolder(oldName)
+            
+            if (!oldFolder.exists()) {
+                return@withContext Result.failure(Exception("Папка не найдена"))
+            }
+            
+            val newFolder = store.getFolder(newName)
+            if (newFolder.exists()) {
+                return@withContext Result.failure(Exception("Папка с таким именем уже существует"))
+            }
+            
+            if (oldFolder.isOpen) {
+                oldFolder.close(false)
+            }
+            
+            val renamed = oldFolder.renameTo(newFolder)
+            if (!renamed) {
+                return@withContext Result.failure(Exception("Не удалось переименовать папку"))
+            }
+            
+            Result.success(FolderEntity(
+                id = "${account.id}_$newName",
+                accountId = account.id,
+                serverId = newName,
+                displayName = newName,
+                parentId = "",
+                type = 1,
+                syncKey = "0",
+                unreadCount = 0
+            ))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     
     suspend fun getEmails(folderName: String, limit: Int = 50): Result<List<EmailEntity>> = withContext(Dispatchers.IO) {

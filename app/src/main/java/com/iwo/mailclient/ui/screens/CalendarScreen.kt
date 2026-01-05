@@ -43,7 +43,10 @@ import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.theme.AppIcons
 import com.iwo.mailclient.ui.theme.LocalColorTheme
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -65,6 +68,12 @@ fun CalendarScreen(
     val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     
+    // Отдельный scope для синхронизации, чтобы не отменялась при навигации
+    val syncScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
+    DisposableEffect(Unit) {
+        onDispose { syncScope.cancel() }
+    }
+    
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
 
@@ -78,11 +87,24 @@ fun CalendarScreen(
         delay(300)
         debouncedSearchQuery = searchQuery
     }
-    var isSyncing by remember { mutableStateOf(false) }
+    var isSyncing by rememberSaveable { mutableStateOf(false) }
+    
+    // Автоматическая синхронизация при первом открытии если нет данных
+    LaunchedEffect(accountId, events.isEmpty()) {
+        if (accountId > 0 && events.isEmpty() && !isSyncing) {
+            isSyncing = true
+            syncScope.launch {
+                withContext(Dispatchers.IO) {
+                    calendarRepo.syncCalendar(accountId)
+                }
+                isSyncing = false
+            }
+        }
+    }
     var selectedEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
     var selectedDate by remember { mutableStateOf(Date()) }
-    var showCreateDialog by remember { mutableStateOf(false) }
+    var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var editingEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var isCreating by remember { mutableStateOf(false) }
     
@@ -111,6 +133,7 @@ fun CalendarScreen(
         EventDetailDialog(
             event = event,
             calendarRepo = calendarRepo,
+            currentUserEmail = activeAccount?.email ?: "",
             onDismiss = { selectedEvent = null },
             onComposeClick = onComposeClick,
             onEditClick = { 
@@ -155,6 +178,11 @@ fun CalendarScreen(
             onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees ->
                 scope.launch {
                     isCreating = true
+                    // Парсим список участников
+                    val attendeeList = attendees.split(",", ";")
+                        .map { it.trim() }
+                        .filter { it.contains("@") }
+                    
                     // Захватываем editingEvent в локальную переменную для безопасного доступа
                     val eventToEdit = editingEvent
                     val result = if (eventToEdit != null) {
@@ -173,6 +201,7 @@ fun CalendarScreen(
                         }
                     } else {
                         withContext(Dispatchers.IO) {
+                            // Создаём событие с участниками - Exchange сам отправит приглашения
                             calendarRepo.createEvent(
                                 accountId = accountId,
                                 subject = subject,
@@ -182,37 +211,17 @@ fun CalendarScreen(
                                 body = body,
                                 allDayEvent = allDayEvent,
                                 reminder = reminder,
-                                busyStatus = busyStatus
+                                busyStatus = busyStatus,
+                                attendees = attendeeList
                             )
-                        }
-                    }
-                    
-                    // Отправляем приглашения если указаны участники
-                    var invitationError: String? = null
-                    if (result is EasResult.Success && attendees.isNotBlank()) {
-                        val invResult = calendarRepo.sendMeetingInvitation(
-                            accountId = accountId,
-                            subject = subject,
-                            startTime = startTime,
-                            endTime = endTime,
-                            location = location,
-                            body = body,
-                            attendees = attendees
-                        )
-                        if (invResult is EasResult.Error) {
-                            invitationError = invResult.message
                         }
                     }
                     
                     isCreating = false
                     when (result) {
                         is EasResult.Success -> {
-                            val message = if (attendees.isNotBlank()) {
-                                if (invitationError != null) {
-                                    "${if (isEditing) eventUpdatedText else eventCreatedText}. Ошибка приглашения: $invitationError"
-                                } else {
-                                    "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
-                                }
+                            val message = if (attendeeList.isNotEmpty()) {
+                                "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
                             } else {
                                 if (isEditing) eventUpdatedText else eventCreatedText
                             }
@@ -265,7 +274,7 @@ fun CalendarScreen(
                     val calendarSyncedText = Strings.calendarSynced
                     IconButton(
                         onClick = {
-                            scope.launch {
+                            syncScope.launch {
                                 isSyncing = true
                                 val result = withContext(Dispatchers.IO) {
                                     calendarRepo.syncCalendar(accountId)
@@ -905,11 +914,13 @@ private fun DayCell(
 private fun EventDetailDialog(
     event: CalendarEventEntity,
     calendarRepo: CalendarRepository,
+    currentUserEmail: String = "",
     onDismiss: () -> Unit,
     onComposeClick: (String) -> Unit = {},
     onEditClick: () -> Unit = {},
     onDeleteClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
@@ -919,6 +930,12 @@ private fun EventDetailDialog(
     // Извлекаем email из строки организатора
     val organizerEmail = remember(event.organizer) {
         EMAIL_REGEX.find(event.organizer)?.value ?: ""
+    }
+    
+    // Проверяем что я не организатор (тогда показываем кнопки ответа)
+    val isOrganizer = remember(organizerEmail, currentUserEmail) {
+        organizerEmail.isNotBlank() && currentUserEmail.isNotBlank() &&
+        organizerEmail.equals(currentUserEmail, ignoreCase = true)
     }
     
     // Проверяем есть ли что показывать в расширенном виде
@@ -958,9 +975,8 @@ private fun EventDetailDialog(
             )
         },
         text = {
-            Column(
-                modifier = if (expanded) Modifier.verticalScroll(rememberScrollState()) else Modifier
-            ) {
+            // Не добавляем verticalScroll - ScaledAlertDialog уже имеет скролл
+            Column {
                 // Дата/время
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1084,6 +1100,7 @@ private fun EventDetailDialog(
                                 )
                             }
                         }
+                        
                     }
                     
                     // Участники
@@ -1107,11 +1124,25 @@ private fun EventDetailDialog(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 attendees.forEach { attendee ->
-                                    val displayText = if (attendee.name.isNotBlank()) "${attendee.name} <${attendee.email}>" else attendee.email
+                                    val nameOrEmail = if (attendee.name.isNotBlank()) attendee.name else attendee.email
+                                    // Статус участника: 0=Unknown, 2=Tentative, 3=Accepted, 4=Declined, 5=Not responded
+                                    val statusText = when (attendee.status) {
+                                        2 -> " (${Strings.statusTentative})"
+                                        3 -> " (${Strings.statusAccepted})"
+                                        4 -> " (${Strings.statusDeclined})"
+                                        5 -> " (${Strings.statusNotResponded})"
+                                        else -> ""
+                                    }
+                                    val displayText = "$nameOrEmail$statusText"
                                     Text(
                                         text = displayText,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = if (attendee.email.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        color = when (attendee.status) {
+                                            3 -> MaterialTheme.colorScheme.primary // Accepted - синий
+                                            4 -> MaterialTheme.colorScheme.error // Declined - красный
+                                            2 -> MaterialTheme.colorScheme.tertiary // Tentative - третичный
+                                            else -> MaterialTheme.colorScheme.onSurface
+                                        },
                                         modifier = if (attendee.email.isNotBlank()) {
                                             Modifier.clickable { onComposeClick(attendee.email) }
                                         } else Modifier

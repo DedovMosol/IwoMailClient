@@ -42,7 +42,8 @@ object Strings {
     val empty: String @Composable get() = if (isRussian()) "Пусто" else "Empty"
     
     // Главный экран
-    val hello: String @Composable get() = if (isRussian()) "Привет! 👋" else "Hello! 👋"
+    val hello: String @Composable get() = if (isRussian()) "Привет!" else "Hello!"
+    val waveEmoji: String get() = "👋"
     val inbox: String @Composable get() = if (isRussian()) "Входящие" else "Inbox"
     val unread: String @Composable get() = if (isRussian()) "Непрочитано" else "Unread"
     val favorites: String @Composable get() = if (isRussian()) "Избранные письма" else "Favorites"
@@ -567,6 +568,15 @@ object Strings {
     val showLess: String @Composable get() = if (isRussian()) "Свернуть" else "Show less"
     val sortNewestFirst: String @Composable get() = if (isRussian()) "Сначала новые" else "Newest first"
     val sortOldestFirst: String @Composable get() = if (isRussian()) "Сначала старые" else "Oldest first"
+    val meetingInvitation: String @Composable get() = if (isRussian()) "Приглашение на встречу" else "Meeting invitation"
+    val accept: String @Composable get() = if (isRussian()) "Принять" else "Accept"
+    val tentative: String @Composable get() = if (isRussian()) "Под вопросом" else "Tentative"
+    val decline: String @Composable get() = if (isRussian()) "Отклонить" else "Decline"
+    val responseSent: String @Composable get() = if (isRussian()) "Ответ отправлен" else "Response sent"
+    val responseAccepted: String @Composable get() = if (isRussian()) "Вы приняли приглашение" else "You accepted"
+    val responseTentative: String @Composable get() = if (isRussian()) "Вы ответили «Под вопросом»" else "You tentatively accepted"
+    val responseDeclined: String @Composable get() = if (isRussian()) "Вы отклонили приглашение" else "You declined"
+    val notResponded: String @Composable get() = if (isRussian()) "Ожидает ответа" else "Not responded"
     
     // Задачи
     val noTasks: String @Composable get() = if (isRussian()) "Нет задач" else "No tasks"
@@ -745,7 +755,6 @@ object Strings {
     val addToTasks: String @Composable get() = if (isRussian()) "Добавить в задачи" else "Add to tasks"
     val taskAddedToCalendar: String @Composable get() = if (isRussian()) "Задача добавлена в календарь" else "Task added to calendar"
     val taskAddedToTasks: String @Composable get() = if (isRussian()) "Задача добавлена" else "Task added"
-    val meetingInvitation: String @Composable get() = if (isRussian()) "Приглашение на встречу" else "Meeting invitation"
     val acceptInvitation: String @Composable get() = if (isRussian()) "Принять" else "Accept"
     val declineInvitation: String @Composable get() = if (isRussian()) "Отклонить" else "Decline"
     val tentativeInvitation: String @Composable get() = if (isRussian()) "Под вопросом" else "Tentative"
@@ -756,9 +765,12 @@ object Strings {
     val titleRequired: String @Composable get() = if (isRussian()) "Введите название" else "Enter title"
     val busyStatus: String @Composable get() = if (isRussian()) "Статус" else "Status"
     val statusFree: String @Composable get() = if (isRussian()) "Свободен" else "Free"
-    val statusTentative: String @Composable get() = if (isRussian()) "Под вопросом" else "Tentative"
+    val statusTentative: String @Composable get() = if (isRussian()) "под вопросом" else "tentative"
     val statusBusy: String @Composable get() = if (isRussian()) "Занят" else "Busy"
     val statusOof: String @Composable get() = if (isRussian()) "Нет на месте" else "Out of office"
+    val statusAccepted: String @Composable get() = if (isRussian()) "принял" else "accepted"
+    val statusDeclined: String @Composable get() = if (isRussian()) "отклонил" else "declined"
+    val statusNotResponded: String @Composable get() = if (isRussian()) "не ответил" else "not responded"
     
     // Создание/редактирование заметок
     val newNote: String @Composable get() = if (isRussian()) "Новая заметка" else "New note"

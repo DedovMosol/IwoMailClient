@@ -46,7 +46,8 @@ fun SettingsScreen(
     onBackClick: () -> Unit,
     onAddAccount: () -> Unit = {},
     onNavigateToPersonalization: () -> Unit = {},
-    onNavigateToAccountSettings: (Long) -> Unit = {}
+    onNavigateToAccountSettings: (Long) -> Unit = {},
+    onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -108,7 +109,13 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text(Strings.settings, color = Color.White) },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    IconButton(onClick = {
+                        if (accounts.isEmpty()) {
+                            onNoAccountsLeft()
+                        } else {
+                            onBackClick()
+                        }
+                    }) {
                         Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
@@ -138,7 +145,7 @@ fun SettingsScreen(
                 )
             }
             
-            items(accounts) { account ->
+            items(accounts, key = { it.id }) { account ->
                 AccountCard(
                     account = account,
                     onDeleteClick = { accountToDelete = account },
@@ -302,7 +309,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("iwo Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.5.0") },
+                    supportingContent = { Text("${Strings.version} 1.5.1") },
                     leadingContent = { Icon(AppIcons.Info, null) }
                 )
             }

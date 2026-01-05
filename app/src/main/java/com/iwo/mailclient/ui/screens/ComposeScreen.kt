@@ -127,6 +127,9 @@ fun ComposeScreen(
     val mailRepo = remember { MailRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
     
+    // Контроллер отложенной отправки
+    val sendController = com.iwo.mailclient.ui.components.LocalSendController.current
+    
     // Аккаунт отправителя
     var activeAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var allAccounts by remember { mutableStateOf<List<AccountEntity>>(emptyList()) }
@@ -206,7 +209,7 @@ fun ComposeScreen(
     val focusManager = LocalFocusManager.current
     
     // Функция поиска подсказок
-    fun searchSuggestions(query: String, accountId: Long) {
+    fun searchSuggestions(query: String, accountId: Long, accountEmail: String) {
         suggestionSearchJob?.cancel()
         if (query.length < 2) {
             toSuggestions = emptyList()
@@ -215,22 +218,36 @@ fun ComposeScreen(
         }
         
         // Email текущего аккаунта — не предлагаем самого себя
-        val ownEmail = activeAccount?.email?.lowercase() ?: ""
+        val ownEmail = accountEmail.lowercase()
         
         suggestionSearchJob = scope.launch {
             val suggestions = mutableListOf<EmailSuggestion>()
             val seenEmails = mutableSetOf<String>() // Для отслеживания дубликатов
             
+            // Функция нормализации email - извлекает email из формата "Name <email>" и приводит к lowercase
+            fun normalizeEmail(email: String): String {
+                val trimmed = email.trim()
+                // Если есть угловые скобки, извлекаем email из них
+                val extracted = if (trimmed.contains("<") && trimmed.contains(">")) {
+                    trimmed.substringAfter("<").substringBefore(">")
+                } else {
+                    trimmed.removePrefix("<").removeSuffix(">")
+                }
+                return extracted.trim().lowercase()
+            }
+            
+            val ownEmailNormalized = normalizeEmail(ownEmail)
+            
             // 1. Поиск по локальным контактам (мгновенно)
             withContext(Dispatchers.IO) {
-                val contacts = database.contactDao().searchForAutocomplete(accountId, query, 5)
+                val contacts = database.contactDao().searchForAutocomplete(accountId, query, ownEmail, 5)
                 contacts.forEach { contact ->
-                    val emailLower = contact.email.lowercase()
+                    val emailNormalized = normalizeEmail(contact.email)
                     // Не добавляем дубликаты и самого себя
-                    if (emailLower !in seenEmails && emailLower != ownEmail) {
-                        seenEmails.add(emailLower)
+                    if (emailNormalized.isNotBlank() && emailNormalized !in seenEmails && emailNormalized != ownEmailNormalized) {
+                        seenEmails.add(emailNormalized)
                         suggestions.add(EmailSuggestion(
-                            email = contact.email,
+                            email = contact.email.trim().removePrefix("<").removeSuffix(">").trim(),
                             name = contact.displayName,
                             source = SuggestionSource.CONTACT
                         ))
@@ -240,14 +257,15 @@ fun ComposeScreen(
             
             // 2. Поиск по истории писем (мгновенно)
             withContext(Dispatchers.IO) {
-                val history = database.emailDao().searchEmailHistory(accountId, query, 5)
+                val history = database.emailDao().searchEmailHistory(accountId, query, ownEmail, 5)
                 history.forEach { result ->
-                    val emailLower = result.email.lowercase()
+                    // Нормализуем email - убираем <>, пробелы и приводим к нижнему регистру
+                    val emailNormalized = normalizeEmail(result.email)
                     // Не добавляем дубликаты и самого себя
-                    if (emailLower !in seenEmails && emailLower != ownEmail) {
-                        seenEmails.add(emailLower)
+                    if (emailNormalized.isNotBlank() && emailNormalized !in seenEmails && emailNormalized != ownEmailNormalized) {
+                        seenEmails.add(emailNormalized)
                         suggestions.add(EmailSuggestion(
-                            email = result.email,
+                            email = result.email.trim().removePrefix("<").removeSuffix(">").trim(),
                             name = result.name,
                             source = SuggestionSource.HISTORY
                         ))
@@ -269,12 +287,12 @@ fun ComposeScreen(
                         }
                         if (galResult is EasResult.Success) {
                             val galSuggestions = galResult.data.take(5).mapNotNull { gal ->
-                                val emailLower = gal.email.lowercase()
+                                val emailNormalized = normalizeEmail(gal.email)
                                 // Не добавляем дубликаты и самого себя
-                                if (emailLower !in seenEmails && emailLower != ownEmail) {
-                                    seenEmails.add(emailLower)
+                                if (emailNormalized !in seenEmails && emailNormalized != ownEmailNormalized) {
+                                    seenEmails.add(emailNormalized)
                                     EmailSuggestion(
-                                        email = gal.email,
+                                        email = gal.email.trim().removePrefix("<").removeSuffix(">").trim(),
                                         name = gal.displayName,
                                         source = SuggestionSource.GAL
                                     )
@@ -289,29 +307,50 @@ fun ComposeScreen(
         }
     }
     
+    // Отслеживание начального аккаунта для определения изменений
+    var initialAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
+    
     // Загружаем активный аккаунт и все аккаунты
     LaunchedEffect(Unit) {
         activeAccount = accountRepo.getActiveAccountSync()
-        // Загружаем подписи для аккаунта
-        activeAccount?.let { account ->
-            signatures = database.signatureDao().getSignaturesByAccountList(account.id)
-            // Выбираем подпись по умолчанию или первую
-            selectedSignature = signatures.find { it.isDefault } ?: signatures.firstOrNull()
-        }
-        // Подставляем подпись для нового письма (если нет ответа/пересылки и body пустой)
-        if (replyToEmailId == null && forwardEmailId == null && editDraftId == null && body.isEmpty()) {
-            selectedSignature?.text?.takeIf { it.isNotBlank() }?.let { sig ->
-                body = "\n\n--\n$sig"
-            } ?: activeAccount?.signature?.takeIf { it.isNotBlank() }?.let { sig ->
-                // Fallback на старую подпись из аккаунта
-                body = "\n\n--\n$sig"
-            }
+        // Сохраняем начальный аккаунт
+        if (initialAccountId == null) {
+            initialAccountId = activeAccount?.id
         }
         // Подставляем email из контактов
         if (initialToEmail != null && to.isEmpty()) {
             to = initialToEmail
         }
         accountRepo.accounts.collect { allAccounts = it }
+    }
+    
+    // Перезагружаем подписи при смене аккаунта
+    LaunchedEffect(activeAccount?.id) {
+        activeAccount?.let { account ->
+            signatures = database.signatureDao().getSignaturesByAccountList(account.id)
+            // Выбираем подпись по умолчанию или первую
+            val newSignature = signatures.find { it.isDefault } ?: signatures.firstOrNull()
+            
+            // Обновляем подпись в body только для нового письма (не reply/forward/draft)
+            if (replyToEmailId == null && forwardEmailId == null && editDraftId == null) {
+                val oldSignatureText = selectedSignature?.text ?: account.signature
+                val newSignatureText = newSignature?.text ?: ""
+                
+                // Заменяем старую подпись на новую
+                if (body.contains("\n\n--\n")) {
+                    body = body.replace(Regex("\n\n--\n.*", RegexOption.DOT_MATCHES_ALL), 
+                        if (newSignatureText.isNotBlank()) "\n\n--\n$newSignatureText" else "")
+                } else if (newSignatureText.isNotBlank()) {
+                    body = body + "\n\n--\n$newSignatureText"
+                }
+            }
+            
+            selectedSignature = newSignature
+        } ?: run {
+            // Аккаунт не выбран — очищаем подписи
+            signatures = emptyList()
+            selectedSignature = null
+        }
     }
     
     // Лаунчер для выбора файлов
@@ -499,97 +538,63 @@ fun ComposeScreen(
         }
     }
     
+    // Локализованная строка для прогресс-бара
+    val sendingMessageText = if (currentLanguage == AppLanguage.RUSSIAN) "Отправка письма..." else "Sending email..."
+    
     fun sendEmail(scheduledTime: Long? = null) {
-        scope.launch {
-            isSending = true
-            
-            val account = activeAccount
-            if (account == null) {
-                Toast.makeText(context, accountNotFoundMsg, Toast.LENGTH_SHORT).show()
-                isSending = false
-                return@launch
-            }
-            
-            val password = accountRepo.getPassword(account.id)
-            if (password == null) {
-                Toast.makeText(context, authErrorMsg, Toast.LENGTH_SHORT).show()
-                isSending = false
-                return@launch
-            }
-            
-            // Если запланировано - создаём WorkManager задачу
-            if (scheduledTime != null) {
-                val delay = scheduledTime - System.currentTimeMillis()
-                if (delay > 0) {
-                    scheduleEmail(context, account.id, to, cc, bcc, subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
-                    Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
-                    onSent()
-                    isSending = false
-                    return@launch
-                }
-            }
-            
-            // Читаем данные вложений
-            val attachmentDataList = withContext(Dispatchers.IO) {
-                attachments.mapNotNull { att ->
-                    try {
-                        val bytes = context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
-                        if (bytes != null) Triple(att.name, att.mimeType, bytes) else null
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
-            }
-            
-            val client = EasClient(
-                serverUrl = account.serverUrl,
-                username = account.username,
-                password = password,
-                domain = account.domain,
-                acceptAllCerts = account.acceptAllCerts,
-                deviceIdSuffix = account.email,
-                certificatePath = account.certificatePath
-            )
-            
-            val result = if (attachmentDataList.isEmpty()) {
-                client.sendMail(to, subject, body, cc, bcc, importance = if (highPriority) 2 else 1, requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt)
-            } else {
-                client.sendMailWithAttachments(to, subject, body, cc, bcc, attachmentDataList, requestReadReceipt, requestDeliveryReceipt, importance = if (highPriority) 2 else 1)
-            }
-            
-            when (result) {
-                is EasResult.Success -> {
-                    // Удаляем черновик если редактировали
-                    editDraftId?.let { draftId ->
-                        withContext(Dispatchers.IO) {
-                            database.emailDao().delete(draftId)
-                        }
-                    }
-                    val isRussian = currentLanguage == AppLanguage.RUSSIAN
-                    Toast.makeText(context, NotificationStrings.getEmailSent(isRussian), Toast.LENGTH_SHORT).show()
-                    com.iwo.mailclient.util.SoundPlayer.playSendSound(context)
-                    
-                    // Синхронизируем папку "Отправленные" в фоне (не блокируем UI)
-                    val accountId = account.id
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            kotlinx.coroutines.delay(2000) // Даём серверу время обработать
-                            val sentFolder = database.folderDao().getFoldersByAccountList(accountId)
-                                .find { it.type == 5 } // type 5 = Sent
-                            sentFolder?.let { folder ->
-                                mailRepo.syncEmails(accountId, folder.serverId)
-                            }
-                        } catch (_: Exception) { }
-                    }
-                    
-                    onSent()
-                }
-                is EasResult.Error -> {
-                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                }
-            }
-            isSending = false
+        val account = activeAccount
+        if (account == null) {
+            Toast.makeText(context, accountNotFoundMsg, Toast.LENGTH_SHORT).show()
+            return
         }
+        
+        // Если запланировано - создаём WorkManager задачу (без обратного отсчёта)
+        if (scheduledTime != null) {
+            val delay = scheduledTime - System.currentTimeMillis()
+            if (delay > 0) {
+                scheduleEmail(context, account.id, to, cc, bcc, subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
+                Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
+                onSent()
+                return
+            }
+        }
+        
+        // Читаем данные вложений синхронно перед закрытием экрана
+        val attachmentDataList = attachments.mapNotNull { att ->
+            try {
+                context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
+                    ?.let { bytes -> com.iwo.mailclient.ui.components.AttachmentData(att.name, att.mimeType, bytes) }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        
+        // Создаём PendingEmail
+        val pendingEmail = com.iwo.mailclient.ui.components.PendingEmail(
+            account = account,
+            to = to,
+            cc = cc,
+            bcc = bcc,
+            subject = subject,
+            body = body,
+            attachments = attachmentDataList,
+            importance = if (highPriority) 2 else 1,
+            requestReadReceipt = requestReadReceipt,
+            requestDeliveryReceipt = requestDeliveryReceipt,
+            draftId = editDraftId // Черновик удалится после успешной отправки
+        )
+        
+        // Запускаем отложенную отправку и закрываем экран
+        sendController.startSend(
+            email = pendingEmail,
+            message = sendingMessageText,
+            context = context,
+            mailRepo = mailRepo,
+            onSuccess = { },
+            onCancel = { }
+        )
+        
+        onSent()
     }
     
     // Диалог подтверждения выхода — сохранить или нет
@@ -790,7 +795,7 @@ fun ComposeScreen(
     
     // Перехват системного жеста "назад" (свайп)
     BackHandler {
-        val hasContent = to.isNotBlank() || subject.isNotBlank() || body.isNotBlank() || attachments.isNotEmpty()
+        val hasContent = to.isNotBlank() || subject.isNotBlank() || body.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
         if (hasContent) {
             showDiscardDialog = true
         } else {
@@ -805,7 +810,7 @@ fun ComposeScreen(
                 navigationIcon = {
                     IconButton(onClick = {
                         // Если есть контент — показываем диалог
-                        val hasContent = to.isNotBlank() || subject.isNotBlank() || body.isNotBlank() || attachments.isNotEmpty()
+                        val hasContent = to.isNotBlank() || subject.isNotBlank() || body.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
                         if (hasContent) {
                             showDiscardDialog = true
                         } else {
@@ -944,8 +949,8 @@ fun ComposeScreen(
                         value = to,
                         onValueChange = { newValue ->
                             to = newValue
-                            activeAccount?.id?.let { accountId ->
-                                searchSuggestions(newValue, accountId)
+                            activeAccount?.let { acc ->
+                                searchSuggestions(newValue, acc.id, acc.email)
                             }
                         },
                         modifier = Modifier

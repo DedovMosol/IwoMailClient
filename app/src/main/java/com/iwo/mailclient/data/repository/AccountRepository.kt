@@ -16,6 +16,7 @@ import com.iwo.mailclient.imap.ImapClient
 import com.iwo.mailclient.pop3.Pop3Client
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -198,6 +199,20 @@ class AccountRepository(private val context: Context) {
                 
                 // Запускаем немедленную синхронизацию для нового аккаунта
                 com.iwo.mailclient.sync.SyncWorker.syncNow(context)
+                
+                // Для Exchange аккаунтов запускаем синхронизацию календаря и задач в фоне
+                if (accountType == AccountType.EXCHANGE) {
+                    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            val calendarRepo = CalendarRepository(context)
+                            calendarRepo.syncCalendar(accountId)
+                        } catch (_: Exception) { }
+                        try {
+                            val taskRepo = TaskRepository(context)
+                            taskRepo.syncTasks(accountId)
+                        } catch (_: Exception) { }
+                    }
+                }
                 
                 // Запускаем PushService только для Exchange аккаунтов с режимом PUSH
                 if (accountType == AccountType.EXCHANGE && syncMode == SyncMode.PUSH) {

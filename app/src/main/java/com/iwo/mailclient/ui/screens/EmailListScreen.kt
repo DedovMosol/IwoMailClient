@@ -277,19 +277,19 @@ fun EmailListScreen(
 
     fun refresh() {
         if (isFavorites) return
-        folder?.let { f ->
-            scope.launch {
-                isRefreshing = true
-                errorMessage = null
-                
-                // Синхронизируем папку (для Черновиков вызовется syncDrafts)
-                val result = withContext(Dispatchers.IO) { mailRepo.syncEmails(f.accountId, folderId) }
-                when (result) {
-                    is EasResult.Success -> {}
-                    is EasResult.Error -> errorMessage = result.message
-                }
-                isRefreshing = false
+        // Используем folder.accountId если есть, иначе activeAccount.id
+        val accountId = folder?.accountId ?: activeAccount?.id ?: return
+        scope.launch {
+            isRefreshing = true
+            errorMessage = null
+            
+            // Синхронизируем папку (для Черновиков вызовется syncDrafts)
+            val result = withContext(Dispatchers.IO) { mailRepo.syncEmails(accountId, folderId) }
+            when (result) {
+                is EasResult.Success -> {}
+                is EasResult.Error -> errorMessage = result.message
             }
+            isRefreshing = false
         }
     }
     
@@ -358,7 +358,20 @@ fun EmailListScreen(
     
     fun markSelectedAsRead(read: Boolean) {
         scope.launch {
-            selectedIds.forEach { id -> mailRepo.markAsRead(id, read) }
+            var hasError = false
+            var errorMsg = ""
+            selectedIds.forEach { id -> 
+                when (val result = mailRepo.markAsRead(id, read)) {
+                    is EasResult.Success -> { /* OK */ }
+                    is EasResult.Error -> {
+                        hasError = true
+                        errorMsg = result.message
+                    }
+                }
+            }
+            if (hasError) {
+                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
+            }
             selectedIds = emptySet()
         }
     }
@@ -535,7 +548,8 @@ fun EmailListScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    LazyColumn {
+                    // Ограничиваем высоту LazyColumn чтобы избежать вложенного скролла
+                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
                         items(availableFolders) { targetFolder ->
                             ListItem(
                                 headlineContent = { Text(Strings.getFolderName(targetFolder.type, targetFolder.displayName)) },
@@ -1011,13 +1025,6 @@ private fun EmailList(
     val isAtTop by remember { derivedStateOf { listState.firstVisibleItemIndex < 3 } }
     val showScrollButton = emails.size > 5
     val pullRefreshState = rememberPullRefreshState(isRefreshing, onRetry)
-    
-    // Автоскролл вверх при входе в режим выделения
-    LaunchedEffect(isSelectionMode) {
-        if (isSelectionMode) {
-            listState.animateScrollToItem(0)
-        }
-    }
     
     // Автоскролл вверх при появлении новых писем (во время синхронизации)
     var previousEmailCount by remember { mutableStateOf(emails.size) }

@@ -252,6 +252,7 @@ fun AppNavigation(
     
     // Обработка переключения аккаунта при клике на уведомление
     var accountSwitchHandled by remember { mutableStateOf(false) }
+    var accountSwitchCompleted by remember { mutableStateOf(switchToAccountId == null) }
     
     LaunchedEffect(switchToAccountId, hasCheckedAccounts) {
         if (switchToAccountId != null && switchToAccountId > 0 && !accountSwitchHandled && hasCheckedAccounts) {
@@ -260,8 +261,16 @@ fun AppNavigation(
                 withContext(Dispatchers.IO) {
                     accountRepo.setActiveAccount(switchToAccountId)
                 }
+                // Задержка чтобы Flow успел обновиться
+                kotlinx.coroutines.delay(100)
+                accountSwitchCompleted = true
                 onAccountSwitched()
-            } catch (_: Exception) { }
+            } catch (_: Exception) {
+                accountSwitchCompleted = true
+            }
+        } else if (switchToAccountId == null && hasCheckedAccounts) {
+            // Нет переключения аккаунта — сразу готовы
+            accountSwitchCompleted = true
         }
     }
     
@@ -290,9 +299,9 @@ fun AppNavigation(
     // Обработка перехода на конкретное письмо
     var emailIdHandled by remember { mutableStateOf(false) }
     
-    LaunchedEffect(openEmailId, hasCheckedAccounts, startDestination) {
-        // Обрабатываем только один раз и только когда всё готово
-        if (openEmailId != null && !emailIdHandled && hasCheckedAccounts && startDestination == Screen.Main.route) {
+    LaunchedEffect(openEmailId, hasCheckedAccounts, startDestination, accountSwitchCompleted) {
+        // Обрабатываем только один раз и только когда всё готово (включая переключение аккаунта)
+        if (openEmailId != null && !emailIdHandled && hasCheckedAccounts && startDestination == Screen.Main.route && accountSwitchCompleted) {
             emailIdHandled = true
             // Задержка чтобы NavHost успел инициализироваться
             kotlinx.coroutines.delay(500)
@@ -348,8 +357,8 @@ fun AppNavigation(
     }
     
     // Обработка перехода на Входящие с фильтром Непрочитанные
-    LaunchedEffect(openInboxUnread, hasCheckedAccounts) {
-        if (openInboxUnread && hasCheckedAccounts) {
+    LaunchedEffect(openInboxUnread, hasCheckedAccounts, accountSwitchCompleted) {
+        if (openInboxUnread && hasCheckedAccounts && accountSwitchCompleted) {
             // Получаем папку Входящие
             val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
             if (account != null) {
@@ -636,7 +645,12 @@ fun AppNavigation(
                 initialSubject = subject,
                 initialBody = body,
                 onBackClick = { navController.popBackStack() },
-                onSent = { navController.popBackStack() }
+                onSent = { 
+                    // После отправки переходим на главную
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.Main.route) { inclusive = false }
+                    }
+                }
             )
         }
         
@@ -651,6 +665,11 @@ fun AppNavigation(
                 },
                 onNavigateToAccountSettings = { accountId ->
                     navController.navigate(Screen.AccountSettings.createRoute(accountId))
+                },
+                onNoAccountsLeft = {
+                    navController.navigate(Screen.Setup.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
                 }
             )
         }

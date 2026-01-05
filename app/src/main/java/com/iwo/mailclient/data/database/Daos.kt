@@ -303,18 +303,24 @@ interface EmailDao {
     /**
      * Получает уникальные email адреса из истории переписки для автодополнения
      * Ищет по полям from, to, fromName
+     * Исключает email текущего аккаунта (ownEmail)
      */
     @Query("""
-        SELECT DISTINCT `from` as email, fromName as name FROM emails 
-        WHERE accountId = :accountId 
-        AND (`from` LIKE :query || '%' OR fromName LIKE '%' || :query || '%')
-        UNION
-        SELECT DISTINCT `to` as email, '' as name FROM emails 
-        WHERE accountId = :accountId 
-        AND `to` LIKE :query || '%'
+        SELECT email, MAX(name) as name FROM (
+            SELECT DISTINCT `from` as email, fromName as name FROM emails 
+            WHERE accountId = :accountId 
+            AND (`from` LIKE :query || '%' OR fromName LIKE '%' || :query || '%')
+            AND LOWER(`from`) != LOWER(:ownEmail)
+            UNION
+            SELECT DISTINCT `to` as email, '' as name FROM emails 
+            WHERE accountId = :accountId 
+            AND `to` LIKE :query || '%'
+            AND LOWER(`to`) != LOWER(:ownEmail)
+        )
+        GROUP BY LOWER(email)
         LIMIT :limit
     """)
-    suspend fun searchEmailHistory(accountId: Long, query: String, limit: Int = 10): List<EmailHistoryResult>
+    suspend fun searchEmailHistory(accountId: Long, query: String, ownEmail: String, limit: Int = 10): List<EmailHistoryResult>
 }
 
 /**

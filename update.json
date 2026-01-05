@@ -1,7 +1,7 @@
 {
-  "versionCode": 20,
-  "versionName": "1.5.0",
-  "apkUrl": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.0/iwo-mail-1.5.0.apk",
+  "versionCode": 21,
+  "versionName": "1.5.1",
+  "apkUrl": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.1/iwo-mail-1.5.1.apk",
   "changelog": "Проверка обновлений, оптимизация батареи",
   "minSdk": 24
 }

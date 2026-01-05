@@ -106,6 +106,7 @@ class CalendarRepository(private val context: Context) {
     
     /**
      * Создание события календаря на сервере и в локальной БД
+     * @param attendees Список email участников (для митингов)
      */
     suspend fun createEvent(
         accountId: Long,
@@ -117,7 +118,8 @@ class CalendarRepository(private val context: Context) {
         allDayEvent: Boolean = false,
         reminder: Int = 15,
         busyStatus: Int = 2,
-        sensitivity: Int = 0
+        sensitivity: Int = 0,
+        attendees: List<String> = emptyList()
     ): EasResult<CalendarEventEntity> {
         return withContext(Dispatchers.IO) {
             try {
@@ -140,12 +142,18 @@ class CalendarRepository(private val context: Context) {
                     allDayEvent = allDayEvent,
                     reminder = reminder,
                     busyStatus = busyStatus,
-                    sensitivity = sensitivity
+                    sensitivity = sensitivity,
+                    attendees = attendees
                 )
                 
                 when (result) {
                     is EasResult.Success -> {
                         val serverId = result.data
+                        // Сохраняем участников в JSON формате
+                        val attendeesJson = if (attendees.isNotEmpty()) {
+                            attendees.joinToString(",") { """{"email":"$it","name":""}""" }
+                                .let { "[$it]" }
+                        } else ""
                         val event = CalendarEventEntity(
                             id = "${accountId}_${serverId}",
                             accountId = accountId,
@@ -160,7 +168,7 @@ class CalendarRepository(private val context: Context) {
                             busyStatus = busyStatus,
                             sensitivity = sensitivity,
                             organizer = "",
-                            attendees = "",
+                            attendees = attendeesJson,
                             isRecurring = false,
                             recurrenceRule = "",
                             categories = "",
@@ -311,6 +319,52 @@ class CalendarRepository(private val context: Context) {
             }
         }
     }
+    
+    /**
+     * Ответ на приглашение на встречу
+     * @param event Событие календаря
+     * @param response Тип ответа: "Accept", "Tentative", "Decline"
+     * @param sendResponse Отправить ответ организатору
+     */
+    suspend fun respondToMeeting(
+        event: CalendarEventEntity,
+        response: String,
+        sendResponse: Boolean = true
+    ): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val account = accountRepo.getAccount(event.accountId)
+                    ?: return@withContext EasResult.Error("Аккаунт не найден")
+                
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    return@withContext EasResult.Error("Ответ на приглашения поддерживается только для Exchange")
+                }
+                
+                val easClient = accountRepo.createEasClient(event.accountId)
+                    ?: return@withContext EasResult.Error("Не удалось создать клиент")
+                
+                val result = easClient.respondToMeetingRequest(event.serverId, response, sendResponse)
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        // Обновляем статус ответа локально
+                        val newResponseStatus = when (response.lowercase()) {
+                            "accept" -> MeetingResponseStatus.ACCEPTED.value
+                            "tentative" -> MeetingResponseStatus.TENTATIVE.value
+                            "decline" -> MeetingResponseStatus.DECLINED.value
+                            else -> MeetingResponseStatus.ACCEPTED.value
+                        }
+                        val updatedEvent = event.copy(responseStatus = newResponseStatus)
+                        calendarEventDao.update(updatedEvent)
+                        EasResult.Success(true)
+                    }
+                    is EasResult.Error -> result
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка ответа на приглашение")
+            }
+        }
+    }
 
     
     // === Синхронизация ===
@@ -376,7 +430,9 @@ class CalendarRepository(private val context: Context) {
                                 isRecurring = event.isRecurring,
                                 recurrenceRule = event.recurrenceRule,
                                 categories = event.categories.joinToString(","),
-                                lastModified = event.lastModified
+                                lastModified = event.lastModified,
+                                responseStatus = event.responseStatus,
+                                isMeeting = event.isMeeting
                             )
                         }
                         
@@ -434,6 +490,57 @@ class CalendarRepository(private val context: Context) {
             attendees
         } catch (e: Exception) {
             emptyList()
+        }
+    }
+    
+    /**
+     * Обновление статуса участника в событии календаря
+     * @param accountId ID аккаунта
+     * @param meetingSubject Название события
+     * @param attendeeEmail Email участника
+     * @param status Статус: 2=Tentative, 3=Accepted, 4=Declined
+     */
+    suspend fun updateAttendeeStatus(
+        accountId: Long,
+        meetingSubject: String,
+        attendeeEmail: String,
+        status: Int
+    ): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Ищем событие по названию
+                val events = calendarEventDao.getEventsByAccountList(accountId)
+                val event = events.find { it.subject.equals(meetingSubject, ignoreCase = true) }
+                    ?: return@withContext EasResult.Error("Событие не найдено")
+                
+                // Парсим текущих участников
+                val attendees = parseAttendeesFromJson(event.attendees).toMutableList()
+                
+                // Ищем участника по email
+                val attendeeIndex = attendees.indexOfFirst { 
+                    it.email.equals(attendeeEmail, ignoreCase = true) 
+                }
+                
+                if (attendeeIndex >= 0) {
+                    // Обновляем статус существующего участника
+                    val oldAttendee = attendees[attendeeIndex]
+                    attendees[attendeeIndex] = Attendee(oldAttendee.email, oldAttendee.name, status)
+                } else {
+                    // Добавляем нового участника с email из письма
+                    val name = attendeeEmail.substringBefore("@")
+                    attendees.add(Attendee(attendeeEmail, name, status))
+                }
+                
+                // Сохраняем обновлённый список участников
+                val updatedAttendeesJson = attendeesToJson(attendees.map { 
+                    com.iwo.mailclient.eas.EasAttendee(it.email, it.name, it.status) 
+                })
+                calendarEventDao.updateAttendees(event.id, updatedAttendeesJson)
+                
+                EasResult.Success(true)
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка обновления статуса")
+            }
         }
     }
 }

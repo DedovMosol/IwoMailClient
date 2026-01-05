@@ -127,6 +127,10 @@ class TaskRepository(private val context: Context) {
                             lastModified = System.currentTimeMillis()
                         )
                         taskDao.insert(task)
+                        // Планируем напоминание
+                        if (reminderSet && reminderTime > 0) {
+                            TaskReminderReceiver.scheduleReminder(context, task)
+                        }
                         EasResult.Success(task)
                     }
                     is EasResult.Error -> result
@@ -190,6 +194,11 @@ class TaskRepository(private val context: Context) {
                             lastModified = System.currentTimeMillis()
                         )
                         taskDao.update(updatedTask)
+                        // Перепланируем напоминание
+                        TaskReminderReceiver.cancelReminder(context, task.id)
+                        if (reminderSet && reminderTime > 0 && !complete) {
+                            TaskReminderReceiver.scheduleReminder(context, updatedTask)
+                        }
                         EasResult.Success(updatedTask)
                     }
                     is EasResult.Error -> result

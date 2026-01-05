@@ -33,6 +33,7 @@ fun RichTextWithImages(
         parseHtmlContent(htmlContent)
     }
     
+    // Используем Column без скролла - родительский контейнер должен обеспечить скролл
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp)

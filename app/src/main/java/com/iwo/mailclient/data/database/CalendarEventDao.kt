@@ -64,4 +64,7 @@ interface CalendarEventDao {
     
     @Query("SELECT * FROM calendar_events WHERE startTime > :now AND reminder > 0")
     suspend fun getAllFutureEventsWithReminders(now: Long): List<CalendarEventEntity>
+    
+    @Query("UPDATE calendar_events SET attendees = :attendeesJson WHERE id = :id")
+    suspend fun updateAttendees(id: String, attendeesJson: String)
 }

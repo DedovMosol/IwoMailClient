@@ -62,9 +62,9 @@ class ContactRepository(context: Context) {
         return contactDao.searchContacts(accountId, query)
     }
     
-    suspend fun searchForAutocomplete(accountId: Long, query: String): List<ContactEntity> {
+    suspend fun searchForAutocomplete(accountId: Long, query: String, ownEmail: String, limit: Int = 10): List<ContactEntity> {
         if (query.isBlank()) return emptyList()
-        return contactDao.searchForAutocomplete(accountId, query)
+        return contactDao.searchForAutocomplete(accountId, query, ownEmail, limit)
     }
     
     /**

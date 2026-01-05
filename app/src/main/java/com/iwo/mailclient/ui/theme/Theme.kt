@@ -4,8 +4,10 @@ import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -192,13 +194,15 @@ fun ScaledAlertDialog(
     ) {
         CompositionLocalProvider(LocalDensity provides scaledDensity) {
             Surface(
-                modifier = modifier,
+                modifier = modifier.heightIn(max = 500.dp),
                 shape = shape,
                 color = containerColor,
                 tonalElevation = tonalElevation
             ) {
                 Column(
-                    modifier = androidx.compose.ui.Modifier.padding(24.dp)
+                    modifier = androidx.compose.ui.Modifier
+                        .padding(24.dp)
+                        .verticalScroll(rememberScrollState())
                 ) {
                     // Иконка
                     icon?.let {

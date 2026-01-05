@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 24,
+    version = 25,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -45,8 +45,17 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
         
+        private val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Добавляем поля для ответа на приглашения в календаре
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN responseStatus INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN isMeeting INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        
         private val ALL_MIGRATIONS = arrayOf<Migration>(
-            MIGRATION_23_24
+            MIGRATION_23_24,
+            MIGRATION_24_25
         )
         
         fun getInstance(context: Context): MailDatabase {

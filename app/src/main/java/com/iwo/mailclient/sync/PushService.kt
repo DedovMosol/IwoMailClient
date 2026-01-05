@@ -386,6 +386,14 @@ class PushService : Service() {
                 it.syncMode == SyncMode.PUSH.name
             }
             
+            // Очищаем кэш для удалённых аккаунтов
+            val activeAccountIds = accounts.map { it.id }.toSet()
+            easClientCache.keys.toList().forEach { cachedId ->
+                if (cachedId !in activeAccountIds) {
+                    clearCacheForAccount(cachedId)
+                }
+            }
+            
             if (exchangePushAccounts.isEmpty()) {
                 stopSelf()
                 return@launch

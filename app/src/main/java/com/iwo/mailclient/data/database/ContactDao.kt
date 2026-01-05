@@ -47,10 +47,12 @@ interface ContactDao {
         WHERE accountId = :accountId 
         AND (email LIKE :query || '%' 
              OR displayName LIKE :query || '%')
+        AND LOWER(email) != LOWER(:ownEmail)
+        GROUP BY LOWER(email)
         ORDER BY useCount DESC, lastUsed DESC
         LIMIT :limit
     """)
-    suspend fun searchForAutocomplete(accountId: Long, query: String, limit: Int = 10): List<ContactEntity>
+    suspend fun searchForAutocomplete(accountId: Long, query: String, ownEmail: String, limit: Int = 10): List<ContactEntity>
     
     // === Проверка существования ===
     

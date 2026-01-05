@@ -139,7 +139,9 @@ fun DeletionProgressBar(
     
     if (state.isActive) {
         Surface(
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(bottom = 80.dp), // Отступ от FAB
             color = MaterialTheme.colorScheme.errorContainer,
             shadowElevation = 8.dp,
             tonalElevation = 4.dp

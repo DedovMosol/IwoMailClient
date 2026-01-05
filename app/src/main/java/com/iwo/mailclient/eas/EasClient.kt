@@ -7,6 +7,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.nio.charset.Charset
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -171,12 +172,8 @@ class EasClient(
         private val ITEM_OPS_PROPS_DATA_REGEX = "<Properties>.*?<Data>(.*?)</Data>.*?</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val FOLDER_REGEX = "<Folder>(.*?)</Folder>".toRegex(RegexOption.DOT_MATCHES_ALL)
         
-        // Кэш для extractValue regex паттернов (ограничен размером для предотвращения утечки памяти)
-        private val extractValueCache = object : LinkedHashMap<String, Regex>(16, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Regex>?): Boolean {
-                return size > 50 // Максимум 50 паттернов в кэше
-            }
-        }
+        // Кэш для extractValue regex паттернов (thread-safe)
+        private val extractValueCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
         
         /**
          * Нормализует URL сервера - добавляет схему и порт
@@ -1056,7 +1053,17 @@ class EasClient(
             """.trimIndent()
             
             val mimeResult = executeEasCommand("ItemOperations", mimeXml) { responseXml ->
+                // Проверяем Status=8 (OBJECT_NOT_FOUND)
+                val status = extractValue(responseXml, "Status")?.toIntOrNull()
+                if (status == 8) {
+                    return@executeEasCommand "OBJECT_NOT_FOUND"
+                }
                 extractValue(responseXml, "Data") ?: ""
+            }
+            
+            // Проверяем на удалённое письмо
+            if (mimeResult is EasResult.Success && mimeResult.data == "OBJECT_NOT_FOUND") {
+                return@withTimeoutOrNull EasResult.Error("OBJECT_NOT_FOUND")
             }
             
             var mdnRequestedBy: String? = null
@@ -1093,9 +1100,17 @@ class EasClient(
                 """.trimIndent()
                 
                 val htmlResult = executeEasCommand("ItemOperations", htmlXml) { responseXml ->
+                    val status = extractValue(responseXml, "Status")?.toIntOrNull()
+                    if (status == 8) {
+                        return@executeEasCommand "OBJECT_NOT_FOUND"
+                    }
                     extractValue(responseXml, "Data") 
                         ?: extractValue(responseXml, "Body")
                         ?: ""
+                }
+                
+                if (htmlResult is EasResult.Success && htmlResult.data == "OBJECT_NOT_FOUND") {
+                    return@withTimeoutOrNull EasResult.Error("OBJECT_NOT_FOUND")
                 }
                 
                 if (htmlResult is EasResult.Success && htmlResult.data.isNotBlank()) {
@@ -1123,9 +1138,17 @@ class EasClient(
                 """.trimIndent()
                 
                 val plainResult = executeEasCommand("ItemOperations", plainXml) { responseXml ->
+                    val status = extractValue(responseXml, "Status")?.toIntOrNull()
+                    if (status == 8) {
+                        return@executeEasCommand "OBJECT_NOT_FOUND"
+                    }
                     extractValue(responseXml, "Data") 
                         ?: extractValue(responseXml, "Body")
                         ?: ""
+                }
+                
+                if (plainResult is EasResult.Success && plainResult.data == "OBJECT_NOT_FOUND") {
+                    return@withTimeoutOrNull EasResult.Error("OBJECT_NOT_FOUND")
                 }
                 
                 if (plainResult is EasResult.Success) {
@@ -2209,6 +2232,7 @@ $foldersXml
         val status = extractValue(xml, "Status")?.toIntOrNull() ?: 1
         val emails = mutableListOf<EasEmail>()
         val deletedIds = mutableListOf<String>()
+        val changedEmails = mutableListOf<EasEmailChange>()
         
         // Проверяем наличие MoreAvailable (пустой тег)
         val moreAvailable = xml.contains("<MoreAvailable/>") || xml.contains("<MoreAvailable>")
@@ -2218,6 +2242,25 @@ $foldersXml
         addPattern.findAll(xml).forEach { match ->
             val emailXml = match.groupValues[1]
             parseEmail(emailXml)?.let { emails.add(it) }
+        }
+        
+        // Парсим изменённые письма (Change) - только Read и Flag
+        val changePattern = "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        changePattern.findAll(xml).forEach { match ->
+            val changeXml = match.groupValues[1]
+            val serverId = extractValue(changeXml, "ServerId")
+            if (serverId != null) {
+                val readValue = extractValue(changeXml, "Read")
+                val read = readValue?.let { it == "1" }
+                
+                // Flag status: 2 = flagged, 0 or absent = not flagged
+                val flagStatus = extractValue(changeXml, "Status")
+                val flagged = flagStatus?.let { it == "2" }
+                
+                if (read != null || flagged != null) {
+                    changedEmails.add(EasEmailChange(serverId, read, flagged))
+                }
+            }
         }
         
         // Парсим удалённые письма (Delete и SoftDelete)
@@ -2231,7 +2274,7 @@ $foldersXml
             extractValue(match.groupValues[1], "ServerId")?.let { deletedIds.add(it) }
         }
         
-        return SyncResponse(syncKey, status, emails, moreAvailable, deletedIds)
+        return SyncResponse(syncKey, status, emails, moreAvailable, deletedIds, changedEmails)
     }
     
     private fun parseEmail(xml: String): EasEmail? {
@@ -2274,7 +2317,7 @@ $foldersXml
     }
     
     private fun extractValue(xml: String, tag: String): String? {
-        val pattern = extractValueCache.getOrPut(tag) {
+        val pattern = extractValueCache.computeIfAbsent(tag) {
             "<$tag>(.*?)</$tag>".toRegex(RegexOption.DOT_MATCHES_ALL)
         }
         return pattern.find(xml)?.groupValues?.get(1)
@@ -2688,7 +2731,19 @@ $foldersXml
                     .replace("/default.eas", "")
                     .trimEnd('/')
                 val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
-                val escapedServerId = escapeXml(serverId)
+                
+                // Проверяем формат serverId - если это EAS формат (короткий), нужно найти EWS ItemId
+                val ewsItemId = if (serverId.length < 50 || serverId.contains(":")) {
+                    findEwsNoteItemId(ewsUrl, serverId)
+                } else {
+                    serverId
+                }
+                
+                if (ewsItemId == null) {
+                    return@withContext EasResult.Error("Не удалось найти заметку на сервере")
+                }
+                
+                val escapedItemId = escapeXml(ewsItemId)
                 
                 val soapRequest = """
                     <?xml version="1.0" encoding="utf-8"?>
@@ -2701,13 +2756,14 @@ $foldersXml
                         <soap:Body>
                             <m:DeleteItem DeleteType="MoveToDeletedItems">
                                 <m:ItemIds>
-                                    <t:ItemId Id="$escapedServerId"/>
+                                    <t:ItemId Id="$escapedItemId"/>
                                 </m:ItemIds>
                             </m:DeleteItem>
                         </soap:Body>
                     </soap:Envelope>
                 """.trimIndent()
                 
+                // Пробуем NTLM аутентификацию (как в createNoteEws)
                 val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
                 if (ntlmAuth == null) {
                     return@withContext EasResult.Error("NTLM аутентификация не удалась")
@@ -2718,12 +2774,59 @@ $foldersXml
                     return@withContext EasResult.Error("Не удалось выполнить запрос")
                 }
                 
-                EasResult.Success(responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\""))
+                if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"") || responseXml.contains("ErrorItemNotFound")) {
+                    EasResult.Success(true)
+                } else {
+                    EasResult.Error("Не удалось удалить заметку")
+                }
             } catch (e: Exception) {
-                android.util.Log.e("EasClient", "deleteNoteEws error", e)
                 EasResult.Error(e.message ?: "Ошибка удаления заметки через EWS")
             }
         }
+    }
+    
+    /**
+     * Находит EWS ItemId заметки
+     */
+    private suspend fun findEwsNoteItemId(ewsUrl: String, easServerId: String): String? {
+        val findRequest = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                           xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                           xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                <soap:Header>
+                    <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                </soap:Header>
+                <soap:Body>
+                    <m:FindItem Traversal="Shallow">
+                        <m:ItemShape>
+                            <t:BaseShape>IdOnly</t:BaseShape>
+                        </m:ItemShape>
+                        <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
+                        <m:ParentFolderIds>
+                            <t:DistinguishedFolderId Id="notes"/>
+                        </m:ParentFolderIds>
+                    </m:FindItem>
+                </soap:Body>
+            </soap:Envelope>
+        """.trimIndent()
+        
+        // Используем только NTLM для Exchange 2007
+        val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+        if (ntlmAuth == null) {
+            return null
+        }
+        
+        val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+        if (responseXml == null) {
+            return null
+        }
+        
+        val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
+        val matches = itemIdPattern.findAll(responseXml).toList()
+        
+        val index = easServerId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
+        return matches.getOrNull(index)?.groupValues?.get(1) ?: matches.firstOrNull()?.groupValues?.get(1)
     }
     
     /**
@@ -3449,7 +3552,6 @@ $foldersXml
             response.close()
             body
         } else {
-            android.util.Log.e("EasClient", "executeNtlmRequest: HTTP ${response.code}")
             response.close()
             null
         }
@@ -3972,9 +4074,15 @@ $foldersXml
     }
     
     private fun extractEwsAttribute(xml: String, tag: String, attr: String): String? {
-        val pattern = "<t:$tag[^>]*$attr=\"([^\"]+)\"".toRegex()
-        val match = pattern.find(xml)
-        return match?.groupValues?.get(1)
+        // Пробуем с namespace t:
+        val pattern1 = "<t:$tag[^>]*$attr=\"([^\"]+)\"".toRegex()
+        val match1 = pattern1.find(xml)
+        if (match1 != null) return match1.groupValues[1]
+        
+        // Пробуем без namespace
+        val pattern2 = "<$tag[^>]*$attr=\"([^\"]+)\"".toRegex()
+        val match2 = pattern2.find(xml)
+        return match2?.groupValues?.get(1)
     }
     
     private fun parseEwsDate(dateStr: String?): Long {
@@ -4274,12 +4382,38 @@ $foldersXml
         allDayEvent: Boolean = false,
         reminder: Int = 15,
         busyStatus: Int = 2, // 0=Free, 1=Tentative, 2=Busy, 3=OOF
-        sensitivity: Int = 0 // 0=Normal, 1=Personal, 2=Private, 3=Confidential
+        sensitivity: Int = 0, // 0=Normal, 1=Personal, 2=Private, 3=Confidential
+        attendees: List<String> = emptyList() // Список email участников
     ): EasResult<String> {
         if (!versionDetected) {
             detectEasVersion()
         }
         
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+        
+        // Для Exchange 2007 (EAS 12.x) используем EWS
+        return if (majorVersion >= 14) {
+            createCalendarEventEas(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees)
+        } else {
+            createCalendarEventEws(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees)
+        }
+    }
+    
+    /**
+     * Создание события календаря через EAS (Exchange 2010+)
+     */
+    private suspend fun createCalendarEventEas(
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        allDayEvent: Boolean,
+        reminder: Int,
+        busyStatus: Int,
+        sensitivity: Int,
+        attendees: List<String>
+    ): EasResult<String> {
         // Получаем папку календаря
         val foldersResult = folderSync("0")
         val calendarFolderId = when (foldersResult) {
@@ -4334,6 +4468,25 @@ $foldersXml
         val escapedLocation = escapeXml(location)
         val escapedBody = escapeXml(body)
         
+        // MeetingStatus: 0=Appointment, 1=Meeting (organizer), 3=Meeting (attendee)
+        val meetingStatus = if (attendees.isNotEmpty()) 1 else 0
+        
+        // Формируем блок участников для EAS
+        val attendeesXml = if (attendees.isNotEmpty()) {
+            buildString {
+                append("<calendar:Attendees>")
+                for (email in attendees) {
+                    val escapedEmail = escapeXml(email.trim())
+                    append("<calendar:Attendee>")
+                    append("<calendar:Email>$escapedEmail</calendar:Email>")
+                    append("<calendar:AttendeeType>1</calendar:AttendeeType>") // 1=Required
+                    append("<calendar:AttendeeStatus>0</calendar:AttendeeStatus>") // 0=Response unknown
+                    append("</calendar:Attendee>")
+                }
+                append("</calendar:Attendees>")
+            }
+        } else ""
+        
         // Формируем XML для создания события
         val createXml = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -4358,7 +4511,8 @@ $foldersXml
                                     <calendar:Reminder>$reminder</calendar:Reminder>
                                     <calendar:BusyStatus>$busyStatus</calendar:BusyStatus>
                                     <calendar:Sensitivity>$sensitivity</calendar:Sensitivity>
-                                    <calendar:MeetingStatus>0</calendar:MeetingStatus>
+                                    <calendar:MeetingStatus>$meetingStatus</calendar:MeetingStatus>
+                                    $attendeesXml
                                 </ApplicationData>
                             </Add>
                         </Commands>
@@ -4368,8 +4522,6 @@ $foldersXml
         """.trimIndent()
         
         return executeEasCommand("Sync", createXml) { responseXml ->
-            android.util.Log.d("EasClient", "createCalendarEvent response: ${responseXml.take(1000)}")
-            
             // Проверяем статус
             val status = extractValue(responseXml, "Status")
             if (status == "1") {
@@ -4378,6 +4530,148 @@ $foldersXml
                 serverId
             } else {
                 throw Exception("Ошибка создания события: Status=$status")
+            }
+        }
+    }
+    
+    /**
+     * Создание события календаря через EWS (Exchange 2007)
+     * Формат XML по официальной документации Microsoft:
+     * https://docs.microsoft.com/en-us/exchange/client-developer/web-service-reference/createitem-operation-calendar-item
+     */
+    private suspend fun createCalendarEventEws(
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        allDayEvent: Boolean,
+        reminder: Int,
+        busyStatus: Int,
+        sensitivity: Int,
+        attendees: List<String>
+    ): EasResult<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                val escapedSubject = escapeXml(subject)
+                val escapedLocation = escapeXml(location)
+                val escapedBody = escapeXml(body)
+                
+                // Формат даты как в официальном примере MS: без Z на конце
+                val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                val startTimeStr = dateFormat.format(java.util.Date(startTime))
+                val endTimeStr = dateFormat.format(java.util.Date(endTime))
+                
+                // Маппинг LegacyFreeBusyStatus
+                val ewsBusyStatus = when (busyStatus) {
+                    0 -> "Free"
+                    1 -> "Tentative"
+                    3 -> "OOF"
+                    else -> "Busy"
+                }
+                
+                // Если есть участники - это митинг, отправляем приглашения
+                val sendInvitations = if (attendees.isNotEmpty()) "SendToAllAndSaveCopy" else "SendToNone"
+                
+                // Формируем блок участников по официальному примеру Microsoft
+                val attendeesXml = if (attendees.isNotEmpty()) {
+                    buildString {
+                        append("<RequiredAttendees>")
+                        for (email in attendees) {
+                            val escapedEmail = escapeXml(email.trim())
+                            append("<Attendee>")
+                            append("<Mailbox>")
+                            append("<EmailAddress>$escapedEmail</EmailAddress>")
+                            append("</Mailbox>")
+                            append("</Attendee>")
+                        }
+                        append("</RequiredAttendees>")
+                    }
+                } else ""
+                
+                // Формируем SOAP запрос ТОЧНО по официальному примеру Microsoft:
+                // Внутри CalendarItem элементы БЕЗ префикса t:, используется xmlns на CalendarItem
+                val soapRequest = buildString {
+                    append("""<?xml version="1.0" encoding="utf-8"?>""")
+                    append("""<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" """)
+                    append("""xmlns:xsd="http://www.w3.org/2001/XMLSchema" """)
+                    append("""xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" """)
+                    append("""xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">""")
+                    append("<soap:Body>")
+                    append("""<CreateItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages" """)
+                    append("""xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" """)
+                    append("""SendMeetingInvitations="$sendInvitations">""")
+                    append("<SavedItemFolderId>")
+                    append("""<t:DistinguishedFolderId Id="calendar"/>""")
+                    append("</SavedItemFolderId>")
+                    append("<Items>")
+                    // CalendarItem с xmlns - внутренние элементы без префикса (как в официальном примере MS)
+                    append("""<t:CalendarItem xmlns="http://schemas.microsoft.com/exchange/services/2006/types">""")
+                    append("<Subject>$escapedSubject</Subject>")
+                    if (escapedBody.isNotBlank()) {
+                        append("""<Body BodyType="Text">$escapedBody</Body>""")
+                    }
+                    if (reminder > 0) {
+                        append("<ReminderIsSet>true</ReminderIsSet>")
+                        append("<ReminderMinutesBeforeStart>$reminder</ReminderMinutesBeforeStart>")
+                    } else {
+                        append("<ReminderIsSet>false</ReminderIsSet>")
+                    }
+                    append("<Start>$startTimeStr</Start>")
+                    append("<End>$endTimeStr</End>")
+                    append("<IsAllDayEvent>$allDayEvent</IsAllDayEvent>")
+                    append("<LegacyFreeBusyStatus>$ewsBusyStatus</LegacyFreeBusyStatus>")
+                    if (escapedLocation.isNotBlank()) {
+                        append("<Location>$escapedLocation</Location>")
+                    }
+                    // Добавляем участников если есть
+                    append(attendeesXml)
+                    append("</t:CalendarItem>")
+                    append("</Items>")
+                    append("</CreateItem>")
+                    append("</soap:Body>")
+                    append("</soap:Envelope>")
+                }
+                
+                android.util.Log.d("EasClient", "createCalendarEventEws: Request: $soapRequest")
+                
+                // Пробуем NTLM аутентификацию
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+                if (ntlmAuth == null) {
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                android.util.Log.d("EasClient", "createCalendarEventEws: Response: ${responseXml?.take(2000)}")
+                
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                // Проверяем на ошибки
+                if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
+                    return@withContext EasResult.Error("Ошибка схемы EWS")
+                }
+                
+                // Извлекаем ItemId
+                val itemId = EWS_ITEM_ID_REGEX.find(responseXml)?.groupValues?.get(1)
+                
+                if (itemId != null) {
+                    EasResult.Success(itemId)
+                } else if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+                    EasResult.Success("pending_sync_${System.currentTimeMillis()}")
+                } else {
+                    EasResult.Error("Не удалось создать событие через EWS")
+                }
+            } catch (e: Exception) {
+                EasResult.Error(e.message ?: "Ошибка создания события через EWS")
             }
         }
     }
@@ -4403,7 +4697,7 @@ $foldersXml
             return EasResult.Error("Папка календаря не найдена")
         }
         
-        // Получаем SyncKey
+        // Шаг 1: Получаем начальный SyncKey
         val initialXml = """
             <?xml version="1.0" encoding="UTF-8"?>
             <Sync xmlns="AirSync">
@@ -4430,7 +4724,37 @@ $foldersXml
             return EasResult.Error("Не удалось получить SyncKey")
         }
         
-        // Формируем XML для удаления
+        // Шаг 2: Делаем полную синхронизацию чтобы получить актуальный SyncKey
+        val fullSyncXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:AirSyncBase="AirSyncBase" xmlns:Calendar="Calendar">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                        <GetChanges>1</GetChanges>
+                        <WindowSize>100</WindowSize>
+                        <Options>
+                            <AirSyncBase:BodyPreference>
+                                <AirSyncBase:Type>1</AirSyncBase:Type>
+                                <AirSyncBase:TruncationSize>0</AirSyncBase:TruncationSize>
+                            </AirSyncBase:BodyPreference>
+                        </Options>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        val fullSyncResult = executeEasCommand("Sync", fullSyncXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: syncKey
+        }
+        
+        when (fullSyncResult) {
+            is EasResult.Success -> syncKey = fullSyncResult.data
+            is EasResult.Error -> return EasResult.Error(fullSyncResult.message)
+        }
+        
+        // Шаг 3: Формируем XML для удаления с актуальным SyncKey
         val deleteXml = """
             <?xml version="1.0" encoding="UTF-8"?>
             <Sync xmlns="AirSync">
@@ -4452,6 +4776,215 @@ $foldersXml
             val status = extractValue(responseXml, "Status")
             status == "1"
         }
+    }
+    
+    /**
+     * Удаление события календаря через EWS (для Exchange 2007)
+     */
+    private suspend fun deleteCalendarEventEws(serverId: String): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                // Проверяем формат serverId
+                val itemInfo = if (serverId.length < 50 || serverId.contains(":")) {
+                    findEwsCalendarItemIdWithChangeKey(ewsUrl, serverId)
+                } else {
+                    Pair(serverId, "")
+                }
+                
+                if (itemInfo == null) {
+                    return@withContext EasResult.Error("Не удалось найти событие на сервере")
+                }
+                
+                val (ewsItemId, changeKey) = itemInfo
+                val escapedItemId = escapeXml(ewsItemId)
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:DeleteItem DeleteType="MoveToDeletedItems" SendMeetingCancellations="SendToNone">
+                                <m:ItemIds>
+                                    <t:ItemId Id="$escapedItemId"/>
+                                </m:ItemIds>
+                            </m:DeleteItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                // Используем только NTLM для Exchange 2007
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                if (ntlmAuth == null) {
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"") || responseXml.contains("ErrorItemNotFound")) {
+                    return@withContext EasResult.Success(true)
+                }
+                
+                // Если ошибка - возможно мы участник, а не организатор
+                // Пробуем отклонить приглашение через DeclineItem
+                if (changeKey.isNotEmpty()) {
+                    val declineResult = declineAndDeleteMeeting(ewsUrl, ewsItemId, changeKey)
+                    if (declineResult is EasResult.Success) {
+                        return@withContext declineResult
+                    }
+                }
+                
+                EasResult.Error("Не удалось удалить событие")
+            } catch (e: Exception) {
+                EasResult.Error("Ошибка EWS: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * Отклонить приглашение и удалить из календаря (для событий где мы участник)
+     */
+    private suspend fun declineAndDeleteMeeting(ewsUrl: String, itemId: String, changeKey: String): EasResult<Boolean> {
+        val escapedItemId = escapeXml(itemId)
+        val escapedChangeKey = escapeXml(changeKey)
+        
+        val soapRequest = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                           xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                           xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                <soap:Header>
+                    <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                </soap:Header>
+                <soap:Body>
+                    <m:CreateItem MessageDisposition="SendAndSaveCopy">
+                        <m:Items>
+                            <t:DeclineItem>
+                                <t:ReferenceItemId Id="$escapedItemId" ChangeKey="$escapedChangeKey"/>
+                            </t:DeclineItem>
+                        </m:Items>
+                    </m:CreateItem>
+                </soap:Body>
+            </soap:Envelope>
+        """.trimIndent()
+        
+        val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+            ?: return EasResult.Error("NTLM аутентификация не удалась")
+        
+        val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+            ?: return EasResult.Error("Не удалось выполнить запрос")
+        
+        return if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+            EasResult.Success(true)
+        } else {
+            EasResult.Error("Не удалось отклонить приглашение")
+        }
+    }
+    
+    /**
+     * Находит EWS ItemId события календаря (без ChangeKey)
+     */
+    private suspend fun findEwsCalendarItemId(ewsUrl: String, easServerId: String): String? {
+        val result = findEwsCalendarItemIdWithChangeKey(ewsUrl, easServerId)
+        return result?.first
+    }
+    
+    /**
+     * Находит EWS ItemId события календаря с ChangeKey
+     * Возвращает пару (ItemId, ChangeKey)
+     */
+    private suspend fun findEwsCalendarItemIdWithChangeKey(ewsUrl: String, easServerId: String): Pair<String, String>? {
+        // Если это уже EWS ItemId (длинная строка), пробуем получить ChangeKey через GetItem
+        if (easServerId.length > 50 && !easServerId.contains(":")) {
+            val getItemRequest = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                    <soap:Header>
+                        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                    </soap:Header>
+                    <soap:Body>
+                        <m:GetItem>
+                            <m:ItemShape>
+                                <t:BaseShape>IdOnly</t:BaseShape>
+                            </m:ItemShape>
+                            <m:ItemIds>
+                                <t:ItemId Id="${escapeXml(easServerId)}"/>
+                            </m:ItemIds>
+                        </m:GetItem>
+                    </soap:Body>
+                </soap:Envelope>
+            """.trimIndent()
+            
+            val ntlmAuth = performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
+            if (ntlmAuth != null) {
+                val responseXml = executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem")
+                if (responseXml != null) {
+                    val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
+                    val match = itemIdPattern.find(responseXml)
+                    if (match != null) {
+                        return Pair(match.groupValues[1], match.groupValues[2])
+                    }
+                }
+            }
+            // Если не удалось получить ChangeKey, возвращаем без него
+            return Pair(easServerId, "")
+        }
+        
+        // Для коротких EAS serverId ищем все события и пытаемся найти по индексу
+        val findRequest = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                           xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                           xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                <soap:Header>
+                    <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                </soap:Header>
+                <soap:Body>
+                    <m:FindItem Traversal="Shallow">
+                        <m:ItemShape>
+                            <t:BaseShape>IdOnly</t:BaseShape>
+                        </m:ItemShape>
+                        <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
+                        <m:ParentFolderIds>
+                            <t:DistinguishedFolderId Id="calendar"/>
+                        </m:ParentFolderIds>
+                    </m:FindItem>
+                </soap:Body>
+            </soap:Envelope>
+        """.trimIndent()
+        
+        // Используем только NTLM для Exchange 2007
+        val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+        if (ntlmAuth == null) {
+            return null
+        }
+        
+        val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+        if (responseXml == null) {
+            return null
+        }
+        
+        // Ищем ItemId с ChangeKey
+        val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
+        val matches = itemIdPattern.findAll(responseXml).toList()
+        
+        val index = easServerId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
+        val match = matches.getOrNull(index) ?: matches.firstOrNull()
+        return match?.let { Pair(it.groupValues[1], it.groupValues[2]) }
     }
     
     /**
@@ -4563,6 +5096,172 @@ $foldersXml
     }
     
     /**
+     * Ответ на приглашение на встречу через EAS MeetingResponse
+     * @param serverId ID события календаря (формат: accountId_easServerId)
+     * @param response Тип ответа: "Accept", "Tentative", "Decline"
+     * @param sendResponse Отправить ответ организатору (не используется в EAS 12.1)
+     */
+    suspend fun respondToMeetingRequest(
+        serverId: String,
+        response: String,
+        sendResponse: Boolean = true
+    ): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Извлекаем EAS serverId из формата "accountId_serverId"
+                val easServerId = if (serverId.contains("_")) {
+                    serverId.substringAfter("_")
+                } else {
+                    serverId
+                }
+                
+                // Получаем ID папки календаря
+                val foldersResult = folderSync("0")
+                val calendarFolderId = when (foldersResult) {
+                    is EasResult.Success -> {
+                        foldersResult.data.folders.find { it.type == 8 }?.serverId
+                    }
+                    is EasResult.Error -> return@withContext EasResult.Error(foldersResult.message)
+                }
+                
+                if (calendarFolderId == null) {
+                    return@withContext EasResult.Error("Папка календаря не найдена")
+                }
+                
+                // Определяем UserResponse: 1=Accept, 2=Tentative, 3=Decline
+                val userResponse = when (response.lowercase()) {
+                    "accept" -> 1
+                    "tentative" -> 2
+                    "decline" -> 3
+                    else -> 1
+                }
+                
+                // Формируем MeetingResponse запрос
+                val meetingResponseXml = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <MeetingResponse xmlns="MeetingResponse">
+                        <Request>
+                            <UserResponse>$userResponse</UserResponse>
+                            <CollectionId>$calendarFolderId</CollectionId>
+                            <RequestId>$easServerId</RequestId>
+                        </Request>
+                    </MeetingResponse>
+                """.trimIndent()
+                
+                val result = executeEasCommand("MeetingResponse", meetingResponseXml) { responseXml ->
+                    // Проверяем Status в ответе
+                    val status = extractValue(responseXml, "Status")
+                    when (status) {
+                        "1" -> true // Success
+                        "2" -> throw Exception("Неверный запрос на собрание")
+                        "3" -> throw Exception("Ошибка сервера при обработке запроса")
+                        "4" -> throw Exception("Неверный ID запроса на собрание")
+                        else -> {
+                            // Проверяем наличие CalendarId - это тоже успех
+                            if (responseXml.contains("CalendarId")) {
+                                true
+                            } else {
+                                throw Exception("Неизвестная ошибка: Status=$status")
+                            }
+                        }
+                    }
+                }
+                
+                when (result) {
+                    is EasResult.Success -> EasResult.Success(true)
+                    is EasResult.Error -> {
+                        // Если EAS не сработал, пробуем EWS как fallback
+                        respondToMeetingRequestEws(serverId, response, sendResponse)
+                    }
+                }
+            } catch (e: Exception) {
+                // Пробуем EWS как fallback
+                respondToMeetingRequestEws(serverId, response, sendResponse)
+            }
+        }
+    }
+    
+    /**
+     * Ответ на приглашение через EWS (fallback для EAS)
+     */
+    private suspend fun respondToMeetingRequestEws(
+        serverId: String,
+        response: String,
+        sendResponse: Boolean
+    ): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                // Находим EWS ItemId с ChangeKey
+                val itemInfo = findEwsCalendarItemIdWithChangeKey(ewsUrl, serverId)
+                
+                if (itemInfo == null) {
+                    return@withContext EasResult.Error("Не удалось найти событие на сервере")
+                }
+                
+                val (ewsItemId, changeKey) = itemInfo
+                val escapedItemId = escapeXml(ewsItemId)
+                val escapedChangeKey = escapeXml(changeKey)
+                
+                // Определяем тип ответа для EWS
+                val responseType = when (response.lowercase()) {
+                    "accept" -> "AcceptItem"
+                    "tentative" -> "TentativelyAcceptItem"
+                    "decline" -> "DeclineItem"
+                    else -> "AcceptItem"
+                }
+                
+                val messageDisposition = if (sendResponse) "SendAndSaveCopy" else "SaveOnly"
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:CreateItem MessageDisposition="$messageDisposition">
+                                <m:Items>
+                                    <t:$responseType>
+                                        <t:ReferenceItemId Id="$escapedItemId" ChangeKey="$escapedChangeKey"/>
+                                    </t:$responseType>
+                                </m:Items>
+                            </m:CreateItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+                if (ntlmAuth == null) {
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
+                    return@withContext EasResult.Success(true)
+                }
+                
+                // Извлекаем сообщение об ошибке
+                val errorMsg = EWS_MESSAGE_TEXT_REGEX.find(responseXml)?.groupValues?.get(1) ?: "Неизвестная ошибка"
+                EasResult.Error(errorMsg)
+            } catch (e: Exception) {
+                EasResult.Error("Ошибка EWS: ${e.message}")
+            }
+        }
+    }
+    
+    /**
      * Синхронизация календаря из папки Calendar на сервере Exchange
      * Возвращает список событий
      */
@@ -4573,16 +5272,31 @@ $foldersXml
         
         // Сначала получаем список папок чтобы найти папку Calendar (type = 8)
         val foldersResult = folderSync("0")
-        val calendarFolderId = when (foldersResult) {
-            is EasResult.Success -> {
-                foldersResult.data.folders.find { it.type == 8 }?.serverId
-            }
+        val folders = when (foldersResult) {
+            is EasResult.Success -> foldersResult.data.folders
             is EasResult.Error -> return EasResult.Error(foldersResult.message)
         }
         
-        if (calendarFolderId == null) {
-            return EasResult.Error("Папка календаря не найдена")
+        // Определяем версию EAS
+        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+        
+        return if (majorVersion >= 14) {
+            // EAS 14+ — стандартный Calendar sync
+            syncCalendarStandard(folders)
+        } else {
+            // EAS 12.x (Exchange 2007) — fallback через Search/EWS
+            syncCalendarLegacy(folders)
         }
+    }
+    
+    /**
+     * Стандартная синхронизация календаря для EAS 14+ (Exchange 2010+)
+     */
+    private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<List<EasCalendarEvent>> {
+        val calendarFolderId = folders.find { it.type == 8 }?.serverId
+            ?: return EasResult.Error("Папка календаря не найдена")
+        
+        cachedCalendarFolderId = calendarFolderId
         
         // Шаг 1: Получаем начальный SyncKey для папки календаря
         val initialXml = """
@@ -4636,6 +5350,272 @@ $foldersXml
         return executeEasCommand("Sync", syncXml) { responseXml ->
             parseCalendarSyncResponse(responseXml)
         }
+    }
+    
+    /**
+     * Legacy синхронизация календаря для Exchange 2007 (EAS 12.x)
+     * Используем прямой Sync как в v1.4.2 (без Search/EWS fallback)
+     */
+    private suspend fun syncCalendarLegacy(folders: List<EasFolder>): EasResult<List<EasCalendarEvent>> {
+        // Ищем папку Calendar по типу
+        val calendarFolderId = folders.find { it.type == 8 }?.serverId
+        
+        if (calendarFolderId == null) {
+            return EasResult.Error("Папка календаря не найдена")
+        }
+        
+        cachedCalendarFolderId = calendarFolderId
+        
+        // Шаг 1: Получаем начальный SyncKey для папки календаря
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Success(emptyList())
+        }
+        
+        // Шаг 2: Запрашиваем события календаря
+        val syncXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$calendarFolderId</CollectionId>
+                        <DeletesAsMoves/>
+                        <GetChanges/>
+                        <WindowSize>100</WindowSize>
+                        <Options>
+                            <airsyncbase:BodyPreference>
+                                <airsyncbase:Type>1</airsyncbase:Type>
+                                <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                            </airsyncbase:BodyPreference>
+                        </Options>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", syncXml) { responseXml ->
+            parseCalendarSyncResponse(responseXml)
+        }
+    }
+    
+    /**
+     * Парсинг событий календаря из Search ответа
+     */
+    private fun parseCalendarSearchResponse(xml: String): List<EasCalendarEvent> {
+        val events = mutableListOf<EasCalendarEvent>()
+        
+        val resultPattern = "<Result>(.*?)</Result>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        resultPattern.findAll(xml).forEach { match ->
+            val resultXml = match.groupValues[1]
+            
+            val serverId = extractValue(resultXml, "LongId") 
+                ?: extractValue(resultXml, "ServerId") 
+                ?: return@forEach
+            
+            val propsPattern = "<Properties>(.*?)</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val propsMatch = propsPattern.find(resultXml)
+            if (propsMatch != null) {
+                val propsXml = propsMatch.groupValues[1]
+                
+                val subject = extractCalendarValue(propsXml, "Subject") ?: ""
+                val location = extractCalendarValue(propsXml, "Location") ?: ""
+                val body = extractCalendarBody(propsXml)
+                val startTime = parseCalendarDate(extractCalendarValue(propsXml, "StartTime")) ?: 0L
+                val endTime = parseCalendarDate(extractCalendarValue(propsXml, "EndTime")) ?: 0L
+                val allDayEvent = extractCalendarValue(propsXml, "AllDayEvent") == "1"
+                val reminder = extractCalendarValue(propsXml, "Reminder")?.toIntOrNull() ?: 0
+                val busyStatus = extractCalendarValue(propsXml, "BusyStatus")?.toIntOrNull() ?: 2
+                val sensitivity = extractCalendarValue(propsXml, "Sensitivity")?.toIntOrNull() ?: 0
+                val organizer = extractCalendarValue(propsXml, "OrganizerEmail") 
+                    ?: extractCalendarValue(propsXml, "Organizer_Email") ?: ""
+                val attendees = parseCalendarAttendees(propsXml)
+                val categories = extractCalendarCategories(propsXml)
+                val isRecurring = propsXml.contains("<calendar:Recurrence>") || propsXml.contains("<Recurrence>")
+                val lastModified = parseCalendarDate(extractCalendarValue(propsXml, "DtStamp")) ?: 0L
+                
+                events.add(EasCalendarEvent(
+                    serverId = serverId,
+                    subject = subject,
+                    location = location,
+                    body = body,
+                    startTime = startTime,
+                    endTime = endTime,
+                    allDayEvent = allDayEvent,
+                    reminder = reminder,
+                    busyStatus = busyStatus,
+                    sensitivity = sensitivity,
+                    organizer = organizer,
+                    attendees = attendees,
+                    isRecurring = isRecurring,
+                    categories = categories,
+                    lastModified = lastModified
+                ))
+            }
+        }
+        
+        return events
+    }
+    
+    /**
+     * Синхронизация календаря через EWS (для Exchange 2007)
+     */
+    private suspend fun syncCalendarEws(): EasResult<List<EasCalendarEvent>> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                // Используем только NTLM для Exchange 2007
+                val ntlmResult = syncCalendarEwsNtlm(ewsUrl)
+                if (ntlmResult is EasResult.Success && ntlmResult.data.isNotEmpty()) {
+                    return@withContext ntlmResult
+                }
+                
+                EasResult.Success(emptyList())
+            } catch (e: Exception) {
+                EasResult.Error("Ошибка EWS: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * EWS запрос календаря с NTLM аутентификацией
+     */
+    private suspend fun syncCalendarEwsNtlm(ewsUrl: String): EasResult<List<EasCalendarEvent>> {
+        try {
+            val soapRequest = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                    <soap:Header>
+                        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                    </soap:Header>
+                    <soap:Body>
+                        <m:FindItem Traversal="Shallow">
+                            <m:ItemShape>
+                                <t:BaseShape>AllProperties</t:BaseShape>
+                                <t:BodyType>Text</t:BodyType>
+                            </m:ItemShape>
+                            <m:IndexedPageItemView MaxEntriesReturned="200" Offset="0" BasePoint="Beginning"/>
+                            <m:ParentFolderIds>
+                                <t:DistinguishedFolderId Id="calendar"/>
+                            </m:ParentFolderIds>
+                        </m:FindItem>
+                    </soap:Body>
+                </soap:Envelope>
+            """.trimIndent()
+            
+            // Получаем NTLM auth header
+            val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "FindItem")
+                ?: return EasResult.Success(emptyList())
+            
+            // Выполняем FindItem с NTLM
+            val responseBody = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "FindItem")
+                ?: return EasResult.Success(emptyList())
+            
+            if (responseBody.contains("CalendarItem")) {
+                val events = parseEwsCalendarResponse(responseBody)
+                return EasResult.Success(events)
+            }
+            
+            return EasResult.Success(emptyList())
+        } catch (e: Exception) {
+            return EasResult.Error("NTLM ошибка: ${e.message}")
+        }
+    }
+    
+    /**
+     * Парсинг событий календаря из EWS ответа
+     */
+    private fun parseEwsCalendarResponse(xml: String): List<EasCalendarEvent> {
+        val events = mutableListOf<EasCalendarEvent>()
+        
+        val itemPattern = "<t:CalendarItem>(.*?)</t:CalendarItem>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        itemPattern.findAll(xml).forEach { match ->
+            val itemXml = match.groupValues[1]
+            
+            val itemId = extractEwsValue(itemXml, "ItemId")?.let { idXml ->
+                "Id=\"([^\"]+)\"".toRegex().find(idXml)?.groupValues?.get(1)
+            } ?: return@forEach
+            
+            val subject = extractEwsValue(itemXml, "Subject") ?: ""
+            val location = extractEwsValue(itemXml, "Location") ?: ""
+            val rawBody = extractEwsValue(itemXml, "Body") ?: ""
+            // Исправляем кодировку body если нужно
+            val body = fixEncoding(rawBody)
+            val startTime = parseEwsDate(extractEwsValue(itemXml, "Start"))
+            val endTime = parseEwsDate(extractEwsValue(itemXml, "End"))
+            val allDayEvent = extractEwsValue(itemXml, "IsAllDayEvent") == "true"
+            val reminder = extractEwsValue(itemXml, "ReminderMinutesBeforeStart")?.toIntOrNull() ?: 0
+            val organizer = extractEwsValue(itemXml, "Organizer")?.let { orgXml ->
+                extractEwsValue(orgXml, "EmailAddress") ?: ""
+            } ?: ""
+            val isRecurring = extractEwsValue(itemXml, "IsRecurring") == "true"
+            val lastModified = parseEwsDate(extractEwsValue(itemXml, "LastModifiedTime"))
+            
+            // Определяем это встреча или обычное событие
+            val isMeeting = extractEwsValue(itemXml, "IsMeeting") == "true" || organizer.isNotBlank()
+            
+            // Парсим статус ответа (MyResponseType)
+            // Unknown=0, Organizer=1, Tentative=2, Accept=3, Decline=4, NoResponseReceived=5
+            val myResponseType = extractEwsValue(itemXml, "MyResponseType") ?: ""
+            val responseStatus = when (myResponseType.lowercase()) {
+                "accept" -> 2 // ACCEPTED
+                "tentative" -> 3 // TENTATIVE
+                "decline" -> 4 // DECLINED
+                "noresponserecieved", "unknown" -> 1 // NOT_RESPONDED
+                "organizer" -> 0 // NONE (я организатор)
+                else -> if (isMeeting && organizer.isNotBlank()) 1 else 0 // NOT_RESPONDED если встреча
+            }
+            
+            events.add(EasCalendarEvent(
+                serverId = itemId,
+                subject = subject,
+                location = location,
+                body = body,
+                startTime = startTime,
+                endTime = endTime,
+                allDayEvent = allDayEvent,
+                reminder = reminder,
+                busyStatus = 2,
+                sensitivity = 0,
+                organizer = organizer,
+                attendees = emptyList(),
+                isRecurring = isRecurring,
+                categories = emptyList(),
+                lastModified = lastModified,
+                responseStatus = responseStatus,
+                isMeeting = isMeeting
+            ))
+        }
+        
+        return events
     }
     
     private fun parseCalendarSyncResponse(xml: String): List<EasCalendarEvent> {
@@ -4727,6 +5707,55 @@ $foldersXml
         return ""
     }
     
+    /**
+     * Исправляет кодировку текста если она сломана
+     */
+    private fun fixEncoding(text: String): String {
+        if (text.isBlank()) return text
+        
+        // Пробуем декодировать из base64 если это base64
+        if (text.matches(Regex("^[A-Za-z0-9+/=\\s]+$")) && text.length > 20) {
+            try {
+                val decoded = android.util.Base64.decode(text.replace("\\s".toRegex(), ""), android.util.Base64.DEFAULT)
+                // Пробуем UTF-8
+                val utf8 = String(decoded, Charsets.UTF_8)
+                if (!utf8.contains("�") && !utf8.contains("?????")) {
+                    return utf8
+                }
+                // Пробуем Windows-1251 (кириллица)
+                try {
+                    val win1251 = String(decoded, Charset.forName("windows-1251"))
+                    if (!win1251.contains("�")) {
+                        return win1251
+                    }
+                } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }
+        
+        // Проверяем не сломана ли кодировка (много знаков вопроса подряд)
+        if (text.contains("?????") || text.matches(Regex(".*\\?{3,}.*"))) {
+            // Пробуем перекодировать из ISO-8859-1 в UTF-8
+            try {
+                val bytes = text.toByteArray(Charsets.ISO_8859_1)
+                val utf8 = String(bytes, Charsets.UTF_8)
+                if (!utf8.contains("?????")) {
+                    return utf8
+                }
+            } catch (_: Exception) {}
+            
+            // Пробуем Windows-1251
+            try {
+                val bytes = text.toByteArray(Charsets.ISO_8859_1)
+                val win1251 = String(bytes, Charset.forName("windows-1251"))
+                if (!win1251.contains("?????")) {
+                    return win1251
+                }
+            } catch (_: Exception) {}
+        }
+        
+        return text
+    }
+    
     private fun extractCalendarCategories(xml: String): List<String> {
         val categories = mutableListOf<String>()
         val categoriesPattern = "<calendar:Categories>(.*?)</calendar:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -4742,17 +5771,37 @@ $foldersXml
     
     private fun parseCalendarAttendees(xml: String): List<EasAttendee> {
         val attendees = mutableListOf<EasAttendee>()
-        val attendeesPattern = "<calendar:Attendees>(.*?)</calendar:Attendees>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val attendeesMatch = attendeesPattern.find(xml)
-        if (attendeesMatch != null) {
-            val attendeesXml = attendeesMatch.groupValues[1]
-            val attendeePattern = "<calendar:Attendee>(.*?)</calendar:Attendee>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            attendeePattern.findAll(attendeesXml).forEach { match ->
-                val attendeeXml = match.groupValues[1]
-                val email = extractCalendarValue(attendeeXml, "Email") ?: return@forEach
-                val name = extractCalendarValue(attendeeXml, "Name") ?: ""
-                val status = extractCalendarValue(attendeeXml, "AttendeeStatus")?.toIntOrNull() ?: 0
-                attendees.add(EasAttendee(email, name, status))
+        
+        // Пробуем оба варианта: с namespace prefix и без
+        val attendeesPatterns = listOf(
+            "<calendar:Attendees>(.*?)</calendar:Attendees>".toRegex(RegexOption.DOT_MATCHES_ALL),
+            "<Attendees>(.*?)</Attendees>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        )
+        
+        var attendeesXml: String? = null
+        for (pattern in attendeesPatterns) {
+            val match = pattern.find(xml)
+            if (match != null) {
+                attendeesXml = match.groupValues[1]
+                break
+            }
+        }
+        
+        if (attendeesXml != null) {
+            val attendeePatterns = listOf(
+                "<calendar:Attendee>(.*?)</calendar:Attendee>".toRegex(RegexOption.DOT_MATCHES_ALL),
+                "<Attendee>(.*?)</Attendee>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            )
+            
+            for (attendeePattern in attendeePatterns) {
+                attendeePattern.findAll(attendeesXml).forEach { match ->
+                    val attendeeXml = match.groupValues[1]
+                    val email = extractCalendarValue(attendeeXml, "Email") ?: return@forEach
+                    val name = extractCalendarValue(attendeeXml, "Name") ?: ""
+                    val status = extractCalendarValue(attendeeXml, "AttendeeStatus")?.toIntOrNull() ?: 0
+                    attendees.add(EasAttendee(email, name, status))
+                }
+                if (attendees.isNotEmpty()) break
             }
         }
         return attendees
@@ -4912,6 +5961,234 @@ $foldersXml
         }
     }
     
+    /**
+     * Стандартная синхронизация задач для EAS 14+ (Exchange 2010+)
+     */
+    private suspend fun syncTasksStandard(folders: List<EasFolder>): EasResult<List<EasTask>> {
+        val tasksFolderId = folders.find { it.type == 7 }?.serverId
+            ?: return EasResult.Error("Папка Tasks (type=7) не найдена")
+        
+        cachedTasksFolderId = tasksFolderId
+        
+        // Шаг 1: Получаем начальный SyncKey
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return initialResult
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Success(emptyList())
+        }
+        
+        // Шаг 2: Запрашиваем задачи
+        val syncXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                        <DeletesAsMoves/>
+                        <GetChanges/>
+                        <WindowSize>100</WindowSize>
+                        <Options>
+                            <airsyncbase:BodyPreference>
+                                <airsyncbase:Type>1</airsyncbase:Type>
+                                <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                            </airsyncbase:BodyPreference>
+                        </Options>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        return executeEasCommand("Sync", syncXml) { responseXml ->
+            parseTaskSyncResponse(responseXml)
+        }
+    }
+    
+    /**
+     * Legacy синхронизация задач для Exchange 2007 (EAS 12.x)
+     * Пробуем Search -> Sync -> EWS
+     */
+    private suspend fun syncTasksLegacy(folders: List<EasFolder>): EasResult<List<EasTask>> {
+        // Ищем папку Tasks по типу или имени
+        val tasksFolderId = folders.find { it.type == 7 }?.serverId
+            ?: folders.find { 
+                it.displayName.equals("Tasks", ignoreCase = true) ||
+                it.displayName.equals("Задачи", ignoreCase = true)
+            }?.serverId
+        
+        if (tasksFolderId == null) {
+            // Нет папки Tasks — пробуем EWS
+            return syncTasksEws()
+        }
+        
+        cachedTasksFolderId = tasksFolderId
+        
+        // Пробуем Search (как для заметок)
+        val searchXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Search xmlns="Search" xmlns:airsync="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Store>
+                    <Name>Mailbox</Name>
+                    <Query>
+                        <And>
+                            <airsync:CollectionId>$tasksFolderId</airsync:CollectionId>
+                            <FreeText>*</FreeText>
+                        </And>
+                    </Query>
+                    <Options>
+                        <Range>0-99</Range>
+                        <airsyncbase:BodyPreference>
+                            <airsyncbase:Type>1</airsyncbase:Type>
+                            <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                        </airsyncbase:BodyPreference>
+                    </Options>
+                </Store>
+            </Search>
+        """.trimIndent()
+        
+        val searchResult = executeEasCommand("Search", searchXml) { responseXml ->
+            parseTasksSearchResponse(responseXml)
+        }
+        
+        if (searchResult is EasResult.Success && searchResult.data.isNotEmpty()) {
+            return searchResult
+        }
+        
+        // Search не сработал — пробуем Sync
+        val initialXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync">
+                <Collections>
+                    <Collection>
+                        <SyncKey>0</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        var syncKey = "0"
+        val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
+            extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> {
+                // Sync не работает — пробуем EWS
+                return syncTasksEws()
+            }
+        }
+        
+        if (syncKey == "0") {
+            // Пробуем EWS
+            return syncTasksEws()
+        }
+        
+        val syncXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
+                <Collections>
+                    <Collection>
+                        <SyncKey>$syncKey</SyncKey>
+                        <CollectionId>$tasksFolderId</CollectionId>
+                        <GetChanges>1</GetChanges>
+                        <WindowSize>100</WindowSize>
+                        <Options>
+                            <airsyncbase:BodyPreference>
+                                <airsyncbase:Type>1</airsyncbase:Type>
+                                <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                            </airsyncbase:BodyPreference>
+                        </Options>
+                    </Collection>
+                </Collections>
+            </Sync>
+        """.trimIndent()
+        
+        val syncResult = executeEasCommand("Sync", syncXml) { responseXml ->
+            parseTaskSyncResponse(responseXml)
+        }
+        
+        // Если Sync вернул пустой результат или ошибку — пробуем EWS
+        if (syncResult is EasResult.Error || (syncResult is EasResult.Success && syncResult.data.isEmpty())) {
+            return syncTasksEws()
+        }
+        
+        return syncResult
+    }
+    
+    /**
+     * Парсинг задач из Search ответа
+     */
+    private fun parseTasksSearchResponse(xml: String): List<EasTask> {
+        val tasks = mutableListOf<EasTask>()
+        
+        val resultPattern = "<Result>(.*?)</Result>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        resultPattern.findAll(xml).forEach { match ->
+            val resultXml = match.groupValues[1]
+            
+            val serverId = extractValue(resultXml, "LongId") 
+                ?: extractValue(resultXml, "ServerId") 
+                ?: return@forEach
+            
+            val propsPattern = "<Properties>(.*?)</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val propsMatch = propsPattern.find(resultXml)
+            if (propsMatch != null) {
+                val propsXml = propsMatch.groupValues[1]
+                
+                val subject = extractTaskValue(propsXml, "Subject") ?: ""
+                val body = extractTaskBody(propsXml)
+                val startDate = parseCalendarDate(extractTaskValue(propsXml, "StartDate")) ?: 0L
+                val dueDate = parseCalendarDate(extractTaskValue(propsXml, "DueDate") ?: extractTaskValue(propsXml, "UtcDueDate")) ?: 0L
+                val complete = extractTaskValue(propsXml, "Complete") == "1"
+                val dateCompleted = parseCalendarDate(extractTaskValue(propsXml, "DateCompleted")) ?: 0L
+                val importance = extractTaskValue(propsXml, "Importance")?.toIntOrNull() ?: 1
+                val sensitivity = extractTaskValue(propsXml, "Sensitivity")?.toIntOrNull() ?: 0
+                val reminderSet = extractTaskValue(propsXml, "ReminderSet") == "1"
+                val reminderTime = parseCalendarDate(extractTaskValue(propsXml, "ReminderTime")) ?: 0L
+                val categories = extractTaskCategories(propsXml)
+                
+                tasks.add(EasTask(
+                    serverId = serverId,
+                    subject = subject,
+                    body = body,
+                    startDate = startDate,
+                    dueDate = dueDate,
+                    complete = complete,
+                    dateCompleted = dateCompleted,
+                    importance = importance,
+                    sensitivity = sensitivity,
+                    reminderSet = reminderSet,
+                    reminderTime = reminderTime,
+                    categories = categories,
+                    lastModified = System.currentTimeMillis()
+                ))
+            }
+        }
+        
+        return tasks
+    }
+    
     private fun parseTaskSyncResponse(xml: String): List<EasTask> {
         val tasks = mutableListOf<EasTask>()
         
@@ -4933,17 +6210,17 @@ $foldersXml
                     val dataXml = dataMatch.groupValues[1]
                     
                     val subject = extractTaskValue(dataXml, "Subject") ?: ""
+                    
                     val body = extractTaskBody(dataXml)
-                    val startDate = parseCalendarDate(extractTaskValue(dataXml, "StartDate") ?: extractTaskValue(dataXml, "UtcStartDate"))
-                    val dueDate = parseCalendarDate(extractTaskValue(dataXml, "DueDate") ?: extractTaskValue(dataXml, "UtcDueDate"))
+                    val startDate = parseCalendarDate(extractTaskValue(dataXml, "StartDate") ?: extractTaskValue(dataXml, "UtcStartDate")) ?: 0L
+                    val dueDate = parseCalendarDate(extractTaskValue(dataXml, "DueDate") ?: extractTaskValue(dataXml, "UtcDueDate")) ?: 0L
                     val complete = extractTaskValue(dataXml, "Complete") == "1"
-                    val dateCompleted = parseCalendarDate(extractTaskValue(dataXml, "DateCompleted"))
+                    val dateCompleted = parseCalendarDate(extractTaskValue(dataXml, "DateCompleted")) ?: 0L
                     val importance = extractTaskValue(dataXml, "Importance")?.toIntOrNull() ?: 1
                     val sensitivity = extractTaskValue(dataXml, "Sensitivity")?.toIntOrNull() ?: 0
                     val reminderSet = extractTaskValue(dataXml, "ReminderSet") == "1"
-                    val reminderTime = parseCalendarDate(extractTaskValue(dataXml, "ReminderTime"))
+                    val reminderTime = parseCalendarDate(extractTaskValue(dataXml, "ReminderTime")) ?: 0L
                     val categories = extractTaskCategories(dataXml)
-                    val lastModified = System.currentTimeMillis()
                     
                     tasks.add(EasTask(
                         serverId = serverId,
@@ -4957,8 +6234,7 @@ $foldersXml
                         sensitivity = sensitivity,
                         reminderSet = reminderSet,
                         reminderTime = reminderTime,
-                        categories = categories,
-                        lastModified = lastModified
+                        categories = categories
                     ))
                 }
             }
@@ -4983,15 +6259,18 @@ $foldersXml
     }
     
     private fun extractTaskBody(xml: String): String {
+        // Сначала пробуем извлечь из AirSyncBase Body с Data
         val bodyPatterns = listOf(
             "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
             "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
-            "<tasks:Body>(.*?)</tasks:Body>"
+            "<tasks:Body>(.*?)</tasks:Body>",
+            // Для Exchange 2007 - Body может быть без namespace и Data внутри
+            "<Body[^>]*>.*?<Data>(.*?)</Data>.*?</Body>"
         )
         for (pattern in bodyPatterns) {
             val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
             val match = regex.find(xml)
-            if (match != null) {
+            if (match != null && match.groupValues[1].isNotBlank()) {
                 return match.groupValues[1].trim()
             }
         }
@@ -5034,17 +6313,16 @@ $foldersXml
         
         val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
         
-        // Если назначаем задачу другому пользователю — используем EWS
-        if (!assignTo.isNullOrBlank()) {
-            return createTaskEws(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo)
-        }
-        
-        // Для Exchange 2010+ (EAS 14+) используем EAS
-        // Для Exchange 2007 (EAS 12.x) используем EWS
-        return if (majorVersion >= 14) {
-            createTaskEas(subject, body, startDate, dueDate, importance, reminderSet, reminderTime)
-        } else {
+        // EAS 14+ — через EAS Sync Add с датами
+        // EAS 12.x (Exchange 2007) с датами — через EWS (EAS не поддерживает даты)
+        // Назначение задач — через EWS
+        return if (!assignTo.isNullOrBlank()) {
             createTaskEws(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo)
+        } else if (majorVersion < 14 && (startDate > 0 || dueDate > 0)) {
+            // Exchange 2007 с датами — пробуем EWS
+            createTaskEws(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, null)
+        } else {
+            createTaskEas(subject, body, startDate, dueDate, importance, reminderSet, reminderTime)
         }
     }
     
@@ -5063,8 +6341,6 @@ $foldersXml
         if (!versionDetected) {
             detectEasVersion()
         }
-        
-        val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
         
         // Получаем папку задач с кэшированием
         val tasksFolderId = getTasksFolderId()
@@ -5099,6 +6375,7 @@ $foldersXml
         
         val clientId = java.util.UUID.randomUUID().toString().replace("-", "").take(32)
         
+        // Формат даты как в AOSP reference: yyyy-MM-dd'T'HH:mm:ss.S'Z'
         val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.000'Z'", java.util.Locale.US)
         dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
         
@@ -5106,16 +6383,9 @@ $foldersXml
         val escapedBody = escapeXml(body)
         
         // Формируем XML для создания задачи
-        // Для EAS 12.x (Exchange 2007) используем упрощённый формат без AirSyncBase
         val createXml = buildString {
             append("""<?xml version="1.0" encoding="UTF-8"?>""")
-            if (majorVersion >= 14) {
-                // Exchange 2010+ с AirSyncBase
-                append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
-            } else {
-                // Exchange 2007 без AirSyncBase
-                append("""<Sync xmlns="AirSync" xmlns:tasks="Tasks">""")
-            }
+            append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
             append("<Collections><Collection>")
             append("<SyncKey>$syncKey</SyncKey>")
             append("<CollectionId>$tasksFolderId</CollectionId>")
@@ -5123,16 +6393,10 @@ $foldersXml
             append("<ClientId>$clientId</ClientId>")
             append("<ApplicationData>")
             append("<tasks:Subject>$escapedSubject</tasks:Subject>")
-            if (majorVersion >= 14) {
-                // Exchange 2010+ - используем AirSyncBase:Body
-                append("<airsyncbase:Body>")
-                append("<airsyncbase:Type>1</airsyncbase:Type>")
-                append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
-                append("</airsyncbase:Body>")
-            } else if (escapedBody.isNotBlank()) {
-                // Exchange 2007 - используем tasks:Body напрямую
-                append("<tasks:Body>$escapedBody</tasks:Body>")
-            }
+            append("<airsyncbase:Body>")
+            append("<airsyncbase:Type>1</airsyncbase:Type>")
+            append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
+            append("</airsyncbase:Body>")
             append("<tasks:Importance>$importance</tasks:Importance>")
             append("<tasks:Complete>0</tasks:Complete>")
             if (startDate > 0) {
@@ -5191,43 +6455,48 @@ $foldersXml
                 val escapedSubject = escapeXml(subject)
                 val escapedBody = escapeXml(body)
                 
+                // Exchange 2007 EWS — формат даты как в официальной документации MS: yyyy-MM-dd'T'HH:mm:ss (без Z!)
                 val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
                 dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
                 
-                // Маппинг важности: 0=Low, 1=Normal, 2=High
-                val ewsImportance = when (importance) {
-                    0 -> "Low"
-                    2 -> "High"
-                    else -> "Normal"
-                }
-                
-                // Формируем SOAP запрос для создания задачи
-                // Используем t:Message с ItemClass как для заметок (работает на Exchange 2007)
+                // Формируем SOAP запрос по официальному примеру Microsoft:
+                // https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/createitem-operation-task
+                // Exchange 2007 не поддерживает StartDate в CreateItem — только DueDate
                 val soapRequest = buildString {
                     append("""<?xml version="1.0" encoding="utf-8"?>""")
-                    append("""<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" """)
-                    append("""xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" """)
-                    append("""xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">""")
-                    append("<soap:Header>")
-                    append("""<t:RequestServerVersion Version="Exchange2007_SP1"/>""")
-                    append("</soap:Header>")
+                    append("""<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" """)
+                    append("""xmlns:xsd="http://www.w3.org/2001/XMLSchema" """)
+                    append("""xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" """)
+                    append("""xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">""")
                     append("<soap:Body>")
-                    append("""<m:CreateItem MessageDisposition="SaveOnly">""")
-                    append("<m:SavedItemFolderId>")
-                    append("""<t:DistinguishedFolderId Id="tasks"/>""")
-                    append("</m:SavedItemFolderId>")
-                    append("<m:Items>")
-                    append("<t:Message>")
-                    append("<t:ItemClass>IPM.Task</t:ItemClass>")
+                    append("""<CreateItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages" """)
+                    append("""xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" """)
+                    append("""MessageDisposition="SaveOnly">""")
+                    append("<Items>")
+                    append("<t:Task>")
                     append("<t:Subject>$escapedSubject</t:Subject>")
-                    append("""<t:Body BodyType="Text">$escapedBody</t:Body>""")
+                    if (escapedBody.isNotBlank()) {
+                        append("""<t:Body BodyType="Text">$escapedBody</t:Body>""")
+                    }
+                    // Importance: 0=Low, 1=Normal, 2=High
+                    val ewsImportance = when (importance) {
+                        0 -> "Low"
+                        2 -> "High"
+                        else -> "Normal"
+                    }
                     append("<t:Importance>$ewsImportance</t:Importance>")
-                    append("</t:Message>")
-                    append("</m:Items>")
-                    append("</m:CreateItem>")
+                    if (dueDate > 0) {
+                        append("<t:DueDate>${dateFormat.format(java.util.Date(dueDate))}</t:DueDate>")
+                    }
+                    append("<t:Status>NotStarted</t:Status>")
+                    append("</t:Task>")
+                    append("</Items>")
+                    append("</CreateItem>")
                     append("</soap:Body>")
                     append("</soap:Envelope>")
                 }
+                
+                android.util.Log.d("EasClient", "createTaskEws: Request: $soapRequest")
                 
                 // Пробуем NTLM аутентификацию (как в createNoteEws)
                 val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
@@ -5236,27 +6505,28 @@ $foldersXml
                 }
                 
                 val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                android.util.Log.d("EasClient", "createTaskEws: Response: ${responseXml?.take(2000)}")
+                
                 if (responseXml == null) {
                     return@withContext EasResult.Error("Не удалось выполнить запрос")
                 }
                 
                 // Проверяем на ошибки
                 if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
+                    android.util.Log.e("EasClient", "createTaskEws: Schema error in response")
                     return@withContext EasResult.Error("Ошибка схемы EWS")
                 }
                 
                 // Извлекаем ItemId
                 val itemId = EWS_ITEM_ID_REGEX.find(responseXml)?.groupValues?.get(1)
                 
-                val taskId = if (itemId != null) {
-                    itemId
+                if (itemId != null) {
+                    EasResult.Success(itemId)
                 } else if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
-                    java.util.UUID.randomUUID().toString()
+                    EasResult.Success("pending_sync_${System.currentTimeMillis()}")
                 } else {
-                    return@withContext EasResult.Error("Не удалось создать задачу через EWS")
+                    EasResult.Error("Не удалось создать задачу через EWS")
                 }
-                
-                EasResult.Success(taskId)
             } catch (e: Exception) {
                 EasResult.Error(e.message ?: "Ошибка создания задачи через EWS")
             }
@@ -5673,6 +6943,11 @@ $foldersXml
             detectEasVersion()
         }
         
+        // Для Exchange 2007 (EAS 12.x) используем EWS - serverId уже в формате EWS ItemId
+        if (easVersion.startsWith("12.")) {
+            return deleteTaskEws(serverId)
+        }
+        
         // Получаем папку задач с кэшированием
         val tasksFolderId = getTasksFolderId()
             ?: return EasResult.Error("Папка задач не найдена")
@@ -5725,6 +7000,257 @@ $foldersXml
             val status = extractValue(responseXml, "Status")
             status == "1"
         }
+    }
+    
+    /**
+     * Удаление задачи через EWS (для Exchange 2007)
+     */
+    private suspend fun deleteTaskEws(serverId: String): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                // Проверяем формат serverId - если это EAS формат (короткий), нужно найти EWS ItemId
+                val ewsItemId = if (serverId.length < 50 || serverId.contains(":")) {
+                    findEwsTaskItemId(ewsUrl, serverId)
+                } else {
+                    serverId
+                }
+                
+                if (ewsItemId == null) {
+                    return@withContext EasResult.Error("Не удалось найти задачу на сервере")
+                }
+                
+                val escapedItemId = escapeXml(ewsItemId)
+                
+                val soapRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:DeleteItem DeleteType="MoveToDeletedItems" AffectedTaskOccurrences="AllOccurrences">
+                                <m:ItemIds>
+                                    <t:ItemId Id="$escapedItemId"/>
+                                </m:ItemIds>
+                            </m:DeleteItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                // Используем только NTLM для Exchange 2007
+                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                if (ntlmAuth == null) {
+                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                if (responseXml == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
+                
+                if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"") || responseXml.contains("ErrorItemNotFound")) {
+                    return@withContext EasResult.Success(true)
+                }
+                
+                EasResult.Error("Не удалось удалить задачу")
+            } catch (e: Exception) {
+                EasResult.Error("Ошибка EWS: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * Находит EWS ItemId задачи по EAS ServerId
+     */
+    private suspend fun findEwsTaskItemId(ewsUrl: String, easServerId: String): String? {
+        val findRequest = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                           xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                           xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                <soap:Header>
+                    <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                </soap:Header>
+                <soap:Body>
+                    <m:FindItem Traversal="Shallow">
+                        <m:ItemShape>
+                            <t:BaseShape>IdOnly</t:BaseShape>
+                        </m:ItemShape>
+                        <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
+                        <m:ParentFolderIds>
+                            <t:DistinguishedFolderId Id="tasks"/>
+                        </m:ParentFolderIds>
+                    </m:FindItem>
+                </soap:Body>
+            </soap:Envelope>
+        """.trimIndent()
+        
+        // Используем только NTLM для Exchange 2007
+        val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+        if (ntlmAuth == null) {
+            return null
+        }
+        
+        val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+        if (responseXml == null) {
+            return null
+        }
+        
+        val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
+        val matches = itemIdPattern.findAll(responseXml).toList()
+        
+        val index = easServerId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
+        return matches.getOrNull(index)?.groupValues?.get(1) ?: matches.firstOrNull()?.groupValues?.get(1)
+    }
+    
+    /**
+     * Синхронизация задач через EWS (для Exchange 2007)
+     */
+    private suspend fun syncTasksEws(): EasResult<List<EasTask>> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizedServerUrl
+                    .replace("/Microsoft-Server-ActiveSync", "")
+                    .replace("/default.eas", "")
+                    .trimEnd('/')
+                val ewsUrl = "$baseUrl/EWS/Exchange.asmx"
+                
+                // FindItem запрос для задач - простой запрос как для заметок
+                val findRequest = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+                                   xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+                                   xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+                        <soap:Header>
+                            <t:RequestServerVersion Version="Exchange2007_SP1"/>
+                        </soap:Header>
+                        <soap:Body>
+                            <m:FindItem Traversal="Shallow">
+                                <m:ItemShape>
+                                    <t:BaseShape>AllProperties</t:BaseShape>
+                                </m:ItemShape>
+                                <m:IndexedPageItemView MaxEntriesReturned="200" Offset="0" BasePoint="Beginning"/>
+                                <m:ParentFolderIds>
+                                    <t:DistinguishedFolderId Id="tasks"/>
+                                </m:ParentFolderIds>
+                            </m:FindItem>
+                        </soap:Body>
+                    </soap:Envelope>
+                """.trimIndent()
+                
+                android.util.Log.d("EasClient", "syncTasksEws: Sending FindItem request")
+                
+                // Используем только NTLM для Exchange 2007
+                val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+                if (ntlmAuth == null) {
+                    android.util.Log.e("EasClient", "syncTasksEws: NTLM handshake failed")
+                    return@withContext EasResult.Success(emptyList())
+                }
+                
+                val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+                if (responseXml == null) {
+                    android.util.Log.e("EasClient", "syncTasksEws: executeNtlmRequest returned null")
+                    return@withContext EasResult.Success(emptyList())
+                }
+                
+                android.util.Log.d("EasClient", "syncTasksEws: Got response, length=${responseXml.length}")
+                
+                val tasks = parseEwsTasksResponse(responseXml)
+                EasResult.Success(tasks)
+            } catch (e: Exception) {
+                EasResult.Success(emptyList())
+            }
+        }
+    }
+    
+    /**
+     * Парсинг задач из EWS ответа
+     */
+    private fun parseEwsTasksResponse(xml: String): List<EasTask> {
+        val tasks = mutableListOf<EasTask>()
+        
+        // DEBUG: Логируем первые 2000 символов ответа
+        android.util.Log.d("EasClient", "parseEwsTasksResponse XML: ${xml.take(2000)}")
+        
+        // Сначала пробуем найти Items контейнер
+        val itemsPattern = "<(?:t:|m:)?Items>(.*?)</(?:t:|m:)?Items>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        val itemsMatch = itemsPattern.find(xml)
+        val itemsXml = itemsMatch?.groupValues?.get(1) ?: xml
+        
+        android.util.Log.d("EasClient", "parseEwsTasksResponse itemsXml found: ${itemsMatch != null}, length: ${itemsXml.length}")
+        
+        // EWS может возвращать задачи как Task, Item или Message
+        val itemPatterns = listOf(
+            "<t:Task[^>]*>(.*?)</t:Task>",
+            "<Task[^>]*>(.*?)</Task>",
+            "<t:Item[^>]*>(.*?)</t:Item>",
+            "<Item[^>]*>(.*?)</Item>"
+        )
+        
+        for (pattern in itemPatterns) {
+            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+            val matches = regex.findAll(itemsXml).toList()
+            android.util.Log.d("EasClient", "parseEwsTasksResponse pattern '$pattern' found ${matches.size} matches")
+            
+            matches.forEach { match ->
+                val itemXml = match.groupValues[1]
+                android.util.Log.d("EasClient", "parseEwsTasksResponse itemXml: ${itemXml.take(500)}")
+                
+                // Проверяем ItemClass — должен быть IPM.Task (если есть)
+                val itemClass = extractEwsValue(itemXml, "ItemClass") ?: ""
+                if (itemClass.isNotEmpty() && !itemClass.contains("Task", ignoreCase = true)) {
+                    android.util.Log.d("EasClient", "parseEwsTasksResponse skipping itemClass: $itemClass")
+                    return@forEach
+                }
+                
+                // Извлекаем ItemId через extractEwsAttribute
+                val serverId = extractEwsAttribute(itemXml, "ItemId", "Id")
+                android.util.Log.d("EasClient", "parseEwsTasksResponse serverId: $serverId")
+                if (serverId == null) return@forEach
+                
+                val subject = extractEwsValue(itemXml, "Subject") ?: ""
+                android.util.Log.d("EasClient", "parseEwsTasksResponse subject: '$subject'")
+                
+                val body = extractEwsValue(itemXml, "Body") ?: ""
+                val startDate = parseCalendarDate(extractEwsValue(itemXml, "StartDate")) ?: 0L
+                val dueDate = parseCalendarDate(extractEwsValue(itemXml, "DueDate")) ?: 0L
+                val complete = extractEwsValue(itemXml, "Status") == "Completed"
+                val dateCompleted = parseCalendarDate(extractEwsValue(itemXml, "CompleteDate")) ?: 0L
+                val importance = when (extractEwsValue(itemXml, "Importance")) {
+                    "High" -> 2
+                    "Low" -> 0
+                    else -> 1
+                }
+                
+                tasks.add(EasTask(
+                    serverId = serverId,
+                    subject = subject,
+                    body = body,
+                    startDate = startDate,
+                    dueDate = dueDate,
+                    complete = complete,
+                    dateCompleted = dateCompleted,
+                    importance = importance,
+                    sensitivity = 0,
+                    reminderSet = false,
+                    reminderTime = 0,
+                    categories = emptyList()
+                ))
+            }
+            
+            if (tasks.isNotEmpty()) break
+        }
+        
+        android.util.Log.d("EasClient", "parseEwsTasksResponse total tasks: ${tasks.size}")
+        return tasks
     }
 
     private fun parseContactsSyncResponse(xml: String): List<GalContact> {
@@ -6235,7 +7761,14 @@ data class SyncResponse(
     val status: Int,
     val emails: List<EasEmail>,
     val moreAvailable: Boolean = false,
-    val deletedIds: List<String> = emptyList() // ServerId удалённых/перемещённых писем
+    val deletedIds: List<String> = emptyList(), // ServerId удалённых/перемещённых писем
+    val changedEmails: List<EasEmailChange> = emptyList() // Изменения Read/Flag с сервера
+)
+
+data class EasEmailChange(
+    val serverId: String,
+    val read: Boolean? = null,
+    val flagged: Boolean? = null
 )
 
 data class EasEmail(
@@ -6328,7 +7861,9 @@ data class EasCalendarEvent(
     val isRecurring: Boolean = false,
     val recurrenceRule: String = "",
     val categories: List<String> = emptyList(),
-    val lastModified: Long = System.currentTimeMillis()
+    val lastModified: Long = System.currentTimeMillis(),
+    val responseStatus: Int = 0, // 0=None, 1=NotResponded, 2=Accepted, 3=Tentative, 4=Declined
+    val isMeeting: Boolean = false // Это встреча с участниками
 )
 
 /**

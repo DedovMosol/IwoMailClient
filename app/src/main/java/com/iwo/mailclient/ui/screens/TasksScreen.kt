@@ -33,7 +33,10 @@ import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.components.ContactPickerDialog
 import com.iwo.mailclient.ui.theme.AppIcons
 import com.iwo.mailclient.ui.theme.LocalColorTheme
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -54,6 +57,12 @@ fun TasksScreen(
     val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     
+    // Отдельный scope для синхронизации, чтобы не отменялась при навигации
+    val syncScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
+    DisposableEffect(Unit) {
+        onDispose { syncScope.cancel() }
+    }
+    
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
     
@@ -67,9 +76,22 @@ fun TasksScreen(
         delay(300)
         debouncedSearchQuery = searchQuery
     }
-    var isSyncing by remember { mutableStateOf(false) }
+    var isSyncing by rememberSaveable { mutableStateOf(false) }
+    
+    // Автоматическая синхронизация при первом открытии если нет данных
+    LaunchedEffect(accountId, allTasks.isEmpty()) {
+        if (accountId > 0 && allTasks.isEmpty() && !isSyncing) {
+            isSyncing = true
+            syncScope.launch {
+                withContext(Dispatchers.IO) {
+                    taskRepo.syncTasks(accountId)
+                }
+                isSyncing = false
+            }
+        }
+    }
     var selectedTask by remember { mutableStateOf<TaskEntity?>(null) }
-    var showCreateDialog by remember { mutableStateOf(false) }
+    var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var editingTask by remember { mutableStateOf<TaskEntity?>(null) }
     var isCreating by remember { mutableStateOf(false) }
     var currentFilter by rememberSaveable { mutableStateOf(TaskFilter.ALL) }
@@ -241,7 +263,7 @@ fun TasksScreen(
                     val tasksSyncedText = Strings.tasksSynced
                     IconButton(
                         onClick = {
-                            scope.launch {
+                            syncScope.launch {
                                 isSyncing = true
                                 val result = withContext(Dispatchers.IO) {
                                     taskRepo.syncTasks(accountId)

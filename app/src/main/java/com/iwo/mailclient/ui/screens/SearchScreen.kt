@@ -192,10 +192,24 @@ fun SearchScreen(
     
     fun markSelectedAsRead(read: Boolean) {
         scope.launch {
-            selectedIds.forEach { id -> mailRepo.markAsRead(id, read) }
-            // Обновляем локально
+            var hasError = false
+            var errorMsg = ""
+            val successIds = mutableSetOf<String>()
+            selectedIds.forEach { id -> 
+                when (val result = mailRepo.markAsRead(id, read)) {
+                    is EasResult.Success -> successIds.add(id)
+                    is EasResult.Error -> {
+                        hasError = true
+                        errorMsg = result.message
+                    }
+                }
+            }
+            // Обновляем локально только успешные
             allResults = allResults.map { email ->
-                if (email.id in selectedIds) email.copy(read = read) else email
+                if (email.id in successIds) email.copy(read = read) else email
+            }
+            if (hasError) {
+                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
             }
             selectedIds = emptySet()
         }
@@ -356,13 +370,6 @@ fun SearchScreen(
                     }
                     else -> {
                         val listState = rememberLazyListState()
-                        
-                        // Автоскролл вверх при входе в режим выделения
-                        LaunchedEffect(isSelectionMode) {
-                            if (isSelectionMode) {
-                                listState.animateScrollToItem(0)
-                            }
-                        }
                         
                         LazyColumn(state = listState) {
                             // Выбрать всё (только в режиме выбора)

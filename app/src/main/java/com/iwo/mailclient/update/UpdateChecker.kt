@@ -52,7 +52,6 @@ class UpdateChecker(private val context: Context) {
     
     companion object {
         // URL к JSON файлу с информацией об обновлении
-        // TODO: Заменить на реальную ссылку Яндекс.Диска
         private const val UPDATE_URL = "https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json"
         
         private const val UPDATES_DIR = "updates"
@@ -61,6 +60,20 @@ class UpdateChecker(private val context: Context) {
     
     // Используем общий HttpClient для предотвращения утечек памяти
     private val client = com.iwo.mailclient.network.HttpClientProvider.getClient()
+    
+    /**
+     * Определяет архитектуру устройства
+     */
+    private fun getDeviceArch(): String {
+        val supportedAbis = Build.SUPPORTED_ABIS
+        return when {
+            supportedAbis.contains("arm64-v8a") -> "arm64-v8a"
+            supportedAbis.contains("armeabi-v7a") -> "armeabi-v7a"
+            supportedAbis.contains("x86_64") -> "x86_64"
+            supportedAbis.contains("x86") -> "x86"
+            else -> "universal"
+        }
+    }
     
     /**
      * Проверяет наличие обновлений
@@ -80,10 +93,21 @@ class UpdateChecker(private val context: Context) {
             val body = response.body?.string() ?: return@withContext UpdateResult.Error("Empty response")
             val json = JSONObject(body)
             
+            // Определяем архитектуру и выбираем нужный URL
+            val arch = getDeviceArch()
+            val apkUrls = json.optJSONObject("apkUrls")
+            val apkUrl = apkUrls?.optString(arch)?.takeIf { it.isNotBlank() }
+                ?: apkUrls?.optString("universal")?.takeIf { it.isNotBlank() }
+                ?: json.optString("apkUrl") // fallback на старый формат
+            
+            if (apkUrl.isBlank()) {
+                return@withContext UpdateResult.Error("No APK URL for $arch")
+            }
+            
             val updateInfo = UpdateInfo(
                 versionCode = json.getInt("versionCode"),
                 versionName = json.getString("versionName"),
-                apkUrl = json.getString("apkUrl"),
+                apkUrl = apkUrl,
                 changelog = json.optString("changelog", ""),
                 minSdk = json.optInt("minSdk", 24)
             )

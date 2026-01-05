@@ -14,6 +14,17 @@ enum class BusyStatus(val value: Int) {
 }
 
 /**
+ * Статус ответа на приглашение
+ */
+enum class MeetingResponseStatus(val value: Int) {
+    NONE(0),           // Не приглашение или не требует ответа
+    NOT_RESPONDED(1),  // Ещё не ответил
+    ACCEPTED(2),       // Принял
+    TENTATIVE(3),      // Под вопросом
+    DECLINED(4)        // Отклонил
+}
+
+/**
  * Событие календаря из Exchange
  */
 @Entity(
@@ -44,5 +55,7 @@ data class CalendarEventEntity(
     val isRecurring: Boolean = false,
     val recurrenceRule: String = "", // Правило повторения
     val categories: String = "", // Категории через запятую
-    val lastModified: Long = System.currentTimeMillis()
+    val lastModified: Long = System.currentTimeMillis(),
+    val responseStatus: Int = MeetingResponseStatus.NONE.value, // Статус ответа на приглашение
+    val isMeeting: Boolean = false // Это встреча с участниками (требует ответа)
 )

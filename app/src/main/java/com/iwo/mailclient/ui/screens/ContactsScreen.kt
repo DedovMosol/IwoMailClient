@@ -104,8 +104,20 @@ fun ContactsScreen(
     // Exchange контакты из БД (синхронизированные в фоне)
     val exchangeContacts by remember(accountId) { contactRepo.getExchangeContacts(accountId) }.collectAsState(initial = emptyList())
     var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
-    var isSyncing by remember { mutableStateOf(false) }
+    var isSyncing by rememberSaveable { mutableStateOf(false) }
     var syncError by remember { mutableStateOf<String?>(null) }
+    
+    // Автоматическая синхронизация при первом открытии если нет данных
+    LaunchedEffect(accountId, localContacts.isEmpty(), exchangeContacts.isEmpty()) {
+        if (accountId > 0 && localContacts.isEmpty() && exchangeContacts.isEmpty() && !isSyncing) {
+            isSyncing = true
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                contactRepo.syncExchangeContacts(accountId)
+                contactRepo.syncGalContactsToDb(accountId)
+            }
+            isSyncing = false
+        }
+    }
     
     // Множественный выбор
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
@@ -507,7 +519,8 @@ fun ContactsScreen(
             icon = { Icon(AppIcons.Folder, null) },
             title = { Text(Strings.moveToGroup) },
             text = {
-                LazyColumn {
+                // Ограничиваем высоту LazyColumn чтобы избежать вложенного скролла
+                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
                     // Без группы
                     item {
                         ListItem(

@@ -5,8 +5,13 @@ import android.content.Context
 import android.content.Intent
 import com.iwo.mailclient.data.database.AccountType
 import com.iwo.mailclient.data.database.MailDatabase
+import com.iwo.mailclient.data.repository.CalendarRepository
+import com.iwo.mailclient.data.repository.ContactRepository
 import com.iwo.mailclient.data.repository.MailRepository
+import com.iwo.mailclient.data.repository.NoteRepository
 import com.iwo.mailclient.data.repository.SettingsRepository
+import com.iwo.mailclient.data.repository.TaskRepository
+import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.NotificationStrings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -92,6 +97,13 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                     settingsRepo.setLastSyncTime(System.currentTimeMillis())
                     settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
                     
+                    // Синхронизация контактов, заметок, календаря и задач (для Exchange)
+                    // Внутри каждого метода проверяется интервал (в днях) из настроек аккаунта
+                    syncGalContacts(context, accounts, settingsRepo)
+                    syncNotes(context, accounts, settingsRepo)
+                    syncCalendar(context, accounts, settingsRepo)
+                    syncTasks(context, accounts, settingsRepo)
+                    
                     // Пытаемся перезапустить PushService только если есть аккаунты с режимом PUSH
                     val hasExchangePushAccounts = accounts.any { 
                         it.accountType == AccountType.EXCHANGE.name &&
@@ -173,5 +185,117 @@ class SyncAlarmReceiver : BroadcastReceiver() {
         
         // Воспроизводим звук
         com.iwo.mailclient.util.SoundPlayer.playReceiveSound(context)
+    }
+    
+    /**
+     * Синхронизация контактов из GAL для Exchange аккаунтов
+     */
+    private suspend fun syncGalContacts(
+        context: Context,
+        accounts: List<com.iwo.mailclient.data.database.AccountEntity>,
+        settingsRepo: SettingsRepository
+    ) {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val contactRepo = ContactRepository(context)
+        
+        for (account in accounts) {
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            if (account.contactsSyncIntervalDays <= 0) continue
+            
+            val lastSync = settingsRepo.getLastContactsSyncTimeSync(account.id)
+            val intervalMs = account.contactsSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            try {
+                val result = contactRepo.syncGalContactsToDb(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastContactsSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (_: Exception) { }
+        }
+    }
+    
+    /**
+     * Синхронизация заметок для Exchange аккаунтов
+     */
+    private suspend fun syncNotes(
+        context: Context,
+        accounts: List<com.iwo.mailclient.data.database.AccountEntity>,
+        settingsRepo: SettingsRepository
+    ) {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val noteRepo = NoteRepository(context)
+        
+        for (account in accounts) {
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            if (account.notesSyncIntervalDays <= 0) continue
+            
+            val lastSync = settingsRepo.getLastNotesSyncTimeSync(account.id)
+            val intervalMs = account.notesSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            try {
+                val result = noteRepo.syncNotes(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastNotesSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (_: Exception) { }
+        }
+    }
+    
+    /**
+     * Синхронизация календаря для Exchange аккаунтов
+     */
+    private suspend fun syncCalendar(
+        context: Context,
+        accounts: List<com.iwo.mailclient.data.database.AccountEntity>,
+        settingsRepo: SettingsRepository
+    ) {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val calendarRepo = CalendarRepository(context)
+        
+        for (account in accounts) {
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            if (account.calendarSyncIntervalDays <= 0) continue
+            
+            val lastSync = settingsRepo.getLastCalendarSyncTimeSync(account.id)
+            val intervalMs = account.calendarSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            try {
+                val result = calendarRepo.syncCalendar(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastCalendarSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (_: Exception) { }
+        }
+    }
+    
+    /**
+     * Синхронизация задач для Exchange аккаунтов
+     */
+    private suspend fun syncTasks(
+        context: Context,
+        accounts: List<com.iwo.mailclient.data.database.AccountEntity>,
+        settingsRepo: SettingsRepository
+    ) {
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        val taskRepo = TaskRepository(context)
+        
+        for (account in accounts) {
+            if (account.accountType != AccountType.EXCHANGE.name) continue
+            if (account.tasksSyncIntervalDays <= 0) continue
+            
+            val lastSync = settingsRepo.getLastTasksSyncTimeSync(account.id)
+            val intervalMs = account.tasksSyncIntervalDays * oneDayMs
+            if (System.currentTimeMillis() - lastSync < intervalMs) continue
+            
+            try {
+                val result = taskRepo.syncTasks(account.id)
+                if (result is EasResult.Success) {
+                    settingsRepo.setLastTasksSyncTime(account.id, System.currentTimeMillis())
+                }
+            } catch (_: Exception) { }
+        }
     }
 }
