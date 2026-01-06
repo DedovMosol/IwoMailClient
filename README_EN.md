@@ -23,37 +23,15 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 
 ## 📱 Capabilities
 
-| Feature | Status |
-|---------|--------|
-| Folder and email sync | ✅ |
-| Send emails with attachments | ✅ |
-| Download attachments | ✅ |
-| Email search | ✅ |
-| Filters (unread, starred, with attachments, by date) | ✅ |
-| Favorite emails | ✅ |
-| Move/delete/restore emails | ✅ |
-| Deferred deletion with undo | ✅ |
-| Auto-empty trash | ✅ |
-| Create/delete/rename folders | ✅ |
-| Contacts with import/export | ✅ |
-| Contact groups | ✅ |
-| Favorite contacts | ✅ |
-| Exchange Notes (create/edit/delete) | ✅ |
-| Exchange Calendar (create/edit/delete) | ⚠️ Beta |
-| Email autocomplete | ✅ |
-| Multiple accounts | ✅ |
-| Multiple signatures | ✅ |
-| Push notifications (Direct Push) | ✅ |
-| Background sync | ✅ |
-| Dark theme | ✅ |
-| Color themes (7 colors) | ✅ |
-| Interface personalization | ✅ |
-| Read/delivery receipt request (MDN/DSN) | ✅ |
-| Calendar event reminders | ✅ |
-| Exchange Tasks (create/edit/delete) | ⚠️ Beta |
-| "Important" filter (high priority) | ✅ |
-| Night sync mode | ✅ |
-| Battery saver mode | ✅ |
+- ✅ **Mail** — sync, send with attachments, search, filters, favorites, folder management
+- ✅ **Contacts** — personal and GAL, groups, import/export (vCard, CSV)
+- ✅ **Calendar** — events with reminders, invite attendees
+- ✅ **Notes** — create, edit, sync
+- ✅ **Tasks** — create, edit, sync
+- ✅ **Notifications** — Push (Direct Push), background sync, night mode
+- ✅ **Interface** — dark/light theme, 7 color schemes, personalization
+- ✅ **Multiple accounts** — with individual signatures and settings
+- ✅ **MDN/DSN** — read and delivery receipt requests
 
 ## 🆕 What's New in v1.5.1
 
