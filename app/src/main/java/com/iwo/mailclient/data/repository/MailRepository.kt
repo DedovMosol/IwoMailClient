@@ -688,11 +688,18 @@ class MailRepository(context: Context) {
         var moreAvailable = true
         var iterations = 0
         val maxIterations = 500 // Увеличен лимит для очень больших папок (до 50000 писем)
+        var consecutiveErrors = 0
+        val maxConsecutiveErrors = 3
         
-        while (moreAvailable && iterations < maxIterations) {
+        while (moreAvailable && iterations < maxIterations && consecutiveErrors < maxConsecutiveErrors) {
             iterations++
+            // Даём возможность другим корутинам выполниться (предотвращает блокировку)
+            kotlinx.coroutines.yield()
+            
             when (val result = client.sync(folder.serverId, syncKey, windowSize)) {
                 is EasResult.Success -> {
+                    consecutiveErrors = 0 // Сбрасываем счётчик ошибок при успехе
+                    
                     // Обработка Status 12 (Invalid SyncKey) - сбрасываем и начинаем заново
                     if (result.data.status == 12) {
                         // Сбрасываем SyncKey всех папок этого аккаунта
@@ -778,11 +785,22 @@ class MailRepository(context: Context) {
                     folderDao.updateCounts(folderId, unreadCount, totalCount)
                 }
                 is EasResult.Error -> {
-                    return if (newEmailsCount > 0) {
-                        EasResult.Success(newEmailsCount)
-                    } else {
-                        EasResult.Error(result.message)
+                    consecutiveErrors++
+                    // При ошибке пробуем продолжить если есть ещё попытки
+                    if (consecutiveErrors >= maxConsecutiveErrors) {
+                        // Обновляем счётчики перед выходом
+                        val totalCount = emailDao.getCountByFolder(folderId)
+                        val unreadCount = emailDao.getUnreadCount(folderId)
+                        folderDao.updateCounts(folderId, unreadCount, totalCount)
+                        
+                        return if (newEmailsCount > 0) {
+                            EasResult.Success(newEmailsCount)
+                        } else {
+                            EasResult.Error(result.message)
+                        }
                     }
+                    // Небольшая пауза перед повтором
+                    kotlinx.coroutines.delay(500)
                 }
             }
         }
@@ -989,11 +1007,13 @@ class MailRepository(context: Context) {
             
             // Определяем исходную папку:
             // 1. Если ServerId в формате "folderId:messageId" (Exchange 2007) - берём folderId из него
-            // 2. Иначе берём из email.folderId
+            // 2. Иначе получаем serverId папки из БД
             val srcFolderServerId = if (emailServerId.contains(":")) {
                 emailServerId.substringBefore(":")
             } else {
-                email.folderId.substringAfter("_")
+                // Получаем serverId папки из БД
+                val srcFolder = folderDao.getFolder(email.folderId)
+                srcFolder?.serverId ?: email.folderId.substringAfter("_")
             }
             items.add(emailServerId to srcFolderServerId)
         }
@@ -1226,7 +1246,9 @@ class MailRepository(context: Context) {
             val folderServerId = if (email.serverId.contains(":")) {
                 email.serverId.substringBefore(":")
             } else {
-                email.folderId.substringAfter("_")
+                // Получаем serverId папки из БД
+                val srcFolder = folderDao.getFolder(email.folderId)
+                srcFolder?.serverId ?: email.folderId.substringAfter("_")
             }
             
             // Получаем syncKey папки
@@ -1328,7 +1350,9 @@ class MailRepository(context: Context) {
             val folderServerId = if (email.serverId.contains(":")) {
                 email.serverId.substringBefore(":")
             } else {
-                email.folderId.substringAfter("_")
+                // Получаем serverId папки из БД
+                val srcFolder = folderDao.getFolder(email.folderId)
+                srcFolder?.serverId ?: email.folderId.substringAfter("_")
             }
             
             var folder = folderDao.getFolder(email.folderId)

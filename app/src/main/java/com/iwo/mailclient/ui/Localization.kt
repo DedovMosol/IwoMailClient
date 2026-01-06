@@ -382,6 +382,22 @@ object Strings {
     // Дополнительные строки для главного экрана
     val emailsCount: String @Composable get() = if (isRussian()) "писем" else "emails"
     
+    @Composable
+    fun pluralEmails(count: Int): String {
+        return if (isRussian()) {
+            val mod10 = count % 10
+            val mod100 = count % 100
+            when {
+                mod100 in 11..19 -> "писем"
+                mod10 == 1 -> "письмо"
+                mod10 in 2..4 -> "письма"
+                else -> "писем"
+            }
+        } else {
+            if (count == 1) "email" else "emails"
+        }
+    }
+    
     // Время последней синхронизации
     val lastSync: String @Composable get() = if (isRussian()) "Последняя синхронизация:" else "Last sync:"
     val neverSynced: String @Composable get() = if (isRussian()) "Ещё не синхронизировано" else "Not synced yet"

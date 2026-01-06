@@ -685,13 +685,10 @@ class EasClient(
                 val status = extractValue(responseContent, "Status")?.toIntOrNull() ?: 0
                 val dstMsgId = extractValue(responseContent, "DstMsgId") ?: ""
                 
-                when (status) {
-                    1, 3 -> {
-                        if (dstMsgId.isNotEmpty()) {
-                            results[srcMsgId] = dstMsgId
-                        }
-                    }
-                    else -> { }
+                // Status 3 = Success (STATUS_CODE_SUCCESS)
+                // Status 1 = No source folder, 2 = No dest folder, 4 = Same folder
+                if (status == 3 && dstMsgId.isNotEmpty()) {
+                    results[srcMsgId] = dstMsgId
                 }
             }
             results

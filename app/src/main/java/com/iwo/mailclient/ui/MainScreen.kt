@@ -1669,7 +1669,7 @@ private fun HomeContent(
                             Spacer(modifier = Modifier.height(8.dp))
                             
                             Text(
-                                text = "� 2025",
+                                text = "© 2025",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2106,10 +2106,10 @@ private fun FolderCardDisplay(
                     if (type != -2 && count > 0) {
                         Text(
                             text = "$count ${when (type) {
-                                -3 -> Strings.pluralNotes(count)  // �������
-                                -4 -> Strings.pluralEvents(count)  // ���������
-                                -5 -> Strings.pluralTasks(count)  // ������
-                                else -> Strings.emailsCount
+                                -3 -> Strings.pluralNotes(count)  // Заметки
+                                -4 -> Strings.pluralEvents(count)  // Календарь
+                                -5 -> Strings.pluralTasks(count)  // Задачи
+                                else -> Strings.pluralEmails(count)  // Письма
                             }}",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.8f)

@@ -1613,7 +1613,6 @@ private fun ContactEditDialog(
         title = { Text(if (contact == null) Strings.addContact else Strings.editContact) },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 OutlinedTextField(
