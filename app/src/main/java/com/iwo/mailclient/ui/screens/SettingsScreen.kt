@@ -309,7 +309,7 @@ fun SettingsScreen(
             item {
                 ListItem(
                     headlineContent = { Text("iwo Mail Client") },
-                    supportingContent = { Text("${Strings.version} 1.5.1") },
+                    supportingContent = { Text("${Strings.version} 1.5.2") },
                     leadingContent = { Icon(AppIcons.Info, null) }
                 )
             }
@@ -1675,9 +1675,10 @@ fun SignaturesManagementDialog(
                         database.signatureDao().clearDefaultForAccount(accountId)
                     }
                     
-                    if (editingSignature != null) {
+                    val currentEditing = editingSignature
+                    if (currentEditing != null) {
                         // Редактирование — update
-                        val updated = editingSignature.copy(
+                        val updated = currentEditing.copy(
                             name = name,
                             text = text,
                             isDefault = actualIsDefault

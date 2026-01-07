@@ -180,8 +180,8 @@ private fun parseHtmlContent(html: String): List<ContentElement> {
         currentPosition = img.range.last + 1
     }
     
-    // Текст после последнего изображения
-    if (currentPosition < html.length) {
+    // Текст после последнего изображения (или весь текст если не было изображений)
+    if (currentPosition < html.length && allImages.isNotEmpty()) {
         val textAfter = html.substring(currentPosition)
         val textElement = parseTextWithLinks(textAfter, linkRegex, urlRegex, imageExtensions)
         if (textElement != null) {

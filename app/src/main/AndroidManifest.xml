@@ -46,6 +46,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             
+            <!-- App Shortcuts -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+            
             <!-- Обработка mailto: ссылок (для выбора приложением по умолчанию) -->
             <intent-filter>
                 <action android:name="android.intent.action.SENDTO" />

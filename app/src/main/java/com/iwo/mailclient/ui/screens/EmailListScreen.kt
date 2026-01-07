@@ -194,8 +194,6 @@ fun EmailListScreen(
     var showFilters by rememberSaveable { mutableStateOf(initialFilter != MailFilter.ALL) }
     var mailFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var dateFilter by rememberSaveable { mutableStateOf(EmailDateFilter.ALL) }
-    var fromFilter by rememberSaveable { mutableStateOf("") }
-    var toFilter by rememberSaveable { mutableStateOf("") }
     
     // Режим выбора
     var selectedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
@@ -214,38 +212,31 @@ fun EmailListScreen(
     }
 
     // Применяем фильтры
-    val filteredEmails = remember(displayEmails, mailFilter, dateFilter, fromFilter, toFilter) {
-        displayEmails.filter { email ->
-            val matchesMail = when (mailFilter) {
-                MailFilter.ALL -> true
-                MailFilter.UNREAD -> !email.read
-                MailFilter.STARRED -> email.flagged
-                MailFilter.WITH_ATTACHMENTS -> email.hasAttachments
-                MailFilter.IMPORTANT -> email.importance == 2
-            }
-            
-            val matchesDate = dateFilter.days?.let { days ->
-                val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
-                email.dateReceived >= cutoff
-            } ?: true
-            
-            val matchesFrom = fromFilter.isEmpty() || 
-                email.from.contains(fromFilter, ignoreCase = true) ||
-                email.fromName.contains(fromFilter, ignoreCase = true)
-            
-            val matchesTo = toFilter.isEmpty() || 
-                email.to.contains(toFilter, ignoreCase = true)
-            
-            matchesMail && matchesDate && matchesFrom && matchesTo
-        }.sortedByDescending { it.dateReceived }
+    val filteredEmails = remember(displayEmails, mailFilter, dateFilter) {
+        displayEmails
+            .distinctBy { it.id } // Защита от дубликатов
+            .filter { email ->
+                val matchesMail = when (mailFilter) {
+                    MailFilter.ALL -> true
+                    MailFilter.UNREAD -> !email.read
+                    MailFilter.STARRED -> email.flagged
+                    MailFilter.WITH_ATTACHMENTS -> email.hasAttachments
+                    MailFilter.IMPORTANT -> email.importance == 2
+                }
+                
+                val matchesDate = dateFilter.days?.let { days ->
+                    val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
+                    email.dateReceived >= cutoff
+                } ?: true
+                
+                matchesMail && matchesDate
+            }.sortedByDescending { it.dateReceived }
     }
     
     // Количество активных фильтров
     val activeFiltersCount = listOf(
         mailFilter != MailFilter.ALL,
-        dateFilter != EmailDateFilter.ALL,
-        fromFilter.isNotEmpty(),
-        toFilter.isNotEmpty()
+        dateFilter != EmailDateFilter.ALL
     ).count { it }
     
     // Загружаем папки для перемещения
@@ -386,8 +377,6 @@ fun EmailListScreen(
     fun clearFilters() {
         mailFilter = MailFilter.ALL
         dateFilter = EmailDateFilter.ALL
-        fromFilter = ""
-        toFilter = ""
     }
 
     // Диалог подтверждения удаления (в корзину)
@@ -728,10 +717,6 @@ fun EmailListScreen(
                 onMailFilterChange = { mailFilter = it },
                 dateFilter = dateFilter,
                 onDateFilterChange = { dateFilter = it },
-                fromFilter = fromFilter,
-                onFromFilterChange = { fromFilter = it },
-                toFilter = toFilter,
-                onToFilterChange = { toFilter = it },
                 activeFiltersCount = activeFiltersCount,
                 onClearFilters = { clearFilters() },
                 totalCount = displayEmails.size,
@@ -780,10 +765,6 @@ private fun FilterPanel(
     onMailFilterChange: (MailFilter) -> Unit,
     dateFilter: EmailDateFilter,
     onDateFilterChange: (EmailDateFilter) -> Unit,
-    fromFilter: String,
-    onFromFilterChange: (String) -> Unit,
-    toFilter: String,
-    onToFilterChange: (String) -> Unit,
     activeFiltersCount: Int,
     onClearFilters: () -> Unit,
     totalCount: Int,
@@ -867,48 +848,17 @@ private fun FilterPanel(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                     )
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        OutlinedTextField(
-                            value = fromFilter,
-                            onValueChange = onFromFilterChange,
-                            label = { Text(Strings.sender) },
-                            placeholder = { Text(Strings.nameOrEmail) },
-                            singleLine = true,
-                            leadingIcon = { Icon(AppIcons.Person, null) },
-                            trailingIcon = {
-                                if (fromFilter.isNotEmpty()) {
-                                    IconButton(onClick = { onFromFilterChange("") }) {
-                                        Icon(AppIcons.Clear, Strings.close)
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        OutlinedTextField(
-                            value = toFilter,
-                            onValueChange = onToFilterChange,
-                            label = { Text(Strings.to) },
-                            placeholder = { Text(Strings.nameOrEmail) },
-                            singleLine = true,
-                            leadingIcon = { Icon(AppIcons.PersonOutline, null) },
-                            trailingIcon = {
-                                if (toFilter.isNotEmpty()) {
-                                    IconButton(onClick = { onToFilterChange("") }) {
-                                        Icon(AppIcons.Clear, Strings.close)
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        if (activeFiltersCount > 0) {
-                            Spacer(modifier = Modifier.height(8.dp))
+                    // Кнопка сброса фильтров
+                    if (activeFiltersCount > 0) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
                             TextButton(
                                 onClick = onClearFilters,
-                                modifier = Modifier.align(Alignment.End)
+                                modifier = Modifier.align(Alignment.End).padding(8.dp)
                             ) {
                                 Icon(AppIcons.Clear, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -1348,6 +1298,22 @@ private fun EmailListItem(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.Top
         ) {
+            // Получаем имя из кэша если fromName пустой или содержит email
+            val cachedSenderName = remember(email.from) {
+                if (email.fromName.isBlank() || email.fromName.contains("@")) {
+                    com.iwo.mailclient.data.repository.MailRepository.getCachedName(email.from)
+                } else null
+            }
+            
+            // Очищаем fromName от email части (формат "Имя <email>" или "Имя/email")
+            val cleanFromName = remember(email.fromName) {
+                email.fromName
+                    .substringBefore("<").trim()
+                    .substringBefore("/").trim()
+                    .trim('"')
+                    .takeIf { it.isNotBlank() && !it.contains("@") }
+            }
+            
             // Для папки Отправленные показываем получателя, иначе отправителя
             val displayName = if (isSent) {
                 // Извлекаем имя получателя из поля to
@@ -1359,7 +1325,7 @@ private fun EmailListItem(
                 }.ifEmpty { toField }
                 "${Strings.toPrefix} $recipientName"
             } else {
-                email.fromName.ifEmpty { email.from }
+                cachedSenderName ?: cleanFromName ?: email.from
             }
             
             // Аватар с цветом на основе имени (получателя для Отправленных, отправителя для остальных)
@@ -1372,7 +1338,7 @@ private fun EmailListItem(
                     else -> toField
                 }.ifEmpty { toField }
             } else {
-                email.fromName.ifEmpty { email.from }
+                cachedSenderName ?: cleanFromName ?: email.from
             }
             val avatarColor = getAvatarColor(avatarName)
             

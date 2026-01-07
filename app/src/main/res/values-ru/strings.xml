@@ -7,4 +7,14 @@
     <string name="task_reminder">Напоминание о задаче</string>
     <string name="due_date_label">Срок</string>
     <string name="high_priority">Высокий приоритет</string>
+    
+    <!-- App Shortcuts -->
+    <string name="shortcut_compose">Написать</string>
+    <string name="shortcut_compose_long">Написать письмо</string>
+    <string name="shortcut_inbox">Входящие</string>
+    <string name="shortcut_inbox_long">Открыть Входящие</string>
+    <string name="shortcut_search">Поиск</string>
+    <string name="shortcut_search_long">Поиск писем</string>
+    <string name="shortcut_sync">Синхронизация</string>
+    <string name="shortcut_sync_long">Синхронизировать</string>
 </resources>

@@ -295,7 +295,13 @@ class ContactRepository(context: Context) {
     
     suspend fun deleteContacts(ids: List<String>): Int {
         if (ids.isEmpty()) return 0
-        return contactDao.deleteByIds(ids)
+        // SQLite имеет лимит на количество параметров в IN clause (~999)
+        // Разбиваем на батчи по 500
+        var totalDeleted = 0
+        ids.chunked(500).forEach { batch ->
+            totalDeleted += contactDao.deleteByIds(batch)
+        }
+        return totalDeleted
     }
     
     // === Группы контактов ===

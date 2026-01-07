@@ -98,6 +98,9 @@ class MailApplication : Application() {
     
     private fun scheduleSync() {
         applicationScope.launch(Dispatchers.IO) {
+            // Инициализируем кэш имён отправителей из БД
+            com.iwo.mailclient.data.repository.MailRepository.initCacheFromDb(this@MailApplication)
+            
             val hasAccounts = MailDatabase.getInstance(this@MailApplication)
                 .accountDao().getCount() > 0
             

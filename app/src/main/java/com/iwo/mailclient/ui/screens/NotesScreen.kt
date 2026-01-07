@@ -497,10 +497,22 @@ private fun NoteDetailDialog(
                 
                 // Текст заметки с кликабельными ссылками
                 if (note.body.isNotBlank()) {
+                    // Очищаем body от дубликатов
+                    val cleanBody = remember(note.body) {
+                        val lines = note.body.lines()
+                        val seen = mutableSetOf<String>()
+                        lines.mapNotNull { line ->
+                            val trimmed = line.trim()
+                            if (trimmed.isBlank()) null
+                            else if (seen.add(trimmed.lowercase())) trimmed
+                            else null
+                        }.joinToString("\n")
+                    }
+                    
                     Spacer(modifier = Modifier.height(8.dp))
                     SelectionContainer {
                         ClickableNoteText(
-                            text = note.body,
+                            text = cleanBody,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }

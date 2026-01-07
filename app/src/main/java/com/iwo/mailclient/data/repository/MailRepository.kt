@@ -37,21 +37,85 @@ class MailRepository(context: Context) {
         // Кэш email → displayName (глобальный, потокобезопасный)
         // Заполняется только из писем, не из контактов
         private val emailNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+        private var cacheInitialized = false
+        private var contactsDatabase: com.iwo.mailclient.data.database.MailDatabase? = null
+        
+        // Regex для извлечения email из строки типа "Name <email@domain.com>"
+        private val EMAIL_EXTRACT_REGEX = Regex("<([^>]+)>")
+        
+        /**
+         * Извлечь чистый email из строки (убирает "Name <...>" обёртку)
+         */
+        private fun extractEmail(raw: String): String {
+            val match = EMAIL_EXTRACT_REGEX.find(raw)
+            return (match?.groupValues?.get(1) ?: raw).lowercase().trim()
+        }
         
         /**
          * Получить имя из кэша по email
          */
         fun getCachedName(email: String): String? {
-            return emailNameCache[email.lowercase()]
+            val cleanEmail = extractEmail(email)
+            return emailNameCache[cleanEmail]
+        }
+        
+        /**
+         * Получить имя из контактов по email (синхронно из кэша, асинхронно из БД)
+         */
+        suspend fun getNameFromContacts(email: String): String? {
+            val db = contactsDatabase ?: return null
+            return try {
+                db.contactDao().getNameByEmail(email)
+            } catch (_: Exception) { null }
         }
         
         /**
          * Сохранить имя в кэш (только из писем)
+         * Пропускает если такой email уже есть в кэше
          */
         fun cacheName(email: String, name: String) {
             if (email.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
-                emailNameCache[email.lowercase()] = name
+                val key = email.lowercase()
+                if (!emailNameCache.containsKey(key)) {
+                    emailNameCache[key] = name
+                }
             }
+        }
+        
+        /**
+         * Инициализация кэша из существующих писем в БД
+         * Вызывается один раз при первом создании MailRepository
+         */
+        suspend fun initCacheFromDb(context: android.content.Context) {
+            if (cacheInitialized) return
+            cacheInitialized = true
+            
+            try {
+                val database = com.iwo.mailclient.data.database.MailDatabase.getInstance(context)
+                contactsDatabase = database
+                
+                // Сначала загружаем из контактов (приоритет)
+                val accounts = database.accountDao().getAllAccountsList()
+                for (account in accounts) {
+                    val contacts = database.contactDao().getContactsByAccountList(account.id)
+                    for (contact in contacts) {
+                        if (contact.email.isNotBlank() && contact.displayName.isNotBlank() && !contact.displayName.contains("@")) {
+                            emailNameCache[contact.email.lowercase()] = contact.displayName
+                        }
+                    }
+                }
+                
+                // Потом из писем (не перезаписывает если уже есть из контактов)
+                val senderPairs = database.emailDao().getAllSenderNames()
+                for ((email, name) in senderPairs) {
+                    if (email.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
+                        val key = email.lowercase()
+                        if (!emailNameCache.containsKey(key)) {
+                            emailNameCache[key] = name
+                        }
+                    }
+                }
+            } catch (_: Exception) { }
         }
     }
     
@@ -406,6 +470,17 @@ class MailRepository(context: Context) {
                 }
                 
                 accountDao.updateFolderSyncKey(accountId, result.data.syncKey)
+                
+                // Удаляем папки, которые были удалены на сервере
+                if (result.data.deletedFolderIds.isNotEmpty()) {
+                    for (serverId in result.data.deletedFolderIds) {
+                        val folderId = "${accountId}_${serverId}"
+                        // Удаляем письма из папки
+                        emailDao.deleteByFolder(folderId)
+                        // Удаляем саму папку
+                        folderDao.delete(folderId)
+                    }
+                }
                 
                 // Если папки пришли - сохраняем
                 if (result.data.folders.isNotEmpty()) {
@@ -1293,8 +1368,15 @@ class MailRepository(context: Context) {
                 continue
             }
             
+            // Извлекаем itemId из serverId (может быть в формате folderId:itemId)
+            val itemServerId = if (email.serverId.contains(":")) {
+                email.serverId.substringAfter(":")
+            } else {
+                email.serverId
+            }
+            
             // Удаляем через Sync Delete (DeletesAsMoves=0 для окончательного удаления)
-            when (val result = client.deleteEmailPermanently(folderServerId, email.serverId, syncKey)) {
+            when (val result = client.deleteEmailPermanently(folderServerId, itemServerId, syncKey)) {
                 is EasResult.Success -> {
                     // Обновляем syncKey папки
                     folderDao.updateSyncKey(email.folderId, result.data)

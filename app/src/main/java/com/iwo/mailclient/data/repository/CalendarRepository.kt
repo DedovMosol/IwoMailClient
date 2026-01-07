@@ -149,35 +149,80 @@ class CalendarRepository(private val context: Context) {
                 when (result) {
                     is EasResult.Success -> {
                         val serverId = result.data
+                        
+                        // Если serverId похож на clientId (UUID без дефисов), 
+                        // значит сервер не вернул реальный ID — нужна синхронизация
+                        val isClientId = serverId.length == 32 && !serverId.contains(":")
+                        
                         // Сохраняем участников в JSON формате
                         val attendeesJson = if (attendees.isNotEmpty()) {
                             attendees.joinToString(",") { """{"email":"$it","name":""}""" }
                                 .let { "[$it]" }
                         } else ""
-                        val event = CalendarEventEntity(
-                            id = "${accountId}_${serverId}",
-                            accountId = accountId,
-                            serverId = serverId,
-                            subject = subject,
-                            location = location,
-                            body = body,
-                            startTime = startTime,
-                            endTime = endTime,
-                            allDayEvent = allDayEvent,
-                            reminder = reminder,
-                            busyStatus = busyStatus,
-                            sensitivity = sensitivity,
-                            organizer = "",
-                            attendees = attendeesJson,
-                            isRecurring = false,
-                            recurrenceRule = "",
-                            categories = "",
-                            lastModified = System.currentTimeMillis()
-                        )
-                        calendarEventDao.insert(event)
-                        // Планируем напоминание
-                        CalendarReminderReceiver.scheduleReminder(context, event)
-                        EasResult.Success(event)
+                        
+                        if (isClientId) {
+                            // Сервер не вернул реальный ID — синхронизируем
+                            syncCalendar(accountId)
+                            
+                            // Ищем созданное событие
+                            val createdEvent = calendarEventDao.getEventsByAccountList(accountId)
+                                .find { it.subject == subject && it.startTime == startTime }
+                            
+                            if (createdEvent != null) {
+                                CalendarReminderReceiver.scheduleReminder(context, createdEvent)
+                                EasResult.Success(createdEvent)
+                            } else {
+                                // Событие не найдено — создаём локально
+                                val event = CalendarEventEntity(
+                                    id = "${accountId}_${serverId}",
+                                    accountId = accountId,
+                                    serverId = serverId,
+                                    subject = subject,
+                                    location = location,
+                                    body = body,
+                                    startTime = startTime,
+                                    endTime = endTime,
+                                    allDayEvent = allDayEvent,
+                                    reminder = reminder,
+                                    busyStatus = busyStatus,
+                                    sensitivity = sensitivity,
+                                    organizer = "",
+                                    attendees = attendeesJson,
+                                    isRecurring = false,
+                                    recurrenceRule = "",
+                                    categories = "",
+                                    lastModified = System.currentTimeMillis()
+                                )
+                                calendarEventDao.insert(event)
+                                CalendarReminderReceiver.scheduleReminder(context, event)
+                                EasResult.Success(event)
+                            }
+                        } else {
+                            // Сервер вернул реальный ID — сохраняем сразу
+                            val event = CalendarEventEntity(
+                                id = "${accountId}_${serverId}",
+                                accountId = accountId,
+                                serverId = serverId,
+                                subject = subject,
+                                location = location,
+                                body = body,
+                                startTime = startTime,
+                                endTime = endTime,
+                                allDayEvent = allDayEvent,
+                                reminder = reminder,
+                                busyStatus = busyStatus,
+                                sensitivity = sensitivity,
+                                organizer = "",
+                                attendees = attendeesJson,
+                                isRecurring = false,
+                                recurrenceRule = "",
+                                categories = "",
+                                lastModified = System.currentTimeMillis()
+                            )
+                            calendarEventDao.insert(event)
+                            CalendarReminderReceiver.scheduleReminder(context, event)
+                            EasResult.Success(event)
+                        }
                     }
                     is EasResult.Error -> result
                 }

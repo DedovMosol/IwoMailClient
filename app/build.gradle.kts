@@ -12,8 +12,8 @@ android {
         applicationId = "com.iwo.mailclient"
         minSdk = 26  // Android 8.0
         targetSdk = 35  // Android 15
-        versionCode = 21
-        versionName = "1.5.1"
+        versionCode = 22
+        versionName = "1.5.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

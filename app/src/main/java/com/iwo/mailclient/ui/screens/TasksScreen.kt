@@ -3,11 +3,13 @@ package com.iwo.mailclient.ui.screens
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -442,53 +444,44 @@ private fun TaskFilterChips(
     currentFilter: TaskFilter,
     onFilterChange: (TaskFilter) -> Unit
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Первый ряд: Все, Активные, Выполненные
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(
-                selected = currentFilter == TaskFilter.ALL,
-                onClick = { onFilterChange(TaskFilter.ALL) },
-                label = { Text(Strings.allTasks) }
+        FilterChip(
+            selected = currentFilter == TaskFilter.ALL,
+            onClick = { onFilterChange(TaskFilter.ALL) },
+            label = { Text(Strings.allTasks) }
+        )
+        FilterChip(
+            selected = currentFilter == TaskFilter.ACTIVE,
+            onClick = { onFilterChange(TaskFilter.ACTIVE) },
+            label = { Text(Strings.activeTasks) }
+        )
+        FilterChip(
+            selected = currentFilter == TaskFilter.COMPLETED,
+            onClick = { onFilterChange(TaskFilter.COMPLETED) },
+            label = { Text(Strings.completedTasks) }
+        )
+        FilterChip(
+            selected = currentFilter == TaskFilter.HIGH_PRIORITY,
+            onClick = { onFilterChange(TaskFilter.HIGH_PRIORITY) },
+            label = { Text(Strings.highPriorityTasks) },
+            leadingIcon = if (currentFilter == TaskFilter.HIGH_PRIORITY) {
+                { Icon(AppIcons.Star, null, Modifier.size(16.dp)) }
+            } else null
+        )
+        FilterChip(
+            selected = currentFilter == TaskFilter.OVERDUE,
+            onClick = { onFilterChange(TaskFilter.OVERDUE) },
+            label = { Text(Strings.overdueTasks) },
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = Color(0xFFF44336).copy(alpha = 0.2f)
             )
-            FilterChip(
-                selected = currentFilter == TaskFilter.ACTIVE,
-                onClick = { onFilterChange(TaskFilter.ACTIVE) },
-                label = { Text(Strings.activeTasks) }
-            )
-            FilterChip(
-                selected = currentFilter == TaskFilter.COMPLETED,
-                onClick = { onFilterChange(TaskFilter.COMPLETED) },
-                label = { Text(Strings.completedTasks) }
-            )
-        }
-        // Второй ряд: Важные, Просроченные
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(
-                selected = currentFilter == TaskFilter.HIGH_PRIORITY,
-                onClick = { onFilterChange(TaskFilter.HIGH_PRIORITY) },
-                label = { Text(Strings.highPriorityTasks) },
-                leadingIcon = if (currentFilter == TaskFilter.HIGH_PRIORITY) {
-                    { Icon(AppIcons.Star, null, Modifier.size(16.dp)) }
-                } else null
-            )
-            FilterChip(
-                selected = currentFilter == TaskFilter.OVERDUE,
-                onClick = { onFilterChange(TaskFilter.OVERDUE) },
-                label = { Text(Strings.overdueTasks) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Color(0xFFF44336).copy(alpha = 0.2f)
-                )
-            )
-        }
+        )
     }
 }
 
@@ -669,7 +662,24 @@ private fun TaskDetailDialog(
                 }
                 
                 // Описание
-                if (task.body.isNotBlank()) {
+                             val cleanBody = remember(task.body) {
+                    // Сначала заменяем HTML теги на переносы строк
+                    val normalized = task.body
+                        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+                        .replace(Regex("</p>\\s*<p[^>]*>", RegexOption.IGNORE_CASE), "\n")
+                        .replace(Regex("</?p[^>]*>", RegexOption.IGNORE_CASE), "\n")
+                        .replace(Regex("</?div[^>]*>", RegexOption.IGNORE_CASE), "\n")
+                    
+                    val seen = mutableSetOf<String>()
+                    normalized.lines()
+                        .filter { line ->
+                            val trimmed = line.trim().replace("\\s+".toRegex(), " ")
+                            if (trimmed.isBlank()) true
+                            else seen.add(trimmed.lowercase())
+                        }
+                        .joinToString("\n").trim()
+                }
+                if (cleanBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = Strings.taskDescription,
@@ -679,7 +689,7 @@ private fun TaskDetailDialog(
                     Spacer(modifier = Modifier.height(4.dp))
                     SelectionContainer {
                         com.iwo.mailclient.ui.components.RichTextWithImages(
-                            htmlContent = task.body,
+                            htmlContent = cleanBody,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }

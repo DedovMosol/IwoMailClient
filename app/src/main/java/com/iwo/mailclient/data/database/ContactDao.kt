@@ -59,6 +59,9 @@ interface ContactDao {
     @Query("SELECT * FROM contacts WHERE accountId = :accountId AND email = :email LIMIT 1")
     suspend fun findByEmail(accountId: Long, email: String): ContactEntity?
     
+    @Query("SELECT displayName FROM contacts WHERE LOWER(email) = LOWER(:email) AND displayName IS NOT NULL AND displayName != '' LIMIT 1")
+    suspend fun getNameByEmail(email: String): String?
+    
     @Query("SELECT EXISTS(SELECT 1 FROM contacts WHERE id = :id)")
     suspend fun exists(id: String): Boolean
     

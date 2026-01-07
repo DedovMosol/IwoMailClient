@@ -497,6 +497,7 @@ class SyncWorker(
             
             val request = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(networkType).build())
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
             
             WorkManager.getInstance(context).enqueue(request)

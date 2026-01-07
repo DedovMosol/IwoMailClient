@@ -929,13 +929,41 @@ private fun EventDetailDialog(
     
     // Очищаем body от дублированных строк
     val cleanBody = remember(event.body) {
-        val lines = event.body.lines()
+        // Убираем HTML теги и нормализуем
+        var textOnly = event.body
+            .replace(HTML_TAG_REGEX, "\n")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("\r", "")
+            .replace("\u00A0", " ") // non-breaking space
+            .replace("\t", " ")
+        
+        // Убираем дублированный контент после разделителя *~*~*
+        val separatorIndex = textOnly.indexOf("*~*~*")
+        if (separatorIndex > 0) {
+            // Берём только часть после разделителя (основной контент)
+            val afterSeparator = textOnly.substring(separatorIndex)
+            val separatorEnd = afterSeparator.indexOf("\n")
+            if (separatorEnd > 0) {
+                textOnly = afterSeparator.substring(separatorEnd + 1)
+            }
+        }
+        
+        val lines = textOnly.split("\n")
         val seen = mutableSetOf<String>()
-        lines.filter { line ->
-            val trimmed = line.trim()
-            if (trimmed.isBlank()) true // пустые строки оставляем
-            else seen.add(trimmed) // добавляем только уникальные
-        }.joinToString("\n").trim()
+        val result = mutableListOf<String>()
+        for (line in lines) {
+            // Нормализуем: убираем все пробелы и приводим к lowercase для сравнения
+            val normalized = line.trim().replace("\\s+".toRegex(), " ")
+            if (normalized.isBlank()) continue
+            val key = normalized.lowercase().replace(" ", "")
+            if (seen.add(key)) {
+                result.add(normalized)
+            }
+        }
+        result.joinToString("\n")
     }
     
     // Извлекаем email из строки организатора
@@ -1041,7 +1069,7 @@ private fun EventDetailDialog(
                 if (!expanded && cleanBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = cleanBody.replace(HTML_TAG_REGEX, "").take(200) + if (cleanBody.length > 200) "..." else "",
+                        text = cleanBody.take(200) + if (cleanBody.length > 200) "..." else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 3,
@@ -1052,16 +1080,15 @@ private fun EventDetailDialog(
                 // Кнопка "Показать ещё"
                 if (!expanded && hasMoreContent) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(
-                        onClick = { expanded = true },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) {
-                        Text(Strings.showMore)
-                        Icon(
-                            AppIcons.ExpandMore,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        TextButton(onClick = { expanded = true }) {
+                            Text(Strings.showMore)
+                            Icon(
+                                AppIcons.ExpandMore,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
                 

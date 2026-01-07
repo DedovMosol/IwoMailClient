@@ -170,6 +170,12 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_OPEN_INBOX_UNREAD = "open_inbox_unread"
         const val EXTRA_OPEN_EMAIL_ID = "open_email_id"
         const val EXTRA_SWITCH_ACCOUNT_ID = "switch_account_id"
+        
+        // App Shortcuts actions
+        const val ACTION_SHORTCUT_COMPOSE = "com.iwo.mailclient.SHORTCUT_COMPOSE"
+        const val ACTION_SHORTCUT_INBOX = "com.iwo.mailclient.SHORTCUT_INBOX"
+        const val ACTION_SHORTCUT_SEARCH = "com.iwo.mailclient.SHORTCUT_SEARCH"
+        const val ACTION_SHORTCUT_SYNC = "com.iwo.mailclient.SHORTCUT_SYNC"
     }
     
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -188,8 +194,26 @@ class MainActivity : ComponentActivity() {
     private var composeSubject = mutableStateOf<String?>(null)
     private var composeBody = mutableStateOf<String?>(null)
     
+    // App Shortcuts
+    private var shortcutCompose = mutableStateOf(false)
+    private var shortcutInbox = mutableStateOf(false)
+    private var shortcutSearch = mutableStateOf(false)
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Sync shortcut — запускаем синхронизацию и сразу выходим БЕЗ отрисовки UI
+        if (intent?.action == ACTION_SHORTCUT_SYNC) {
+            intent.action = null
+            com.iwo.mailclient.sync.SyncWorker.syncNow(applicationContext)
+            val isRussian = com.iwo.mailclient.data.repository.SettingsRepository
+                .getInstance(applicationContext).getLanguageSync() == "ru"
+            val msg = if (isRussian) "Синхронизация запущена" else "Sync started"
+            android.widget.Toast.makeText(applicationContext, msg, android.widget.Toast.LENGTH_SHORT).show()
+            finishAffinity()
+            return
+        }
+        
         enableHighRefreshRate()
         requestNotificationPermission()
         if (!permissionsChecked) {
@@ -234,6 +258,11 @@ class MainActivity : ComponentActivity() {
             val subjectToCompose by composeSubject
             val bodyToCompose by composeBody
             
+            // App Shortcuts
+            val shouldShortcutCompose by shortcutCompose
+            val shouldShortcutInbox by shortcutInbox
+            val shouldShortcutSearch by shortcutSearch
+            
             // Контроллер отложенного удаления
             val deletionController = remember { com.iwo.mailclient.ui.components.DeletionController() }
             
@@ -270,6 +299,14 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onAccountSwitched = {
                                     switchToAccountId.value = null
+                                },
+                                shortcutCompose = shouldShortcutCompose,
+                                shortcutInbox = shouldShortcutInbox,
+                                shortcutSearch = shouldShortcutSearch,
+                                onShortcutHandled = {
+                                    shortcutCompose.value = false
+                                    shortcutInbox.value = false
+                                    shortcutSearch.value = false
                                 }
                             )
                         }
@@ -364,6 +401,30 @@ class MainActivity : ComponentActivity() {
             openInboxUnread.value = true
             intent.removeExtra(EXTRA_OPEN_INBOX_UNREAD)
             return
+        }
+        
+        // App Shortcuts
+        when (intent.action) {
+            ACTION_SHORTCUT_COMPOSE -> {
+                shortcutCompose.value = true
+                intent.action = null
+                return
+            }
+            ACTION_SHORTCUT_INBOX -> {
+                shortcutInbox.value = true
+                intent.action = null
+                return
+            }
+            ACTION_SHORTCUT_SEARCH -> {
+                shortcutSearch.value = true
+                intent.action = null
+                return
+            }
+            ACTION_SHORTCUT_SYNC -> {
+                // Обрабатывается в onCreate до setContent
+                intent.action = null
+                return
+            }
         }
         
         // Обработка mailto: ссылок

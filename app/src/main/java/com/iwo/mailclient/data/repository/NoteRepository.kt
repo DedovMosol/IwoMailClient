@@ -72,17 +72,49 @@ class NoteRepository(context: Context) {
                 when (result) {
                     is EasResult.Success -> {
                         val serverId = result.data
-                        val note = NoteEntity(
-                            id = "${accountId}_${serverId}",
-                            accountId = accountId,
-                            serverId = serverId,
-                            subject = subject,
-                            body = body,
-                            categories = "",
-                            lastModified = System.currentTimeMillis()
-                        )
-                        noteDao.insert(note)
-                        EasResult.Success(note)
+                        
+                        // Если serverId похож на clientId (UUID без дефисов), 
+                        // значит сервер не вернул реальный ID — нужна синхронизация
+                        val isClientId = serverId.length == 32 && !serverId.contains(":")
+                        
+                        if (isClientId) {
+                            // Сервер не вернул реальный ID — синхронизируем
+                            syncNotes(accountId)
+                            
+                            // Ищем созданную заметку
+                            val createdNote = noteDao.getNotesByAccountList(accountId)
+                                .find { it.subject == subject }
+                            
+                            if (createdNote != null) {
+                                EasResult.Success(createdNote)
+                            } else {
+                                // Заметка не найдена — создаём локально
+                                val note = NoteEntity(
+                                    id = "${accountId}_${serverId}",
+                                    accountId = accountId,
+                                    serverId = serverId,
+                                    subject = subject,
+                                    body = body,
+                                    categories = "",
+                                    lastModified = System.currentTimeMillis()
+                                )
+                                noteDao.insert(note)
+                                EasResult.Success(note)
+                            }
+                        } else {
+                            // Сервер вернул реальный ID — сохраняем сразу
+                            val note = NoteEntity(
+                                id = "${accountId}_${serverId}",
+                                accountId = accountId,
+                                serverId = serverId,
+                                subject = subject,
+                                body = body,
+                                categories = "",
+                                lastModified = System.currentTimeMillis()
+                            )
+                            noteDao.insert(note)
+                            EasResult.Success(note)
+                        }
                     }
                     is EasResult.Error -> result
                 }

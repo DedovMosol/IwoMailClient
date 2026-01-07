@@ -321,6 +321,16 @@ interface EmailDao {
         LIMIT :limit
     """)
     suspend fun searchEmailHistory(accountId: Long, query: String, ownEmail: String, limit: Int = 10): List<EmailHistoryResult>
+    
+    /**
+     * Получает все уникальные пары email → имя отправителя для кэширования
+     * Используется для инициализации кэша имён при старте приложения
+     */
+    @Query("""
+        SELECT DISTINCT `from` as email, fromName as name FROM emails 
+        WHERE fromName IS NOT NULL AND fromName != '' AND fromName NOT LIKE '%@%'
+    """)
+    suspend fun getAllSenderNames(): List<EmailHistoryResult>
 }
 
 /**

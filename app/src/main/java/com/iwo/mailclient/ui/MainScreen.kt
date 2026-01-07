@@ -319,7 +319,8 @@ fun MainScreen(
     var eventsCount by remember { mutableStateOf(0) }
     var tasksCount by remember { mutableStateOf(0) }
     
-    LaunchedEffect(activeAccount?.id, initialSyncDone) {
+    // Загрузка папок — отдельный эффект без зависимости от initialSyncDone
+    LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
         // Сначала загружаем из кэша
         val cached = FoldersCache.get(accountId)
@@ -327,12 +328,33 @@ fun MainScreen(
             folders = cached
             dataLoaded = true
         }
-        // Запускаем все Flow параллельно
-        launch { mailRepo.getFolders(accountId).collect { folders = it; FoldersCache.set(accountId, it); dataLoaded = true } }
-        launch { mailRepo.getFlaggedCount(accountId).collect { flaggedCount = it } }
-        launch { noteRepo.getNotesCount(accountId).collect { notesCount = it } }
-        launch { calendarRepo.getEventsCount(accountId).collect { eventsCount = it } }
-        launch { taskRepo.getActiveTasksCount(accountId).collect { tasksCount = it } }
+        // Подписываемся на Flow — он автоматически обновится когда данные в БД изменятся
+        mailRepo.getFolders(accountId).collect { 
+            folders = it
+            FoldersCache.set(accountId, it)
+            dataLoaded = true 
+        }
+    }
+    
+    // Загрузка счётчиков — отдельные эффекты
+    LaunchedEffect(activeAccount?.id) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        mailRepo.getFlaggedCount(accountId).collect { flaggedCount = it }
+    }
+    
+    LaunchedEffect(activeAccount?.id) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        noteRepo.getNotesCount(accountId).collect { notesCount = it }
+    }
+    
+    LaunchedEffect(activeAccount?.id) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        calendarRepo.getEventsCount(accountId).collect { eventsCount = it }
+    }
+    
+    LaunchedEffect(activeAccount?.id) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        taskRepo.getActiveTasksCount(accountId).collect { tasksCount = it }
     }
 
     
@@ -1562,7 +1584,7 @@ private fun HomeContent(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "v1.5.1",
+                                text = "v1.5.2",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2342,9 +2364,12 @@ private fun DrawerContent(
         }
         
         // ��T�T¦-��Ț-T˦� ���-������ (��T��-�-�� Contacts - type 9, T� �-�-T� T��-�-�� Tͦ�T��-�- ���-�-T¦-��T¦-�-)
-        // Остальные папки (скрываем Contacts, Calendar, Notes - они показаны отдельно)
-        val hiddenFolderTypes = listOf(8, 9, 10) // Calendar, Contacts, Notes
-        val otherFolders = folders.filter { it.type !in mainFolderTypes && it.type !in hiddenFolderTypes }
+        // Остальные папки (скрываем Contacts, Calendar, Notes, Tasks - они показаны отдельно)
+        val hiddenFolderTypes = listOf(7, 8, 9, 10) // Tasks, Calendar, Contacts, Notes
+        val otherFolders = folders.filter { folder ->
+            folder.type !in mainFolderTypes && 
+            folder.type !in hiddenFolderTypes
+        }
         
         // Контакты
         item {
@@ -2632,7 +2657,7 @@ private fun FolderItem(
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     
-    // �ۦ-���-�������-�-�-�-�-�-�� �-�-���-�-�-���� ���-������
+    // Локализованное название папки
     val displayName = Strings.getFolderName(folder.type, folder.displayName)
     
     // �᦬T�T¦��-�-T˦� ���-������ �-����Ț�T� Tæ+�-��T�T�T� (�-����T�TǦ-T� �᦬�-�-)

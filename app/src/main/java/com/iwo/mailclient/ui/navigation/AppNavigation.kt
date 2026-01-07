@@ -218,7 +218,12 @@ fun AppNavigation(
     composeSubject: String? = null,
     composeBody: String? = null,
     onComposeHandled: () -> Unit = {},
-    onAccountSwitched: () -> Unit = {}
+    onAccountSwitched: () -> Unit = {},
+    // App Shortcuts
+    shortcutCompose: Boolean = false,
+    shortcutInbox: Boolean = false,
+    shortcutSearch: Boolean = false,
+    onShortcutHandled: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
@@ -373,6 +378,55 @@ fun AppNavigation(
                         // Очищаем back stack до Main
                         popUpTo(Screen.Main.route) { inclusive = false }
                     }
+                }
+            }
+        }
+    }
+    
+    // Обработка App Shortcuts
+    var shortcutHandled by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, hasCheckedAccounts, startDestination) {
+        if (!shortcutHandled && hasCheckedAccounts && startDestination == Screen.Main.route) {
+            when {
+                shortcutCompose -> {
+                    shortcutHandled = true
+                    kotlinx.coroutines.delay(300)
+                    try {
+                        navController.navigate(Screen.Compose.createRoute()) {
+                            launchSingleTop = true
+                        }
+                        onShortcutHandled()
+                    } catch (_: Exception) { }
+                }
+                shortcutInbox -> {
+                    shortcutHandled = true
+                    kotlinx.coroutines.delay(300)
+                    try {
+                        val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
+                        if (account != null) {
+                            val database = com.iwo.mailclient.data.database.MailDatabase.getInstance(context)
+                            val inboxFolder = withContext(Dispatchers.IO) {
+                                database.folderDao().getFolderByType(account.id, 2)
+                            }
+                            if (inboxFolder != null) {
+                                navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        }
+                        onShortcutHandled()
+                    } catch (_: Exception) { }
+                }
+                shortcutSearch -> {
+                    shortcutHandled = true
+                    kotlinx.coroutines.delay(300)
+                    try {
+                        navController.navigate(Screen.Search.route) {
+                            launchSingleTop = true
+                        }
+                        onShortcutHandled()
+                    } catch (_: Exception) { }
                 }
             }
         }
@@ -697,6 +751,9 @@ fun AppNavigation(
                 onBackClick = { navController.popBackStack() },
                 onEmailClick = { emailId ->
                     navController.navigate(Screen.EmailDetail.createRoute(emailId))
+                },
+                onComposeClick = {
+                    navController.navigate(Screen.Compose.route)
                 }
             )
         }

@@ -112,7 +112,8 @@ private fun getAvatarColor(name: String): Color {
 @Composable
 fun SearchScreen(
     onBackClick: () -> Unit,
-    onEmailClick: (String) -> Unit
+    onEmailClick: (String) -> Unit,
+    onComposeClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -324,6 +325,16 @@ fun SearchScreen(
                     )
                 )
             }
+        },
+        floatingActionButton = {
+            if (!isSelectionMode) {
+                com.iwo.mailclient.ui.theme.AnimatedFab(
+                    onClick = onComposeClick,
+                    containerColor = LocalColorTheme.current.gradientStart
+                ) {
+                    Icon(AppIcons.Edit, Strings.compose, tint = Color.White)
+                }
+            }
         }
     ) { padding ->
         Column(
@@ -486,8 +497,15 @@ private fun SearchResultItem(
 ) {
     val haptic = LocalHapticFeedback.current
     
+    // Получаем имя из кэша если fromName пустой
+    val cachedSenderName = remember(email.from) {
+        if (email.fromName.isBlank() || email.fromName.contains("@")) {
+            com.iwo.mailclient.data.repository.MailRepository.getCachedName(email.from)
+        } else null
+    }
+    
     // Цвет аватара на основе имени отправителя
-    val senderName = email.fromName.ifEmpty { email.from }
+    val senderName = cachedSenderName ?: email.fromName.ifEmpty { email.from }
     val avatarColor = getAvatarColor(senderName)
     // Используем цвет аватара для подсветки найденного текста
     val highlightColor = avatarColor
@@ -607,7 +625,7 @@ private fun SearchResultItem(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.weight(1f)) {
                         highlightText(
-                            text = email.fromName.ifEmpty { email.from },
+                            text = senderName,
                             query = query,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = if (email.read) FontWeight.Normal else FontWeight.Bold

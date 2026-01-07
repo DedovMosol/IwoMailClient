@@ -1,18 +1,23 @@
 # Changelog
 
-## v1.5.2 (in development)
+## v1.5.2 (07.01.2026)
+
+### New Features
+- App Shortcuts — quick actions when holding app icon (Compose, Inbox, Search, Sync)
+- "Compose" button on search screen
 
 ### Improvements
-- Sender name caching — if a name came in one email, it's used for all emails from that address
-- Pulse animation for FAB buttons (pencil, plus) — can be disabled in settings
+- Sender names taken from contacts (priority), then from email history
+
+### Exchange 2007 Fixes
+- Task sync — uses EWS instead of EAS (EAS returns empty response)
+- Task creation — uses EWS for all tasks (EAS doesn't work on Exchange 2007)
+- Task deletion from server now works correctly
 
 ### Fixes
-- Fixed signature duplication when editing
-- Calendar attendees are now blue and clickable (like organizer)
-- Fixed description duplication in calendar events
-- Fixed organization contacts counter (excludes own account)
-- Fixed email selection preservation on screen rotation
-- Fixed repeated cancel of delete/send after first cancel
+- Fixed task/event/note duplication when creating on Exchange 2007
+- Folder counters not updating after first sync
+- Fixed description duplication in calendar events and tasks
 
 ---
 

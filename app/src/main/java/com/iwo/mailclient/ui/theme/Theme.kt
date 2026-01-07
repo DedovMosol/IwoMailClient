@@ -113,9 +113,12 @@ fun AnimatedFab(
 ) {
     val animationsEnabled = LocalAnimationsEnabled.current
     
-    val scale = if (animationsEnabled) {
+    val scale: Float
+    val rotation: Float
+    
+    if (animationsEnabled) {
         val infiniteTransition = rememberInfiniteTransition(label = "fabPulse")
-        infiniteTransition.animateFloat(
+        scale = infiniteTransition.animateFloat(
             initialValue = 1f,
             targetValue = 1.08f,
             animationSpec = infiniteRepeatable(
@@ -124,8 +127,18 @@ fun AnimatedFab(
             ),
             label = "fabScale"
         ).value
+        rotation = infiniteTransition.animateFloat(
+            initialValue = -8f,
+            targetValue = 8f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(600, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "fabRotation"
+        ).value
     } else {
-        1f
+        scale = 1f
+        rotation = 0f
     }
     
     FloatingActionButton(
@@ -137,7 +150,9 @@ fun AnimatedFab(
         containerColor = containerColor,
         contentColor = contentColor
     ) {
-        content()
+        Box(modifier = androidx.compose.ui.Modifier.graphicsLayer { rotationZ = rotation }) {
+            content()
+        }
     }
 }
 
