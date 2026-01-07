@@ -4,7 +4,7 @@
 
 Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
 
-**Version:** 1.5.1  
+**Version:** 1.5.2  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -33,11 +33,11 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 - ✅ **Multiple accounts** — with individual signatures and settings
 - ✅ **MDN/DSN** — read and delivery receipt requests
 
-## 🆕 What's New in v1.5.1
+## 🆕 What's New in v1.5.2
 
-- **Undo send** — 3 seconds to cancel after pressing "Send"
-- **Bug fixes from v1.5.0** — sync, calendar, tasks, notifications
-- ⚠️ **Calendar and Tasks in beta mode** — bugs may occur
+- **App Shortcuts** — quick actions when holding app icon (Compose, Inbox, Search, Sync)
+- **Exchange 2007** — fixed task sync and creation via EWS
+- **Fixes** — description duplication in events and tasks
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 

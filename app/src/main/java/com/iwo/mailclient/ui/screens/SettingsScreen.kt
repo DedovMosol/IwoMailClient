@@ -696,7 +696,7 @@ private fun UpdateDialog(
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = colorTheme.primary
+                                    containerColor = colorTheme.gradientStart
                                 )
                             ) {
                                 Icon(AppIcons.Download, null, modifier = Modifier.size(18.dp))
@@ -710,7 +710,7 @@ private fun UpdateDialog(
                                 onClick = {}, 
                                 enabled = false,
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = colorTheme.primary
+                                    containerColor = colorTheme.gradientStart
                                 )
                             ) {
                                 CircularProgressIndicator(
@@ -730,7 +730,7 @@ private fun UpdateDialog(
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = colorTheme.primary
+                                    containerColor = colorTheme.gradientStart
                                 )
                             ) {
                                 Icon(AppIcons.Install, null, modifier = Modifier.size(18.dp))
