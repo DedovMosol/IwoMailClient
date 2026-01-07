@@ -8,6 +8,6 @@
     "x86": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.2/app-x86-release.apk",
     "universal": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.2/app-universal-release.apk"
   },
-  "changelog": "Исправлена синхронизация и создание задач на Exchange 2007",
+  "changelog": "• App Shortcuts — быстрые действия при удержании иконки\n• Исправлена синхронизация задач на Exchange 2007\n• Исправлено создание задач на Exchange 2007\n• Исправлено дублирование описания в событиях и задачах",
   "minSdk": 24
 }
