@@ -1675,19 +1675,25 @@ fun SignaturesManagementDialog(
                         database.signatureDao().clearDefaultForAccount(accountId)
                     }
                     
-                    val newSignature = editingSignature?.copy(
-                        name = name,
-                        text = text,
-                        isDefault = actualIsDefault
-                    ) ?: com.iwo.mailclient.data.database.SignatureEntity(
-                        accountId = accountId,
-                        name = name,
-                        text = text,
-                        isDefault = actualIsDefault,
-                        sortOrder = signatures.size
-                    )
-                    
-                    database.signatureDao().insert(newSignature)
+                    if (editingSignature != null) {
+                        // Редактирование — update
+                        val updated = editingSignature.copy(
+                            name = name,
+                            text = text,
+                            isDefault = actualIsDefault
+                        )
+                        database.signatureDao().update(updated)
+                    } else {
+                        // Создание новой
+                        val newSignature = com.iwo.mailclient.data.database.SignatureEntity(
+                            accountId = accountId,
+                            name = name,
+                            text = text,
+                            isDefault = actualIsDefault,
+                            sortOrder = signatures.size
+                        )
+                        database.signatureDao().insert(newSignature)
+                    }
                     onSignaturesChanged(database.signatureDao().getSignaturesByAccountList(accountId))
                 }
                 showAddDialog = false

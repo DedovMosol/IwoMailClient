@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.5.2 (in development)
+
+### Improvements
+- Sender name caching — if a name came in one email, it's used for all emails from that address
+- Pulse animation for FAB buttons (pencil, plus) — can be disabled in settings
+
+### Fixes
+- Fixed signature duplication when editing
+- Calendar attendees are now blue and clickable (like organizer)
+- Fixed description duplication in calendar events
+- Fixed organization contacts counter (excludes own account)
+- Fixed email selection preservation on screen rotation
+- Fixed repeated cancel of delete/send after first cancel
+
+---
+
 ## v1.5.1 (05.01.2026)
 
 ### New Features
@@ -89,7 +105,7 @@
 ### Fixes
 - Battery saver indicator now updates when mode changes
 - Removed large font size option from settings
-- Fixed drafts badge on main screen
+- Fixed drafts badge on main screen (was showing even without drafts)
 
 ---
 
@@ -98,8 +114,7 @@
 ### New Features
 - **Server-side drafts** — drafts now sync with Exchange server via EWS (previously stored locally only)
   - Creating draft saves to server
-  - Sync downloads drafts from server
-  - Deleting draft removes from server
+  - Sync drafts from server
   - Editing draft updates on server
 - **High priority when sending** — ability to mark email as important when sending (recipient will see red exclamation mark)
 
@@ -409,7 +424,6 @@
 - **Fixed time input fields** — in schedule send dialog you can now properly edit hours/minutes/seconds
 - **Auto-activate new account** — when adding second account it automatically becomes active
 - **Preserve settings on 401 error** — on authorization error email, server, color are preserved
-- **Fixed user certificates** — app now trusts user-installed certificates in Android settings
 
 ### Security
 - **Disabled ADB backup** — `allowBackup="false"` prevents data extraction via ADB
@@ -591,7 +605,3 @@
 - Auto-start after reboot
 - Dark theme
 - Two languages (RU/EN)
-
-
-
-

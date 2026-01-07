@@ -310,6 +310,19 @@ fun ComposeScreen(
     // Отслеживание начального аккаунта для определения изменений
     var initialAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
     
+    // Функция навигации назад с переключением аккаунта если он изменился
+    fun handleBackNavigation() {
+        val currentAccountId = activeAccount?.id
+        if (currentAccountId != null && initialAccountId != null && currentAccountId != initialAccountId) {
+            scope.launch {
+                accountRepo.setActiveAccount(currentAccountId)
+                onBackClick()
+            }
+        } else {
+            onBackClick()
+        }
+    }
+    
     // Загружаем активный аккаунт и все аккаунты
     LaunchedEffect(Unit) {
         activeAccount = accountRepo.getActiveAccountSync()
@@ -526,7 +539,7 @@ fun ComposeScreen(
                 
                 if (success) {
                     Toast.makeText(context, draftSavedMsg, Toast.LENGTH_SHORT).show()
-                    onBackClick()
+                    handleBackNavigation()
                 } else {
                     Toast.makeText(context, draftSaveErrorMsg, Toast.LENGTH_SHORT).show()
                 }
@@ -618,7 +631,7 @@ fun ComposeScreen(
                 TextButton(
                     onClick = { 
                         showDiscardDialog = false
-                        onBackClick()
+                        handleBackNavigation()
                     },
                     enabled = !isSavingDraft
                 ) {
@@ -799,7 +812,7 @@ fun ComposeScreen(
         if (hasContent) {
             showDiscardDialog = true
         } else {
-            onBackClick()
+            handleBackNavigation()
         }
     }
     
@@ -814,7 +827,7 @@ fun ComposeScreen(
                         if (hasContent) {
                             showDiscardDialog = true
                         } else {
-                            onBackClick()
+                            handleBackNavigation()
                         }
                     }) {
                         Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)

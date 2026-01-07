@@ -308,7 +308,7 @@ fun TasksScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
+            com.iwo.mailclient.ui.theme.AnimatedFab(
                 onClick = {
                     editingTask = null
                     showCreateDialog = true

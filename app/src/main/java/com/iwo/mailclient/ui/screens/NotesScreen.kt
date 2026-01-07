@@ -260,7 +260,7 @@ fun NotesScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
+            com.iwo.mailclient.ui.theme.AnimatedFab(
                 onClick = {
                     editingNote = null
                     showCreateDialog = true

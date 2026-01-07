@@ -218,7 +218,7 @@ class SendController {
      * Отменяет отправку (только в фазе обратного отсчёта)
      */
     fun cancel() {
-        if (state.phase == SendPhase.COUNTDOWN) {
+        if (state.isActive && state.phase == SendPhase.COUNTDOWN) {
             isCancelled = true
             sendJob?.cancel()
             sendJob = null

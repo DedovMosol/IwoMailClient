@@ -129,9 +129,9 @@ fun SearchScreen(
     var isSearching by rememberSaveable { mutableStateOf(false) }
     
     // Режим выбора
-    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
-    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     

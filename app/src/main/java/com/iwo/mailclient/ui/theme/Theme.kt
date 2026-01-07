@@ -99,6 +99,48 @@ val LocalColorTheme = compositionLocalOf { AppColorTheme.PURPLE }
  */
 val LocalAnimationsEnabled = compositionLocalOf { true }
 
+/**
+ * Анимированная FAB кнопка с пульсацией
+ * Анимация отключается через настройки
+ */
+@Composable
+fun AnimatedFab(
+    onClick: () -> Unit,
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    containerColor: Color = LocalColorTheme.current.gradientStart,
+    contentColor: Color = Color.White,
+    content: @Composable () -> Unit
+) {
+    val animationsEnabled = LocalAnimationsEnabled.current
+    
+    val scale = if (animationsEnabled) {
+        val infiniteTransition = rememberInfiniteTransition(label = "fabPulse")
+        infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.08f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "fabScale"
+        ).value
+    } else {
+        1f
+    }
+    
+    FloatingActionButton(
+        onClick = onClick,
+        modifier = modifier.graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        },
+        containerColor = containerColor,
+        contentColor = contentColor
+    ) {
+        content()
+    }
+}
+
 @Composable
 fun ExchangeMailTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),

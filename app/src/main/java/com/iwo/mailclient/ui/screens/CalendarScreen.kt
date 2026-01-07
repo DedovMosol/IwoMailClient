@@ -319,7 +319,7 @@ fun CalendarScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
+            com.iwo.mailclient.ui.theme.AnimatedFab(
                 onClick = { 
                     editingEvent = null
                     showCreateDialog = true 
@@ -927,6 +927,17 @@ private fun EventDetailDialog(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
     
+    // Очищаем body от дублированных строк
+    val cleanBody = remember(event.body) {
+        val lines = event.body.lines()
+        val seen = mutableSetOf<String>()
+        lines.filter { line ->
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) true // пустые строки оставляем
+            else seen.add(trimmed) // добавляем только уникальные
+        }.joinToString("\n").trim()
+    }
+    
     // Извлекаем email из строки организатора
     val organizerEmail = remember(event.organizer) {
         EMAIL_REGEX.find(event.organizer)?.value ?: ""
@@ -939,7 +950,7 @@ private fun EventDetailDialog(
     }
     
     // Проверяем есть ли что показывать в расширенном виде
-    val hasMoreContent = event.body.isNotBlank() || event.organizer.isNotBlank() || attendees.isNotEmpty()
+    val hasMoreContent = cleanBody.isNotBlank() || event.organizer.isNotBlank() || attendees.isNotEmpty()
     
     // Диалог подтверждения удаления
     if (showDeleteConfirm) {
@@ -1027,10 +1038,10 @@ private fun EventDetailDialog(
                 }
                 
                 // Краткое описание (свёрнутый вид)
-                if (!expanded && event.body.isNotBlank()) {
+                if (!expanded && cleanBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = event.body.replace(HTML_TAG_REGEX, "").take(200) + if (event.body.length > 200) "..." else "",
+                        text = cleanBody.replace(HTML_TAG_REGEX, "").take(200) + if (cleanBody.length > 200) "..." else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 3,
@@ -1137,12 +1148,7 @@ private fun EventDetailDialog(
                                     Text(
                                         text = displayText,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = when (attendee.status) {
-                                            3 -> MaterialTheme.colorScheme.primary // Accepted - синий
-                                            4 -> MaterialTheme.colorScheme.error // Declined - красный
-                                            2 -> MaterialTheme.colorScheme.tertiary // Tentative - третичный
-                                            else -> MaterialTheme.colorScheme.onSurface
-                                        },
+                                        color = if (attendee.email.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                         modifier = if (attendee.email.isNotBlank()) {
                                             Modifier.clickable { onComposeClick(attendee.email) }
                                         } else Modifier
@@ -1153,14 +1159,14 @@ private fun EventDetailDialog(
                     }
                     
                     // Полное описание с изображениями и ссылками
-                    if (event.body.isNotBlank()) {
+                    if (cleanBody.isNotBlank()) {
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         SelectionContainer {
                             com.iwo.mailclient.ui.components.RichTextWithImages(
-                                htmlContent = event.body,
+                                htmlContent = cleanBody,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }

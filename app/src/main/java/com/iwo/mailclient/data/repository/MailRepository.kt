@@ -33,6 +33,28 @@ class MailRepository(context: Context) {
     private val accountDao = database.accountDao()
     private val syncDao = database.syncDao()
     
+    companion object {
+        // Кэш email → displayName (глобальный, потокобезопасный)
+        // Заполняется только из писем, не из контактов
+        private val emailNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+        
+        /**
+         * Получить имя из кэша по email
+         */
+        fun getCachedName(email: String): String? {
+            return emailNameCache[email.lowercase()]
+        }
+        
+        /**
+         * Сохранить имя в кэш (только из писем)
+         */
+        fun cacheName(email: String, name: String) {
+            if (email.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
+                emailNameCache[email.lowercase()] = name
+            }
+        }
+    }
+    
     /**
      * Безопасное обновление папки без удаления связанных писем
      * Использует INSERT IGNORE + UPDATE вместо REPLACE
@@ -1454,35 +1476,66 @@ class MailRepository(context: Context) {
         attachmentDao.updateLocalPath(attachmentId, path)
     }
     
-    private fun extractName(email: String): String {
+    private fun extractName(emailField: String): String {
+        // Извлекаем email адрес для поиска в кэше
+        val emailAddress = extractEmailAddress(emailField)
+        
         // Обработка X.500 Distinguished Name
         // Пример: "username" </O=ORG/OU=EXCHANGE.../CN=USERNAME>
-        if (email.contains("/O=") || email.contains("/OU=") || email.contains("/CN=")) {
+        if (emailField.contains("/O=") || emailField.contains("/OU=") || emailField.contains("/CN=")) {
             // Извлекаем CN (Common Name)
-            val cnMatch = CN_REGEX.find(email)
+            val cnMatch = CN_REGEX.find(emailField)
             if (cnMatch != null) {
                 val cn = cnMatch.groupValues[1].trim()
                 // Если CN это RECIPIENTS, ищем следующий CN
                 if (cn.equals("RECIPIENTS", ignoreCase = true)) {
-                    val allCns = CN_REGEX.findAll(email).toList()
+                    val allCns = CN_REGEX.findAll(emailField).toList()
                     val lastCn = allCns.lastOrNull()?.groupValues?.get(1)?.trim()
                     if (lastCn != null && !lastCn.equals("RECIPIENTS", ignoreCase = true)) {
-                        return lastCn.lowercase().replaceFirstChar { it.uppercase() }
+                        val name = lastCn.lowercase().replaceFirstChar { it.uppercase() }
+                        if (emailAddress.isNotBlank()) cacheName(emailAddress, name)
+                        return name
                     }
                 }
-                return cn.lowercase().replaceFirstChar { it.uppercase() }
+                val name = cn.lowercase().replaceFirstChar { it.uppercase() }
+                if (emailAddress.isNotBlank()) cacheName(emailAddress, name)
+                return name
             }
             // Fallback - берём имя до </O=
-            val nameMatch = NAME_BEFORE_BRACKET_REGEX.find(email)
+            val nameMatch = NAME_BEFORE_BRACKET_REGEX.find(emailField)
             if (nameMatch != null) {
-                return nameMatch.groupValues[1].trim()
+                val name = nameMatch.groupValues[1].trim()
+                if (emailAddress.isNotBlank() && !name.contains("@")) cacheName(emailAddress, name)
+                return name
             }
         }
         
         // Стандартный формат: "John Doe <john@example.com>" -> "John Doe"
-        val match = NAME_BEFORE_BRACKET_REGEX.find(email)
-        return match?.groupValues?.get(1)?.trim()?.removeSurrounding("\"") 
-            ?: email.substringBefore("@").substringBefore("<").trim()
+        val match = NAME_BEFORE_BRACKET_REGEX.find(emailField)
+        if (match != null) {
+            val name = match.groupValues[1].trim().removeSurrounding("\"")
+            if (emailAddress.isNotBlank() && !name.contains("@")) cacheName(emailAddress, name)
+            return name
+        }
+        
+        // Имя не найдено в поле — ищем в кэше
+        if (emailAddress.isNotBlank()) {
+            val cachedName = getCachedName(emailAddress)
+            if (cachedName != null) return cachedName
+        }
+        
+        // Fallback — часть до @
+        return emailField.substringBefore("@").substringBefore("<").trim()
+    }
+    
+    /**
+     * Извлекает email адрес из строки формата "Name <email>" или просто "email"
+     */
+    private fun extractEmailAddress(field: String): String {
+        val emailMatch = Regex("<([^>]+@[^>]+)>").find(field)
+        if (emailMatch != null) return emailMatch.groupValues[1].lowercase()
+        if (field.contains("@")) return field.trim().lowercase()
+        return ""
     }
     
     private fun parseDate(dateStr: String): Long {

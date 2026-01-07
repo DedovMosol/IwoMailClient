@@ -1,7 +1,13 @@
 {
-  "versionCode": 21,
-  "versionName": "1.5.1",
-  "apkUrl": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.1/iwo-mail-1.5.1.apk",
-  "changelog": "Проверка обновлений, оптимизация батареи",
+  "versionCode": 22,
+  "versionName": "1.5.2",
+  "apkUrls": {
+    "arm64-v8a": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.2/app-arm64-v8a-release.apk",
+    "armeabi-v7a": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.2/app-armeabi-v7a-release.apk",
+    "x86_64": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.2/app-x86_64-release.apk",
+    "x86": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.2/app-x86-release.apk",
+    "universal": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.5.2/app-universal-release.apk"
+  },
+  "changelog": "Исправлена синхронизация и создание задач на Exchange 2007",
   "minSdk": 24
 }

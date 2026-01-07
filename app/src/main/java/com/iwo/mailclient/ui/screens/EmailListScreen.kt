@@ -198,13 +198,13 @@ fun EmailListScreen(
     var toFilter by rememberSaveable { mutableStateOf("") }
     
     // Режим выбора
-    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
-    var showMoveDialog by remember { mutableStateOf(false) }
+    var showMoveDialog by rememberSaveable { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
-    var showDeleteDialog by remember { mutableStateOf(false) }
-    var showDeletePermanentlyDialog by remember { mutableStateOf(false) }
-    var showEmptyTrashDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
+    var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
+    var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<FolderEntity>>(emptyList()) }
 
     // Используем Flow для всех папок включая Черновики (теперь они серверные)
@@ -705,7 +705,7 @@ fun EmailListScreen(
         },
         floatingActionButton = {
             if (!isSelectionMode) {
-                FloatingActionButton(
+                com.iwo.mailclient.ui.theme.AnimatedFab(
                     onClick = onComposeClick,
                     containerColor = LocalColorTheme.current.gradientStart
                 ) {

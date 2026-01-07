@@ -772,8 +772,9 @@ fun MainScreen(
                 val colorTheme = com.iwo.mailclient.ui.theme.LocalColorTheme.current
                 val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
                 
-                // Анимация покачивания карандашика
+                // Анимация покачивания карандашика и пульсации
                 val pencilRotation: Float
+                val fabScale: Float
                 if (animationsEnabled) {
                     val infiniteTransition = rememberInfiniteTransition(label = "pencil")
                     pencilRotation = infiniteTransition.animateFloat(
@@ -785,14 +786,28 @@ fun MainScreen(
                         ),
                         label = "pencilRotation"
                     ).value
+                    fabScale = infiniteTransition.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 1.08f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(800, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "fabScale"
+                    ).value
                 } else {
                     pencilRotation = 0f
+                    fabScale = 1f
                 }
                 
                 FloatingActionButton(
                     onClick = onNavigateToCompose,
                     containerColor = colorTheme.gradientStart,
-                    contentColor = Color.White
+                    contentColor = Color.White,
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = fabScale
+                        scaleY = fabScale
+                    }
                 ) {
                     Icon(
                         AppIcons.Edit, 

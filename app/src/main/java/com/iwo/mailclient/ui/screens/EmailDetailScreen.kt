@@ -536,7 +536,7 @@ fun EmailDetailScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
+            com.iwo.mailclient.ui.theme.AnimatedFab(
                 onClick = onReplyClick,
                 containerColor = LocalColorTheme.current.gradientStart
             ) {

@@ -126,6 +126,15 @@ fun ContactsScreen(
     // Email текущего аккаунта для фильтрации себя
     val ownEmail = activeAccount?.email?.lowercase() ?: ""
     
+    // Количество контактов организации (без себя) для отображения в табе
+    val exchangeContactsCount = remember(exchangeContacts, ownEmail) {
+        if (ownEmail.isNotBlank()) {
+            exchangeContacts.count { it.email.lowercase() != ownEmail }
+        } else {
+            exchangeContacts.size
+        }
+    }
+    
     // Фильтрация Exchange контактов по поиску (исключая себя)
     val filteredExchangeContacts = remember(exchangeContacts, exchangeSearchQuery, ownEmail) {
         val filtered = if (exchangeSearchQuery.isBlank()) {
@@ -851,7 +860,7 @@ fun ContactsScreen(
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("${Strings.organization} (${exchangeContacts.size})") }
+                    text = { Text("${Strings.organization} ($exchangeContactsCount)") }
                 )
             }
             

@@ -113,7 +113,7 @@ class DeletionController {
      * Отменяет удаление (только в фазе обратного отсчёта)
      */
     fun cancel() {
-        if (state.phase == DeletionPhase.COUNTDOWN) {
+        if (state.isActive && state.phase == DeletionPhase.COUNTDOWN) {
             isCancelled = true
             deletionJob?.cancel()
             deletionJob = null
