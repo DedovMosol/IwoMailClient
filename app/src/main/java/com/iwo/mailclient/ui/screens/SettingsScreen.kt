@@ -654,14 +654,19 @@ private fun UpdateDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    // Кнопка "Позже" слева
                     if (downloadState !is DownloadState.Downloading) {
                         TextButton(onClick = onDismiss) {
                             Text(Strings.later)
                         }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
                     }
                     
+                    // Кнопка действия справа
+                    val colorTheme = LocalColorTheme.current
                     when (downloadState) {
                         is DownloadState.Idle, is DownloadState.Error -> {
                             Button(
@@ -689,7 +694,10 @@ private fun UpdateDialog(
                                             }
                                         }
                                     }
-                                }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colorTheme.primary
+                                )
                             ) {
                                 Icon(AppIcons.Download, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -698,7 +706,13 @@ private fun UpdateDialog(
                         }
                         is DownloadState.Downloading -> {
                             // Кнопка неактивна во время скачивания
-                            Button(onClick = {}, enabled = false) {
+                            Button(
+                                onClick = {}, 
+                                enabled = false,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colorTheme.primary
+                                )
+                            ) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
                                     strokeWidth = 2.dp,
@@ -714,7 +728,10 @@ private fun UpdateDialog(
                                     downloadedFile?.let { file ->
                                         updateChecker.installApk(file)
                                     }
-                                }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colorTheme.primary
+                                )
                             ) {
                                 Icon(AppIcons.Install, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
