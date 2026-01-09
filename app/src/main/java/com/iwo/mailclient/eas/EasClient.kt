@@ -2066,6 +2066,7 @@ $foldersXml
         serverId: String,
         syncKey: String
     ): EasResult<String> {
+        // Формат как в официальной документации MS-ASEMAIL
         val xml = """
             <?xml version="1.0" encoding="UTF-8"?>
             <Sync xmlns="AirSync">
@@ -2074,6 +2075,8 @@ $foldersXml
                         <SyncKey>$syncKey</SyncKey>
                         <CollectionId>$collectionId</CollectionId>
                         <DeletesAsMoves>0</DeletesAsMoves>
+                        <GetChanges>1</GetChanges>
+                        <WindowSize>100</WindowSize>
                         <Commands>
                             <Delete>
                                 <ServerId>$serverId</ServerId>
@@ -2085,7 +2088,15 @@ $foldersXml
         """.trimIndent()
         
         return executeEasCommand("Sync", xml) { responseXml ->
-            extractValue(responseXml, "SyncKey") ?: syncKey
+            val status = extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
+            val newSyncKey = extractValue(responseXml, "SyncKey") ?: syncKey
+            
+            when (status) {
+                1 -> newSyncKey // Success
+                8 -> newSyncKey // Object not found - уже удалено, это OK
+                3 -> throw Exception("INVALID_SYNCKEY") // Invalid SyncKey - нужен resync
+                else -> throw Exception("Delete failed: Status=$status")
+            }
         }
     }
     

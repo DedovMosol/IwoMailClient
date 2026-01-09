@@ -694,38 +694,48 @@ private fun FeaturePage(
         visible = true
     }
     
-    // Бесконечные анимации для иконок
-    val infiniteTransition = rememberInfiniteTransition(label = "iconAnim")
+    // Бесконечные анимации для иконок - создаём только когда visible
+    val pulse: Float
+    val shake: Float
+    val rotation: Float
     
-    val pulse by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse"
-    )
-    
-    val shake by infiniteTransition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(300, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "shake"
-    )
-    
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
-    )
+    if (visible && animationsEnabled) {
+        val infiniteTransition = rememberInfiniteTransition(label = "iconAnim")
+        
+        pulse = infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulse"
+        ).value
+        
+        shake = infiniteTransition.animateFloat(
+            initialValue = -10f,
+            targetValue = 10f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(300, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "shake"
+        ).value
+        
+        rotation = infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(3000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "rotation"
+        ).value
+    } else {
+        pulse = 1f
+        shake = 0f
+        rotation = 0f
+    }
     
     Column(
         modifier = Modifier
@@ -883,8 +893,8 @@ private fun FeaturePage(
                     color = Color(0xFF78909C),
                     titleRu = "Персонализация",
                     titleEn = "Personalization",
-                    descRu = "7 тем, мультиаккаунт, подписи",
-                    descEn = "7 themes, multi-account, signatures",
+                    descRu = "7 тем, мультиаккаунт, индивидуальные подписи",
+                    descEn = "7 themes, multi-account, individual signatures",
                     isRussian = isRussian
                 )
                 Spacer(modifier = Modifier.height(16.dp))

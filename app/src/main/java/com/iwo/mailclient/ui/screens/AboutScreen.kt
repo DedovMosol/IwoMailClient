@@ -83,7 +83,6 @@ fun AboutScreen(
                     headlineContent = { Text(if (isRu) "Обзор" else "Overview") },
                     supportingContent = { Text(if (isRu) "Краткий обзор приложения" else "Quick app overview") },
                     leadingContent = { Icon(AppIcons.Lightbulb, null) },
-                    trailingContent = { Icon(AppIcons.ChevronRight, null) },
                     modifier = Modifier.clickable { onNavigateToOnboarding() }
                 )
             }

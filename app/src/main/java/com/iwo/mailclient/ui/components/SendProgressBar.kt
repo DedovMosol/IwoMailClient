@@ -17,6 +17,8 @@ import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.MailRepository
 import com.iwo.mailclient.eas.EasClient
 import com.iwo.mailclient.eas.EasResult
+import com.iwo.mailclient.network.NetworkMonitor
+import com.iwo.mailclient.sync.OutboxWorker
 import kotlinx.coroutines.*
 
 /**
@@ -199,8 +201,37 @@ class SendController {
                         onSuccess()
                     }
                     is EasResult.Error -> {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        // Проверяем, связана ли ошибка с сетью
+                        val isNetworkError = result.message.contains("UnknownHost", ignoreCase = true) ||
+                            result.message.contains("SocketTimeout", ignoreCase = true) ||
+                            result.message.contains("ConnectException", ignoreCase = true) ||
+                            result.message.contains("NoRouteToHost", ignoreCase = true) ||
+                            result.message.contains("Network", ignoreCase = true) ||
+                            !NetworkMonitor.isNetworkAvailable(context)
+                        
+                        if (isNetworkError && email.attachments.isEmpty()) {
+                            // Добавляем в очередь отправки (только без вложений)
+                            OutboxWorker.enqueue(
+                                context = context,
+                                accountId = email.account.id,
+                                to = email.to,
+                                cc = email.cc,
+                                bcc = email.bcc,
+                                subject = email.subject,
+                                body = email.body,
+                                requestReadReceipt = email.requestReadReceipt
+                            )
+                            withContext(Dispatchers.Main) {
+                                val isRu = java.util.Locale.getDefault().language == "ru"
+                                val msg = if (isRu) "Нет сети. Письмо добавлено в очередь отправки" 
+                                    else "No network. Email added to outbox queue"
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            }
+                            onSuccess() // Закрываем экран — письмо в очереди
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
                 }

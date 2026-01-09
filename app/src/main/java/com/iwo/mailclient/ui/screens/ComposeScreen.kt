@@ -47,6 +47,7 @@ import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.components.ContactPickerDialog
+import com.iwo.mailclient.ui.components.NetworkBanner
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -922,8 +923,15 @@ fun ComposeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
         ) {
+            // Баннер "Нет сети"
+            NetworkBanner()
+            
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+            ) {
             // От кого - кликабельное для выбора аккаунта
             Row(
                 modifier = Modifier
@@ -1213,6 +1221,7 @@ fun ComposeScreen(
                         }
                     }
                 }
+            }
             }
         }
     }

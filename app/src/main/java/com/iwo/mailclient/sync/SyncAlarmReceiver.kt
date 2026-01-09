@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import com.iwo.mailclient.data.database.AccountType
 import com.iwo.mailclient.data.database.MailDatabase
 import com.iwo.mailclient.data.repository.CalendarRepository
@@ -14,6 +15,7 @@ import com.iwo.mailclient.data.repository.NoteRepository
 import com.iwo.mailclient.data.repository.SettingsRepository
 import com.iwo.mailclient.data.repository.TaskRepository
 import com.iwo.mailclient.eas.EasResult
+import com.iwo.mailclient.network.NetworkMonitor
 import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.widget.MailWidgetReceiver
 import kotlinx.coroutines.CoroutineScope
@@ -69,6 +71,17 @@ class SyncAlarmReceiver : BroadcastReceiver() {
             
             // Показываем уведомление только при ручном запуске
             if (isManualSync) {
+                // Проверяем сеть ПЕРЕД запуском синхронизации
+                if (!NetworkMonitor.isNetworkAvailable(context)) {
+                    val settingsRepo = SettingsRepository.getInstance(context)
+                    val isRussian = settingsRepo.getLanguageSync() == "ru"
+                    val message = if (isRussian) "Нет сети" else "No network"
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
+                    return
+                }
+                
                 showSyncStartedNotification(context)
                 
                 // Для ручной синхронизации используем WorkManager - он надёжнее

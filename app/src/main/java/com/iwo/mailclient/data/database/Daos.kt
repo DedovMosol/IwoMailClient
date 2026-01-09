@@ -208,6 +208,9 @@ interface EmailDao {
     @Query("SELECT id FROM emails WHERE id IN (:ids)")
     suspend fun getExistingIds(ids: List<String>): List<String>
     
+    @Query("SELECT serverId FROM emails WHERE accountId = :accountId AND serverId IN (:serverIds)")
+    suspend fun getExistingServerIds(accountId: Long, serverIds: List<String>): List<String>
+    
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(email: EmailEntity)
     
@@ -369,6 +372,18 @@ interface EmailDao {
         )
     """)
     suspend fun deleteDuplicateEmails()
+    
+    /**
+     * Получает последние N писем из папки с пустым body
+     * Используется для предзагрузки тел писем для офлайн-доступа
+     */
+    @Query("""
+        SELECT * FROM emails 
+        WHERE folderId = :folderId AND (body = '' OR body IS NULL)
+        ORDER BY dateReceived DESC 
+        LIMIT :limit
+    """)
+    suspend fun getEmailsWithEmptyBody(folderId: String, limit: Int): List<EmailEntity>
 }
 
 /**

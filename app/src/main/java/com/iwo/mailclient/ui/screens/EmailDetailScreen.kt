@@ -3,6 +3,7 @@ package com.iwo.mailclient.ui.screens
 import android.content.Intent
 import android.webkit.WebView
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -35,6 +36,8 @@ import com.iwo.mailclient.ui.Strings
 import com.iwo.mailclient.ui.LocalLanguage
 import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.NotificationStrings
+import com.iwo.mailclient.ui.components.NetworkBanner
+import com.iwo.mailclient.network.NetworkMonitor
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -371,36 +374,62 @@ fun EmailDetailScreen(
                         CircularProgressIndicator()
                     }
                 } else {
-                    Column(
-                        modifier = Modifier.heightIn(max = 300.dp)
-                    ) {
-                        availableFolders.forEach { folder ->
-                            ListItem(
-                                headlineContent = { Text(folder.displayName) },
-                                leadingContent = { 
-                                    Icon(AppIcons.Folder, null) 
-                                },
-                                modifier = Modifier.clickable {
-                                    scope.launch {
-                                        isMoving = true
-                                        val result = withContext(Dispatchers.IO) {
-                                            mailRepo.moveEmails(listOf(emailId), folder.id)
-                                        }
-                                        when (result) {
-                                            is EasResult.Success -> {
-                                                Toast.makeText(context, NotificationStrings.getMoved(isRussian), Toast.LENGTH_SHORT).show()
-                                                showMoveDialog = false
-                                                onBackClick()
+                    val scrollState = rememberScrollState()
+                    Box(modifier = Modifier.heightIn(max = 300.dp)) {
+                        Column(
+                            modifier = Modifier.verticalScroll(scrollState)
+                        ) {
+                            availableFolders.forEach { folder ->
+                                ListItem(
+                                    headlineContent = { Text(folder.displayName) },
+                                    leadingContent = { 
+                                        Icon(AppIcons.Folder, null) 
+                                    },
+                                    modifier = Modifier.clickable {
+                                        scope.launch {
+                                            isMoving = true
+                                            val result = withContext(Dispatchers.IO) {
+                                                mailRepo.moveEmails(listOf(emailId), folder.id)
                                             }
-                                            is EasResult.Error -> {
-                                                val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                            when (result) {
+                                                is EasResult.Success -> {
+                                                    Toast.makeText(context, NotificationStrings.getMoved(isRussian), Toast.LENGTH_SHORT).show()
+                                                    showMoveDialog = false
+                                                    onBackClick()
+                                                }
+                                                is EasResult.Error -> {
+                                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
+                                                    Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                }
                                             }
+                                            isMoving = false
                                         }
-                                        isMoving = false
                                     }
-                                }
-                            )
+                                )
+                            }
+                        }
+                        // Скроллбар
+                        val scrollbarColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        if (scrollState.maxValue > 0) {
+                            Canvas(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .fillMaxHeight()
+                                    .width(4.dp)
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                val scrollFraction = scrollState.value.toFloat() / scrollState.maxValue.toFloat()
+                                val viewportFraction = size.height / (size.height + scrollState.maxValue)
+                                val scrollbarHeight = (viewportFraction * size.height).coerceAtLeast(20.dp.toPx())
+                                val scrollbarY = scrollFraction * (size.height - scrollbarHeight)
+                                
+                                drawRoundRect(
+                                    color = scrollbarColor,
+                                    topLeft = androidx.compose.ui.geometry.Offset(0f, scrollbarY),
+                                    size = androidx.compose.ui.geometry.Size(size.width, scrollbarHeight),
+                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                                )
+                            }
                         }
                     }
                 }
@@ -565,8 +594,15 @@ fun EmailDetailScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .verticalScroll(rememberScrollState())
             ) {
+                // Баннер "Нет сети"
+                NetworkBanner()
+                
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                ) {
                 // Тема
                 Text(
                     text = currentEmail.subject,
@@ -1292,6 +1328,13 @@ fun EmailDetailScreen(
                                         return@launch
                                     }
                                     
+                                    // Проверяем сеть перед скачиванием
+                                    if (!NetworkMonitor.isNetworkAvailable(context)) {
+                                        val noNetworkMsg = if (isRussian) "Нет сети" else "No network"
+                                        Toast.makeText(context, noNetworkMsg, Toast.LENGTH_SHORT).show()
+                                        return@launch
+                                    }
+                                    
                                     // Скачиваем через EasClient (умеет делать Provision при 449)
                                     downloadingId = attachment.id
                                     val account = accountRepo.getActiveAccountSync()
@@ -1525,6 +1568,7 @@ fun EmailDetailScreen(
                 } // end else (body loaded)
                 
                 Spacer(modifier = Modifier.height(80.dp)) // Для FAB
+                }
             }
         }
     }

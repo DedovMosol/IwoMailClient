@@ -8,7 +8,7 @@
     "x86": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.6.0/app-x86-release.apk",
     "universal": "https://github.com/DedovMosol/IwoMailClient/releases/download/v1.6.0/app-universal-release.apk"
   },
-  "changelogRu": "• Онбординг при первом запуске\n• Переработанный виджет\n• Карточка статистики\n• Экран обновлений\n• Per-account настройки синхронизации\n• Исправления багов",
-  "changelogEn": "• Onboarding on first launch\n• Redesigned widget\n• Statistics card\n• Updates screen\n• Per-account sync settings\n• Bug fixes",
+  "changelogRu": "• Онбординг при первом запуске\n• Переработанный виджет\n• Офлайн-режим: баннер, очередь отправки, кэширование\n• Per-account настройки синхронизации\n• Исправления багов",
+  "changelogEn": "• Onboarding on first launch\n• Redesigned widget\n• Offline mode: banner, send queue, caching\n• Per-account sync settings\n• Bug fixes",
   "minSdk": 24
 }

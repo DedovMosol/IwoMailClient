@@ -1,6 +1,7 @@
 ﻿package com.iwo.mailclient.ui
 
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -47,6 +48,9 @@ import com.iwo.mailclient.data.repository.AccountRepository
 import com.iwo.mailclient.data.repository.MailRepository
 import com.iwo.mailclient.data.repository.RepositoryProvider
 import com.iwo.mailclient.data.repository.SettingsRepository
+import com.iwo.mailclient.network.NetworkMonitor
+import com.iwo.mailclient.ui.components.NetworkBanner
+import com.iwo.mailclient.network.rememberNetworkState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withLock
@@ -166,6 +170,13 @@ object InitialSyncController {
                                 }
                             }
                         }
+                    }
+                    
+                    // Предзагружаем тела последних 7 писем из Inbox для офлайн-доступа
+                    withContext(Dispatchers.IO) {
+                        try {
+                            mailRepo.prefetchEmailBodies(accountId, 7)
+                        } catch (_: Exception) { }
                     }
                     
                     // Синхронизируем контакты, заметки, календарь, задачи параллельно
@@ -514,6 +525,14 @@ fun MainScreen(
 
     
     fun syncFolders() {
+        // Проверяем сеть перед синхронизацией
+        if (!NetworkMonitor.isNetworkAvailable(context)) {
+            val isRussian = settingsRepo.getLanguageSync() == "ru"
+            val message = if (isRussian) "Нет сети" else "No network"
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         activeAccount?.let { account ->
             manualSyncScope.launch {
                 isLoading = true
@@ -1067,37 +1086,9 @@ private fun HomeContent(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        // Карточка "Нет сети"
-        if (noNetwork) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
-                    ),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            AppIcons.Warning,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = Strings.noNetwork,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                }
-            }
+        // Реактивный баннер "Нет сети" - показывается сразу при отключении
+        item {
+            NetworkBanner(modifier = Modifier.padding(bottom = 4.dp))
         }
         
         // Индикатор синхронизации (карточка)

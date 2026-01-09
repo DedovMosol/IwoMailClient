@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -51,6 +52,8 @@ import com.iwo.mailclient.ui.LocalLanguage
 import com.iwo.mailclient.ui.AppLanguage
 import com.iwo.mailclient.ui.NotificationStrings
 import com.iwo.mailclient.ui.Strings
+import com.iwo.mailclient.ui.components.NetworkBanner
+import com.iwo.mailclient.network.NetworkMonitor
 import com.iwo.mailclient.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -268,6 +271,15 @@ fun EmailListScreen(
 
     fun refresh() {
         if (isFavorites) return
+        
+        // Проверяем сеть перед синхронизацией
+        if (!NetworkMonitor.isNetworkAvailable(context)) {
+            val isRussian = currentLanguage == AppLanguage.RUSSIAN
+            val message = if (isRussian) "Нет сети" else "No network"
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        
         // Используем folder.accountId если есть, иначе activeAccount.id
         val accountId = folder?.accountId ?: activeAccount?.id ?: return
         scope.launch {
@@ -537,27 +549,29 @@ fun EmailListScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
+                    val lazyListState = rememberLazyListState()
                     // Ограничиваем высоту LazyColumn чтобы избежать вложенного скролла
-                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                        items(availableFolders) { targetFolder ->
-                            ListItem(
-                                headlineContent = { Text(Strings.getFolderName(targetFolder.type, targetFolder.displayName)) },
-                                leadingContent = {
-                                    Icon(getFolderIcon(targetFolder.type), null)
-                                },
-                                modifier = Modifier.clickable(enabled = !isMoving) {
-                                    scope.launch {
-                                        isMoving = true
-                                        val result = withContext(Dispatchers.IO) {
-                                            mailRepo.moveEmails(selectedIds.toList(), targetFolder.id)
-                                        }
-                                        isMoving = false
-                                        showMoveDialog = false
-                                        
-                                        when (result) {
-                                            is EasResult.Success -> {
-                                                val msg = NotificationStrings.getMoved(isRussian) + ": ${result.data}"
-                                                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                    Box(modifier = Modifier.heightIn(max = 300.dp)) {
+                        LazyColumn(state = lazyListState) {
+                            items(availableFolders) { targetFolder ->
+                                ListItem(
+                                    headlineContent = { Text(Strings.getFolderName(targetFolder.type, targetFolder.displayName)) },
+                                    leadingContent = {
+                                        Icon(getFolderIcon(targetFolder.type), null)
+                                    },
+                                    modifier = Modifier.clickable(enabled = !isMoving) {
+                                        scope.launch {
+                                            isMoving = true
+                                            val result = withContext(Dispatchers.IO) {
+                                                mailRepo.moveEmails(selectedIds.toList(), targetFolder.id)
+                                            }
+                                            isMoving = false
+                                            showMoveDialog = false
+                                            
+                                            when (result) {
+                                                is EasResult.Success -> {
+                                                    val msg = NotificationStrings.getMoved(isRussian) + ": ${result.data}"
+                                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                             }
                                             is EasResult.Error -> {
                                                 val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
@@ -568,6 +582,35 @@ fun EmailListScreen(
                                     }
                                 }
                             )
+                        }
+                    }
+                        // Скроллбар
+                        val scrollbarColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        val canScroll = lazyListState.canScrollForward || lazyListState.canScrollBackward
+                        if (canScroll) {
+                            Canvas(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .fillMaxHeight()
+                                    .width(4.dp)
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                val totalItems = availableFolders.size.toFloat()
+                                val firstVisible = lazyListState.firstVisibleItemIndex.toFloat()
+                                val visibleItems = lazyListState.layoutInfo.visibleItemsInfo.size.toFloat()
+                                
+                                if (totalItems > 0 && visibleItems < totalItems) {
+                                    val scrollbarHeight = (visibleItems / totalItems) * size.height
+                                    val scrollbarY = (firstVisible / totalItems) * size.height
+                                    
+                                    drawRoundRect(
+                                        color = scrollbarColor,
+                                        topLeft = androidx.compose.ui.geometry.Offset(0f, scrollbarY),
+                                        size = androidx.compose.ui.geometry.Size(size.width, scrollbarHeight.coerceAtLeast(20.dp.toPx())),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -709,6 +752,9 @@ fun EmailListScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Баннер "Нет сети"
+            NetworkBanner()
+            
             // Панель фильтров
             FilterPanel(
                 showFilters = showFilters,
@@ -892,24 +938,25 @@ private fun SelectionTopBar(
     showMoreMenu: Boolean,
     onToggleMoreMenu: (Boolean) -> Unit
 ) {
+    val colorTheme = LocalColorTheme.current
     TopAppBar(
-        title = { Text("$selectedCount") },
+        title = { Text("$selectedCount", color = Color.White) },
         navigationIcon = {
             IconButton(onClick = onClearSelection) {
-                Icon(AppIcons.ArrowBack, Strings.cancelSelection)
+                Icon(AppIcons.ArrowBack, Strings.cancelSelection, tint = Color.White)
             }
         },
         actions = {
             // В корзине - кнопка Восстановить, иначе - Переместить
             if (isTrashFolder) {
-                IconButton(onClick = onRestore) { Icon(AppIcons.Restore, Strings.restore) }
+                IconButton(onClick = onRestore) { Icon(AppIcons.Restore, Strings.restore, tint = Color.White) }
             } else {
-                IconButton(onClick = onMove) { Icon(AppIcons.DriveFileMove, Strings.moveTo) }
+                IconButton(onClick = onMove) { Icon(AppIcons.DriveFileMove, Strings.moveTo, tint = Color.White) }
             }
-            IconButton(onClick = onDelete) { Icon(AppIcons.Delete, Strings.delete) }
+            IconButton(onClick = onDelete) { Icon(AppIcons.Delete, Strings.delete, tint = Color.White) }
             Box {
                 IconButton(onClick = { onToggleMoreMenu(true) }) {
-                    Icon(AppIcons.MoreVert, Strings.more)
+                    Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
                 }
                 DropdownMenu(expanded = showMoreMenu, onDismissRequest = { onToggleMoreMenu(false) }) {
                     // Пометить и Непрочитанное только если НЕ в корзине и НЕ в спаме
@@ -947,7 +994,7 @@ private fun SelectionTopBar(
                 }
             }
         },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = colorTheme.gradientStart)
     )
 }
 
@@ -1001,8 +1048,8 @@ private fun EmailList(
                         modifier = Modifier.fillMaxSize()
                     )
                     
-                    // Индикатор обновления для пустого состояния
-                    if (!isFavorites) {
+                // Индикатор обновления для пустого состояния
+                    if (!isFavorites && (isRefreshing || pullRefreshState.progress > 0)) {
                         Box(
                             modifier = Modifier.fillMaxWidth(),
                             contentAlignment = Alignment.TopCenter
@@ -1481,7 +1528,10 @@ private fun ErrorContent(message: String, onRetry: () -> Unit, modifier: Modifie
 
 @Composable
 private fun EmptyContent(message: String, modifier: Modifier = Modifier) {
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(AppIcons.Inbox, null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
             Spacer(modifier = Modifier.height(16.dp))

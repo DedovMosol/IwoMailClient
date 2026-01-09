@@ -10,15 +10,25 @@
 - **About Screen** — all app information in one place
 - **Sync & Cleanup Screen** — sync and auto-cleanup management per account
 - **Per-account settings** — night mode and Battery Saver ignore now configurable per account
+- **Offline mode:**
+  - "No network" banner — shown at top of screen when offline
+  - Send queue — emails without attachments are saved and sent automatically when network returns
+  - Email body caching — last 7 emails in each folder are prefetched for offline access
+  - Network check before sync — "No network" toast instead of waiting for error
+  - Network check before downloading attachments
 
 ### Improvements
 - Simplified settings screens — sections moved to separate screens
 - Removed "Tips" and "About" sections from main screen
 - Widget updates after sync completion
+- Scrollbar in move email dialog
 
 ### Fixes
 - Reliable calendar/notes/tasks counters loading on startup
 - Counters don't decrease during sync
+- Fixed crash when deleting emails from server folders
+- Empty folder icon centering
+- SelectionTopBar colors match theme
 
 ---
 

@@ -5,6 +5,8 @@ import com.iwo.mailclient.data.database.*
 import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.imap.ImapClient
 import com.iwo.mailclient.pop3.Pop3Client
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.Flow
 
 // Предкомпилированные regex для производительности
@@ -856,11 +858,21 @@ class MailRepository(context: Context) {
                         val existingIds = emailDao.getExistingIds(emailEntities.map { it.id })
                         val newEmails = emailEntities.filter { it.id !in existingIds }
                         
-                        // Дополнительная защита от дублей: проверяем по subject+from+date
-                        val filteredEmails = if (newEmails.isNotEmpty()) {
+                        // Дополнительная защита: проверяем что письмо не существует в другой папке по serverId
+                        // Это предотвращает появление "призрачных" писем при проблемах с syncKey
+                        val filteredByServerId = if (newEmails.isNotEmpty()) {
+                            val serverIds = newEmails.map { it.serverId }
+                            val existingByServerId = emailDao.getExistingServerIds(accountId, serverIds)
+                            newEmails.filter { it.serverId !in existingByServerId }
+                        } else {
+                            emptyList()
+                        }
+                        
+                        // Дополнительная защита от дублей: проверяем по subject+from+date в текущей папке
+                        val filteredEmails = if (filteredByServerId.isNotEmpty()) {
                             val existingInFolder = emailDao.getEmailsByFolderList(folderId)
                             val existingKeys = existingInFolder.map { "${it.subject}_${it.from}_${it.dateReceived}" }.toSet()
-                            newEmails.filter { email ->
+                            filteredByServerId.filter { email ->
                                 val key = "${email.subject}_${email.from}_${email.dateReceived}"
                                 key !in existingKeys
                             }
@@ -1087,6 +1099,45 @@ class MailRepository(context: Context) {
         return EasResult.Error("Загрузка тела не поддерживается для этого типа аккаунта")
     }
     
+    /**
+     * Предзагрузка тел последних N писем из Inbox для офлайн-доступа
+     * Загружает только письма с пустым body
+     * @param accountId ID аккаунта
+     * @param count количество писем для предзагрузки (по умолчанию 7)
+     */
+    suspend fun prefetchEmailBodies(accountId: Long, count: Int = 7) {
+        try {
+            // Получаем папку Inbox
+            val inboxFolder = folderDao.getFolderByType(accountId, 2) ?: return
+            
+            // Получаем последние N писем с пустым body
+            val emails = emailDao.getEmailsWithEmptyBody(inboxFolder.id, count)
+            if (emails.isEmpty()) return
+            
+            val account = accountRepo.getAccount(accountId) ?: return
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) return
+            
+            val client = accountRepo.createEasClient(accountId) ?: return
+            val folderServerId = inboxFolder.serverId
+            
+            // Загружаем тела параллельно (но не более 3 одновременно)
+            kotlinx.coroutines.supervisorScope {
+                emails.chunked(3).forEach { chunk ->
+                    chunk.map { email ->
+                        async {
+                            try {
+                                val result = client.fetchEmailBodyWithMdn(folderServerId, email.serverId)
+                                if (result is EasResult.Success) {
+                                    emailDao.updateBody(email.id, result.data.body)
+                                }
+                            } catch (_: Exception) { }
+                        }
+                    }.awaitAll()
+                }
+            }
+        } catch (_: Exception) { }
+    }
+    
     suspend fun toggleFlag(emailId: String) {
         val email = emailDao.getEmail(emailId) ?: return
         emailDao.updateFlagStatus(emailId, !email.flagged)
@@ -1114,92 +1165,102 @@ class MailRepository(context: Context) {
     suspend fun moveEmails(emailIds: List<String>, targetFolderId: String, updateOriginalFolder: Boolean = true): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
         
-        // Получаем первое письмо чтобы узнать accountId
-        val firstEmail = emailDao.getEmail(emailIds.first()) 
-            ?: return EasResult.Error("Email not found")
-        
-        val account = accountRepo.getAccount(firstEmail.accountId)
-            ?: return EasResult.Error("Account not found")
-        
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-            return EasResult.Error("Move is only supported for Exchange")
-        }
-        
-        val client = accountRepo.createEasClient(firstEmail.accountId)
-            ?: return EasResult.Error("Failed to create client")
-        
-        // Получаем целевую папку
-        val targetFolder = folderDao.getFolder(targetFolderId)
-            ?: return EasResult.Error("Target folder not found")
-        
-        // Собираем данные для перемещения: (serverId письма, serverId исходной папки)
-        val items = mutableListOf<Pair<String, String>>()
-        for (emailId in emailIds) {
-            val email = emailDao.getEmail(emailId) ?: continue
+        return try {
+            // Получаем первое письмо чтобы узнать accountId
+            val firstEmail = emailDao.getEmail(emailIds.first()) 
+                ?: return EasResult.Error("Email not found")
             
-            // ServerId письма - используем как есть
-            val emailServerId = email.serverId
+            val account = accountRepo.getAccount(firstEmail.accountId)
+                ?: return EasResult.Error("Account not found")
             
-            // Определяем исходную папку:
-            // 1. Если ServerId в формате "folderId:messageId" (Exchange 2007) - берём folderId из него
-            // 2. Иначе получаем serverId папки из БД
-            val srcFolderServerId = if (emailServerId.contains(":")) {
-                emailServerId.substringBefore(":")
-            } else {
-                // Получаем serverId папки из БД
-                val srcFolder = folderDao.getFolder(email.folderId)
-                srcFolder?.serverId ?: email.folderId.substringAfter("_")
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                return EasResult.Error("Move is only supported for Exchange")
             }
-            items.add(emailServerId to srcFolderServerId)
-        }
-        
-        if (items.isEmpty()) return EasResult.Success(0)
-        
-        // Проверяем что не перемещаем в ту же папку
-        val srcFolderId = items.first().second
-        if (srcFolderId == targetFolder.serverId) {
-            return EasResult.Error("ALREADY_IN_FOLDER")
-        }
-        
-        return when (val result = client.moveItems(items, targetFolder.serverId)) {
-            is EasResult.Success -> {
-                val movedCount = result.data.size
-                val sourceFolderIds = mutableSetOf<String>()
+            
+            val client = accountRepo.createEasClient(firstEmail.accountId)
+                ?: return EasResult.Error("Failed to create client")
+            
+            // Получаем целевую папку
+            val targetFolder = folderDao.getFolder(targetFolderId)
+                ?: return EasResult.Error("Target folder not found")
+            
+            // Собираем данные для перемещения: (serverId письма, serverId исходной папки)
+            val items = mutableListOf<Pair<String, String>>()
+            for (emailId in emailIds) {
+                val email = emailDao.getEmail(emailId) ?: continue
                 
-                for (emailId in emailIds) {
-                    val email = emailDao.getEmail(emailId) ?: continue
-                    sourceFolderIds.add(email.folderId)
+                // ServerId письма - используем как есть
+                val emailServerId = email.serverId
+                
+                // Определяем исходную папку:
+                // 1. Если ServerId в формате "folderId:messageId" (Exchange 2007) - берём folderId из него
+                // 2. Иначе берём из folderId
+                val srcFolderServerId = if (emailServerId.contains(":")) {
+                    emailServerId.substringBefore(":")
+                } else {
+                    email.folderId.substringAfter("_")
+                }
+                items.add(emailServerId to srcFolderServerId)
+            }
+            
+            if (items.isEmpty()) return EasResult.Success(0)
+            
+            // Проверяем что не перемещаем в ту же папку
+            val srcFolderId = items.first().second
+            if (srcFolderId == targetFolder.serverId) {
+                return EasResult.Error("ALREADY_IN_FOLDER")
+            }
+            
+            when (val result = client.moveItems(items, targetFolder.serverId)) {
+                is EasResult.Success -> {
+                    val movedCount = result.data.size
                     
-                    val newServerId = result.data[email.serverId]
-                    if (newServerId != null) {
-                        val newEmailId = "${firstEmail.accountId}_$newServerId"
-                        // Сохраняем оригинальную дату письма при перемещении
-                        // Обновляем originalFolderId только если это обычное перемещение (не в корзину)
-                        val newOriginalFolderId = if (updateOriginalFolder) targetFolderId else email.originalFolderId
-                        val updatedEmail = email.copy(
-                            id = newEmailId,
-                            serverId = newServerId,
-                            folderId = targetFolderId,
-                            originalFolderId = newOriginalFolderId
-                            // dateReceived остаётся оригинальной!
-                        )
-                        emailDao.delete(emailId)
-                        emailDao.insert(updatedEmail)
+                    // Собираем исходные папки ДО удаления писем
+                    val sourceFolderIds = mutableSetOf<String>()
+                    for (emailId in emailIds) {
+                        val email = emailDao.getEmail(emailId) ?: continue
+                        sourceFolderIds.add(email.folderId)
                     }
+                    
+                    // Обновляем письма
+                    for (emailId in emailIds) {
+                        val email = emailDao.getEmail(emailId) ?: continue
+                        
+                        val newServerId = result.data[email.serverId]
+                        if (newServerId != null) {
+                            val newEmailId = "${firstEmail.accountId}_$newServerId"
+                            // Сохраняем оригинальную дату письма при перемещении
+                            // Обновляем originalFolderId только если это обычное перемещение (не в корзину)
+                            val newOriginalFolderId = if (updateOriginalFolder) targetFolderId else email.originalFolderId
+                            val updatedEmail = email.copy(
+                                id = newEmailId,
+                                serverId = newServerId,
+                                folderId = targetFolderId,
+                                originalFolderId = newOriginalFolderId
+                                // dateReceived остаётся оригинальной!
+                            )
+                            emailDao.delete(emailId)
+                            emailDao.insert(updatedEmail)
+                        }
+                    }
+                    
+                    // Обновляем счётчики исходных папок
+                    for (folderId in sourceFolderIds) {
+                        val totalCount = emailDao.getCountByFolder(folderId)
+                        val unreadCount = emailDao.getUnreadCount(folderId)
+                        folderDao.updateCounts(folderId, unreadCount, totalCount)
+                    }
+                    
+                    // Обновляем счётчики целевой папки
+                    val targetTotalCount = emailDao.getCountByFolder(targetFolderId)
+                    val targetUnreadCount = emailDao.getUnreadCount(targetFolderId)
+                    folderDao.updateCounts(targetFolderId, targetUnreadCount, targetTotalCount)
+                    EasResult.Success(movedCount)
                 }
-                
-                for (srcFolderId in sourceFolderIds) {
-                    val totalCount = emailDao.getCountByFolder(srcFolderId)
-                    val unreadCount = emailDao.getUnreadCount(srcFolderId)
-                    folderDao.updateCounts(srcFolderId, unreadCount, totalCount)
-                }
-                
-                val targetTotalCount = emailDao.getCountByFolder(targetFolderId)
-                val targetUnreadCount = emailDao.getUnreadCount(targetFolderId)
-                folderDao.updateCounts(targetFolderId, targetUnreadCount, targetTotalCount)
-                EasResult.Success(movedCount)
+                is EasResult.Error -> result
             }
-            is EasResult.Error -> result
+        } catch (e: Exception) {
+            EasResult.Error("Move error: ${e.message}")
         }
     }
     
@@ -1227,62 +1288,66 @@ class MailRepository(context: Context) {
     suspend fun moveToTrash(emailIds: List<String>): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
         
-        val firstEmail = emailDao.getEmail(emailIds.first())
-            ?: return EasResult.Error("Email not found")
-        
-        val draftsFolder = folderDao.getFolderByType(firstEmail.accountId, 3)
-        val trashFolder = folderDao.getFolderByType(firstEmail.accountId, 4)
-            ?: return EasResult.Error("Trash folder not found")
-        
-        // Разделяем письма по типу: черновики, письма в корзине, обычные письма
-        val drafts = mutableListOf<String>()
-        val inTrash = mutableListOf<String>()
-        val regularEmails = mutableListOf<String>()
-        
-        for (emailId in emailIds) {
-            val email = emailDao.getEmail(emailId) ?: continue
-            when {
-                // Черновики из папки Черновики
-                draftsFolder != null && email.folderId == draftsFolder.id -> drafts.add(emailId)
-                // Письма уже в корзине
-                email.folderId == trashFolder.id -> inTrash.add(emailId)
-                // Обычные письма
-                else -> regularEmails.add(emailId)
+        return try {
+            val firstEmail = emailDao.getEmail(emailIds.first())
+                ?: return EasResult.Error("Email not found")
+            
+            val draftsFolder = folderDao.getFolderByType(firstEmail.accountId, 3)
+            val trashFolder = folderDao.getFolderByType(firstEmail.accountId, 4)
+                ?: return EasResult.Error("Trash folder not found")
+            
+            // Разделяем письма по типу: черновики, письма в корзине, обычные письма
+            val drafts = mutableListOf<String>()
+            val inTrash = mutableListOf<String>()
+            val regularEmails = mutableListOf<String>()
+            
+            for (emailId in emailIds) {
+                val email = emailDao.getEmail(emailId) ?: continue
+                when {
+                    // Черновики из папки Черновики
+                    draftsFolder != null && email.folderId == draftsFolder.id -> drafts.add(emailId)
+                    // Письма уже в корзине
+                    email.folderId == trashFolder.id -> inTrash.add(emailId)
+                    // Обычные письма
+                    else -> regularEmails.add(emailId)
+                }
             }
-        }
-        
-        var totalDeleted = 0
-        
-        // Черновики удаляем сразу через deleteDraft
-        for (emailId in drafts) {
-            val email = emailDao.getEmail(emailId) ?: continue
-            val result = deleteDraft(email.accountId, email.serverId)
-            if (result is EasResult.Success) {
-                totalDeleted++
+            
+            var totalDeleted = 0
+            
+            // Черновики удаляем сразу через deleteDraft
+            for (emailId in drafts) {
+                val email = emailDao.getEmail(emailId) ?: continue
+                val result = deleteDraft(email.accountId, email.serverId)
+                if (result is EasResult.Success) {
+                    totalDeleted++
+                }
             }
-        }
-        
-        // Письма в корзине удаляем окончательно
-        if (inTrash.isNotEmpty()) {
-            val result = deleteEmailsPermanently(inTrash)
-            if (result is EasResult.Success) {
-                totalDeleted += result.data
+            
+            // Письма в корзине удаляем окончательно
+            if (inTrash.isNotEmpty()) {
+                val result = deleteEmailsPermanently(inTrash)
+                if (result is EasResult.Success) {
+                    totalDeleted += result.data
+                }
             }
+            
+            // Если нет обычных писем - возвращаем 0 (всё удалено окончательно)
+            if (regularEmails.isEmpty()) {
+                return EasResult.Success(0)
+            }
+            
+            // Сохраняем исходную папку перед перемещением в корзину
+            for (emailId in regularEmails) {
+                val email = emailDao.getEmail(emailId) ?: continue
+                emailDao.updateOriginalFolderId(emailId, email.folderId)
+            }
+            
+            // Перемещаем обычные письма в корзину
+            moveEmails(regularEmails, trashFolder.id, updateOriginalFolder = false)
+        } catch (e: Exception) {
+            EasResult.Error("Delete error: ${e.message}")
         }
-        
-        // Если нет обычных писем - возвращаем 0 (всё удалено окончательно)
-        if (regularEmails.isEmpty()) {
-            return EasResult.Success(0)
-        }
-        
-        // Сохраняем исходную папку перед перемещением в корзину
-        for (emailId in regularEmails) {
-            val email = emailDao.getEmail(emailId) ?: continue
-            emailDao.updateOriginalFolderId(emailId, email.folderId)
-        }
-        
-        // Перемещаем обычные письма в корзину
-        return moveEmails(regularEmails, trashFolder.id, updateOriginalFolder = false)
     }
     
     /**
@@ -1310,136 +1375,140 @@ class MailRepository(context: Context) {
     suspend fun deleteEmailsPermanently(emailIds: List<String>): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
         
-        val firstEmail = emailDao.getEmail(emailIds.first())
-            ?: return EasResult.Success(0)
-        
-        val draftsFolder = folderDao.getFolderByType(firstEmail.accountId, 3)
-        
-        // Разделяем письма: черновики и обычные
-        val drafts = mutableListOf<String>()
-        val regularEmails = mutableListOf<String>()
-        
-        for (emailId in emailIds) {
-            val email = emailDao.getEmail(emailId) ?: continue
-            when {
-                // Черновики из папки Черновики
-                draftsFolder != null && email.folderId == draftsFolder.id -> drafts.add(emailId)
-                // Обычные письма
-                else -> regularEmails.add(emailId)
-            }
-        }
-        
-        var deletedCount = 0
-        
-        // Черновики удаляем через deleteDraft (EAS для Exchange)
-        for (emailId in drafts) {
-            val email = emailDao.getEmail(emailId) ?: continue
-            val result = deleteDraft(email.accountId, email.serverId)
-            if (result is EasResult.Success) {
-                deletedCount++
-            }
-        }
-        
-        // Если нет обычных писем — выходим
-        if (regularEmails.isEmpty()) {
-            return EasResult.Success(deletedCount)
-        }
-        
-        val affectedFolderIds = mutableSetOf<String>()
-        
-        val account = accountRepo.getAccount(firstEmail.accountId)
-            ?: return EasResult.Error("Account not found")
-        
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-            // Для не-Exchange просто удаляем локально
-            regularEmails.forEach { emailId ->
-                val email = emailDao.getEmail(emailId)
-                if (email != null) {
-                    affectedFolderIds.add(email.folderId)
+        return try {
+            val firstEmail = emailDao.getEmail(emailIds.first())
+                ?: return EasResult.Success(0)
+            
+            val draftsFolder = folderDao.getFolderByType(firstEmail.accountId, 3)
+            
+            // Разделяем письма: черновики и обычные
+            val drafts = mutableListOf<String>()
+            val regularEmails = mutableListOf<String>()
+            
+            for (emailId in emailIds) {
+                val email = emailDao.getEmail(emailId) ?: continue
+                when {
+                    // Черновики из папки Черновики
+                    draftsFolder != null && email.folderId == draftsFolder.id -> drafts.add(emailId)
+                    // Обычные письма
+                    else -> regularEmails.add(emailId)
                 }
-                attachmentDao.deleteByEmail(emailId)
-                emailDao.delete(emailId)
-                deletedCount++
             }
-            // Обновляем счётчики
+            
+            var deletedCount = 0
+            
+            // Черновики удаляем через deleteDraft (EAS для Exchange)
+            for (emailId in drafts) {
+                val email = emailDao.getEmail(emailId) ?: continue
+                val result = deleteDraft(email.accountId, email.serverId)
+                if (result is EasResult.Success) {
+                    deletedCount++
+                }
+            }
+            
+            // Если нет обычных писем — выходим
+            if (regularEmails.isEmpty()) {
+                return EasResult.Success(deletedCount)
+            }
+            
+            val affectedFolderIds = mutableSetOf<String>()
+            
+            val account = accountRepo.getAccount(firstEmail.accountId)
+                ?: return EasResult.Error("Account not found")
+            
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                // Для не-Exchange просто удаляем локально
+                regularEmails.forEach { emailId ->
+                    val email = emailDao.getEmail(emailId)
+                    if (email != null) {
+                        affectedFolderIds.add(email.folderId)
+                    }
+                    attachmentDao.deleteByEmail(emailId)
+                    emailDao.delete(emailId)
+                    deletedCount++
+                }
+                // Обновляем счётчики
+                for (folderId in affectedFolderIds) {
+                    val totalCount = emailDao.getCountByFolder(folderId)
+                    val unreadCount = emailDao.getUnreadCount(folderId)
+                    folderDao.updateCounts(folderId, unreadCount, totalCount)
+                }
+                return EasResult.Success(deletedCount)
+            }
+            
+            val client = accountRepo.createEasClient(firstEmail.accountId)
+                ?: return EasResult.Error("Failed to create client")
+            
+            for (emailId in regularEmails) {
+                val email = emailDao.getEmail(emailId) ?: continue
+                affectedFolderIds.add(email.folderId)
+                
+                // Определяем папку письма (как в v1.4.2)
+                val folderServerId = if (email.serverId.contains(":")) {
+                    email.serverId.substringBefore(":")
+                } else {
+                    email.folderId.substringAfter("_")
+                }
+                
+                // Получаем syncKey папки
+                var folder = folderDao.getFolder(email.folderId)
+                var syncKey = folder?.syncKey ?: "0"
+                
+                // Если syncKey "0" - получаем начальный syncKey
+                if (syncKey == "0") {
+                    val initResult = client.sync(folderServerId, "0")
+                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
+                        syncKey = initResult.data.syncKey
+                        folderDao.updateSyncKey(email.folderId, syncKey)
+                    }
+                }
+                
+                if (syncKey == "0") {
+                    // Не удалось получить syncKey - пропускаем, не удаляем локально
+                    continue
+                }
+                
+                // Удаляем через Sync Delete (DeletesAsMoves=0 для окончательного удаления)
+                var deleteResult = client.deleteEmailPermanently(folderServerId, email.serverId, syncKey)
+                
+                // Если INVALID_SYNCKEY - сбрасываем и повторяем
+                if (deleteResult is EasResult.Error && deleteResult.message.contains("INVALID_SYNCKEY")) {
+                    val initResult = client.sync(folderServerId, "0")
+                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
+                        syncKey = initResult.data.syncKey
+                        folderDao.updateSyncKey(email.folderId, syncKey)
+                        // Повторяем удаление с новым syncKey
+                        deleteResult = client.deleteEmailPermanently(folderServerId, email.serverId, syncKey)
+                    }
+                }
+                
+                when (deleteResult) {
+                    is EasResult.Success -> {
+                        // Обновляем syncKey папки
+                        folderDao.updateSyncKey(email.folderId, deleteResult.data)
+                        // Удаляем локально только после успешного удаления на сервере
+                        attachmentDao.deleteByEmail(emailId)
+                        emailDao.delete(emailId)
+                        deletedCount++
+                    }
+                    is EasResult.Error -> {
+                        // Ошибка удаления на сервере — НЕ удаляем локально, иначе вернётся при синхронизации
+                        // Пропускаем это письмо
+                    }
+                }
+            }
+            
+            // Обновляем счётчики затронутых папок
             for (folderId in affectedFolderIds) {
                 val totalCount = emailDao.getCountByFolder(folderId)
                 val unreadCount = emailDao.getUnreadCount(folderId)
                 folderDao.updateCounts(folderId, unreadCount, totalCount)
             }
-            return EasResult.Success(deletedCount)
+            
+            EasResult.Success(deletedCount)
+        } catch (e: Exception) {
+            EasResult.Error("Delete error: ${e.message}")
         }
-        
-        val client = accountRepo.createEasClient(firstEmail.accountId)
-            ?: return EasResult.Error("Failed to create client")
-        
-        for (emailId in regularEmails) {
-            val email = emailDao.getEmail(emailId) ?: continue
-            affectedFolderIds.add(email.folderId)
-            
-            // Определяем папку письма
-            val folderServerId = if (email.serverId.contains(":")) {
-                email.serverId.substringBefore(":")
-            } else {
-                // Получаем serverId папки из БД
-                val srcFolder = folderDao.getFolder(email.folderId)
-                srcFolder?.serverId ?: email.folderId.substringAfter("_")
-            }
-            
-            // Получаем syncKey папки
-            var folder = folderDao.getFolder(email.folderId)
-            var syncKey = folder?.syncKey ?: "0"
-            
-            // Если syncKey устарел - синхронизируем папку для получения актуального
-            if (syncKey == "0" && folder != null) {
-                val syncResult = client.sync(folder.serverId, "0")
-                if (syncResult is EasResult.Success) {
-                    val newKey = syncResult.data.syncKey
-                    if (newKey != "0") {
-                        folderDao.updateSyncKey(email.folderId, newKey)
-                        syncKey = newKey
-                    }
-                }
-            }
-
-            if (syncKey == "0") {
-                continue
-            }
-            
-            // Извлекаем itemId из serverId (может быть в формате folderId:itemId)
-            val itemServerId = if (email.serverId.contains(":")) {
-                email.serverId.substringAfter(":")
-            } else {
-                email.serverId
-            }
-            
-            // Удаляем через Sync Delete (DeletesAsMoves=0 для окончательного удаления)
-            when (val result = client.deleteEmailPermanently(folderServerId, itemServerId, syncKey)) {
-                is EasResult.Success -> {
-                    // Обновляем syncKey папки
-                    folderDao.updateSyncKey(email.folderId, result.data)
-                    // Удаляем локально
-                    attachmentDao.deleteByEmail(emailId)
-                    emailDao.delete(emailId)
-                    deletedCount++
-                }
-                is EasResult.Error -> {
-                    // Ошибка удаления на сервере — удаляем локально чтобы не застрять
-                    attachmentDao.deleteByEmail(emailId)
-                    emailDao.delete(emailId)
-                    deletedCount++
-                }
-            }
-        }
-        
-        // Обновляем счётчики затронутых папок
-        for (folderId in affectedFolderIds) {
-            val totalCount = emailDao.getCountByFolder(folderId)
-            val unreadCount = emailDao.getUnreadCount(folderId)
-            folderDao.updateCounts(folderId, unreadCount, totalCount)
-        }
-        
-        return EasResult.Success(deletedCount)
     }
     
     /**
@@ -1451,97 +1520,108 @@ class MailRepository(context: Context) {
     ): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
         
-        val affectedFolderIds = mutableSetOf<String>()
-        val total = emailIds.size
-        var deletedCount = 0
-        
-        val firstEmail = emailDao.getEmail(emailIds.first())
-            ?: return EasResult.Success(0)
-        
-        val account = accountRepo.getAccount(firstEmail.accountId)
-            ?: return EasResult.Error("Account not found")
-        
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-            // Для не-Exchange просто удаляем локально
-            emailIds.forEach { emailId ->
-                val email = emailDao.getEmail(emailId)
-                if (email != null) {
-                    affectedFolderIds.add(email.folderId)
+        return try {
+            val affectedFolderIds = mutableSetOf<String>()
+            val total = emailIds.size
+            var deletedCount = 0
+            
+            val firstEmail = emailDao.getEmail(emailIds.first())
+                ?: return EasResult.Success(0)
+            
+            val account = accountRepo.getAccount(firstEmail.accountId)
+                ?: return EasResult.Error("Account not found")
+            
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                // Для не-Exchange просто удаляем локально
+                emailIds.forEach { emailId ->
+                    val email = emailDao.getEmail(emailId)
+                    if (email != null) {
+                        affectedFolderIds.add(email.folderId)
+                    }
+                    attachmentDao.deleteByEmail(emailId)
+                    emailDao.delete(emailId)
+                    deletedCount++
+                    onProgress(deletedCount, total)
                 }
-                attachmentDao.deleteByEmail(emailId)
-                emailDao.delete(emailId)
-                deletedCount++
+                // Обновляем счётчики
+                for (folderId in affectedFolderIds) {
+                    val totalCount = emailDao.getCountByFolder(folderId)
+                    val unreadCount = emailDao.getUnreadCount(folderId)
+                    folderDao.updateCounts(folderId, unreadCount, totalCount)
+                }
+                return EasResult.Success(deletedCount)
+            }
+            
+            val client = accountRepo.createEasClient(firstEmail.accountId)
+                ?: return EasResult.Error("Failed to create client")
+            
+            for ((index, emailId) in emailIds.withIndex()) {
+                val email = emailDao.getEmail(emailId) ?: continue
+                affectedFolderIds.add(email.folderId)
+                
+                // Определяем папку письма (как в v1.4.2)
+                val folderServerId = if (email.serverId.contains(":")) {
+                    email.serverId.substringBefore(":")
+                } else {
+                    email.folderId.substringAfter("_")
+                }
+                
+                var folder = folderDao.getFolder(email.folderId)
+                var syncKey = folder?.syncKey ?: "0"
+                
+                // Если syncKey "0" - получаем начальный syncKey (как в v1.4.2)
+                if (syncKey == "0") {
+                    val initResult = client.sync(folderServerId, "0")
+                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
+                        syncKey = initResult.data.syncKey
+                        folderDao.updateSyncKey(email.folderId, syncKey)
+                    }
+                }
+                
+                if (syncKey == "0") {
+                    // Нет syncKey - пропускаем, не удаляем локально
+                    onProgress(deletedCount, total)
+                    continue
+                }
+                
+                // Удаляем через Sync Delete
+                var deleteResult = client.deleteEmailPermanently(folderServerId, email.serverId, syncKey)
+                
+                // Если INVALID_SYNCKEY - сбрасываем и повторяем
+                if (deleteResult is EasResult.Error && deleteResult.message.contains("INVALID_SYNCKEY")) {
+                    val initResult = client.sync(folderServerId, "0")
+                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
+                        syncKey = initResult.data.syncKey
+                        folderDao.updateSyncKey(email.folderId, syncKey)
+                        deleteResult = client.deleteEmailPermanently(folderServerId, email.serverId, syncKey)
+                    }
+                }
+                
+                when (deleteResult) {
+                    is EasResult.Success -> {
+                        folderDao.updateSyncKey(email.folderId, deleteResult.data)
+                        attachmentDao.deleteByEmail(emailId)
+                        emailDao.delete(emailId)
+                        deletedCount++
+                    }
+                    is EasResult.Error -> {
+                        // Ошибка удаления на сервере — НЕ удаляем локально
+                    }
+                }
                 onProgress(deletedCount, total)
             }
-            // Обновляем счётчики
+            
+            // Обновляем счётчики затронутых папок
             for (folderId in affectedFolderIds) {
                 val totalCount = emailDao.getCountByFolder(folderId)
                 val unreadCount = emailDao.getUnreadCount(folderId)
                 folderDao.updateCounts(folderId, unreadCount, totalCount)
             }
-            return EasResult.Success(deletedCount)
+            
+            EasResult.Success(deletedCount)
+        } catch (e: Exception) {
+            EasResult.Error("Delete error: ${e.message}")
         }
-        
-        val client = accountRepo.createEasClient(firstEmail.accountId)
-            ?: return EasResult.Error("Failed to create client")
-        
-        for ((index, emailId) in emailIds.withIndex()) {
-            val email = emailDao.getEmail(emailId) ?: continue
-            affectedFolderIds.add(email.folderId)
-            
-            val folderServerId = if (email.serverId.contains(":")) {
-                email.serverId.substringBefore(":")
-            } else {
-                // Получаем serverId папки из БД
-                val srcFolder = folderDao.getFolder(email.folderId)
-                srcFolder?.serverId ?: email.folderId.substringAfter("_")
-            }
-            
-            var folder = folderDao.getFolder(email.folderId)
-            var syncKey = folder?.syncKey ?: "0"
-            
-            // Если syncKey устарел - синхронизируем папку для получения актуального
-            if (syncKey == "0" && folder != null) {
-                val syncResult = client.sync(folder.serverId, "0")
-                if (syncResult is EasResult.Success) {
-                    val newKey = syncResult.data.syncKey
-                    if (newKey != "0") {
-                        folderDao.updateSyncKey(email.folderId, newKey)
-                        syncKey = newKey
-                    }
-                }
-            }
-            
-            if (syncKey == "0") {
-                onProgress(deletedCount + index + 1, total)
-                continue
-            }
-            
-            when (val result = client.deleteEmailPermanently(folderServerId, email.serverId, syncKey)) {
-                is EasResult.Success -> {
-                    folderDao.updateSyncKey(email.folderId, result.data)
-                    attachmentDao.deleteByEmail(emailId)
-                    emailDao.delete(emailId)
-                    deletedCount++
-                }
-                is EasResult.Error -> {
-                    // Ошибка удаления на сервере — удаляем локально чтобы не застрять
-                    attachmentDao.deleteByEmail(emailId)
-                    emailDao.delete(emailId)
-                    deletedCount++
-                }
-            }
-            onProgress(deletedCount, total)
-        }
-        
-        // Обновляем счётчики затронутых папок
-        for (folderId in affectedFolderIds) {
-            val totalCount = emailDao.getCountByFolder(folderId)
-            val unreadCount = emailDao.getUnreadCount(folderId)
-            folderDao.updateCounts(folderId, unreadCount, totalCount)
-        }
-        
-        return EasResult.Success(deletedCount)
     }
     
     /**

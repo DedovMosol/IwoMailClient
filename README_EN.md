@@ -37,8 +37,8 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 
 - **Onboarding** — welcome slides with app features on first launch
 - **Redesigned widget** — new design with search, calendar and accounts
+- **Offline mode** — "No network" banner, send queue, email body caching
 - **Per-account settings** — night mode and Battery Saver per account
-- **Fixes** — reliable counters loading, meeting invitation date parsing
 
 📋 Full changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 

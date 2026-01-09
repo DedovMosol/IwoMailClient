@@ -1061,6 +1061,14 @@ object NotificationStrings {
             errorCode == "Spam folder not found" -> getSpamFolderNotFound(isRussian)
             errorCode == "NO_INTERNET" -> getNoInternetConnection(isRussian)
             errorCode == "ACCOUNT_EXISTS" -> if (isRussian) "Аккаунт с таким email уже добавлен" else "Account with this email already exists"
+            // Ошибки удаления
+            errorCode.contains("Неверный SyncKey") -> if (isRussian) "Неверный SyncKey. Попробуйте синхронизировать папку." else "Invalid SyncKey. Try syncing the folder."
+            errorCode.contains("Письмо не найдено на сервере") -> if (isRussian) "Письмо не найдено на сервере" else "Email not found on server"
+            errorCode.contains("Ошибка протокола") -> if (isRussian) "Ошибка протокола" else "Protocol error"
+            errorCode.contains("Ошибка сервера") -> if (isRussian) "Ошибка сервера" else "Server error"
+            errorCode.contains("Конфликт") -> if (isRussian) "Конфликт при удалении" else "Conflict during deletion"
+            errorCode.contains("Требуется синхронизация папок") -> if (isRussian) "Требуется синхронизация папок" else "Folder sync required"
+            errorCode.contains("Не удалось удалить письмо") -> if (isRussian) errorCode else errorCode.replace("Не удалось удалить письмо:", "Failed to delete email:")
             // EasClient ошибки
             errorCode.contains("PolicyKey not found") -> if (isRussian) "Ключ политики не найден" else "PolicyKey not found"
             errorCode.contains("Provision failed") -> if (isRussian) "Ошибка согласования политики безопасности" else "Security policy provisioning failed"
