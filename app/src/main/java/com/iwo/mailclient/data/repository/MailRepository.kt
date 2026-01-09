@@ -5,6 +5,7 @@ import com.iwo.mailclient.data.database.*
 import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.imap.ImapClient
 import com.iwo.mailclient.pop3.Pop3Client
+import com.iwo.mailclient.widget.updateMailWidget
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.Flow
@@ -24,7 +25,7 @@ private val WHITESPACE_REGEX = Regex("\\s+")
  * Репозиторий для работы с почтой
  * Single Responsibility: синхронизация и хранение писем/папок
  */
-class MailRepository(context: Context) {
+class MailRepository(private val context: Context) {
     
     private val database = MailDatabase.getInstance(context)
     private val accountRepo = AccountRepository(context)
@@ -1032,6 +1033,7 @@ class MailRepository(context: Context) {
                     // Успех — обновляем локально и syncKey
                     emailDao.updateReadStatus(emailId, read)
                     folderDao.updateSyncKey(email.folderId, result.data)
+                    updateMailWidget(context)
                     EasResult.Success(true)
                 }
                 is EasResult.Error -> {
@@ -1042,6 +1044,7 @@ class MailRepository(context: Context) {
         } else {
             // Для не-Exchange просто обновляем локально
             emailDao.updateReadStatus(emailId, read)
+            updateMailWidget(context)
             return EasResult.Success(true)
         }
     }

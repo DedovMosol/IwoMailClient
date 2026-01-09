@@ -2,6 +2,7 @@ package com.iwo.mailclient.ui.screens
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -548,19 +549,18 @@ private fun ThemeSelectionPage(
     
     val currentTheme = AppColorTheme.fromCode(selectedTheme)
     
-    // Пульсация для выбранной темы
-    val pulse by animateFloatAsState(
-        targetValue = if (animationsEnabled) 1.1f else 1f,
-        animationSpec = if (animationsEnabled) {
-            infiniteRepeatable(
-                animation = tween(1000, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            )
-        } else {
-            tween(0)
-        },
+    // Пульсация для выбранной темы - создаём infiniteTransition всегда
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAnimated by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
         label = "pulse"
     )
+    val pulse = if (visible && animationsEnabled) pulseAnimated else 1f
     
     Column(
         modifier = Modifier
@@ -676,7 +676,6 @@ private fun ThemeSelectionPage(
     }
 }
 
-
 /**
  * Страница с описанием функции — объединённая версия с несколькими иконками
  */
@@ -694,15 +693,11 @@ private fun FeaturePage(
         visible = true
     }
     
-    // Бесконечные анимации для иконок - создаём только когда visible
-    val pulse: Float
-    val shake: Float
-    val rotation: Float
+    // Бесконечные анимации для иконок - создаём всегда, чтобы не было скачков
+    val infiniteTransition = rememberInfiniteTransition(label = "iconAnim")
     
-    if (visible && animationsEnabled) {
-        val infiniteTransition = rememberInfiniteTransition(label = "iconAnim")
-        
-        pulse = infiniteTransition.animateFloat(
+    val pulse = if (visible && animationsEnabled) {
+        infiniteTransition.animateFloat(
             initialValue = 1f,
             targetValue = 1.1f,
             animationSpec = infiniteRepeatable(
@@ -711,8 +706,12 @@ private fun FeaturePage(
             ),
             label = "pulse"
         ).value
-        
-        shake = infiniteTransition.animateFloat(
+    } else {
+        1f
+    }
+    
+    val shake = if (visible && animationsEnabled) {
+        infiniteTransition.animateFloat(
             initialValue = -10f,
             targetValue = 10f,
             animationSpec = infiniteRepeatable(
@@ -721,8 +720,12 @@ private fun FeaturePage(
             ),
             label = "shake"
         ).value
-        
-        rotation = infiniteTransition.animateFloat(
+    } else {
+        0f
+    }
+    
+    val rotation = if (visible && animationsEnabled) {
+        infiniteTransition.animateFloat(
             initialValue = 0f,
             targetValue = 360f,
             animationSpec = infiniteRepeatable(
@@ -732,18 +735,20 @@ private fun FeaturePage(
             label = "rotation"
         ).value
     } else {
-        pulse = 1f
-        shake = 0f
-        rotation = 0f
+        0f
     }
     
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
+    val scrollState = rememberScrollState()
+    
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
         // Главная иконка
         AnimatedVisibility(
             visible = visible,
@@ -909,6 +914,31 @@ private fun FeaturePage(
                     descRu = "Встроенные OTA-обновления",
                     descEn = "Built-in OTA updates",
                     isRussian = isRussian
+                )
+            }
+        }
+        }
+        
+        // Кастомный скроллбар
+        if (scrollState.maxValue > 0) {
+            val scrollbarColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            Canvas(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(4.dp)
+                    .padding(vertical = 4.dp)
+            ) {
+                val scrollFraction = scrollState.value.toFloat() / scrollState.maxValue.toFloat()
+                val viewportFraction = size.height / (size.height + scrollState.maxValue)
+                val scrollbarHeight = (viewportFraction * size.height).coerceAtLeast(20.dp.toPx())
+                val scrollbarY = scrollFraction * (size.height - scrollbarHeight)
+                
+                drawRoundRect(
+                    color = scrollbarColor,
+                    topLeft = androidx.compose.ui.geometry.Offset(0f, scrollbarY),
+                    size = androidx.compose.ui.geometry.Size(size.width, scrollbarHeight),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
                 )
             }
         }

@@ -1956,12 +1956,12 @@ private fun FolderRow(
                         else -> onFolderClick(folder.id)
                     }
                 },
-                modifier = if (rowFolders.size == 1) {
-                    Modifier.fillMaxWidth(0.48f)
-                } else {
-                    Modifier.weight(1f)
-                }
+                modifier = Modifier.weight(1f)
             )
+        }
+        // Если в ряду только одна карточка, добавляем пустое место справа для центрирования
+        if (rowFolders.size == 1) {
+            Spacer(modifier = Modifier.weight(1f))
         }
     }
 }
@@ -2125,7 +2125,11 @@ private fun FolderCardDisplay(
                 
                 Spacer(modifier = Modifier.width(12.dp))
                 
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .widthIn(max = 120.dp)
+                ) {
                     Text(
                         text = name,
                         style = MaterialTheme.typography.bodyMedium,
@@ -2145,7 +2149,9 @@ private fun FolderCardDisplay(
                                 else -> Strings.pluralEmails(count)  // Письма
                             }}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.8f)
+                            color = Color.White.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
