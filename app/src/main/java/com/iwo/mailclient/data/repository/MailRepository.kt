@@ -1165,102 +1165,90 @@ class MailRepository(context: Context) {
     suspend fun moveEmails(emailIds: List<String>, targetFolderId: String, updateOriginalFolder: Boolean = true): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
         
-        return try {
-            // Получаем первое письмо чтобы узнать accountId
-            val firstEmail = emailDao.getEmail(emailIds.first()) 
-                ?: return EasResult.Error("Email not found")
+        // Получаем первое письмо чтобы узнать accountId
+        val firstEmail = emailDao.getEmail(emailIds.first()) 
+            ?: return EasResult.Error("Email not found")
+        
+        val account = accountRepo.getAccount(firstEmail.accountId)
+            ?: return EasResult.Error("Account not found")
+        
+        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+            return EasResult.Error("Move is only supported for Exchange")
+        }
+        
+        val client = accountRepo.createEasClient(firstEmail.accountId)
+            ?: return EasResult.Error("Failed to create client")
+        
+        // Получаем целевую папку
+        val targetFolder = folderDao.getFolder(targetFolderId)
+            ?: return EasResult.Error("Target folder not found")
+        
+        // Собираем данные для перемещения: (serverId письма, serverId исходной папки)
+        val items = mutableListOf<Pair<String, String>>()
+        for (emailId in emailIds) {
+            val email = emailDao.getEmail(emailId) ?: continue
             
-            val account = accountRepo.getAccount(firstEmail.accountId)
-                ?: return EasResult.Error("Account not found")
+            // ServerId письма - используем как есть
+            val emailServerId = email.serverId
             
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                return EasResult.Error("Move is only supported for Exchange")
+            // Определяем исходную папку:
+            // 1. Если ServerId в формате "folderId:messageId" (Exchange 2007) - берём folderId из него
+            // 2. Иначе берём из folderId
+            val srcFolderServerId = if (emailServerId.contains(":")) {
+                emailServerId.substringBefore(":")
+            } else {
+                email.folderId.substringAfter("_")
             }
-            
-            val client = accountRepo.createEasClient(firstEmail.accountId)
-                ?: return EasResult.Error("Failed to create client")
-            
-            // Получаем целевую папку
-            val targetFolder = folderDao.getFolder(targetFolderId)
-                ?: return EasResult.Error("Target folder not found")
-            
-            // Собираем данные для перемещения: (serverId письма, serverId исходной папки)
-            val items = mutableListOf<Pair<String, String>>()
-            for (emailId in emailIds) {
-                val email = emailDao.getEmail(emailId) ?: continue
+            items.add(emailServerId to srcFolderServerId)
+        }
+        
+        if (items.isEmpty()) return EasResult.Success(0)
+        
+        // Проверяем что не перемещаем в ту же папку
+        val srcFolderId = items.first().second
+        if (srcFolderId == targetFolder.serverId) {
+            return EasResult.Error("ALREADY_IN_FOLDER")
+        }
+        
+        return when (val result = client.moveItems(items, targetFolder.serverId)) {
+            is EasResult.Success -> {
+                val movedCount = result.data.size
+                val sourceFolderIds = mutableSetOf<String>()
                 
-                // ServerId письма - используем как есть
-                val emailServerId = email.serverId
+                for (emailId in emailIds) {
+                    val email = emailDao.getEmail(emailId) ?: continue
+                    sourceFolderIds.add(email.folderId)
+                    
+                    val newServerId = result.data[email.serverId]
+                    if (newServerId != null) {
+                        val newEmailId = "${firstEmail.accountId}_$newServerId"
+                        // Сохраняем оригинальную дату письма при перемещении
+                        // Обновляем originalFolderId только если это обычное перемещение (не в корзину)
+                        val newOriginalFolderId = if (updateOriginalFolder) targetFolderId else email.originalFolderId
+                        val updatedEmail = email.copy(
+                            id = newEmailId,
+                            serverId = newServerId,
+                            folderId = targetFolderId,
+                            originalFolderId = newOriginalFolderId
+                            // dateReceived остаётся оригинальной!
+                        )
+                        emailDao.delete(emailId)
+                        emailDao.insert(updatedEmail)
+                    }
+                }
                 
-                // Определяем исходную папку:
-                // 1. Если ServerId в формате "folderId:messageId" (Exchange 2007) - берём folderId из него
-                // 2. Иначе берём из folderId
-                val srcFolderServerId = if (emailServerId.contains(":")) {
-                    emailServerId.substringBefore(":")
-                } else {
-                    email.folderId.substringAfter("_")
+                for (srcFolderId in sourceFolderIds) {
+                    val totalCount = emailDao.getCountByFolder(srcFolderId)
+                    val unreadCount = emailDao.getUnreadCount(srcFolderId)
+                    folderDao.updateCounts(srcFolderId, unreadCount, totalCount)
                 }
-                items.add(emailServerId to srcFolderServerId)
+                
+                val targetTotalCount = emailDao.getCountByFolder(targetFolderId)
+                val targetUnreadCount = emailDao.getUnreadCount(targetFolderId)
+                folderDao.updateCounts(targetFolderId, targetUnreadCount, targetTotalCount)
+                EasResult.Success(movedCount)
             }
-            
-            if (items.isEmpty()) return EasResult.Success(0)
-            
-            // Проверяем что не перемещаем в ту же папку
-            val srcFolderId = items.first().second
-            if (srcFolderId == targetFolder.serverId) {
-                return EasResult.Error("ALREADY_IN_FOLDER")
-            }
-            
-            when (val result = client.moveItems(items, targetFolder.serverId)) {
-                is EasResult.Success -> {
-                    val movedCount = result.data.size
-                    
-                    // Собираем исходные папки ДО удаления писем
-                    val sourceFolderIds = mutableSetOf<String>()
-                    for (emailId in emailIds) {
-                        val email = emailDao.getEmail(emailId) ?: continue
-                        sourceFolderIds.add(email.folderId)
-                    }
-                    
-                    // Обновляем письма
-                    for (emailId in emailIds) {
-                        val email = emailDao.getEmail(emailId) ?: continue
-                        
-                        val newServerId = result.data[email.serverId]
-                        if (newServerId != null) {
-                            val newEmailId = "${firstEmail.accountId}_$newServerId"
-                            // Сохраняем оригинальную дату письма при перемещении
-                            // Обновляем originalFolderId только если это обычное перемещение (не в корзину)
-                            val newOriginalFolderId = if (updateOriginalFolder) targetFolderId else email.originalFolderId
-                            val updatedEmail = email.copy(
-                                id = newEmailId,
-                                serverId = newServerId,
-                                folderId = targetFolderId,
-                                originalFolderId = newOriginalFolderId
-                                // dateReceived остаётся оригинальной!
-                            )
-                            emailDao.delete(emailId)
-                            emailDao.insert(updatedEmail)
-                        }
-                    }
-                    
-                    // Обновляем счётчики исходных папок
-                    for (folderId in sourceFolderIds) {
-                        val totalCount = emailDao.getCountByFolder(folderId)
-                        val unreadCount = emailDao.getUnreadCount(folderId)
-                        folderDao.updateCounts(folderId, unreadCount, totalCount)
-                    }
-                    
-                    // Обновляем счётчики целевой папки
-                    val targetTotalCount = emailDao.getCountByFolder(targetFolderId)
-                    val targetUnreadCount = emailDao.getUnreadCount(targetFolderId)
-                    folderDao.updateCounts(targetFolderId, targetUnreadCount, targetTotalCount)
-                    EasResult.Success(movedCount)
-                }
-                is EasResult.Error -> result
-            }
-        } catch (e: Exception) {
-            EasResult.Error("Move error: ${e.message}")
+            is EasResult.Error -> result
         }
     }
     
