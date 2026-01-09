@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.6.0 (08.01.2026)
+
+### New Features
+- **Onboarding Screen** — welcome slides with app features on first launch, language and animations selection
+- **Redesigned Widget** — new design with search, calendar, accounts and unread counters
+- **Today Statistics Card** on main screen — emails, events and tasks for today
+- **Updates Screen** — check for updates with auto-check interval settings
+- **About Screen** — all app information in one place
+- **Sync & Cleanup Screen** — sync and auto-cleanup management per account
+- **Per-account settings** — night mode and Battery Saver ignore now configurable per account
+
+### Improvements
+- Simplified settings screens — sections moved to separate screens
+- Removed "Tips" and "About" sections from main screen
+- Widget updates after sync completion
+
+### Fixes
+- Reliable calendar/notes/tasks counters loading on startup
+- Counters don't decrease during sync
+
+---
+
 ## v1.5.2 (07.01.2026)
 
 ### New Features

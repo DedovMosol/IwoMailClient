@@ -41,8 +41,6 @@ class SettingsRepository private constructor(private val context: Context) {
         val CONFIRM_DELETE = booleanPreferencesKey("confirm_delete")
         val LANGUAGE = stringPreferencesKey("app_language")
         val FONT_SIZE = stringPreferencesKey("font_size")
-        val NIGHT_MODE_ENABLED = booleanPreferencesKey("night_mode_enabled")
-        val IGNORE_BATTERY_SAVER = booleanPreferencesKey("ignore_battery_saver")
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val LAST_NOTIFICATION_CHECK_TIME = longPreferencesKey("last_notification_check_time")
         val COLOR_THEME = stringPreferencesKey("color_theme")
@@ -56,6 +54,10 @@ class SettingsRepository private constructor(private val context: Context) {
         val THEME_FRIDAY = stringPreferencesKey("theme_friday")
         val THEME_SATURDAY = stringPreferencesKey("theme_saturday")
         val THEME_SUNDAY = stringPreferencesKey("theme_sunday")
+        val ONBOARDING_SHOWN = booleanPreferencesKey("onboarding_shown")
+        val UPDATE_CHECK_INTERVAL = stringPreferencesKey("update_check_interval")
+        val LAST_UPDATE_CHECK_TIME = longPreferencesKey("last_update_check_time")
+        val UPDATE_DISMISSED_VERSION = intPreferencesKey("update_dismissed_version")
     }
     
     // Размеры шрифта
@@ -84,48 +86,6 @@ class SettingsRepository private constructor(private val context: Context) {
     
     val confirmDelete: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[Keys.CONFIRM_DELETE] ?: true
-    }
-    
-    // Ночной режим экономии батареи (23:00-7:00, синхронизация каждые 60 мин)
-    val nightModeEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs[Keys.NIGHT_MODE_ENABLED] ?: false
-    }
-    
-    suspend fun setNightModeEnabled(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.NIGHT_MODE_ENABLED] = enabled
-        }
-    }
-    
-    fun getNightModeEnabledSync(): Boolean {
-        return runBlocking {
-            context.dataStore.data.first()[Keys.NIGHT_MODE_ENABLED] ?: false
-        }
-    }
-    
-    /**
-     * Проверяет, является ли текущее время ночным (23:00-7:00)
-     */
-    fun isNightTime(): Boolean {
-        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        return hour >= 23 || hour < 7
-    }
-    
-    // Игнорировать режим экономии батареи (для тех кому важна почта)
-    val ignoreBatterySaver: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs[Keys.IGNORE_BATTERY_SAVER] ?: false
-    }
-    
-    suspend fun setIgnoreBatterySaver(ignore: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.IGNORE_BATTERY_SAVER] = ignore
-        }
-    }
-    
-    fun getIgnoreBatterySaverSync(): Boolean {
-        return runBlocking {
-            context.dataStore.data.first()[Keys.IGNORE_BATTERY_SAVER] ?: false
-        }
     }
     
     /**
@@ -160,14 +120,6 @@ class SettingsRepository private constructor(private val context: Context) {
         awaitClose {
             context.unregisterReceiver(receiver)
         }
-    }
-    
-    /**
-     * Проверяет, нужно ли применять ограничения Battery Saver
-     * Возвращает true если Battery Saver активен И пользователь НЕ игнорирует его
-     */
-    fun shouldApplyBatterySaverRestrictions(): Boolean {
-        return isBatterySaverActive() && !getIgnoreBatterySaverSync()
     }
     
     val fontSize: Flow<FontSize> = context.dataStore.data.map { prefs ->
@@ -447,6 +399,109 @@ class SettingsRepository private constructor(private val context: Context) {
         } else {
             getColorThemeSync()
         }
+    }
+    
+    // Onboarding показан
+    val onboardingShown: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[Keys.ONBOARDING_SHOWN] ?: false
+    }
+    
+    suspend fun setOnboardingShown(shown: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.ONBOARDING_SHOWN] = shown
+        }
+    }
+    
+    fun getOnboardingShownSync(): Boolean {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.ONBOARDING_SHOWN] ?: false
+        }
+    }
+    
+    // Интервал проверки обновлений
+    enum class UpdateCheckInterval(val days: Int, val displayNameRu: String, val displayNameEn: String) {
+        DAILY(1, "Раз в день", "Daily"),
+        EVERY_3_DAYS(3, "Раз в 3 дня", "Every 3 days"),
+        WEEKLY(7, "Раз в неделю", "Weekly"),
+        NEVER(0, "Никогда", "Never");
+        
+        fun getDisplayName(isRussian: Boolean): String = if (isRussian) displayNameRu else displayNameEn
+        
+        companion object {
+            fun fromName(name: String): UpdateCheckInterval = entries.find { it.name == name } ?: DAILY
+        }
+    }
+    
+    val updateCheckInterval: Flow<UpdateCheckInterval> = context.dataStore.data.map { prefs ->
+        UpdateCheckInterval.fromName(prefs[Keys.UPDATE_CHECK_INTERVAL] ?: UpdateCheckInterval.DAILY.name)
+    }
+    
+    suspend fun setUpdateCheckInterval(interval: UpdateCheckInterval) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.UPDATE_CHECK_INTERVAL] = interval.name
+        }
+    }
+    
+    fun getUpdateCheckIntervalSync(): UpdateCheckInterval {
+        return runBlocking {
+            UpdateCheckInterval.fromName(context.dataStore.data.first()[Keys.UPDATE_CHECK_INTERVAL] ?: UpdateCheckInterval.DAILY.name)
+        }
+    }
+    
+    // Время последней проверки обновлений
+    val lastUpdateCheckTime: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[Keys.LAST_UPDATE_CHECK_TIME] ?: 0L
+    }
+    
+    suspend fun setLastUpdateCheckTime(time: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.LAST_UPDATE_CHECK_TIME] = time
+        }
+    }
+    
+    fun getLastUpdateCheckTimeSync(): Long {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.LAST_UPDATE_CHECK_TIME] ?: 0L
+        }
+    }
+    
+    // Версия, которую пользователь отложил (нажал "Позже")
+    val updateDismissedVersion: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0
+    }
+    
+    suspend fun setUpdateDismissedVersion(versionCode: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.UPDATE_DISMISSED_VERSION] = versionCode
+        }
+    }
+    
+    fun getUpdateDismissedVersionSync(): Int {
+        return runBlocking {
+            context.dataStore.data.first()[Keys.UPDATE_DISMISSED_VERSION] ?: 0
+        }
+    }
+    
+    /**
+     * Проверяет, нужно ли показывать диалог обновления
+     * @param availableVersionCode код доступной версии
+     * @return true если нужно показать диалог
+     */
+    fun shouldShowUpdateDialog(availableVersionCode: Int): Boolean {
+        val interval = getUpdateCheckIntervalSync()
+        if (interval == UpdateCheckInterval.NEVER) return false
+        
+        val lastCheck = getLastUpdateCheckTimeSync()
+        val dismissedVersion = getUpdateDismissedVersionSync()
+        val intervalMs = interval.days * 24 * 60 * 60 * 1000L
+        
+        // Если эту версию уже отложили — проверяем прошёл ли интервал
+        if (dismissedVersion == availableVersionCode) {
+            return System.currentTimeMillis() - lastCheck >= intervalMs
+        }
+        
+        // Новая версия — показываем сразу
+        return true
     }
 }
 

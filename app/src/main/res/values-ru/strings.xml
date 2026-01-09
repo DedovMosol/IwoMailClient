@@ -9,6 +9,8 @@
     <string name="high_priority">Высокий приоритет</string>
     
     <!-- App Shortcuts -->
+    <string name="shortcut_widget">Виджет</string>
+    <string name="shortcut_widget_long">Добавить виджет</string>
     <string name="shortcut_compose">Написать</string>
     <string name="shortcut_compose_long">Написать письмо</string>
     <string name="shortcut_inbox">Входящие</string>

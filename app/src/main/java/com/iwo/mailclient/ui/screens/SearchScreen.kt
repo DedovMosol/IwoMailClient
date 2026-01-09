@@ -284,8 +284,8 @@ fun SearchScreen(
                             placeholder = { Text(Strings.searchInMail, color = Color.White.copy(alpha = 0.7f)) },
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.White.copy(alpha = 0.15f),
-                                unfocusedContainerColor = Color.White.copy(alpha = 0.15f),
+                                focusedContainerColor = Color.Black.copy(alpha = 0.15f),
+                                unfocusedContainerColor = Color.Black.copy(alpha = 0.15f),
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent,
                                 focusedTextColor = Color.White,

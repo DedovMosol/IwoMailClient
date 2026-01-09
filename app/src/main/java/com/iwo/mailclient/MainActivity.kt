@@ -176,6 +176,7 @@ class MainActivity : ComponentActivity() {
         const val ACTION_SHORTCUT_INBOX = "com.iwo.mailclient.SHORTCUT_INBOX"
         const val ACTION_SHORTCUT_SEARCH = "com.iwo.mailclient.SHORTCUT_SEARCH"
         const val ACTION_SHORTCUT_SYNC = "com.iwo.mailclient.SHORTCUT_SYNC"
+        const val ACTION_SHORTCUT_ADD_WIDGET = "com.iwo.mailclient.SHORTCUT_ADD_WIDGET"
     }
     
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -198,18 +199,19 @@ class MainActivity : ComponentActivity() {
     private var shortcutCompose = mutableStateOf(false)
     private var shortcutInbox = mutableStateOf(false)
     private var shortcutSearch = mutableStateOf(false)
+    private var shortcutCalendar = mutableStateOf(false)
+    private var shortcutTasks = mutableStateOf(false)
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Sync shortcut — запускаем синхронизацию и сразу выходим БЕЗ отрисовки UI
+        // Sync shortcut — запускаем синхронизацию через broadcast и сразу выходим
         if (intent?.action == ACTION_SHORTCUT_SYNC) {
             intent.action = null
-            com.iwo.mailclient.sync.SyncWorker.syncNow(applicationContext)
-            val isRussian = com.iwo.mailclient.data.repository.SettingsRepository
-                .getInstance(applicationContext).getLanguageSync() == "ru"
-            val msg = if (isRussian) "Синхронизация запущена" else "Sync started"
-            android.widget.Toast.makeText(applicationContext, msg, android.widget.Toast.LENGTH_SHORT).show()
+            // Отправляем broadcast на SyncAlarmReceiver — он покажет toast о начале и завершении
+            sendBroadcast(Intent(com.iwo.mailclient.sync.SyncAlarmReceiver.ACTION_SYNC_NOW).apply {
+                setClass(applicationContext, com.iwo.mailclient.sync.SyncAlarmReceiver::class.java)
+            })
             finishAffinity()
             return
         }
@@ -303,10 +305,17 @@ class MainActivity : ComponentActivity() {
                                 shortcutCompose = shouldShortcutCompose,
                                 shortcutInbox = shouldShortcutInbox,
                                 shortcutSearch = shouldShortcutSearch,
+                                shortcutCalendar = shortcutCalendar.value,
+                                shortcutTasks = shortcutTasks.value,
                                 onShortcutHandled = {
                                     shortcutCompose.value = false
                                     shortcutInbox.value = false
                                     shortcutSearch.value = false
+                                    shortcutCalendar.value = false
+                                    shortcutTasks.value = false
+                                },
+                                onOnboardingComplete = {
+                                    checkPermissionsForDialogs()
                                 }
                             )
                         }
@@ -403,6 +412,38 @@ class MainActivity : ComponentActivity() {
             return
         }
         
+        // Widget actions (Glance передаёт параметры как Boolean extras)
+        if (intent.getBooleanExtra("compose", false)) {
+            shortcutCompose.value = true
+            intent.removeExtra("compose")
+            return
+        }
+        if (intent.getBooleanExtra("inbox", false)) {
+            shortcutInbox.value = true
+            intent.removeExtra("inbox")
+            return
+        }
+        if (intent.getBooleanExtra("search", false)) {
+            shortcutSearch.value = true
+            intent.removeExtra("search")
+            return
+        }
+        if (intent.getBooleanExtra("calendar", false)) {
+            shortcutCalendar.value = true
+            intent.removeExtra("calendar")
+            return
+        }
+        if (intent.getBooleanExtra("tasks", false)) {
+            shortcutTasks.value = true
+            intent.removeExtra("tasks")
+            return
+        }
+        if (intent.getBooleanExtra("compose", false)) {
+            shortcutCompose.value = true
+            intent.removeExtra("compose")
+            return
+        }
+        
         // App Shortcuts
         when (intent.action) {
             ACTION_SHORTCUT_COMPOSE -> {
@@ -422,6 +463,11 @@ class MainActivity : ComponentActivity() {
             }
             ACTION_SHORTCUT_SYNC -> {
                 // Обрабатывается в onCreate до setContent
+                intent.action = null
+                return
+            }
+            ACTION_SHORTCUT_ADD_WIDGET -> {
+                requestPinWidget()
                 intent.action = null
                 return
             }
@@ -463,6 +509,16 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private fun requestPinWidget() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this)
+            val widgetProvider = android.content.ComponentName(this, com.iwo.mailclient.widget.MailWidgetReceiver::class.java)
+            if (appWidgetManager.isRequestPinAppWidgetSupported) {
+                appWidgetManager.requestPinAppWidget(widgetProvider, null, null)
+            }
+        }
+    }
+    
     private fun parseMailtoUri(uri: android.net.Uri) {
         try {
             // mailto:user@example.com?subject=Test&body=Hello
@@ -487,6 +543,12 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun checkPermissionsForDialogs() {
+        // Не показываем диалоги разрешений пока не пройден онбординг
+        val settingsRepo = SettingsRepository.getInstance(applicationContext)
+        if (!settingsRepo.getOnboardingShownSync()) {
+            return
+        }
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val powerManager = getSystemService(android.os.PowerManager::class.java)
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {

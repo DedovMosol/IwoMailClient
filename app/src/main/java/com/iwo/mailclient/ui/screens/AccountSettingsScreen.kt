@@ -38,7 +38,8 @@ import kotlinx.coroutines.launch
 fun AccountSettingsScreen(
     accountId: Long,
     onBackClick: () -> Unit,
-    onEditCredentials: (Long) -> Unit = {}
+    onEditCredentials: (Long) -> Unit = {},
+    onNavigateToSyncCleanup: (Long) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -71,14 +72,7 @@ fun AccountSettingsScreen(
 
     
     // Диалоги
-    var showSyncModeDialog by remember { mutableStateOf(false) }
-    var showSyncIntervalDialog by remember { mutableStateOf(false) }
     var showSignaturesDialog by remember { mutableStateOf(false) }
-    var showAutoCleanupDialog by remember { mutableStateOf(false) }
-    var showContactsSyncDialog by remember { mutableStateOf(false) }
-    var showNotesSyncDialog by remember { mutableStateOf(false) }
-    var showCalendarSyncDialog by remember { mutableStateOf(false) }
-    var showTasksSyncDialog by remember { mutableStateOf(false) }
     var showCertificateDialog by remember { mutableStateOf(false) }
     
     // Пикеры для сертификата
@@ -180,86 +174,6 @@ fun AccountSettingsScreen(
     }
 
     
-    // Диалог режима синхронизации
-    if (showSyncModeDialog) {
-        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showSyncModeDialog = false },
-            title = { Text(Strings.syncMode) },
-            text = {
-                Column {
-                    SyncMode.entries.forEach { mode ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        accountRepo.updateSyncMode(accountId, mode)
-                                        if (mode == SyncMode.PUSH) {
-                                            com.iwo.mailclient.sync.PushService.start(context)
-                                        } else {
-                                            com.iwo.mailclient.sync.PushService.stop(context)
-                                        }
-                                        SyncWorker.scheduleWithNightMode(context)
-                                        account = accountRepo.getAccount(accountId)
-                                    }
-                                    showSyncModeDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = syncMode == mode, onClick = null)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(mode.getDisplayName(isRu))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSyncModeDialog = false }) {
-                    Text(Strings.cancel)
-                }
-            }
-        )
-    }
-    
-    // Диалог интервала синхронизации
-    if (showSyncIntervalDialog) {
-        val intervals = listOf(1, 2, 3, 5, 10, 15, 30)
-        com.iwo.mailclient.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showSyncIntervalDialog = false },
-            title = { Text(Strings.syncInterval) },
-            text = {
-                Column {
-                    intervals.forEach { minutes ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        accountRepo.updateSyncInterval(accountId, minutes)
-                                        SyncWorker.scheduleWithNightMode(context)
-                                        account = accountRepo.getAccount(accountId)
-                                    }
-                                    showSyncIntervalDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = currentAccount.syncIntervalMinutes == minutes, onClick = null)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(Strings.minutes(minutes))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSyncIntervalDialog = false }) {
-                    Text(Strings.cancel)
-                }
-            }
-        )
-    }
-    
     // Диалог подписей
     if (showSignaturesDialog) {
         SignaturesManagementDialog(
@@ -270,98 +184,6 @@ fun AccountSettingsScreen(
                 signatures = newSignatures
             },
             onDismiss = { showSignaturesDialog = false }
-        )
-    }
-    
-    // Диалог автоочистки
-    if (showAutoCleanupDialog) {
-        AutoCleanupDialog(
-            isRu = isRu,
-            trashDays = currentAccount.autoCleanupTrashDays,
-            draftsDays = currentAccount.autoCleanupDraftsDays,
-            spamDays = currentAccount.autoCleanupSpamDays,
-            onTrashDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateAutoCleanupTrashDays(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDraftsDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateAutoCleanupDraftsDays(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onSpamDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateAutoCleanupSpamDays(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDismiss = { showAutoCleanupDialog = false }
-        )
-    }
-    
-    // Диалог синхронизации контактов
-    if (showContactsSyncDialog) {
-        ContactsSyncDialog(
-            isRu = isRu,
-            currentDays = currentAccount.contactsSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateContactsSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDismiss = { showContactsSyncDialog = false }
-        )
-    }
-    
-    // Диалог синхронизации заметок
-    if (showNotesSyncDialog) {
-        SyncIntervalDialog(
-            isRu = isRu,
-            title = com.iwo.mailclient.ui.NotificationStrings.getNotesSyncTitle(isRu),
-            currentDays = currentAccount.notesSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateNotesSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDismiss = { showNotesSyncDialog = false }
-        )
-    }
-    
-    // Диалог синхронизации календаря
-    if (showCalendarSyncDialog) {
-        SyncIntervalDialog(
-            isRu = isRu,
-            title = com.iwo.mailclient.ui.NotificationStrings.getCalendarSyncTitle(isRu),
-            currentDays = currentAccount.calendarSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateCalendarSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDismiss = { showCalendarSyncDialog = false }
-        )
-    }
-    
-    // Диалог синхронизации задач
-    if (showTasksSyncDialog) {
-        SyncIntervalDialog(
-            isRu = isRu,
-            title = if (isRu) "Синхронизация задач" else "Tasks sync",
-            currentDays = currentAccount.tasksSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateTasksSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDismiss = { showTasksSyncDialog = false }
         )
     }
 
@@ -547,30 +369,6 @@ fun AccountSettingsScreen(
                 }
             }
             
-            // Режим синхронизации (только для Exchange)
-            if (accountType == AccountType.EXCHANGE) {
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.syncMode) },
-                        supportingContent = { Text(syncMode.getDisplayName(isRu)) },
-                        leadingContent = { Icon(AppIcons.Sync, null) },
-                        modifier = Modifier.clickable { showSyncModeDialog = true }
-                    )
-                }
-            }
-            
-            // Интервал синхронизации
-            if (accountType != AccountType.EXCHANGE || syncMode == SyncMode.SCHEDULED) {
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.syncInterval) },
-                        supportingContent = { Text(Strings.minutes(currentAccount.syncIntervalMinutes)) },
-                        leadingContent = { Icon(AppIcons.Schedule, null) },
-                        modifier = Modifier.clickable { showSyncIntervalDialog = true }
-                    )
-                }
-            }
-            
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
             
             // Подписи
@@ -589,61 +387,15 @@ fun AccountSettingsScreen(
                 )
             }
             
-            // Автоочистка
+            // Синхронизация и очистка - открывает отдельный экран
             item {
                 ListItem(
-                    headlineContent = { Text(Strings.autoCleanup) },
-                    supportingContent = { Text(Strings.autoCleanupDesc) },
-                    leadingContent = { Icon(AppIcons.AutoDelete, null) },
+                    headlineContent = { Text(Strings.syncAndCleanup) },
+                    supportingContent = { Text(Strings.syncAndCleanupDesc) },
+                    leadingContent = { Icon(AppIcons.Sync, null) },
                     trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                    modifier = Modifier.clickable { showAutoCleanupDialog = true }
+                    modifier = Modifier.clickable { onNavigateToSyncCleanup(accountId) }
                 )
-            }
-            
-            // Синхронизация контактов (только для Exchange)
-            if (accountType == AccountType.EXCHANGE) {
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.contactsSync) },
-                        supportingContent = { Text(getContactsSyncIntervalText(currentAccount.contactsSyncIntervalDays, isRu)) },
-                        leadingContent = { Icon(AppIcons.ContactPhone, null) },
-                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                        modifier = Modifier.clickable { showContactsSyncDialog = true }
-                    )
-                }
-                
-                // Синхронизация заметок
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.notesSync) },
-                        supportingContent = { Text(getContactsSyncIntervalText(currentAccount.notesSyncIntervalDays, isRu)) },
-                        leadingContent = { Icon(AppIcons.StickyNote, null) },
-                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                        modifier = Modifier.clickable { showNotesSyncDialog = true }
-                    )
-                }
-                
-                // Синхронизация календаря
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.calendarSync) },
-                        supportingContent = { Text(getContactsSyncIntervalText(currentAccount.calendarSyncIntervalDays, isRu)) },
-                        leadingContent = { Icon(AppIcons.CalendarMonth, null) },
-                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                        modifier = Modifier.clickable { showCalendarSyncDialog = true }
-                    )
-                }
-                
-                // Синхронизация задач
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.tasksSync) },
-                        supportingContent = { Text(getContactsSyncIntervalText(currentAccount.tasksSyncIntervalDays, isRu)) },
-                        leadingContent = { Icon(AppIcons.Task, null) },
-                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                        modifier = Modifier.clickable { showTasksSyncDialog = true }
-                    )
-                }
             }
         }
     }
@@ -653,7 +405,7 @@ fun AccountSettingsScreen(
  * Универсальный диалог выбора интервала синхронизации
  */
 @Composable
-private fun SyncIntervalDialog(
+fun SyncIntervalDialog(
     isRu: Boolean,
     title: String,
     currentDays: Int,

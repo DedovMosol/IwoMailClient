@@ -27,8 +27,19 @@ class MailApplication : Application() {
         initConscrypt()
         settingsRepository = SettingsRepository.getInstance(this)
         createNotificationChannels()
+        cleanupDuplicateEmails()
         scheduleSync()
         startPushService()
+    }
+    
+    private fun cleanupDuplicateEmails() {
+        // Очистка дублей писем в фоне (один раз при запуске)
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            try {
+                val database = com.iwo.mailclient.data.database.MailDatabase.getInstance(this@MailApplication)
+                database.emailDao().deleteDuplicateEmails()
+            } catch (_: Exception) { }
+        }
     }
     
     private fun initConscrypt() {
@@ -77,6 +88,20 @@ class MailApplication : Application() {
                 lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
             }
             notificationManager.createNotificationChannel(syncChannel)
+        }
+        
+        // Канал для статуса ручной синхронизации - показывает уведомление
+        if (CHANNEL_SYNC_STATUS !in existingChannels) {
+            val syncStatusChannel = NotificationChannel(
+                CHANNEL_SYNC_STATUS,
+                if (isRussian) "Статус синхронизации" else "Sync status",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = if (isRussian) "Уведомления о завершении синхронизации" else "Sync completion notifications"
+                setShowBadge(false)
+                setSound(null, null)
+            }
+            notificationManager.createNotificationChannel(syncStatusChannel)
         }
         
         // Канал для напоминаний календаря - ВЫСОКИЙ приоритет
@@ -148,6 +173,7 @@ class MailApplication : Application() {
     companion object {
         const val CHANNEL_NEW_MAIL = "new_mail"
         const val CHANNEL_SYNC = "sync"
+        const val CHANNEL_SYNC_STATUS = "sync_status"
         const val CHANNEL_CALENDAR = "calendar_reminders"
     }
 }

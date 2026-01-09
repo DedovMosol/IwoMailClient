@@ -77,8 +77,9 @@ class UpdateChecker(private val context: Context) {
     
     /**
      * Проверяет наличие обновлений
+     * @param isRussian true для русского changelog, false для английского
      */
-    suspend fun checkForUpdate(): UpdateResult = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdate(isRussian: Boolean = true): UpdateResult = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url(UPDATE_URL)
@@ -104,11 +105,20 @@ class UpdateChecker(private val context: Context) {
                 return@withContext UpdateResult.Error("No APK URL for $arch")
             }
             
+            // Выбираем changelog по языку (с fallback на старый формат)
+            val changelog = if (isRussian) {
+                json.optString("changelogRu", "").takeIf { it.isNotBlank() }
+                    ?: json.optString("changelog", "")
+            } else {
+                json.optString("changelogEn", "").takeIf { it.isNotBlank() }
+                    ?: json.optString("changelog", "")
+            }
+            
             val updateInfo = UpdateInfo(
                 versionCode = json.getInt("versionCode"),
                 versionName = json.getString("versionName"),
                 apkUrl = apkUrl,
-                changelog = json.optString("changelog", ""),
+                changelog = changelog,
                 minSdk = json.optInt("minSdk", 24)
             )
             

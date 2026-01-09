@@ -405,12 +405,30 @@ class PushService : Service() {
         }
     }
     
+    /**
+     * Проверяет, является ли текущее время ночным (23:00-7:00)
+     */
+    private fun isNightTime(): Boolean {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        return hour >= 23 || hour < 7
+    }
+    
+    /**
+     * Проверяет, активен ли режим экономии батареи Android
+     */
+    private fun isBatterySaverActive(): Boolean {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        return powerManager?.isPowerSaveMode == true
+    }
+    
     private fun startPingForAccount(account: AccountEntity) {
         accountPingJobs[account.id]?.cancel()
         
-        accountPingJobs[account.id] = serviceScope.launch {
+        val accountId = account.id
+        
+        accountPingJobs[accountId] = serviceScope.launch {
             // Загружаем сохранённый heartbeat или используем дефолтный
-            var heartbeat = loadHeartbeat(account.id)
+            var heartbeat = loadHeartbeat(accountId)
             var consecutiveErrors = 0
             var consecutiveSuccesses = 0  // Для адаптивного увеличения heartbeat
             var pingNotSupported = false
@@ -427,8 +445,22 @@ class PushService : Service() {
                         continue
                     }
                     
-                    // При Battery Saver увеличиваем heartbeat до максимума
-                    val effectiveHeartbeat = if (settingsRepo.shouldApplyBatterySaverRestrictions()) {
+                    // Перечитываем настройки аккаунта из БД (могли измениться в UI)
+                    val currentAccount = database.accountDao().getAccount(accountId)
+                    if (currentAccount == null) {
+                        // Аккаунт удалён — выходим из цикла
+                        break
+                    }
+                    
+                    // Per-account: проверяем нужно ли применять ограничения Battery Saver
+                    val batterySaverActive = isBatterySaverActive()
+                    val shouldApplyBatterySaver = batterySaverActive && !currentAccount.ignoreBatterySaver
+                    
+                    // Per-account: проверяем нужно ли применять ночной режим
+                    val shouldApplyNightMode = currentAccount.nightModeEnabled && isNightTime()
+                    
+                    // Увеличиваем heartbeat при Battery Saver или ночном режиме (per-account)
+                    val effectiveHeartbeat = if (shouldApplyBatterySaver || shouldApplyNightMode) {
                         MAX_HEARTBEAT
                     } else {
                         heartbeat
@@ -442,7 +474,7 @@ class PushService : Service() {
                     }
                     
                     val startTime = System.currentTimeMillis()
-                    val result = doPing(account, effectiveHeartbeat)
+                    val result = doPing(currentAccount, effectiveHeartbeat)
                     val elapsed = System.currentTimeMillis() - startTime
                     
                     if (elapsed < 10_000 && result == STATUS_EXPIRED) {
@@ -465,29 +497,29 @@ class PushService : Service() {
                             // Адаптивное увеличение heartbeat при стабильной работе
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
-                                saveHeartbeat(account.id, heartbeat)
+                                saveHeartbeat(accountId, heartbeat)
                                 consecutiveSuccesses = 0
                             }
                         }
                         STATUS_CHANGES_FOUND -> {
-                            syncAccount(account)
+                            syncAccount(currentAccount)
                             consecutiveErrors = 0
                             consecutiveSuccesses++
                             // Тоже увеличиваем — это успешный Ping
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
-                                saveHeartbeat(account.id, heartbeat)
+                                saveHeartbeat(accountId, heartbeat)
                                 consecutiveSuccesses = 0
                             }
                         }
                         STATUS_HEARTBEAT_OUT_OF_BOUNDS -> {
                             // Сервер сказал что heartbeat слишком большой — уменьшаем
                             heartbeat = maxOf(heartbeat / 2, MIN_HEARTBEAT)
-                            saveHeartbeat(account.id, heartbeat)
+                            saveHeartbeat(accountId, heartbeat)
                             consecutiveSuccesses = 0
                         }
                         STATUS_FOLDER_REFRESH_NEEDED -> {
-                            syncFolders(account)
+                            syncFolders(currentAccount)
                             consecutiveSuccesses = 0
                         }
                         else -> {
@@ -496,7 +528,7 @@ class PushService : Service() {
                             // При ошибке уменьшаем heartbeat
                             if (heartbeat > MIN_HEARTBEAT) {
                                 heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
-                                saveHeartbeat(account.id, heartbeat)
+                                saveHeartbeat(accountId, heartbeat)
                             }
                             if (consecutiveErrors >= 3) {
                                 pingNotSupported = true
@@ -514,7 +546,7 @@ class PushService : Service() {
                     // При исключении тоже уменьшаем heartbeat
                     if (heartbeat > MIN_HEARTBEAT) {
                         heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
-                        saveHeartbeat(account.id, heartbeat)
+                        saveHeartbeat(accountId, heartbeat)
                     }
                     if (consecutiveErrors >= 3) {
                         pingNotSupported = true

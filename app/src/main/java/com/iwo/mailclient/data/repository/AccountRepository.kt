@@ -451,6 +451,20 @@ class AccountRepository(private val context: Context) {
     }
     
     /**
+     * Обновляет настройку ночного режима для аккаунта
+     */
+    suspend fun updateNightModeEnabled(accountId: Long, enabled: Boolean) {
+        accountDao.updateNightModeEnabled(accountId, enabled)
+    }
+    
+    /**
+     * Обновляет настройку игнорирования экономии батареи для аккаунта
+     */
+    suspend fun updateIgnoreBatterySaver(accountId: Long, ignore: Boolean) {
+        accountDao.updateIgnoreBatterySaver(accountId, ignore)
+    }
+    
+    /**
      * Создаёт IMAP клиент для указанного аккаунта
      */
     suspend fun createImapClient(accountId: Long): ImapClient? {

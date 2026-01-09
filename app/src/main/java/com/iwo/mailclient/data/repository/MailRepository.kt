@@ -154,6 +154,23 @@ class MailRepository(context: Context) {
         return emailDao.getFlaggedCountFlow(accountId)
     }
     
+    /**
+     * Подсчитывает письма в Inbox за сегодня
+     */
+    suspend fun getTodayEmailsCount(accountId: Long): Int {
+        val calendar = java.util.Calendar.getInstance()
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        calendar.set(java.util.Calendar.MINUTE, 0)
+        calendar.set(java.util.Calendar.SECOND, 0)
+        calendar.set(java.util.Calendar.MILLISECOND, 0)
+        val startOfDay = calendar.timeInMillis
+        
+        calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+        val endOfDay = calendar.timeInMillis
+        
+        return emailDao.getEmailsCountForPeriod(accountId, startOfDay, endOfDay)
+    }
+    
     fun getEmail(emailId: String): Flow<EmailEntity?> {
         return emailDao.getEmailFlow(emailId)
     }
@@ -835,24 +852,45 @@ class MailRepository(context: Context) {
                             )
                         }
                         
-                        // INSERT OR IGNORE - не дублируем существующие
-                        emailDao.insertAllIgnore(emailEntities)
-                        newEmailsCount += result.data.emails.size
+                        // Фильтруем только новые письма (которых ещё нет в БД по id)
+                        val existingIds = emailDao.getExistingIds(emailEntities.map { it.id })
+                        val newEmails = emailEntities.filter { it.id !in existingIds }
                         
-                        // Сохраняем вложения батчем
-                        val allAttachments = result.data.emails.flatMap { email ->
-                            email.attachments.map { att ->
-                                AttachmentEntity(
-                                    emailId = "${accountId}_${email.serverId}",
-                                    fileReference = att.fileReference,
-                                    displayName = att.displayName,
-                                    contentType = att.contentType,
-                                    estimatedSize = att.estimatedSize,
-                                    isInline = att.isInline,
-                                    contentId = att.contentId
-                                )
+                        // Дополнительная защита от дублей: проверяем по subject+from+date
+                        val filteredEmails = if (newEmails.isNotEmpty()) {
+                            val existingInFolder = emailDao.getEmailsByFolderList(folderId)
+                            val existingKeys = existingInFolder.map { "${it.subject}_${it.from}_${it.dateReceived}" }.toSet()
+                            newEmails.filter { email ->
+                                val key = "${email.subject}_${email.from}_${email.dateReceived}"
+                                key !in existingKeys
                             }
+                        } else {
+                            emptyList()
                         }
+                        
+                        if (filteredEmails.isNotEmpty()) {
+                            // INSERT OR IGNORE - не дублируем существующие
+                            emailDao.insertAllIgnore(filteredEmails)
+                            newEmailsCount += filteredEmails.size
+                        }
+                        
+                        // Сохраняем вложения только для новых писем
+                        val newEmailIds = filteredEmails.map { it.id }.toSet()
+                        val allAttachments = result.data.emails
+                            .filter { "${accountId}_${it.serverId}" in newEmailIds }
+                            .flatMap { email ->
+                                email.attachments.map { att ->
+                                    AttachmentEntity(
+                                        emailId = "${accountId}_${email.serverId}",
+                                        fileReference = att.fileReference,
+                                        displayName = att.displayName,
+                                        contentType = att.contentType,
+                                        estimatedSize = att.estimatedSize,
+                                        isInline = att.isInline,
+                                        contentId = att.contentId
+                                    )
+                                }
+                            }
                         if (allAttachments.isNotEmpty()) {
                             attachmentDao.insertAll(allAttachments)
                         }

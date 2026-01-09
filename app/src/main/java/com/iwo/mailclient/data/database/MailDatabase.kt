@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 25,
+    version = 26,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -53,9 +53,18 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
         
+        private val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Добавляем per-account настройки ночного режима и игнорирования экономии батареи
+                db.execSQL("ALTER TABLE accounts ADD COLUMN nightModeEnabled INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE accounts ADD COLUMN ignoreBatterySaver INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        
         private val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
-            MIGRATION_24_25
+            MIGRATION_24_25,
+            MIGRATION_25_26
         )
         
         fun getInstance(context: Context): MailDatabase {
@@ -159,7 +168,11 @@ data class AccountEntity(
     val calendarSyncKey: String = "0",
     // Синхронизация задач Exchange (0 = никогда, иначе интервал в днях)
     val tasksSyncIntervalDays: Int = 1,
-    val tasksSyncKey: String = "0"
+    val tasksSyncKey: String = "0",
+    // Ночной режим синхронизации (per-account)
+    val nightModeEnabled: Boolean = false,
+    // Игнорировать режим экономии батареи (per-account)
+    val ignoreBatterySaver: Boolean = false
 )
 
 @Entity(

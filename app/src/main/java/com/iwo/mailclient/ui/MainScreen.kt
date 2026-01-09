@@ -19,6 +19,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import com.iwo.mailclient.ui.theme.AppIcons
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -90,7 +93,18 @@ object InitialSyncController {
         private set
     var syncDone by mutableStateOf(false)
         private set
+    var noNetwork by mutableStateOf(false)
+        private set
     
+    /**
+     * Проверяет наличие активного интернет-соединения
+     */
+    private fun isNetworkAvailable(context: Context): Boolean {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
     // Проверка синхронизации конкретного аккаунта
     fun isSyncingAccount(accountId: Long): Boolean = accountId in syncingAccounts
     fun isSyncedAccount(accountId: Long): Boolean = accountId in syncedAccounts
@@ -112,6 +126,13 @@ object InitialSyncController {
         // Пропускаем если этот аккаунт уже синхронизируется
         if (accountId in syncingAccounts) return
         if (syncJobs[accountId]?.isActive == true) return
+        
+        // Проверяем наличие сети
+        if (!isNetworkAvailable(context)) {
+            noNetwork = true
+            return
+        }
+        noNetwork = false
         
         syncingAccounts.add(accountId)
         updateState()
@@ -209,6 +230,7 @@ object InitialSyncController {
         syncJobs.clear()
         syncedAccounts.clear()
         syncingAccounts.clear()
+        noNetwork = false
         updateState()
     }
     
@@ -217,6 +239,7 @@ object InitialSyncController {
         syncJobs[accountId]?.cancel()
         syncJobs.remove(accountId)
         syncingAccounts.remove(accountId)
+        noNetwork = false
         updateState()
     }
 }
@@ -228,6 +251,7 @@ fun MainScreen(
     onNavigateToEmailList: (String) -> Unit,
     onNavigateToCompose: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToOnboarding: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
     onNavigateToEmailDetail: (String) -> Unit = {},
     onNavigateToContacts: () -> Unit = {},
@@ -277,6 +301,9 @@ fun MainScreen(
     val isSyncing = InitialSyncController.isSyncing
     val initialSyncDone = InitialSyncController.syncDone
     
+    // Время последней синхронизации (для обновления статистики)
+    val lastSyncTime by settingsRepo.lastSyncTime.collectAsState(initial = 0L)
+    
    // ������ �������� �����
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
@@ -315,9 +342,14 @@ fun MainScreen(
     }
     
     // Загружаем папки и счётчики после смены аккаунта
-    var notesCount by remember { mutableStateOf(0) }
-    var eventsCount by remember { mutableStateOf(0) }
-    var tasksCount by remember { mutableStateOf(0) }
+    var notesCount by rememberSaveable { mutableStateOf(0) }
+    var eventsCount by rememberSaveable { mutableStateOf(0) }
+    var tasksCount by rememberSaveable { mutableStateOf(0) }
+    
+    // Статистика за сегодня
+    var todayEmailsCount by rememberSaveable { mutableStateOf(0) }
+    var todayEventsCount by rememberSaveable { mutableStateOf(0) }
+    var todayTasksCount by rememberSaveable { mutableStateOf(0) }
     
     // Загрузка папок — отдельный эффект без зависимости от initialSyncDone
     LaunchedEffect(activeAccount?.id) {
@@ -339,22 +371,61 @@ fun MainScreen(
     // Загрузка счётчиков — отдельные эффекты
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        mailRepo.getFlaggedCount(accountId).collect { flaggedCount = it }
+        mailRepo.getFlaggedCount(accountId).collect { newCount ->
+            if (newCount > 0 || flaggedCount == 0) {
+                flaggedCount = newCount
+            }
+        }
     }
     
-    LaunchedEffect(activeAccount?.id) {
+    LaunchedEffect(activeAccount?.id, lastSyncTime) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        noteRepo.getNotesCount(accountId).collect { notesCount = it }
+        noteRepo.getNotesCount(accountId).collect { newCount ->
+            if (newCount >= notesCount || (!isSyncing && notesCount == 0)) {
+                notesCount = newCount
+            }
+        }
     }
     
-    LaunchedEffect(activeAccount?.id) {
+    LaunchedEffect(activeAccount?.id, lastSyncTime) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        calendarRepo.getEventsCount(accountId).collect { eventsCount = it }
+        // Сначала загружаем текущее значение напрямую
+        val initialCount = calendarRepo.getEventsCountSync(accountId)
+        if (initialCount > 0) eventsCount = initialCount
+        // Затем подписываемся на изменения
+        calendarRepo.getEventsCount(accountId).collect { newCount ->
+            // Во время синхронизации не уменьшаем счётчик (защита от промежуточных состояний)
+            // После синхронизации lastSyncTime изменится и LaunchedEffect перезапустится
+            if (newCount >= eventsCount || (!isSyncing && eventsCount == 0)) {
+                eventsCount = newCount
+            }
+        }
     }
     
+    LaunchedEffect(activeAccount?.id, lastSyncTime) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        taskRepo.getActiveTasksCount(accountId).collect { newCount ->
+            if (newCount >= tasksCount || (!isSyncing && tasksCount == 0)) {
+                tasksCount = newCount
+            }
+        }
+    }
+    
+    // Загрузка статистики за сегодня (при смене аккаунта и после синхронизации)
+    LaunchedEffect(activeAccount?.id, lastSyncTime) {
+        val accountId = activeAccount?.id ?: return@LaunchedEffect
+        todayEmailsCount = mailRepo.getTodayEmailsCount(accountId)
+        todayEventsCount = calendarRepo.getEventsCountForDay(accountId, java.util.Date())
+        todayTasksCount = taskRepo.getTodayTasksCount(accountId)
+    }
+    
+    // Дополнительно подписываемся на изменения событий календаря
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        taskRepo.getActiveTasksCount(accountId).collect { tasksCount = it }
+        calendarRepo.getEventsCount(accountId).collect {
+            // При изменении общего количества событий — обновляем статистику за сегодня
+            todayEventsCount = calendarRepo.getEventsCountForDay(accountId, java.util.Date())
+        }
     }
 
     
@@ -377,6 +448,43 @@ fun MainScreen(
         }
         accountsLoaded = true
         initialCheckDone = true
+    }
+    
+    // Автопроверка обновлений
+    var showAutoUpdateDialog by remember { mutableStateOf(false) }
+    var autoUpdateInfo by remember { mutableStateOf<com.iwo.mailclient.update.UpdateInfo?>(null) }
+    
+    LaunchedEffect(initialCheckDone) {
+        if (!initialCheckDone) return@LaunchedEffect
+        
+        // Проверяем настройку интервала
+        val interval = settingsRepo.getUpdateCheckIntervalSync()
+        if (interval == com.iwo.mailclient.data.repository.SettingsRepository.UpdateCheckInterval.NEVER) return@LaunchedEffect
+        
+        val lastCheck = settingsRepo.getLastUpdateCheckTimeSync()
+        val intervalMs = interval.days * 24 * 60 * 60 * 1000L
+        
+        // Проверяем прошёл ли интервал
+        if (System.currentTimeMillis() - lastCheck < intervalMs) return@LaunchedEffect
+        
+        // Проверяем обновления
+        kotlinx.coroutines.delay(2000) // Даём приложению загрузиться
+        try {
+            val updateChecker = com.iwo.mailclient.update.UpdateChecker(context)
+            val isRussian = settingsRepo.getLanguageSync() == "ru"
+            when (val result = updateChecker.checkForUpdate(isRussian)) {
+                is com.iwo.mailclient.update.UpdateResult.Available -> {
+                    if (settingsRepo.shouldShowUpdateDialog(result.info.versionCode)) {
+                        autoUpdateInfo = result.info
+                        showAutoUpdateDialog = true
+                        settingsRepo.setLastUpdateCheckTime(System.currentTimeMillis())
+                    }
+                }
+                else -> {
+                    settingsRepo.setLastUpdateCheckTime(System.currentTimeMillis())
+                }
+            }
+        } catch (_: Exception) { }
     }
     
    // ����������� �������� ��������� (������ ������ �������� �� Flow)
@@ -693,6 +801,26 @@ fun MainScreen(
         )
     }
     
+    // Диалог автообновления
+    if (showAutoUpdateDialog && autoUpdateInfo != null) {
+        AutoUpdateDialog(
+            updateInfo = autoUpdateInfo!!,
+            context = context,
+            settingsRepo = settingsRepo,
+            onDismiss = { 
+                showAutoUpdateDialog = false 
+            },
+            onLater = {
+                // Запоминаем что пользователь отложил эту версию
+                scope.launch {
+                    settingsRepo.setUpdateDismissedVersion(autoUpdateInfo!!.versionCode)
+                    settingsRepo.setLastUpdateCheckTime(System.currentTimeMillis())
+                }
+                showAutoUpdateDialog = false
+            }
+        )
+    }
+    
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -849,8 +977,12 @@ fun MainScreen(
                 notesCount = notesCount,
                 eventsCount = eventsCount,
                 tasksCount = tasksCount,
+                todayEmailsCount = todayEmailsCount,
+                todayEventsCount = todayEventsCount,
+                todayTasksCount = todayTasksCount,
                 isLoading = isLoading,
                 isSyncing = isSyncing,
+                noNetwork = InitialSyncController.noNetwork,
                 onSyncFolders = { syncFolders() },
                 onFolderClick = onNavigateToEmailList,
                 onContactsClick = onNavigateToContacts,
@@ -864,7 +996,7 @@ fun MainScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class, androidx.compose.material.ExperimentalMaterialApi::class)
 @Composable
 private fun HomeContent(
     activeAccount: AccountEntity?,
@@ -873,8 +1005,12 @@ private fun HomeContent(
     notesCount: Int = 0,
     eventsCount: Int = 0,
     tasksCount: Int = 0,
+    todayEmailsCount: Int = 0,
+    todayEventsCount: Int = 0,
+    todayTasksCount: Int = 0,
     isLoading: Boolean,
     isSyncing: Boolean = false,
+    noNetwork: Boolean = false,
     onSyncFolders: () -> Unit,
     onFolderClick: (String) -> Unit,
     onContactsClick: () -> Unit,
@@ -885,9 +1021,11 @@ private fun HomeContent(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var aboutExpanded by rememberSaveable { mutableStateOf(false) }
     var showDonateDialog by rememberSaveable { mutableStateOf(false) }
-    var tipsExpanded by rememberSaveable { mutableStateOf(false) }
+    
+    // Pull-to-refresh state
+    val isRefreshing = isSyncing || isLoading
+    val pullRefreshState = rememberPullRefreshState(isRefreshing, onSyncFolders)
     
     // ��T����-T� ���-T������+�-���� T����-T�T��-�-�����-TƦ���
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
@@ -895,8 +1033,8 @@ private fun HomeContent(
     
     // ����������� ��������� Battery Saver ����� BroadcastReceiver (���������� �������)
     val isBatterySaverActive by settingsRepo.batterySaverState.collectAsState(initial = settingsRepo.isBatterySaverActive())
-    val ignoreBatterySaver by settingsRepo.ignoreBatterySaver.collectAsState(initial = false)
-    val showBatterySaverWarning = isBatterySaverActive && !ignoreBatterySaver
+    // Per-account: показываем предупреждение если активный аккаунт не игнорирует Battery Saver
+    val showBatterySaverWarning = isBatterySaverActive && (activeAccount?.ignoreBatterySaver != true)
     
     // ��������� ��� ������� ������������ (����������� ��� �������� ������, ������������ ��� �����������)
     var isRecommendationDismissed by rememberSaveable { mutableStateOf(false) }
@@ -919,14 +1057,51 @@ private fun HomeContent(
     // Переменные для диалога доната (вынесены для использования вне LazyColumn)
     val accountCopiedText = Strings.accountCopied
     
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .pullRefresh(pullRefreshState)
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        // ��T¦-T�T�T� T����-T�T��-�-�����-TƦ��� ��� T��-�-T����-���-�-T˦� �-���+
-        if (isSyncing || isLoading) {
+        // Карточка "Нет сети"
+        if (noNetwork) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                    ),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            AppIcons.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = Strings.noNetwork,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+        }
+        
+        // Индикатор синхронизации (карточка)
+        if ((isSyncing || isLoading) && !noNetwork) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1117,6 +1292,18 @@ private fun HomeContent(
             }
         }
         
+        // Карточка "Сегодня" — статистика за день
+        val hasTodayStats = todayEmailsCount > 0 || todayEventsCount > 0 || todayTasksCount > 0
+        if (hasTodayStats) {
+            item {
+                TodayStatsCard(
+                    emailsCount = todayEmailsCount,
+                    eventsCount = todayEventsCount,
+                    tasksCount = todayTasksCount
+                )
+            }
+        }
+        
         // �দ���-�-���-�+�-TƦ�T� �+�-T� - ��T����� ��T�T�T� ���-������ T� > 1000 ����T����-
         val foldersOver1000 = folders.filter { 
             it.type in listOf(2, 3, 4, 5) && it.totalCount > 1000 
@@ -1233,20 +1420,22 @@ private fun HomeContent(
             val displayFolders: List<FolderDisplayData> = orderedFolders.toList()
             
             val chunkedFolders: List<List<FolderDisplayData>> = displayFolders.chunked(2)
-            itemsIndexed(chunkedFolders) { index: Int, rowFolders: List<FolderDisplayData> ->
+            itemsIndexed(chunkedFolders, key = { _, row -> row.firstOrNull()?.id ?: "" }) { index: Int, rowFolders: List<FolderDisplayData> ->
                 val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
-                // �������� ��������� ��������
-                var visible by remember { mutableStateOf(!animationsEnabled) }
-                LaunchedEffect(animationsEnabled) {
-                    if (animationsEnabled) {
+                // Анимация только для первых 4 рядов при первом показе
+                val shouldAnimate = animationsEnabled && index < 4
+                var visible by rememberSaveable { mutableStateOf(!shouldAnimate) }
+                LaunchedEffect(Unit) {
+                    if (shouldAnimate && !visible) {
                         kotlinx.coroutines.delay(index * 80L)
-                        visible = true
-                    } else {
                         visible = true
                     }
                 }
                 
-                if (animationsEnabled) {
+                if (shouldAnimate && !visible) {
+                    // Placeholder пока анимация не началась
+                    Spacer(modifier = Modifier.height(80.dp))
+                } else if (shouldAnimate) {
                     AnimatedVisibility(
                         visible = visible,
                         enter = fadeIn(animationSpec = tween(300)) + 
@@ -1255,71 +1444,10 @@ private fun HomeContent(
                                     animationSpec = tween(300, easing = FastOutSlowInEasing)
                                 )
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = if (rowFolders.size == 1) Arrangement.Center else Arrangement.spacedBy(12.dp)
-                        ) {
-                            rowFolders.forEach { folder: FolderDisplayData ->
-                                FolderCardDisplay(
-                                    id = folder.id,
-                                    name = folder.name,
-                                    count = folder.count,
-                                    unreadCount = folder.unreadCount,
-                                    type = folder.type,
-                                    onClick = { 
-                                        // Сбрасываем раскрытые секции при переходе в папку
-                                        tipsExpanded = false
-                                        aboutExpanded = false
-                                        when (folder.id) {
-                                            "contacts" -> onContactsClick()
-                                            "notes" -> onNotesClick()
-                                            "calendar" -> onCalendarClick()
-                                            "tasks" -> onTasksClick()
-                                            else -> onFolderClick(folder.id)
-                                        }
-                                    },
-                                    modifier = if (rowFolders.size == 1) {
-                                        Modifier.fillMaxWidth(0.48f)
-                                    } else {
-                                        Modifier.weight(1f)
-                                    }
-                                )
-                            }
-                        }
+                        FolderRow(rowFolders, onFolderClick, onContactsClick, onNotesClick, onCalendarClick, onTasksClick)
                     }
                 } else {
-                    // Без анимации для быстрой отрисовки
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = if (rowFolders.size == 1) Arrangement.Center else Arrangement.spacedBy(12.dp)
-                    ) {
-                        rowFolders.forEach { folder ->
-                            FolderCardDisplay(
-                                id = folder.id,
-                                name = folder.name,
-                                count = folder.count,
-                                unreadCount = folder.unreadCount,
-                                type = folder.type,
-                                onClick = { 
-                                    // Сбрасываем раскрытые секции при переходе в папку
-                                    tipsExpanded = false
-                                    aboutExpanded = false
-                                    when (folder.id) {
-                                        "contacts" -> onContactsClick()
-                                        "notes" -> onNotesClick()
-                                        "calendar" -> onCalendarClick()
-                                        "tasks" -> onTasksClick()
-                                        else -> onFolderClick(folder.id)
-                                    }
-                                },
-                                modifier = if (rowFolders.size == 1) {
-                                    Modifier.fillMaxWidth(0.48f)
-                                } else {
-                                    Modifier.weight(1f)
-                                }
-                            )
-                        }
-                    }
+                    FolderRow(rowFolders, onFolderClick, onContactsClick, onNotesClick, onCalendarClick, onTasksClick)
                 }
             }
         } else if (isLoading) {
@@ -1384,339 +1512,7 @@ private fun HomeContent(
             }
         }
         
-        // ��-�-��T�T� ���- T��-�-�-T¦� T� ��T������-�����-�����-
-        item {
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
-                ),
-                shape = MaterialTheme.shapes.large
-            ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { tipsExpanded = !tipsExpanded }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // �Ц-���-��T��-�-�-�-�-�-T� ���-�-���-TǦ��-
-                        val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
-                        
-                        val bulbScale: Float
-                        val bulbAlpha: Float
-                        
-                        if (animationsEnabled) {
-                            val infiniteTransition = rememberInfiniteTransition(label = "bulb")
-                            bulbScale = infiniteTransition.animateFloat(
-                                initialValue = 1f,
-                                targetValue = 1.15f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(800, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "bulbScale"
-                            ).value
-                            bulbAlpha = infiniteTransition.animateFloat(
-                                initialValue = 0.7f,
-                                targetValue = 1f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(800, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "bulbAlpha"
-                            ).value
-                        } else {
-                            bulbScale = 1f
-                            bulbAlpha = 1f
-                        }
-                        
-                        Icon(
-                            imageVector = AppIcons.Lightbulb,
-                            contentDescription = null,
-                            tint = Color(0xFFFFB300).copy(alpha = bulbAlpha),
-                            modifier = Modifier
-                                .size(24.dp)
-                                .scale(bulbScale)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = Strings.tipsTitle,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            imageVector = if (tipsExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    
-                    AnimatedVisibility(
-                        visible = tipsExpanded,
-                        enter = expandVertically(),
-                        exit = shrinkVertically()
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .padding(horizontal = 16.dp)
-                                .padding(bottom = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            TipItem(
-                                icon = AppIcons.Notifications,
-                                text = Strings.tipNotification,
-                                iconColor = Color(0xFFFF9800),
-                                iconBackgroundColor = Color(0xFFFFF3E0)
-                            )
-                            TipItem(
-                                icon = AppIcons.BatteryChargingFull,
-                                text = Strings.tipBattery,
-                                iconColor = Color(0xFF4CAF50),
-                                iconBackgroundColor = Color(0xFFE8F5E9)
-                            )
-                            TipItem(
-                                icon = AppIcons.Lock,
-                                text = Strings.tipCertificate,
-                                iconColor = Color(0xFF9C27B0),
-                                iconBackgroundColor = Color(0xFFF3E5F5)
-                            )
-                            TipItem(
-                                icon = AppIcons.Info,
-                                text = Strings.tipBeta,
-                                iconColor = Color(0xFF2196F3),
-                                iconBackgroundColor = Color(0xFFE3F2FD)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        
-        // �� ��T������-�����-���� ��� ���-�-���-��T¦-T˦� T��-�-T����-���-�-T˦� �-���+
-        item {
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                shape = MaterialTheme.shapes.large
-            ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { aboutExpanded = !aboutExpanded }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // �Ц-���-��T��-�-�-�-�-T˦� ���-�-�-��T�T¦��� T� ��T��-�+�����-T¦-�-
-                        val colorTheme = com.iwo.mailclient.ui.theme.LocalColorTheme.current
-                        val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
-                        
-                        val envelopeScale: Float
-                        val envelopeRotation: Float
-                        
-                        if (animationsEnabled) {
-                            val infiniteTransition = rememberInfiniteTransition(label = "envelope")
-                            envelopeScale = infiniteTransition.animateFloat(
-                                initialValue = 1f,
-                                targetValue = 1.08f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(1200, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "envelopeScale"
-                            ).value
-                            envelopeRotation = infiniteTransition.animateFloat(
-                                initialValue = -3f,
-                                targetValue = 3f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(2000, easing = FastOutSlowInEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "envelopeRotation"
-                            ).value
-                        } else {
-                            envelopeScale = 1f
-                            envelopeRotation = 0f
-                        }
-                        
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .scale(envelopeScale)
-                                .clip(MaterialTheme.shapes.medium)
-                                .background(
-                                    Brush.linearGradient(
-                                        colors = listOf(
-                                            colorTheme.gradientStart,
-                                            colorTheme.gradientEnd
-                                        )
-                                    )
-                                )
-                                .shadow(
-                                    elevation = 4.dp,
-                                    shape = MaterialTheme.shapes.medium,
-                                    ambientColor = colorTheme.gradientStart.copy(alpha = 0.3f),
-                                    spotColor = colorTheme.gradientStart.copy(alpha = 0.3f)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                AppIcons.Email,
-                                null,
-                                tint = Color.White,
-                                modifier = Modifier
-                                    .size(26.dp)
-                                    .rotate(envelopeRotation)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "iwo Mail Client",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "v1.5.2",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Icon(
-                            imageVector = if (aboutExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    
-                    AnimatedVisibility(
-                        visible = aboutExpanded,
-                        enter = expandVertically(),
-                        exit = shrinkVertically()
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .padding(horizontal = 16.dp)
-                                .padding(bottom = 16.dp)
-                        ) {
-                            val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-                            
-                            HorizontalDivider()
-                            Spacer(modifier = Modifier.height(12.dp))
-                            
-                            Text(
-                                text = Strings.appDescription,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            
-                            Spacer(modifier = Modifier.height(12.dp))
-                            
-                            // Возможности в виде чипов
-                            androidx.compose.foundation.layout.FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                FeatureChip(Strings.featureSync)
-                                FeatureChip(Strings.featureAttachments)
-                                FeatureChip(Strings.featureSend)
-                                FeatureChip(Strings.featureSearch)
-                                FeatureChip(Strings.featureFolders)
-                                FeatureChip(Strings.featureContacts)
-                                FeatureChip(Strings.featureNotes)
-                                FeatureChip(Strings.featureCalendar)
-                                FeatureChip(Strings.featureTasks)
-                            }
-                            
-                            Spacer(modifier = Modifier.height(12.dp))
-                            HorizontalDivider()
-                            Spacer(modifier = Modifier.height(12.dp))
-                            
-                            // ��-��T��-�-�-T�TǦ���
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    AppIcons.Person,
-                                    null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "${Strings.developerLabel} DedovMosol",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            
-                            Spacer(modifier = Modifier.height(4.dp))
-                            
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { uriHandler.openUri("mailto:andreyid@outlook.com") },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    AppIcons.Email,
-                                    null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "andreyid@outlook.com",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            
-                            Spacer(modifier = Modifier.height(4.dp))
-                            
-                            // Telegram ���-�-�-��
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { uriHandler.openUri("https://t.me/i_wantout") },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    AppIcons.Send,
-                                    null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Telegram: @i_wantout",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            
-                            Spacer(modifier = Modifier.height(8.dp))
-                            
-                            Text(
-                                text = "© 2025",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        
-        // �ڦ-�-�����- "�ަ��-�-���-�-��T�T�T�T� T� T��-���-��T¦����- ��T��-��T��-�-�-T�" T� �-�-���-�-TƦ�����
+        // Кнопка "Посмотреть историю изменений" в changelog
         item {
             val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
             val isRu = LocalLanguage.current == AppLanguage.RUSSIAN
@@ -1894,7 +1690,191 @@ private fun HomeContent(
             }
         )
     }
-    } // Box
+        
+        // PullRefreshIndicator убран — используется карточка "Синхронизация..."
+    } // Box with pullRefresh
+}
+
+/**
+ * Карточка статистики за сегодня
+ * Адаптивная для портретной и альбомной ориентации
+ */
+@Composable
+private fun TodayStatsCard(
+    emailsCount: Int,
+    eventsCount: Int,
+    tasksCount: Int
+) {
+    val colorTheme = com.iwo.mailclient.ui.theme.LocalColorTheme.current
+    val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
+    val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
+    
+    // Анимация появления
+    var visible by remember { mutableStateOf(!animationsEnabled) }
+    LaunchedEffect(animationsEnabled) { visible = true }
+    
+    val cardContent = @Composable {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(
+                    elevation = 4.dp,
+                    shape = MaterialTheme.shapes.large,
+                    ambientColor = colorTheme.gradientStart.copy(alpha = 0.1f),
+                    spotColor = colorTheme.gradientStart.copy(alpha = 0.15f)
+                ),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            ),
+            border = BorderStroke(
+                width = 1.5.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        colorTheme.gradientStart.copy(alpha = 0.6f),
+                        colorTheme.gradientEnd.copy(alpha = 0.4f)
+                    )
+                )
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                // Заголовок с акцентным фоном
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(bottom = 12.dp)
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    colorTheme.gradientStart.copy(alpha = 0.1f),
+                                    Color.Transparent
+                                )
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        AppIcons.Schedule,
+                        contentDescription = null,
+                        tint = colorTheme.gradientStart,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isRussian) "Сегодня" else "Today",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colorTheme.gradientStart
+                    )
+                }
+                
+                // Статистика в ряд (адаптивно)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    // Письма — цвет как у Inbox
+                    TodayStatItem(
+                        icon = AppIcons.Email,
+                        count = emailsCount,
+                        label = if (isRussian) "получено" else "received",
+                        color = Color(0xFF5C6BC0) // Indigo — как Inbox
+                    )
+                    
+                    // Разделитель
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(40.dp)
+                            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                    )
+                    
+                    // События — цвет как у Календаря
+                    TodayStatItem(
+                        icon = AppIcons.CalendarMonth,
+                        count = eventsCount,
+                        label = if (isRussian) "событий" else "events",
+                        color = Color(0xFF42A5F5) // Blue — как Календарь
+                    )
+                    
+                    // Разделитель
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(40.dp)
+                            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                    )
+                    
+                    // Задачи — цвет как у Задач
+                    TodayStatItem(
+                        icon = AppIcons.Task,
+                        count = tasksCount,
+                        label = if (isRussian) "задач" else "tasks",
+                        color = Color(0xFFAB47BC) // Purple — как Задачи
+                    )
+                }
+            }
+        }
+    }
+    
+    if (animationsEnabled) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(300)) + 
+                    slideInVertically(
+                        initialOffsetY = { -it / 4 },
+                        animationSpec = tween(300, easing = FastOutSlowInEasing)
+                    )
+        ) {
+            cardContent()
+        }
+    } else {
+        cardContent()
+    }
+}
+
+/**
+ * Элемент статистики для карточки "Сегодня"
+ */
+@Composable
+private fun TodayStatItem(
+    icon: ImageVector,
+    count: Int,
+    label: String,
+    color: Color
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 8.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = count.toString(),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 @Composable
@@ -1910,20 +1890,6 @@ private fun StatItem(value: String, label: String) {
             text = label,
             style = MaterialTheme.typography.bodySmall,
             color = Color.White.copy(alpha = 0.8f)
-        )
-    }
-}
-
-@Composable
-private fun FeatureChip(text: String) {
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            style = MaterialTheme.typography.labelSmall
         )
     }
 }
@@ -1968,6 +1934,45 @@ private fun FolderCard(
         onClick = onClick,
         modifier = modifier
     )
+}
+
+@Composable
+private fun FolderRow(
+    rowFolders: List<FolderDisplayData>,
+    onFolderClick: (String) -> Unit,
+    onContactsClick: () -> Unit,
+    onNotesClick: () -> Unit,
+    onCalendarClick: () -> Unit,
+    onTasksClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (rowFolders.size == 1) Arrangement.Center else Arrangement.spacedBy(12.dp)
+    ) {
+        rowFolders.forEach { folder: FolderDisplayData ->
+            FolderCardDisplay(
+                id = folder.id,
+                name = folder.name,
+                count = folder.count,
+                unreadCount = folder.unreadCount,
+                type = folder.type,
+                onClick = { 
+                    when (folder.id) {
+                        "contacts" -> onContactsClick()
+                        "notes" -> onNotesClick()
+                        "calendar" -> onCalendarClick()
+                        "tasks" -> onTasksClick()
+                        else -> onFolderClick(folder.id)
+                    }
+                },
+                modifier = if (rowFolders.size == 1) {
+                    Modifier.fillMaxWidth(0.48f)
+                } else {
+                    Modifier.weight(1f)
+                }
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2225,7 +2230,7 @@ private fun SearchTopBar(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = MaterialTheme.shapes.extraLarge,
-            color = Color.White.copy(alpha = 0.95f),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
             tonalElevation = 0.dp
         ) {
             Row(
@@ -2697,58 +2702,140 @@ private fun FolderItem(
     }
 }
 
-
+/**
+ * Диалог автоматического обновления
+ */
 @Composable
-private fun TipItem(
-    icon: ImageVector,
-    text: String,
-    iconColor: Color = MaterialTheme.colorScheme.tertiary,
-    iconBackgroundColor: Color = MaterialTheme.colorScheme.tertiaryContainer
+private fun AutoUpdateDialog(
+    updateInfo: com.iwo.mailclient.update.UpdateInfo,
+    context: android.content.Context,
+    settingsRepo: com.iwo.mailclient.data.repository.SettingsRepository,
+    onDismiss: () -> Unit,
+    onLater: () -> Unit
 ) {
-    val animationsEnabled = com.iwo.mailclient.ui.theme.LocalAnimationsEnabled.current
+    val scope = rememberCoroutineScope()
+    val colorTheme = com.iwo.mailclient.ui.theme.LocalColorTheme.current
+    val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     
-    // �Ц-���-�-TƦ�T� ��Tæ�T�T��-TƦ��� �����-�-����
-    val iconScale: Float
-    if (animationsEnabled) {
-        val infiniteTransition = rememberInfiniteTransition(label = "tipIcon")
-        iconScale = infiniteTransition.animateFloat(
-            initialValue = 1f,
-            targetValue = 1.15f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(1500, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "tipIconScale"
-        ).value
-    } else {
-        iconScale = 1f
-    }
+    var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
+    var downloadProgress by remember { mutableIntStateOf(0) }
+    var downloadedFile by remember { mutableStateOf<java.io.File?>(null) }
     
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
-    ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .scale(iconScale)
-                .clip(CircleShape)
-                .background(iconBackgroundColor),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = iconColor
-            )
+    val updateChecker = remember { com.iwo.mailclient.update.UpdateChecker(context) }
+    
+    com.iwo.mailclient.ui.theme.ScaledAlertDialog(
+        onDismissRequest = { if (downloadState !is DownloadState.Downloading) onDismiss() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    com.iwo.mailclient.ui.theme.AppIcons.Update,
+                    null,
+                    tint = colorTheme.gradientStart
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (isRussian) "Доступно обновление" else "Update available")
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    text = "${if (isRussian) "Новая версия" else "New version"}: ${updateInfo.versionName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+                
+                if (updateInfo.changelog.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = updateInfo.changelog,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                // Прогресс скачивания
+                if (downloadState is DownloadState.Downloading) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    LinearProgressIndicator(
+                        progress = { downloadProgress / 100f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "$downloadProgress%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                if (downloadState is DownloadState.Error) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = (downloadState as DownloadState.Error).message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            when (downloadState) {
+                is DownloadState.Idle, is DownloadState.Error -> {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                updateChecker.downloadUpdate(updateInfo.apkUrl).collect { progress ->
+                                    when (progress) {
+                                        is com.iwo.mailclient.update.DownloadProgress.Starting -> {
+                                            downloadState = DownloadState.Downloading
+                                        }
+                                        is com.iwo.mailclient.update.DownloadProgress.Downloading -> {
+                                            downloadProgress = progress.progress
+                                        }
+                                        is com.iwo.mailclient.update.DownloadProgress.Completed -> {
+                                            downloadedFile = progress.file
+                                            downloadState = DownloadState.Completed
+                                        }
+                                        is com.iwo.mailclient.update.DownloadProgress.Error -> {
+                                            downloadState = DownloadState.Error(progress.message)
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = colorTheme.gradientStart)
+                    ) {
+                        Text(if (isRussian) "Скачать" else "Download")
+                    }
+                }
+                is DownloadState.Downloading -> {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                }
+                is DownloadState.Completed -> {
+                    Button(
+                        onClick = {
+                            downloadedFile?.let { updateChecker.installApk(it) }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = colorTheme.gradientStart)
+                    ) {
+                        Text(if (isRussian) "Установить" else "Install")
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (downloadState !is DownloadState.Downloading) {
+                TextButton(onClick = onLater) {
+                    Text(if (isRussian) "Позже" else "Later")
+                }
+            }
         }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
+    )
+}
+
+private sealed class DownloadState {
+    object Idle : DownloadState()
+    object Downloading : DownloadState()
+    object Completed : DownloadState()
+    data class Error(val message: String) : DownloadState()
 }

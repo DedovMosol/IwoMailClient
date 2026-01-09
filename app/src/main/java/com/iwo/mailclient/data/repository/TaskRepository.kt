@@ -59,6 +59,20 @@ class TaskRepository(private val context: Context) {
         return taskDao.getActiveTasksCount(accountId)
     }
     
+    /**
+     * Подсчитывает задачи на сегодня (с дедлайном сегодня или просроченные)
+     */
+    suspend fun getTodayTasksCount(accountId: Long): Int {
+        val calendar = java.util.Calendar.getInstance()
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 23)
+        calendar.set(java.util.Calendar.MINUTE, 59)
+        calendar.set(java.util.Calendar.SECOND, 59)
+        calendar.set(java.util.Calendar.MILLISECOND, 999)
+        val endOfDay = calendar.timeInMillis
+        
+        return taskDao.getTodayTasksCount(accountId, endOfDay)
+    }
+    
     // === Поиск ===
     
     suspend fun searchTasks(accountId: Long, query: String): List<TaskEntity> {

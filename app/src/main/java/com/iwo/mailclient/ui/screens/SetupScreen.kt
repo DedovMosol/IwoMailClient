@@ -369,10 +369,7 @@ fun SetupScreen(
                         }
                     },
                     actions = {
-                        // Кнопка выбора языка
-                        IconButton(onClick = { showLanguageDialog = true }) {
-                            Icon(AppIcons.Language, Strings.language, tint = Color.White)
-                        }
+                        // Кнопка выбора языка убрана - выбор языка теперь в onboarding
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.Transparent
@@ -466,49 +463,6 @@ fun SetupScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-            // Цвет аккаунта в карточке
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        if (isRussian()) "🎨 Цвет аккаунта" else "🎨 Account color", 
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(ACCOUNT_COLORS) { color ->
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(color))
-                                    .then(
-                                        if (color == selectedColor) {
-                                            Modifier.border(3.dp, Color.White, CircleShape)
-                                        } else Modifier
-                                    )
-                                    .clickable { selectedColor = color },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (color == selectedColor) {
-                                    Icon(
-                                        AppIcons.Check,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             
             OutlinedTextField(
                 value = displayName,

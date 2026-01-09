@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     
+    <!-- Добавить виджет -->
+    <shortcut
+        android:shortcutId="add_widget"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_widget"
+        android:shortcutShortLabel="@string/shortcut_widget"
+        android:shortcutLongLabel="@string/shortcut_widget_long">
+        <intent
+            android:action="com.iwo.mailclient.SHORTCUT_ADD_WIDGET"
+            android:targetPackage="com.iwo.mailclient"
+            android:targetClass="com.iwo.mailclient.MainActivity" />
+    </shortcut>
+    
     <!-- Написать письмо -->
     <shortcut
         android:shortcutId="compose"
@@ -23,19 +36,6 @@
         android:shortcutLongLabel="@string/shortcut_inbox_long">
         <intent
             android:action="com.iwo.mailclient.SHORTCUT_INBOX"
-            android:targetPackage="com.iwo.mailclient"
-            android:targetClass="com.iwo.mailclient.MainActivity" />
-    </shortcut>
-    
-    <!-- Поиск -->
-    <shortcut
-        android:shortcutId="search"
-        android:enabled="true"
-        android:icon="@drawable/ic_shortcut_search"
-        android:shortcutShortLabel="@string/shortcut_search"
-        android:shortcutLongLabel="@string/shortcut_search_long">
-        <intent
-            android:action="com.iwo.mailclient.SHORTCUT_SEARCH"
             android:targetPackage="com.iwo.mailclient"
             android:targetClass="com.iwo.mailclient.MainActivity" />
     </shortcut>

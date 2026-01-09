@@ -39,6 +39,9 @@ interface CalendarEventDao {
     @Query("SELECT COUNT(*) FROM calendar_events WHERE accountId = :accountId AND startTime >= :startOfDay AND startTime < :endOfDay")
     suspend fun getEventsCountForDay(accountId: Long, startOfDay: Long, endOfDay: Long): Int
     
+    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND endTime > :now ORDER BY startTime ASC LIMIT 1")
+    suspend fun getNextEventSync(accountId: Long, now: Long): CalendarEventEntity?
+    
     @Query("""
         SELECT * FROM calendar_events 
         WHERE accountId = :accountId 

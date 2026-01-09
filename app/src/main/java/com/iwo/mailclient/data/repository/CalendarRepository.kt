@@ -95,6 +95,10 @@ class CalendarRepository(private val context: Context) {
         return calendarEventDao.getEventsCount(accountId)
     }
     
+    suspend fun getEventsCountSync(accountId: Long): Int {
+        return calendarEventDao.getEventsCountSync(accountId)
+    }
+    
     // === Поиск ===
     
     suspend fun searchEvents(accountId: Long, query: String): List<CalendarEventEntity> {

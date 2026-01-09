@@ -54,11 +54,13 @@ object Strings {
     val compose: String @Composable get() = if (isRussian()) "Написать" else "Compose"
     val searchInMail: String @Composable get() = if (isRussian()) "Поиск в почте" else "Search mail"
     val syncingMail: String @Composable get() = if (isRussian()) "Синхронизация..." else "Syncing..."
+    val noNetwork: String @Composable get() = if (isRussian()) "Нет подключения к сети" else "No network connection"
     val emails: String @Composable get() = if (isRussian()) "писем" else "emails"
     val events: String @Composable get() = if (isRussian()) "событий" else "events"
     val notesCount: String @Composable get() = if (isRussian()) "заметок" else "notes"
     val menu: String @Composable get() = if (isRussian()) "Меню" else "Menu"
     val noAccount: String @Composable get() = if (isRussian()) "Нет аккаунта" else "No account"
+    val appFeatures: String @Composable get() = if (isRussian()) "Возможности программы" else "App features"
     
     // Папки
     val drafts: String @Composable get() = if (isRussian()) "Черновики" else "Drafts"
@@ -921,6 +923,13 @@ object Strings {
     val calendarSync: String @Composable get() = if (isRussian()) "Синхронизация календаря" else "Calendar sync"
     val tasksSync: String @Composable get() = if (isRussian()) "Синхронизация задач" else "Tasks sync"
     
+    // Синхронизация и очистка
+    val syncAndCleanup: String @Composable get() = if (isRussian()) "Синхронизация и очистка" else "Sync & Cleanup"
+    val syncAndCleanupDesc: String @Composable get() = if (isRussian()) "Настройки синхронизации и автоочистки" else "Sync and auto-cleanup settings"
+    val cleanupSection: String @Composable get() = if (isRussian()) "Очистка" else "Cleanup"
+    val cleanupInfo: String @Composable get() = if (isRussian()) "Автоматическая очистка" else "Auto cleanup"
+    val cleanupInfoDesc: String @Composable get() = if (isRussian()) "Настройки очистки находятся в настройках каждого аккаунта" else "Cleanup settings are in each account's settings"
+    
     // Диалоги разрешений
     val backgroundWorkTitle: String @Composable get() = if (isRussian()) "Фоновая работа" else "Background work"
     val backgroundWorkText: String @Composable get() = if (isRussian()) 
@@ -947,6 +956,7 @@ object Strings {
     val newVersion: String @Composable get() = if (isRussian()) "Новая версия" else "New version"
     val currentVersion: String @Composable get() = if (isRussian()) "Текущая версия" else "Current version"
     val whatsNew: String @Composable get() = if (isRussian()) "Что нового" else "What's new"
+    val autoUpdateCheck: String @Composable get() = if (isRussian()) "Автопроверка обновлений" else "Auto update check"
     @Composable
     fun downloadProgress(mb: Float, totalMb: Float): String = if (isRussian()) 
         "%.1f / %.1f МБ".format(mb, totalMb) 

@@ -11,6 +11,9 @@ interface AccountDao {
     @Query("SELECT * FROM accounts ORDER BY id ASC")
     suspend fun getAllAccountsList(): List<AccountEntity>
     
+    @Query("SELECT * FROM accounts ORDER BY id ASC")
+    fun getAllAccountsSync(): List<AccountEntity>
+    
     @Query("SELECT * FROM accounts WHERE isActive = 1 LIMIT 1")
     fun getActiveAccount(): Flow<AccountEntity?>
     
@@ -82,6 +85,12 @@ interface AccountDao {
     
     @Query("UPDATE accounts SET tasksSyncKey = :syncKey WHERE id = :id")
     suspend fun updateTasksSyncKey(id: Long, syncKey: String)
+    
+    @Query("UPDATE accounts SET nightModeEnabled = :enabled WHERE id = :id")
+    suspend fun updateNightModeEnabled(id: Long, enabled: Boolean)
+    
+    @Query("UPDATE accounts SET ignoreBatterySaver = :ignore WHERE id = :id")
+    suspend fun updateIgnoreBatterySaver(id: Long, ignore: Boolean)
     
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(account: AccountEntity): Long
@@ -195,6 +204,9 @@ interface EmailDao {
     
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAllIgnore(emails: List<EmailEntity>)
+    
+    @Query("SELECT id FROM emails WHERE id IN (:ids)")
+    suspend fun getExistingIds(ids: List<String>): List<String>
     
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(email: EmailEntity)
@@ -331,6 +343,32 @@ interface EmailDao {
         WHERE fromName IS NOT NULL AND fromName != '' AND fromName NOT LIKE '%@%'
     """)
     suspend fun getAllSenderNames(): List<EmailHistoryResult>
+    
+    /**
+     * Подсчитывает письма в Inbox, полученные за указанный период
+     * Используется для статистики "Сегодня"
+     */
+    @Query("""
+        SELECT COUNT(*) FROM emails e 
+        INNER JOIN folders f ON e.folderId = f.id 
+        WHERE e.accountId = :accountId 
+        AND f.type = 2 
+        AND e.dateReceived >= :startTime 
+        AND e.dateReceived < :endTime
+    """)
+    suspend fun getEmailsCountForPeriod(accountId: Long, startTime: Long, endTime: Long): Int
+    
+    /**
+     * Удаляет дубликаты писем (оставляет только одно письмо с уникальной комбинацией subject+from+dateReceived)
+     * Сохраняет письмо с наименьшим id (первое добавленное)
+     */
+    @Query("""
+        DELETE FROM emails WHERE id NOT IN (
+            SELECT MIN(id) FROM emails 
+            GROUP BY folderId, subject, `from`, dateReceived
+        )
+    """)
+    suspend fun deleteDuplicateEmails()
 }
 
 /**

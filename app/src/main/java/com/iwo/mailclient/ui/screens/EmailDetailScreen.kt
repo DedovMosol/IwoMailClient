@@ -58,8 +58,10 @@ private val TASK_DUE_DATE_REGEX = Regex("Срок выполнения:\\s*(\\d{
 private val TASK_DESCRIPTION_REGEX = Regex("Описание:\\s*(.+?)(?=\\n\\n|Срок|Due|$)|Description:\\s*(.+?)(?=\\n\\n|Срок|Due|$)", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
 // Regex для парсинга iCalendar приглашений
 private val ICAL_SUMMARY_REGEX = Regex("SUMMARY[^:]*:(.+?)(?=\\r?\\n[A-Z])", setOf(RegexOption.DOT_MATCHES_ALL))
-private val ICAL_DTSTART_REGEX = Regex("DTSTART[^:]*:(\\d{8}T\\d{6}Z?|\\d{8})")
-private val ICAL_DTEND_REGEX = Regex("DTEND[^:]*:(\\d{8}T\\d{6}Z?|\\d{8})")
+// Поддерживаем форматы: DTSTART:20251203T170000Z, DTSTART;TZID=...:20251203T170000, DTSTART;VALUE=DATE:20251203
+// Группа 1 - TZID (опционально), Группа 2 - дата
+private val ICAL_DTSTART_REGEX = Regex("DTSTART(?:;TZID=([^:;]+))?(?:;[^:]+)?:(\\d{8}(?:T\\d{6})?Z?)")
+private val ICAL_DTEND_REGEX = Regex("DTEND(?:;TZID=([^:;]+))?(?:;[^:]+)?:(\\d{8}(?:T\\d{6})?Z?)")
 private val ICAL_LOCATION_REGEX = Regex("LOCATION[^:]*:(.+?)(?=\\r?\\n[A-Z])", setOf(RegexOption.DOT_MATCHES_ALL))
 private val ICAL_DESCRIPTION_REGEX = Regex("DESCRIPTION[^:]*:(.+?)(?=\\r?\\n[A-Z])", setOf(RegexOption.DOT_MATCHES_ALL))
 private val ICAL_ORGANIZER_REGEX = Regex("ORGANIZER[^:]*:mailto:([^\\r\\n]+)", RegexOption.IGNORE_CASE)
@@ -621,13 +623,14 @@ fun EmailDetailScreen(
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
-                        // Показываем email если это нормальный адрес
+                        // Показываем email если это нормальный адрес (кликабельный)
                         if (displayEmail.isNotEmpty() && displayEmail.contains("@")) {
                             Text(
                                 text = if (showName) "<$displayEmail>" else displayEmail,
                                 style = if (showName) MaterialTheme.typography.bodySmall else MaterialTheme.typography.titleMedium,
                                 fontWeight = if (showName) FontWeight.Normal else FontWeight.SemiBold,
-                                color = if (showName) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable { onComposeToEmail(displayEmail) }
                             )
                         }
                     }
@@ -1005,11 +1008,13 @@ fun EmailDetailScreen(
                     }
                     
                     // Используем данные из тела или из загруженного вложения
+                    // Обрабатываем iCalendar line folding (RFC 5545): строки могут быть разбиты
+                    // с пробелом или табом в начале продолжения
                     val icalData = when {
                         bodyHasVEvent -> currentEmail.body
                         loadedIcalData != null -> loadedIcalData!!
                         else -> ""
-                    }
+                    }.replace(Regex("\\r?\\n[ \\t]"), "") // Убираем line folding
                     
                     if (!eventAdded) {
                         Card(
@@ -1070,14 +1075,19 @@ fun EmailDetailScreen(
                                     val meetingSummary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
                                         ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
                                         ?: currentEmail.subject
-                                    val dtStart = ICAL_DTSTART_REGEX.find(icalData)?.groupValues?.get(1)
-                                    val dtEnd = ICAL_DTEND_REGEX.find(icalData)?.groupValues?.get(1)
+                                    // Извлекаем TZID и дату из DTSTART/DTEND
+                                    val dtStartMatch = ICAL_DTSTART_REGEX.find(icalData)
+                                    val dtStartTzid = dtStartMatch?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
+                                    val dtStart = dtStartMatch?.groupValues?.get(2)
+                                    val dtEndMatch = ICAL_DTEND_REGEX.find(icalData)
+                                    val dtEndTzid = dtEndMatch?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
+                                    val dtEnd = dtEndMatch?.groupValues?.get(2)
                                     val meetingLocation = ICAL_LOCATION_REGEX.find(icalData)?.groupValues?.get(1)
                                         ?.replace("\\n", " ")?.replace("\\,", ",")?.trim() ?: ""
                                     val meetingDescription = ICAL_DESCRIPTION_REGEX.find(icalData)?.groupValues?.get(1)
                                         ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
-                                    val meetingStartTime = parseICalDate(dtStart) ?: System.currentTimeMillis()
-                                    val meetingEndTime = parseICalDate(dtEnd) ?: (meetingStartTime + 60 * 60 * 1000)
+                                    val meetingStartTime = parseICalDate(dtStart, dtStartTzid) ?: System.currentTimeMillis()
+                                    val meetingEndTime = parseICalDate(dtEnd, dtEndTzid) ?: (meetingStartTime + 60 * 60 * 1000)
                                     
                                     // Функция для отправки ответа организатору
                                     suspend fun sendResponseToOrganizer(responseType: String, statusText: String) {
@@ -1708,10 +1718,12 @@ private fun formatRecipients(recipients: String): String {
 }
 
 /**
- * Парсит дату из iCalendar формата
+ * Парсит дату из iCalendar формата с учётом таймзоны
  * Поддерживает форматы: 20260115T100000Z, 20260115T100000, 20260115
+ * @param dateStr строка даты
+ * @param tzid идентификатор таймзоны (например "Europe/Moscow"), null для локальной
  */
-private fun parseICalDate(dateStr: String?): Long? {
+private fun parseICalDate(dateStr: String?, tzid: String? = null): Long? {
     if (dateStr.isNullOrBlank()) return null
     
     return try {
@@ -1724,8 +1736,11 @@ private fun parseICalDate(dateStr: String?): Long? {
             else -> return null
         }
         
-        if (isUtc) {
-            format.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        // Устанавливаем таймзону: UTC если Z, иначе TZID если указан, иначе локальная
+        format.timeZone = when {
+            isUtc -> java.util.TimeZone.getTimeZone("UTC")
+            !tzid.isNullOrBlank() -> java.util.TimeZone.getTimeZone(tzid)
+            else -> java.util.TimeZone.getDefault()
         }
         
         format.parse(cleanDate)?.time

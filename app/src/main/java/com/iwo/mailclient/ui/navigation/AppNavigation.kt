@@ -21,6 +21,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.iwo.mailclient.data.repository.AccountRepository
+import com.iwo.mailclient.data.repository.SettingsRepository
 import com.iwo.mailclient.ui.MainScreen
 import com.iwo.mailclient.ui.screens.*
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,11 @@ private fun popExitTransition(): ExitTransition {
 }
 
 sealed class Screen(val route: String) {
+    object Onboarding : Screen("onboarding?isFirstLaunch={isFirstLaunch}") {
+        fun createRoute(isFirstLaunch: Boolean = true): String {
+            return "onboarding?isFirstLaunch=$isFirstLaunch"
+        }
+    }
     object Main : Screen("main")
     object Setup : Screen("setup?editAccountId={editAccountId}&verificationError={verificationError}&savedData={savedData}") {
         fun createRoute(editAccountId: Long? = null, verificationError: String? = null, savedData: String? = null): String {
@@ -202,6 +208,11 @@ sealed class Screen(val route: String) {
         fun createRoute(accountId: Long): String = "accountSettings/$accountId"
     }
     object Personalization : Screen("personalization")
+    object SyncCleanup : Screen("syncCleanup/{accountId}") {
+        fun createRoute(accountId: Long): String = "syncCleanup/$accountId"
+    }
+    object Updates : Screen("updates")
+    object About : Screen("about")
     object Search : Screen("search")
     object Contacts : Screen("contacts")
     object Notes : Screen("notes")
@@ -223,12 +234,16 @@ fun AppNavigation(
     shortcutCompose: Boolean = false,
     shortcutInbox: Boolean = false,
     shortcutSearch: Boolean = false,
-    onShortcutHandled: () -> Unit = {}
+    shortcutCalendar: Boolean = false,
+    shortcutTasks: Boolean = false,
+    onShortcutHandled: () -> Unit = {},
+    onOnboardingComplete: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val accountRepo = remember { AccountRepository(context) }
+    val settingsRepo = remember { SettingsRepository.getInstance(context) }
     
     // Определяем стартовый экран
     var startDestination by remember { mutableStateOf<String?>(null) }
@@ -243,10 +258,15 @@ fun AppNavigation(
                 }
             } ?: false
             
-            startDestination = if (hasAccounts) {
-                Screen.Main.route
-            } else {
-                Screen.Setup.route
+            val onboardingShown = settingsRepo.getOnboardingShownSync()
+            
+            startDestination = when {
+                // Есть аккаунты — сразу на главный экран
+                hasAccounts -> Screen.Main.route
+                // Нет аккаунтов и onboarding не показан — показываем onboarding
+                !onboardingShown -> Screen.Onboarding.createRoute(isFirstLaunch = true)
+                // Нет аккаунтов, но onboarding уже показан — на экран добавления аккаунта
+                else -> Screen.Setup.route
             }
             hasCheckedAccounts = true
         } catch (e: Exception) {
@@ -386,7 +406,7 @@ fun AppNavigation(
     // Обработка App Shortcuts
     var shortcutHandled by remember { mutableStateOf(false) }
     
-    LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, hasCheckedAccounts, startDestination) {
+    LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, shortcutCalendar, shortcutTasks, hasCheckedAccounts, startDestination) {
         if (!shortcutHandled && hasCheckedAccounts && startDestination == Screen.Main.route) {
             when {
                 shortcutCompose -> {
@@ -423,6 +443,26 @@ fun AppNavigation(
                     kotlinx.coroutines.delay(300)
                     try {
                         navController.navigate(Screen.Search.route) {
+                            launchSingleTop = true
+                        }
+                        onShortcutHandled()
+                    } catch (_: Exception) { }
+                }
+                shortcutCalendar -> {
+                    shortcutHandled = true
+                    kotlinx.coroutines.delay(300)
+                    try {
+                        navController.navigate(Screen.Calendar.route) {
+                            launchSingleTop = true
+                        }
+                        onShortcutHandled()
+                    } catch (_: Exception) { }
+                }
+                shortcutTasks -> {
+                    shortcutHandled = true
+                    kotlinx.coroutines.delay(300)
+                    try {
+                        navController.navigate(Screen.Tasks.route) {
                             launchSingleTop = true
                         }
                         onShortcutHandled()
@@ -485,6 +525,9 @@ fun AppNavigation(
                 },
                 onNavigateToSettings = {
                     navController.navigate(Screen.Settings.route)
+                },
+                onNavigateToOnboarding = {
+                    navController.navigate(Screen.Onboarding.createRoute(isFirstLaunch = false))
                 },
                 onNavigateToSearch = {
                     navController.navigate(Screen.Search.route)
@@ -724,6 +767,9 @@ fun AppNavigation(
                     navController.navigate(Screen.Setup.route) {
                         popUpTo(0) { inclusive = true }
                     }
+                },
+                onNavigateToAbout = {
+                    navController.navigate(Screen.About.route)
                 }
             )
         }
@@ -736,13 +782,43 @@ fun AppNavigation(
             AccountSettingsScreen(
                 accountId = accountId,
                 onBackClick = { navController.popBackStack() },
-                onEditCredentials = { id -> navController.navigate(Screen.Setup.createRoute(id)) }
+                onEditCredentials = { id -> navController.navigate(Screen.Setup.createRoute(id)) },
+                onNavigateToSyncCleanup = { id -> navController.navigate(Screen.SyncCleanup.createRoute(id)) }
             )
         }
         
         composable(Screen.Personalization.route) {
             PersonalizationScreen(
                 onBackClick = { navController.popBackStack() }
+            )
+        }
+        
+        composable(
+            route = Screen.SyncCleanup.route,
+            arguments = listOf(navArgument("accountId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val accountId = backStackEntry.arguments?.getLong("accountId") ?: 0L
+            SyncCleanupScreen(
+                accountId = accountId,
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+        
+        composable(Screen.Updates.route) {
+            UpdatesScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+        
+        composable(Screen.About.route) {
+            AboutScreen(
+                onBackClick = { navController.popBackStack() },
+                onNavigateToUpdates = {
+                    navController.navigate(Screen.Updates.route)
+                },
+                onNavigateToOnboarding = {
+                    navController.navigate(Screen.Onboarding.createRoute(isFirstLaunch = false))
+                }
             )
         }
         
@@ -786,6 +862,33 @@ fun AppNavigation(
         composable(Screen.Tasks.route) {
             TasksScreen(
                 onBackClick = { navController.popBackStack() }
+            )
+        }
+        
+        composable(
+            route = Screen.Onboarding.route,
+            arguments = listOf(
+                navArgument("isFirstLaunch") {
+                    type = NavType.BoolType
+                    defaultValue = true
+                }
+            )
+        ) { backStackEntry ->
+            val isFirstLaunch = backStackEntry.arguments?.getBoolean("isFirstLaunch") ?: true
+            OnboardingScreen(
+                isFirstLaunch = isFirstLaunch,
+                onComplete = {
+                    if (isFirstLaunch) {
+                        // После первого onboarding — на экран добавления аккаунта
+                        onOnboardingComplete()
+                        navController.navigate(Screen.Setup.route) {
+                            popUpTo(Screen.Onboarding.route) { inclusive = true }
+                        }
+                    } else {
+                        // Ручной вызов из MainScreen — просто назад
+                        navController.popBackStack()
+                    }
+                }
             )
         }
     }

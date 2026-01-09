@@ -1,6 +1,8 @@
 package com.iwo.mailclient.sync
 
+import android.appwidget.AppWidgetManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import com.iwo.mailclient.data.database.AccountType
@@ -13,6 +15,7 @@ import com.iwo.mailclient.data.repository.SettingsRepository
 import com.iwo.mailclient.data.repository.TaskRepository
 import com.iwo.mailclient.eas.EasResult
 import com.iwo.mailclient.ui.NotificationStrings
+import com.iwo.mailclient.widget.MailWidgetReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +31,30 @@ import kotlinx.coroutines.launch
  */
 class SyncAlarmReceiver : BroadcastReceiver() {
     
+    companion object {
+        const val ACTION_SYNC_NOW = "com.iwo.mailclient.SYNC_NOW"
+        private const val SYNC_STARTED_NOTIFICATION_ID = 9998
+    }
+    
+    private fun showSyncStartedNotification(context: Context) {
+        val settingsRepo = SettingsRepository.getInstance(context)
+        val isRussian = settingsRepo.getLanguageSync() == "ru"
+        
+        val notification = androidx.core.app.NotificationCompat.Builder(
+            context,
+            com.iwo.mailclient.MailApplication.CHANNEL_SYNC_STATUS
+        )
+            .setSmallIcon(com.iwo.mailclient.R.drawable.ic_sync)
+            .setContentTitle(if (isRussian) "Синхронизация запущена" else "Sync started")
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setTimeoutAfter(3000)
+            .build()
+        
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        notificationManager.notify(SYNC_STARTED_NOTIFICATION_ID, notification)
+    }
+    
     private data class NewEmailInfo(
         val id: String,
         val senderName: String?,
@@ -36,7 +63,26 @@ class SyncAlarmReceiver : BroadcastReceiver() {
     )
     
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == PushService.ACTION_SYNC_ALARM) {
+        val action = intent.action
+        if (action == PushService.ACTION_SYNC_ALARM || action == ACTION_SYNC_NOW) {
+            val isManualSync = action == ACTION_SYNC_NOW
+            
+            // Показываем уведомление только при ручном запуске
+            if (isManualSync) {
+                showSyncStartedNotification(context)
+                
+                // Для ручной синхронизации используем WorkManager - он надёжнее
+                val workRequest = androidx.work.OneTimeWorkRequestBuilder<SyncWorker>()
+                    .setInputData(
+                        androidx.work.Data.Builder()
+                            .putBoolean("manual_sync", true)
+                            .build()
+                    )
+                    .build()
+                androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+                return
+            }
+            
             val pendingResult = goAsync()
             val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             
@@ -45,7 +91,9 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                     val database = MailDatabase.getInstance(context)
                     val accounts = database.accountDao().getAllAccountsList()
                     
-                    if (accounts.isEmpty()) return@launch
+                    if (accounts.isEmpty()) {
+                        return@launch
+                    }
                     
                     val settingsRepo = SettingsRepository.getInstance(context)
                     val mailRepo = MailRepository(context)
@@ -96,6 +144,9 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                     
                     settingsRepo.setLastSyncTime(System.currentTimeMillis())
                     settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
+                    
+                    // Обновляем виджет после синхронизации
+                    updateWidget(context)
                     
                     // Синхронизация контактов, заметок, календаря и задач (для Exchange)
                     // Внутри каждого метода проверяется интервал (в днях) из настроек аккаунта
@@ -297,5 +348,23 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                 }
             } catch (_: Exception) { }
         }
+    }
+    
+    /**
+     * Обновление виджета на рабочем столе
+     */
+    private fun updateWidget(context: Context) {
+        try {
+            val appWidgetManager = AppWidgetManager.getInstance(context)
+            val widgetComponent = ComponentName(context, MailWidgetReceiver::class.java)
+            val widgetIds = appWidgetManager.getAppWidgetIds(widgetComponent)
+            if (widgetIds.isNotEmpty()) {
+                val intent = Intent(context, MailWidgetReceiver::class.java).apply {
+                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, widgetIds)
+                }
+                context.sendBroadcast(intent)
+            }
+        } catch (_: Exception) { }
     }
 }

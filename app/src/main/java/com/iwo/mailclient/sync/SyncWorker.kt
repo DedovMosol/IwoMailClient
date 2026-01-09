@@ -42,10 +42,14 @@ class SyncWorker(
     )
     
     override suspend fun doWork(): Result {
-        // Debounce: пропускаем если синхронизация была менее 30 сек назад
-        val lastSync = settingsRepo.getLastSyncTimeSync()
-        if (System.currentTimeMillis() - lastSync < 30_000) {
-            return Result.success()
+        val isManualSync = inputData.getBoolean("manual_sync", false)
+        
+        // Debounce: пропускаем если синхронизация была менее 30 сек назад (только для автоматической)
+        if (!isManualSync) {
+            val lastSync = settingsRepo.getLastSyncTimeSync()
+            if (System.currentTimeMillis() - lastSync < 30_000) {
+                return Result.success()
+            }
         }
         
         val accounts = database.accountDao().getAllAccountsList()
@@ -118,10 +122,33 @@ class SyncWorker(
         // Синхронизация задач (для Exchange аккаунтов)
         syncTasks()
         
+        // Обновляем виджет
+        com.iwo.mailclient.widget.updateMailWidget(applicationContext)
+        
+        // Показываем уведомление о завершении при ручной синхронизации
+        if (isManualSync) {
+            showSyncCompleteNotification()
+        }
+        
         // Перепланируем с учётом ночного режима (интервал может измениться)
         scheduleWithNightMode(applicationContext)
         
         return if (hasErrors) Result.retry() else Result.success()
+    }
+    
+    private fun showSyncCompleteNotification() {
+        val isRussian = settingsRepo.getLanguageSync() == "ru"
+        
+        val notification = NotificationCompat.Builder(applicationContext, MailApplication.CHANNEL_SYNC_STATUS)
+            .setSmallIcon(com.iwo.mailclient.R.drawable.ic_sync)
+            .setContentTitle(if (isRussian) "Синхронизация завершена" else "Sync complete")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setTimeoutAfter(3000)
+            .build()
+        
+        val notificationManager = applicationContext.getSystemService(NotificationManager::class.java)
+        notificationManager.notify(SYNC_COMPLETE_NOTIFICATION_ID, notification)
     }
     
     private suspend fun showNotification(newEmails: List<NewEmailInfo>, accountEmail: String, accountId: Long) {
@@ -386,6 +413,7 @@ class SyncWorker(
     companion object {
         private const val WORK_NAME = "mail_sync"
         private const val NIGHT_MODE_INTERVAL = 60L // 60 минут ночью
+        private const val SYNC_COMPLETE_NOTIFICATION_ID = 9999
         
         fun schedule(context: Context, intervalMinutes: Long = 15, wifiOnly: Boolean = false) {
             if (intervalMinutes <= 0) {
@@ -434,11 +462,27 @@ class SyncWorker(
             return scheduledAccounts.minOfOrNull { it.syncIntervalMinutes } ?: 15
         }
         
+        /**
+         * Проверяет, является ли текущее время ночным (23:00-7:00)
+         */
+        private fun isNightTime(): Boolean {
+            val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+            return hour >= 23 || hour < 7
+        }
+        
+        /**
+         * Проверяет, активен ли режим экономии батареи Android
+         */
+        private fun isBatterySaverActive(context: Context): Boolean {
+            val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+            return powerManager?.isPowerSaveMode == true
+        }
+        
         fun scheduleWithNightMode(context: Context) {
             val settingsRepo = SettingsRepository.getInstance(context)
             val database = MailDatabase.getInstance(context)
             
-            // Получаем минимальный интервал из всех аккаунтов с режимом SCHEDULED
+            // Получаем все аккаунты
             val accounts = kotlinx.coroutines.runBlocking {
                 database.accountDao().getAllAccountsList()
             }
@@ -457,23 +501,30 @@ class SyncWorker(
                 return
             }
             
-            // Берём минимальный интервал из всех scheduled аккаунтов
-            val minInterval = scheduledAccounts.minOfOrNull { it.syncIntervalMinutes } ?: 15
+            val isNight = isNightTime()
+            val batterySaverActive = isBatterySaverActive(context)
             
-            // Применяем ночной режим
-            val nightModeEnabled = settingsRepo.getNightModeEnabledSync()
-            val isNightTime = settingsRepo.isNightTime()
-            
-            // Применяем Battery Saver (увеличиваем интервал до 60 мин)
-            val batterySaverActive = settingsRepo.shouldApplyBatterySaverRestrictions()
-            
-            val effectiveInterval = when {
-                // Battery Saver имеет приоритет
-                batterySaverActive && minInterval > 0 -> maxOf(NIGHT_MODE_INTERVAL.toInt(), minInterval)
-                // Затем ночной режим
-                nightModeEnabled && isNightTime && minInterval > 0 -> maxOf(NIGHT_MODE_INTERVAL.toInt(), minInterval)
-                else -> minInterval
+            // Вычисляем эффективный интервал для каждого аккаунта с учётом его per-account настроек
+            val effectiveIntervals = scheduledAccounts.map { account ->
+                val baseInterval = account.syncIntervalMinutes
+                
+                // Per-account: проверяем нужно ли применять ограничения Battery Saver
+                val shouldApplyBatterySaver = batterySaverActive && !account.ignoreBatterySaver
+                
+                // Per-account: проверяем нужно ли применять ночной режим
+                val shouldApplyNightMode = account.nightModeEnabled && isNight
+                
+                when {
+                    // Battery Saver имеет приоритет (если не игнорируется для этого аккаунта)
+                    shouldApplyBatterySaver && baseInterval > 0 -> maxOf(NIGHT_MODE_INTERVAL.toInt(), baseInterval)
+                    // Затем ночной режим (если включён для этого аккаунта)
+                    shouldApplyNightMode && baseInterval > 0 -> maxOf(NIGHT_MODE_INTERVAL.toInt(), baseInterval)
+                    else -> baseInterval
+                }
             }
+            
+            // Берём минимальный эффективный интервал
+            val effectiveInterval = effectiveIntervals.minOrNull() ?: 15
             
             val wifiOnly = settingsRepo.syncOnWifiOnly.let { 
                 kotlinx.coroutines.runBlocking { it.first() }

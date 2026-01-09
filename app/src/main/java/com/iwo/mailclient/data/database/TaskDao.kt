@@ -64,4 +64,16 @@ interface TaskDao {
     
     @Query("SELECT * FROM tasks WHERE reminderSet = 1 AND reminderTime > :now AND complete = 0")
     suspend fun getTasksWithReminders(now: Long): List<TaskEntity>
+    
+    /**
+     * Подсчитывает задачи на сегодня (с дедлайном сегодня или просроченные)
+     */
+    @Query("""
+        SELECT COUNT(*) FROM tasks 
+        WHERE accountId = :accountId 
+        AND complete = 0 
+        AND dueDate > 0 
+        AND dueDate < :endOfDay
+    """)
+    suspend fun getTodayTasksCount(accountId: Long, endOfDay: Long): Int
 }
