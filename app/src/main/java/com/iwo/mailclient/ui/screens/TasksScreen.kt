@@ -1064,7 +1064,10 @@ private fun CreateTaskDialog(
                 
                 // Дата начала
                 OutlinedButton(
-                    onClick = { showStartDatePicker = true },
+                    onClick = { 
+                        tempStartDate = if (startDate > 0) startDate else System.currentTimeMillis()
+                        showStartDatePicker = true 
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(AppIcons.Calendar, null, modifier = Modifier.size(18.dp))
@@ -1082,7 +1085,10 @@ private fun CreateTaskDialog(
                 
                 // Срок выполнения
                 OutlinedButton(
-                    onClick = { showDueDatePicker = true },
+                    onClick = { 
+                        tempDueDate = if (dueDate > 0) dueDate else System.currentTimeMillis()
+                        showDueDatePicker = true 
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(AppIcons.Schedule, null, modifier = Modifier.size(18.dp))
@@ -1100,7 +1106,10 @@ private fun CreateTaskDialog(
                 
                 // Напоминание
                 OutlinedButton(
-                    onClick = { showReminderPicker = true },
+                    onClick = { 
+                        tempReminderDate = if (reminderTime > 0) reminderTime else System.currentTimeMillis()
+                        showReminderPicker = true 
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(AppIcons.Notifications, null, modifier = Modifier.size(18.dp))
