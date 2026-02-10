@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "com.iwo.mailclient"
-    compileSdk = 35
+    namespace = "com.dedovmosol.iwomail"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.iwo.mailclient"
+        applicationId = "com.dedovmosol.iwomail"
         minSdk = 26  // Android 8.0
-        targetSdk = 35  // Android 15
-        versionCode = 23
-        versionName = "1.6.0"
+        targetSdk = 36  // Android 16
+        versionCode = 24
+        versionName = "1.6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -76,6 +76,10 @@ android {
             excludes += "/META-INF/LICENSE.md"
             excludes += "/META-INF/DEPENDENCIES"
         }
+    }
+
+    testOptions {
+        unitTests.all { }
     }
 }
 
@@ -141,4 +145,16 @@ dependencies {
     
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("io.mockk:mockk:1.13.8")
+    testImplementation("com.google.truth:truth:1.1.5")
+    
+    // Android Testing
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

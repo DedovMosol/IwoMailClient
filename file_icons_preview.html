@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Icons Preview — IWO Mail</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 32px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 40px;
+            font-size: 16px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+        .icon-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            transition: transform 0.2s, box-shadow 0.2s;
+            border: 2px solid #e9ecef;
+        }
+        .icon-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+            border-color: #667eea;
+        }
+        .icon-wrapper {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            border-radius: 12px;
+            padding: 10px;
+        }
+        svg {
+            width: 100%;
+            height: 100%;
+        }
+        .icon-name {
+            font-weight: 600;
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .extensions {
+            font-size: 13px;
+            color: #666;
+            line-height: 1.6;
+        }
+        .footer {
+            text-align: center;
+            color: #999;
+            font-size: 14px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📎 File Type Icons</h1>
+        <p class="subtitle">16 векторных иконок для вложений в IWO Mail</p>
+        
+        <div class="grid">
+            <!-- Word -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#2B579A" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#1B3F6F" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M7,11l2.5,8l2.5,-5l2.5,5l2.5,-8"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Microsoft Word</div>
+                <div class="extensions">doc, docx, dot, dotx, rtf, odt</div>
+            </div>
+
+            <!-- Excel -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#217346" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#165232" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M15,11L9,11L9,19L15,19M9,15L14,15"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Microsoft Excel</div>
+                <div class="extensions">xls, xlsx, xlt, csv, ods</div>
+            </div>
+
+            <!-- PowerPoint -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#D24726" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#9C3019" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9,19L9,11L14,11C17,11 17,15.5 14,15.5L9,15.5"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Microsoft PowerPoint</div>
+                <div class="extensions">ppt, pptx, pot, pps, odp</div>
+            </div>
+
+            <!-- Access -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#A4373A" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#742628" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8,19L12,11L16,19M9.5,16L14.5,16"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Microsoft Access</div>
+                <div class="extensions">mdb, accdb, accde</div>
+            </div>
+
+            <!-- PDF -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#D32F2F" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#9A2222" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.3" stroke-linecap="round" d="M7,12h10M7,15h10M7,18h6"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Adobe PDF</div>
+                <div class="extensions">pdf</div>
+            </div>
+
+            <!-- Archive -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#FF8F00" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#C67000" d="M14,2v6h6z"/>
+                        <path fill="#FFFFFF" d="M11,9h2v2h-2zM13,11h2v2h-2zM11,13h2v2h-2zM13,15h2v2h-2zM11,17h2v2h-2z"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Archive</div>
+                <div class="extensions">zip, rar, 7z, tar, gz, iso</div>
+            </div>
+
+            <!-- Image -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#00897B" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#005F56" d="M14,2v6h6z"/>
+                        <path fill="#FFFFFF" d="M8,11m-1.5,0a1.5,1.5,0,1,0,3,0a1.5,1.5,0,1,0,-3,0"/>
+                        <path fill="#FFFFFF" d="M6,19L10,13L13,16L17,11L18,19z"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Image</div>
+                <div class="extensions">jpg, png, gif, webp, svg, heic</div>
+            </div>
+
+            <!-- Audio -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#7B1FA2" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#551473" d="M14,2v6h6z"/>
+                        <path fill="#FFFFFF" d="M10,17a2.5,1.5,0,1,0,5,0a2.5,1.5,0,1,0,-5,0"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.5" d="M15,17V10"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" d="M15,10C17,10.5 17,13 15,13.5"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Audio</div>
+                <div class="extensions">mp3, wav, ogg, flac, aac</div>
+            </div>
+
+            <!-- Video -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#E64A19" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#AC3413" d="M14,2v6h6z"/>
+                        <path fill="#FFFFFF" d="M9,11L9,19L17,15z"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Video</div>
+                <div class="extensions">mp4, avi, mkv, mov, wmv</div>
+            </div>
+
+            <!-- Text -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#546E7A" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#37474F" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" d="M7,11h10M7,14h10M7,17h6"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Text Document</div>
+                <div class="extensions">txt, log, md, xml, json, html</div>
+            </div>
+
+            <!-- Code -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#00838F" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#005662" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M10,11L7,15L10,19M14,11L17,15L14,19M11.5,19L12.5,11"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Source Code</div>
+                <div class="extensions">kt, java, py, js, ts, cpp, sql</div>
+            </div>
+
+            <!-- Email -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#1565C0" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#0D47A1" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" d="M7,12h10v7H7zM7,12l5,4l5,-4"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Email Message</div>
+                <div class="extensions">eml, msg</div>
+            </div>
+
+            <!-- Visio -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#3955A3" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#283D7A" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8,11L12,19L16,11"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Microsoft Visio</div>
+                <div class="extensions">vsd, vsdx, vst</div>
+            </div>
+
+            <!-- Web / HTML -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#E65100" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#AC3C00" d="M14,2v6h6z"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M9,11L6,15L9,19M15,11L18,15L15,19M13,10L11,20"/>
+                    </svg>
+                </div>
+                <div class="icon-name">HTML / Web</div>
+                <div class="extensions">html, htm, css, xhtml, mhtml</div>
+            </div>
+
+            <!-- APK -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#3DDC84" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#2CA866" d="M14,2v6h6z"/>
+                        <path fill="#FFFFFF" d="M8,15h8v4a1,1,0,0,1,-1,1h-6a1,1,0,0,1,-1,-1z"/>
+                        <path fill="#FFFFFF" d="M8,15a4,4,0,0,1,8,0"/>
+                        <path fill="#3DDC84" d="M10,13m-0.7,0a0.7,0.7,0,1,0,1.4,0a0.7,0.7,0,1,0,-1.4,0"/>
+                        <path fill="#3DDC84" d="M14,13m-0.7,0a0.7,0.7,0,1,0,1.4,0a0.7,0.7,0,1,0,-1.4,0"/>
+                        <path fill="none" stroke="#FFFFFF" stroke-width="1" stroke-linecap="round" d="M10,11L9,9M14,11L15,9"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Android APK</div>
+                <div class="extensions">apk, aab, xapk</div>
+            </div>
+
+            <!-- Generic -->
+            <div class="icon-card">
+                <div class="icon-wrapper">
+                    <svg viewBox="0 0 24 24">
+                        <path fill="#757575" d="M4,2h10l6,6v14H4z"/>
+                        <path fill="#525252" d="M14,2v6h6z"/>
+                    </svg>
+                </div>
+                <div class="icon-name">Generic File</div>
+                <div class="extensions">fallback для остальных</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            Все иконки — векторные, отрисованы вручную для IWO Mail<br>
+            Размер: 24×24dp • Формат: Android Vector Drawable (SVG-подобный)
+        </div>
+    </div>
+</body>
+</html>

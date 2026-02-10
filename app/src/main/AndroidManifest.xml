@@ -40,6 +40,8 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.IwoMailClient">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -71,6 +73,13 @@
                 <data android:mimeType="message/rfc822" />
             </intent-filter>
             
+            <!-- Отправка любых файлов (картинки, документы и т.д.) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            
             <!-- Отправка нескольких файлов -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
@@ -87,17 +96,20 @@
             </intent-filter>
         </activity>
 
-        <!-- Сервис синхронизации -->
-        <service
-            android:name=".sync.SyncService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
-
         <!-- Сервис Direct Push для Exchange -->
         <service
             android:name=".sync.PushService"
             android:foregroundServiceType="dataSync"
+            android:stopWithTask="false"
             android:exported="false" />
+        
+        <!-- WorkManager foreground service для SyncWorker -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false"
+            android:exported="false"
+            tools:node="merge" />
 
         <!-- FileProvider для открытия вложений -->
         <provider
@@ -127,8 +139,8 @@
             android:enabled="true"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.iwo.mailclient.SYNC_ALARM" />
-                <action android:name="com.iwo.mailclient.SYNC_NOW" />
+                <action android:name="com.dedovmosol.iwomail.SYNC_ALARM" />
+                <action android:name="com.dedovmosol.iwomail.SYNC_NOW" />
             </intent-filter>
         </receiver>
         
@@ -138,7 +150,7 @@
             android:enabled="true"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.iwo.mailclient.CALENDAR_REMINDER" />
+                <action android:name="com.dedovmosol.iwomail.CALENDAR_REMINDER" />
             </intent-filter>
         </receiver>
         
@@ -148,7 +160,19 @@
             android:enabled="true"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.iwo.mailclient.TASK_REMINDER" />
+                <action android:name="com.dedovmosol.iwomail.TASK_REMINDER" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- Сторожевой пёс для проверки работы сервиса -->
+        <receiver
+            android:name=".sync.ServiceWatchdogReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="android.intent.action.SCREEN_ON" />
+                <action android:name="android.intent.action.POWER_CONNECTED" />
             </intent-filter>
         </receiver>
         

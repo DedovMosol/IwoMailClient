@@ -19,4 +19,10 @@
     <string name="shortcut_search_long">Поиск писем</string>
     <string name="shortcut_sync">Синхронизация</string>
     <string name="shortcut_sync_long">Синхронизировать</string>
+    
+    <!-- Widget -->
+    <string name="loading">Загрузка…</string>
+    <string name="widget_add_account">Добавьте аккаунт</string>
+    <string name="widget_search_mail">Поиск в почте</string>
+    <string name="widget_calendar">Календарь</string>
 </resources>

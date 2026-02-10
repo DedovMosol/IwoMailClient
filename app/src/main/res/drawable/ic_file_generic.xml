@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Document body (Generic grey) -->
+    <path
+        android:fillColor="#757575"
+        android:pathData="M4,2h10l6,6v14H4z"/>
+    <!-- Corner fold -->
+    <path
+        android:fillColor="#525252"
+        android:pathData="M14,2v6h6z"/>
+</vector>

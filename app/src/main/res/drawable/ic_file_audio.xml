@@ -1,0 +1,31 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Document body (Audio purple) -->
+    <path
+        android:fillColor="#7B1FA2"
+        android:pathData="M4,2h10l6,6v14H4z"/>
+    <!-- Corner fold -->
+    <path
+        android:fillColor="#551473"
+        android:pathData="M14,2v6h6z"/>
+    <!-- Music note head (oval) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10,17a2.5,1.5,0,1,0,5,0a2.5,1.5,0,1,0,-5,0"/>
+    <!-- Note stem -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:pathData="M15,17V10"/>
+    <!-- Note flag -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M15,10C17,10.5 17,13 15,13.5"/>
+</vector>

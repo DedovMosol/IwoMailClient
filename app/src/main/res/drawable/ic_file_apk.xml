@@ -1,0 +1,36 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Document body (APK Android green) -->
+    <path
+        android:fillColor="#3DDC84"
+        android:pathData="M4,2h10l6,6v14H4z"/>
+    <!-- Corner fold -->
+    <path
+        android:fillColor="#2CA866"
+        android:pathData="M14,2v6h6z"/>
+    <!-- Android robot head -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8,15h8v4a1,1,0,0,1,-1,1h-6a1,1,0,0,1,-1,-1z"/>
+    <!-- Robot head dome -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8,15a4,4,0,0,1,8,0"/>
+    <!-- Eyes -->
+    <path
+        android:fillColor="#3DDC84"
+        android:pathData="M10,13m-0.7,0a0.7,0.7,0,1,0,1.4,0a0.7,0.7,0,1,0,-1.4,0"/>
+    <path
+        android:fillColor="#3DDC84"
+        android:pathData="M14,13m-0.7,0a0.7,0.7,0,1,0,1.4,0a0.7,0.7,0,1,0,-1.4,0"/>
+    <!-- Antennas -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1"
+        android:strokeLineCap="round"
+        android:pathData="M10,11L9,9M14,11L15,9"/>
+</vector>

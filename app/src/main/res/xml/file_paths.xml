@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <files-path name="attachments" path="attachments/" />
+    <files-path name="forward_attachments" path="forward_attachments/" />
+    <files-path name="reply_attachments" path="reply_attachments/" />
+    <files-path name="draft_attachments" path="draft_attachments/" />
     <files-path name="updates" path="updates/" />
     <cache-path name="cache" path="/" />
 </paths>

@@ -9,9 +9,9 @@
         android:shortcutShortLabel="@string/shortcut_widget"
         android:shortcutLongLabel="@string/shortcut_widget_long">
         <intent
-            android:action="com.iwo.mailclient.SHORTCUT_ADD_WIDGET"
-            android:targetPackage="com.iwo.mailclient"
-            android:targetClass="com.iwo.mailclient.MainActivity" />
+            android:action="com.dedovmosol.iwomail.SHORTCUT_ADD_WIDGET"
+            android:targetPackage="com.dedovmosol.iwomail"
+            android:targetClass="com.dedovmosol.iwomail.MainActivity" />
     </shortcut>
     
     <!-- Написать письмо -->
@@ -22,9 +22,9 @@
         android:shortcutShortLabel="@string/shortcut_compose"
         android:shortcutLongLabel="@string/shortcut_compose_long">
         <intent
-            android:action="com.iwo.mailclient.SHORTCUT_COMPOSE"
-            android:targetPackage="com.iwo.mailclient"
-            android:targetClass="com.iwo.mailclient.MainActivity" />
+            android:action="com.dedovmosol.iwomail.SHORTCUT_COMPOSE"
+            android:targetPackage="com.dedovmosol.iwomail"
+            android:targetClass="com.dedovmosol.iwomail.MainActivity" />
     </shortcut>
     
     <!-- Входящие -->
@@ -35,9 +35,9 @@
         android:shortcutShortLabel="@string/shortcut_inbox"
         android:shortcutLongLabel="@string/shortcut_inbox_long">
         <intent
-            android:action="com.iwo.mailclient.SHORTCUT_INBOX"
-            android:targetPackage="com.iwo.mailclient"
-            android:targetClass="com.iwo.mailclient.MainActivity" />
+            android:action="com.dedovmosol.iwomail.SHORTCUT_INBOX"
+            android:targetPackage="com.dedovmosol.iwomail"
+            android:targetClass="com.dedovmosol.iwomail.MainActivity" />
     </shortcut>
     
     <!-- Синхронизировать -->
@@ -48,9 +48,9 @@
         android:shortcutShortLabel="@string/shortcut_sync"
         android:shortcutLongLabel="@string/shortcut_sync_long">
         <intent
-            android:action="com.iwo.mailclient.SHORTCUT_SYNC"
-            android:targetPackage="com.iwo.mailclient"
-            android:targetClass="com.iwo.mailclient.MainActivity" />
+            android:action="com.dedovmosol.iwomail.SHORTCUT_SYNC"
+            android:targetPackage="com.dedovmosol.iwomail"
+            android:targetClass="com.dedovmosol.iwomail.MainActivity" />
     </shortcut>
     
 </shortcuts>

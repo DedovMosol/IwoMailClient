@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Document body (Image teal) -->
+    <path
+        android:fillColor="#00897B"
+        android:pathData="M4,2h10l6,6v14H4z"/>
+    <!-- Corner fold -->
+    <path
+        android:fillColor="#005F56"
+        android:pathData="M14,2v6h6z"/>
+    <!-- Sun circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8,11m-1.5,0a1.5,1.5,0,1,0,3,0a1.5,1.5,0,1,0,-3,0"/>
+    <!-- Mountain peaks -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M6,19L10,13L13,16L17,11L18,19z"/>
+</vector>

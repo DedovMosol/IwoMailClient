@@ -23,4 +23,8 @@
     <!-- Widget -->
     <string name="widget_description">Mail, calendar and tasks overview</string>
     <string name="widget_unread">unread</string>
+    <string name="widget_add_account">Add account</string>
+    <string name="widget_search_mail">Search mail</string>
+    <string name="widget_calendar">Calendar</string>
+    <string name="loading">Loading…</string>
 </resources>

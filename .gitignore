@@ -1,8 +1,30 @@
 # Reference project (fork)
 reference/
 
-# Architecture documentation (personal notes)
+# Old versions for comparison
+Old/
+old/
+
+# Test scripts
+run-tests.bat
+
+# Architecture & internal documentation (personal notes)
 ARCHITECTURE.md
+EXCHANGE_DELETE_OPTIMIZATION.md
+BUGFIX_PLAN.md
+docs/ARCHITECTURE.md
+docs/REFACTORING_PLAN.md
+docs/plan_ios_install.md
+docs/DRAFTS_IMPLEMENTATION.md
+docs/ISSUES_AND_FIXES.md
+docs/ROADMAP.md
+
+# IDE configuration
+.cursorrules
+
+# Personal configuration and scripts
+krista_office2007.reg
+register_krista_addin.bat
 
 # Screenshots (for store, not for repo)
 Screenshots/
@@ -79,3 +101,54 @@ Thumbs.db
 # Signing configs
 signing.properties
 keystore.properties
+
+# Certificates (private keys, client/server certs)
+*.p12
+*.pfx
+*.pem
+*.cer
+*.crt
+*.der
+
+# Environment variables
+*.env
+.env.*
+
+# Heap dumps (Android profiling)
+*.hprof
+
+# Temp/editor files
+*.tmp
+*.bak
+*.swp
+*~
+*.orig
+
+# Cursor IDE
+.cursor/
+.cursorignore
+
+# Lint reports / baseline
+lint-results*
+lint-baseline.xml
+app/lint-baseline.xml
+
+# Crashlytics / Firebase
+crashlytics-build.properties
+fabric.properties
+
+# Native libraries (compiled)
+*.so
+
+# Mapping / R8 / ProGuard outputs
+app/build/outputs/mapping/
+mapping.txt
+
+# Android profiling
+*.trace
+
+# AGP metadata
+.kotlin/
+
+# Update metadata (generated for GitHub)
+update.json

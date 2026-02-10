@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Document body (PDF red) -->
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M4,2h10l6,6v14H4z"/>
+    <!-- Corner fold -->
+    <path
+        android:fillColor="#9A2222"
+        android:pathData="M14,2v6h6z"/>
+    <!-- White page lines (form-like) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M7,12h10M7,15h10M7,18h6"/>
+</vector>

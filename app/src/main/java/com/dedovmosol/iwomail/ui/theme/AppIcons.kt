@@ -1,0 +1,177 @@
+package com.dedovmosol.iwomail.ui.theme
+
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
+import com.dedovmosol.iwomail.R
+
+/**
+ * Кастомные иконки из drawable ресурсов.
+ * Заменяют material-icons-extended для уменьшения размера APK.
+ */
+object AppIcons {
+    val Add: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_add)
+    val Animation: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_animation)
+    val ArrowBack: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_arrow_back)
+    val ArrowDropDown: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_arrow_drop_down)
+    val Attachment: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_attachment)
+    val AutoDelete: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_auto_delete)
+    val BatteryChargingFull: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_battery_charging_full)
+    val BatterySaver: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_battery_saver)
+    val Bolt: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_bolt)
+    val Business: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_business)
+    val Calendar: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_edit_calendar)
+    val CalendarMonth: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_calendar_month)
+    val Call: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_call)
+    val Check: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_check)
+    val CheckCircle: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_check_circle)
+    val ChevronLeft: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_chevron_left)
+    val ChevronRight: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_chevron_right)
+    val Clear: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_clear)
+    val Close: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_close)
+    val ContactPage: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_contact_page)
+    val ContactPhone: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_contact_phone)
+    val Contacts: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_contacts)
+    val ContentCopy: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_content_copy)
+    val CreateNewFolder: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_create_new_folder)
+    val DateRange: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_date_range)
+    val Delete: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_delete)
+    val DeleteForever: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_delete_forever)
+    val Download: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_download)
+    val Drafts: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_drafts)
+    val Draw: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_draw)
+    val DriveFileMove: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_drive_file_move)
+    val Edit: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_edit)
+    val EditCalendar: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_edit_calendar)
+    val Email: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_email)
+    val ErrorOutline: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_error_outline)
+    val ExpandLess: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_expand_less)
+    val ExpandMore: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_expand_more)
+    val Favorite: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_favorite)
+    val FileOpen: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_open)
+    val FilterList: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_filter_list)
+    val Folder: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_folder)
+    val FormatAlignLeft: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_align_left)
+    val FormatAlignCenter: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_align_center)
+    val FormatAlignRight: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_align_right)
+    val FormatAlignJustify: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_align_justify)
+    val FormatColorFill: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_color_fill)
+    val FormatSize: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_size)
+    val FolderOff: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_folder_off)
+    val Forward: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_forward)
+    val History: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_history)
+    val Image: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_image)
+    val Inbox: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_inbox)
+    val Info: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_info)
+    val InsertDriveFile: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_insert_drive_file)
+    val KeyboardArrowDown: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_keyboard_arrow_down)
+    val KeyboardArrowUp: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_keyboard_arrow_up)
+    val Language: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_language)
+    val Lightbulb: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_lightbulb)
+    val LightMode: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_light_mode)
+    val Lock: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_lock)
+    val MarkEmailRead: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_mark_email_read)
+    val MarkEmailUnread: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_mark_email_unread)
+    val Menu: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_menu)
+    val MoreVert: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_more_vert)
+    val NightsStay: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_nights_stay)
+    val Notifications: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_notifications)
+    val OpenInNew: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_open_in_new)
+    val Outbox: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_outbox)
+    val Palette: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_palette)
+    val People: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_people)
+    val Person: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_person)
+    val PersonAdd: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_person_add)
+    val PersonOff: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_person_off)
+    val PersonOutline: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_person_outline)
+    val PhoneAndroid: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_phone_android)
+    val Policy: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_policy)
+    val PriorityHigh: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_priority_high)
+    val Refresh: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_refresh)
+    val Reply: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_reply)
+    val Report: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_report)
+    val Restore: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_restore)
+    val Rocket: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_rocket)
+    val Schedule: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_schedule)
+    val Search: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_search)
+    val Security: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_security)
+    val Send: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_send)
+    val Settings: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_settings)
+    val Star: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_star)
+    val StarOutline: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_star_outline)
+    val StickyNote: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_sticky_note)
+    val SwapHoriz: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_swap_horiz)
+    val Sync: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_sync)
+    val TableChart: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_table_chart)
+    val Task: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_task)
+    val TextFields: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_text_fields)
+    val Update: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_update)
+    val Upload: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_upload)
+    val Visibility: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_visibility)
+    val VisibilityOff: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_visibility_off)
+    val Warning: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_warning)
+    val WbSunny: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_wb_sunny)
+    val Wifi: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_wifi)
+    val Install: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_install)
+
+    // --- File type icons ---
+    val FileWord: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_word)
+    val FileExcel: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_excel)
+    val FilePowerPoint: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_powerpoint)
+    val FileAccess: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_access)
+    val FileVisio: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_visio)
+    val FilePdf: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_pdf)
+    val FileArchive: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_archive)
+    val FileImage: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_image)
+    val FileAudio: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_audio)
+    val FileVideo: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_video)
+    val FileText: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_text)
+    val FileWeb: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_web)
+    val FileCode: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_code)
+    val FileApk: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_apk)
+    val FileEmail: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_email)
+    val FileGeneric: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_generic)
+
+    /**
+     * Возвращает иконку по имени файла (расширению).
+     * Используется для вложений в письмах.
+     */
+    @Composable
+    fun fileIconFor(fileName: String): ImageVector {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            // Microsoft Word
+            "doc", "docx", "dot", "dotx", "docm", "dotm", "rtf", "odt" -> FileWord
+            // Microsoft Excel
+            "xls", "xlsx", "xlt", "xltx", "xlsm", "xlsb", "csv", "ods" -> FileExcel
+            // Microsoft PowerPoint
+            "ppt", "pptx", "pot", "potx", "pptm", "pps", "ppsx", "odp" -> FilePowerPoint
+            // Microsoft Access
+            "mdb", "accdb", "accde", "accdt" -> FileAccess
+            // Microsoft Visio
+            "vsd", "vsdx", "vsdm", "vst", "vstx" -> FileVisio
+            // PDF / Adobe
+            "pdf" -> FilePdf
+            // Archives
+            "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "cab", "iso" -> FileArchive
+            // Images
+            "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "tiff", "tif", "ico", "heic" -> FileImage
+            // Audio
+            "mp3", "wav", "ogg", "flac", "aac", "wma", "m4a", "opus" -> FileAudio
+            // Video
+            "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "3gp", "m4v" -> FileVideo
+            // Web / HTML
+            "html", "htm", "css", "xhtml", "mhtml", "mht" -> FileWeb
+            // Text
+            "txt", "log", "md", "xml", "json", "yaml", "yml", "ini", "cfg" -> FileText
+            // Code
+            "kt", "java", "py", "cpp", "c", "h", "cs", "js", "ts", "go", "rs", "rb", "php", "swift", "sh", "bat", "ps1", "sql" -> FileCode
+            // APK / Android
+            "apk", "aab", "xapk" -> FileApk
+            // Email
+            "eml", "msg" -> FileEmail
+            // Fallback
+            else -> FileGeneric
+        }
+    }
+}
