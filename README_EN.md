@@ -11,7 +11,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 
 ## 🌟 Features
 
-- 📧 **Exchange ActiveSync** — EAS 12.0-14.1 support (Exchange 2007+)
+- 📧 **Exchange ActiveSync** — EAS 12.0-14.1 support (Exchange 2007+). Tested on Exchange 2007 SP1
 - 🔄 **EWS for Exchange 2007** — notes sync and creation via EWS with NTLMv2 (fallback for EAS 12.x)
 - 📬 **IMAP/POP3** — works with any mail server (beta)
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
@@ -39,7 +39,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 - Client certificates (mTLS), Certificate Pinning
 - Fixed: reply/forward (files, inline images), read status sync, deletion, system folders
 - Sync reentrancy protection, extended markAsRead error handling
-- Refactoring: 15 services, 6 repositories, 10-100x faster performance
+- Refactoring: 15 services, 6 repositories, performance improvements
 
 📋 Full changelog: [CHANGELOG_EN.md](docs/CHANGELOG_EN.md)
 

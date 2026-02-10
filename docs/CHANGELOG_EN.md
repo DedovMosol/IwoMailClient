@@ -28,7 +28,7 @@
 
 ### Performance
 - Refactoring: 15 services, 6 repositories
-- N+1 query optimization (10-100x faster), caching, regex pre-compilation
+- N+1 query optimization, caching, regex pre-compilation
 - PushService — battery savings, Chinese ROM protection
 
 ---
@@ -449,7 +449,6 @@
 - **Deletion progress bar** — fixed progress bar display when emptying trash
 - **Certificate selection** — now only certificate files can be selected
 - **Account deletion** — deleting account now fully cleans up local data
-- **User avatar color** — avatar in search and settings now changes color with app theme
 
 ---
 
@@ -528,16 +527,22 @@
 
 ---
 
-## v1.0.5c (26.12.2025)
+## v1.0.5c (25.12.2025)
 
 ### Notification Fixes
 - Fixed notifications on lock screen — added `VISIBILITY_PUBLIC`
 - Notification channels now recreated on app launch to apply new settings
 - Added `CATEGORY_EMAIL` for proper system handling
+- New emails channel now has `lockscreenVisibility = PUBLIC`
 
 ### Email Move Fixes
 - Fixed restore from trash bug — email now returns to the folder it was deleted from
 - `originalFolderId` correctly updates when moving between folders
+
+### Navigation Fixes
+- Fixed bug opening email from notification after swiping away app
+- Added check for email existence before opening
+- If email not found — opens Inbox with "Unread" filter
 
 ### Compatibility Improvements
 - Improved TLS compatibility on different devices — removed deprecated SSLv3
