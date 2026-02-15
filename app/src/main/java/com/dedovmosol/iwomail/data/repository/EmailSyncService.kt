@@ -311,9 +311,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 }
                 
                 val parsedDate = parseEwsDate(draft.dateCreated)
+                // Если сервер не вернул дату — сохраняем существующую или ставим 1L
+                // (НЕ currentTimeMillis, чтобы старые письма не всплывали как новые)
                 val effectiveDate = if (parsedDate > 0L) parsedDate
                     else existingEmail?.dateReceived?.takeIf { it > 0L }
-                    ?: System.currentTimeMillis()
+                    ?: 1L
                 val preview = stripHtml(draft.body).take(150).replace("\n", " ").trim()
                 EmailEntity(
                     id = "${accountId}_${draft.serverId}",
@@ -435,9 +437,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     if (result.data.emails.isNotEmpty()) {
                         val emailEntities = result.data.emails.map { email ->
                             val parsedDate = parseDate(email.dateReceived)
-                            // Если сервер не вернул дату — используем текущее время
+                            // Если сервер не вернул дату — ставим 1L вместо текущего времени,
+                            // чтобы старые письма не всплывали как «только что отправленные»
                             // (insertAllIgnore не перезапишет существующие письма)
-                            val effectiveDate = if (parsedDate > 0L) parsedDate else System.currentTimeMillis()
+                            val effectiveDate = if (parsedDate > 0L) parsedDate else 1L
                             EmailEntity(
                                 id = "${accountId}_${email.serverId}",
                                 accountId = accountId,
@@ -901,10 +904,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val existingEmail = existingEmailsMap[emailId]
             val parsedDate = parseDate(email.dateReceived)
             // Если сервер не вернул DateReceived (parsedDate=0), сохраняем существующую дату.
-            // Только для действительно новых писем без даты используем текущее время.
+            // Если сервер не вернул дату — сохраняем существующую или ставим 1L.
+            // НЕ currentTimeMillis(), чтобы старые письма не появлялись как новые
+            // и не вызывали уведомления/непрочитанные маркеры.
             val effectiveDate = if (parsedDate > 0L) parsedDate
                 else existingEmail?.dateReceived?.takeIf { it > 0L }
-                ?: System.currentTimeMillis()
+                ?: 1L
             EmailEntity(
                 id = emailId,
                 accountId = accountId,
