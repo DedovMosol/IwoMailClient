@@ -2515,7 +2515,7 @@ private fun CreateEventDialog(
                     )
                     if (recurrenceType != -1) {
                         Text(
-                            text = if (isRussianLang) "Задаёт длительность одного повторения" else "Sets the duration of each occurrence",
+                            text = if (isRussianLang) "Продолжительность каждого повторения" else "Sets the duration of each occurrence",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

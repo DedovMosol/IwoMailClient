@@ -1,5 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import android.app.Activity
+import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -51,6 +53,15 @@ import com.dedovmosol.iwomail.ui.components.EasterEggOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private fun ContextWrapper.findActivity(): Activity? {
+    var current: android.content.Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}
 
 enum class DateFilter(val days: Int?) {
     ALL(null), TODAY(1), WEEK(7), MONTH(30), YEAR(365)
@@ -476,7 +487,9 @@ fun SearchScreen(
     // Останавливаем музыку при уходе с экрана (свайп назад / навигация)
     DisposableEffect(Unit) {
         onDispose {
-            if (EasterEggPlayer.isPlaying) {
+            val activity = (context as? ContextWrapper)?.findActivity()
+            val isRotation = activity?.isChangingConfigurations == true
+            if (!isRotation && EasterEggPlayer.isPlaying) {
                 EasterEggPlayer.stop()
             }
         }

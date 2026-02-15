@@ -1,9 +1,10 @@
 ﻿# Архитектура проекта / Project Architecture
 
-**iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS), IMAP, POP3.
+**iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS), IMAP, POP3.  
+**iwo Mail Client** — Android client for Microsoft Exchange (EAS/EWS), IMAP, POP3.
 
-**Версия:** 1.6.2  
-**Пакет:** com.dedovmosol.iwomail  
+**Версия / Version:** 1.6.2  
+**Пакет / Package:** com.dedovmosol.iwomail  
 **Min SDK:** 26 (Android 8.0) | **Target SDK:** 36 (Android 16)
 
 ---

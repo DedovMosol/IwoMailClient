@@ -297,6 +297,8 @@ fun OnboardingScreen(
         }
 }
 
+}
+
 
 /**
  * Страница выбора языка
@@ -417,6 +419,8 @@ private fun LanguageSelectionPage(
                     colorTheme = colorTheme
                 )
             }
+        }
+
         }
 
         ScrollColumnScrollbar(scrollState)
@@ -586,6 +590,8 @@ private fun AnimationsSelectionPage(
                     )
                 )
             }
+        }
+
         }
 
         ScrollColumnScrollbar(scrollState)
@@ -796,6 +802,8 @@ private fun ThemeSelectionPage(
             }
         }
 
+        }
+
         ScrollColumnScrollbar(scrollState)
     }
 }
@@ -977,6 +985,8 @@ private fun DraftModeSelectionPage(
                     }
                 }
             }
+        }
+
         }
 
         ScrollColumnScrollbar(scrollState)
