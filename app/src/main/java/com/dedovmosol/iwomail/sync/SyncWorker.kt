@@ -241,19 +241,20 @@ class SyncWorker(
         settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
         
         // Автоочистка корзины
-        performAutoTrashCleanup()
+        performAutoTrashCleanup(accounts)
         
+        // DRY: передаём уже загруженный список аккаунтов вместо повторных DB-запросов
         // Синхронизация контактов GAL (для Exchange аккаунтов)
-        syncGalContacts()
+        syncGalContacts(accounts)
         
         // Синхронизация заметок (для Exchange аккаунтов)
-        syncNotes()
+        syncNotes(accounts)
         
         // Синхронизация календаря (для Exchange аккаунтов)
-        syncCalendar()
+        syncCalendar(accounts)
         
         // Синхронизация задач (для Exchange аккаунтов)
-        syncTasks()
+        syncTasks(accounts)
         
         // Обновляем виджет
         com.dedovmosol.iwomail.widget.updateMailWidget(applicationContext)
@@ -425,12 +426,10 @@ class SyncWorker(
      * Автоматическая очистка папок — удаляет письма старше N дней
      * Настройки берутся из каждого аккаунта индивидуально
      */
-    private suspend fun performAutoTrashCleanup() {
+    private suspend fun performAutoTrashCleanup(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
         // Проверяем раз в день
         val lastCleanup = settingsRepo.getLastTrashCleanupTimeSync()
         if (System.currentTimeMillis() - lastCleanup < ONE_DAY_MS) return
-        
-        val accounts = database.accountDao().getAllAccountsList()
         
         for (account in accounts) {
             // Очистка корзины
@@ -484,8 +483,7 @@ class SyncWorker(
      * Синхронизация контактов из GAL для Exchange аккаунтов
      * Загружает контакты и сохраняет в локальную БД
      */
-    private suspend fun syncGalContacts() {
-        val accounts = database.accountDao().getAllAccountsList()
+    private suspend fun syncGalContacts(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
         val contactRepo = com.dedovmosol.iwomail.data.repository.ContactRepository(applicationContext)
         
         for (account in accounts) {
@@ -515,8 +513,7 @@ class SyncWorker(
     /**
      * Синхронизация заметок для Exchange аккаунтов
      */
-    private suspend fun syncNotes() {
-        val accounts = database.accountDao().getAllAccountsList()
+    private suspend fun syncNotes(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
         val noteRepo = com.dedovmosol.iwomail.data.repository.NoteRepository(applicationContext)
         
         for (account in accounts) {
@@ -546,8 +543,7 @@ class SyncWorker(
     /**
      * Синхронизация календаря для Exchange аккаунтов
      */
-    private suspend fun syncCalendar() {
-        val accounts = database.accountDao().getAllAccountsList()
+    private suspend fun syncCalendar(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
         val calendarRepo = com.dedovmosol.iwomail.data.repository.CalendarRepository(applicationContext)
         
         for (account in accounts) {
@@ -577,8 +573,7 @@ class SyncWorker(
     /**
      * Синхронизация задач для Exchange аккаунтов
      */
-    private suspend fun syncTasks() {
-        val accounts = database.accountDao().getAllAccountsList()
+    private suspend fun syncTasks(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
         val taskRepo = com.dedovmosol.iwomail.data.repository.TaskRepository(applicationContext)
         
         for (account in accounts) {

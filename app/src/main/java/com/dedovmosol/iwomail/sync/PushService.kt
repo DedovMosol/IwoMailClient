@@ -181,6 +181,23 @@ class PushService : Service() {
     }
     
     /**
+     * Проверяет, закэширован ли pingNotSupported для аккаунта.
+     * TTL 24ч — после этого повторная проверка (сервер мог быть обновлён).
+     */
+    private fun isPingNotSupportedCached(accountId: Long): Boolean {
+        val prefs = getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
+        val timestamp = prefs.getLong("ping_not_supported_$accountId", 0L)
+        if (timestamp == 0L) return false
+        // TTL 24 часа
+        return (System.currentTimeMillis() - timestamp) < 24 * 60 * 60 * 1000L
+    }
+    
+    private fun savePingNotSupported(accountId: Long) {
+        getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
+            .edit().putLong("ping_not_supported_$accountId", System.currentTimeMillis()).apply()
+    }
+    
+    /**
      * Сохраняет heartbeat для аккаунта
      */
     private fun saveHeartbeat(accountId: Long, heartbeat: Int) {
@@ -548,7 +565,7 @@ class PushService : Service() {
             var heartbeat = loadHeartbeat(accountId)
             var consecutiveErrors = 0
             var consecutiveSuccesses = 0  // Для адаптивного увеличения heartbeat
-            var pingNotSupported = false
+            var pingNotSupported = isPingNotSupportedCached(accountId)
             
             syncAccount(account)
             
@@ -598,6 +615,7 @@ class PushService : Service() {
                         quickPingCount++
                         if (quickPingCount >= 3) {
                             pingNotSupported = true
+                            savePingNotSupported(accountId)
                             quickPingCount = 0
                             continue
                         }
@@ -655,6 +673,7 @@ class PushService : Service() {
                             }
                             if (consecutiveErrors >= 3) {
                                 pingNotSupported = true
+                                savePingNotSupported(accountId)
                                 consecutiveErrors = 0
                             } else {
                                 delay(60 * 1000L)
@@ -675,6 +694,7 @@ class PushService : Service() {
                     }
                     if (consecutiveErrors >= 3) {
                         pingNotSupported = true
+                        savePingNotSupported(accountId)
                         consecutiveErrors = 0
                     } else {
                         delay(60 * 1000L)
@@ -763,16 +783,24 @@ class PushService : Service() {
         
         for (folder in folders) {
             // Сначала инкрементальная синхронизация, при ошибке - полный ресинк
+            // КРИТИЧНО: withTimeoutOrNull предотвращает бесконечное удержание radio
+            // (аналогично SyncWorker — 300 сек per folder)
             try {
-                val result = mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
-                if (result is EasResult.Error) {
-                    // При ошибке делаем полный ресинк как страховку
-            mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                val result = withTimeoutOrNull(300_000L) {
+                    mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
+                }
+                if (result == null || result is EasResult.Error) {
+                    // Таймаут или ошибка — пробуем полный ресинк
+                    withTimeoutOrNull(300_000L) {
+                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                    }
                 }
             } catch (_: Exception) {
                 // При исключении тоже пробуем полный ресинк
                 try {
-                    mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                    withTimeoutOrNull(300_000L) {
+                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                    }
                 } catch (_: Exception) {
                     // Продолжаем с другими папками
                 }
@@ -786,7 +814,9 @@ class PushService : Service() {
         val newEmailEntities = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
         
         // Предзагружаем тела ДО блокировки mutex (IO-тяжёлая операция)
-        for (entity in newEmailEntities) {
+        // КРИТИЧНО: Лимит 5 тел — каждый loadEmailBody = сетевой запрос.
+        // Без лимита 50 новых писем = 50 последовательных HTTP-запросов, держащих radio активным.
+        for (entity in newEmailEntities.take(5)) {
             try {
                 val email = database.emailDao().getEmail(entity.id)
                 if (email != null && email.body.isEmpty()) {
