@@ -9,8 +9,6 @@ old/
 run-tests.bat
 
 # Architecture & internal documentation (personal notes)
-ARCHITECTURE.md
-docs/ARCHITECTURE.md
 EXCHANGE_DELETE_OPTIMIZATION.md
 BUGFIX_PLAN.md
 
