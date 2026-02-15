@@ -740,8 +740,19 @@ class CalendarRepository(private val context: Context) {
                         if (serverEvents.isNotEmpty() || existingEvents.isEmpty()) {
                             val serverDeletedIds = existingServerIds - serverReturnedIds
                             
-                            // Удаляем только те, которых нет на сервере
+                            // КРИТИЧНО: EAS FilterType=6 возвращает только 3 месяца событий.
+                            // События СТАРШЕ 3 месяцев не будут в ответе сервера,
+                            // но это НЕ означает что они удалены — просто вне окна фильтра.
+                            // Удаляем только те, которых нет на сервере И которые в пределах окна.
+                            val filterCutoffMs = System.currentTimeMillis() - (90L * 24 * 60 * 60 * 1000) // 90 дней
+                            val existingEventsMap = existingEvents.associateBy { it.serverId }
+                            
                             for (serverId in serverDeletedIds) {
+                                val localEvent = existingEventsMap[serverId]
+                                // Не удаляем события старше 3 месяцев — они вне окна FilterType=6
+                                if (localEvent != null && localEvent.startTime < filterCutoffMs) {
+                                    continue
+                                }
                                 val eventId = "${accountId}_${serverId}"
                                 CalendarReminderReceiver.cancelReminder(context, eventId)
                                 calendarEventDao.delete(eventId)

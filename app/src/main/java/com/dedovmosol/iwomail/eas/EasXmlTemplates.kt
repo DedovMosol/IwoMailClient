@@ -415,8 +415,14 @@ $SOAP_ENVELOPE_END"""
     
     /**
      * EWS FindItem для календаря
+     * Динамический диапазон: 1 год назад — 2 года вперёд
      */
     fun ewsFindCalendarItems(): String {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        val now = System.currentTimeMillis()
+        val startDate = sdf.format(java.util.Date(now - 365L * 24 * 60 * 60 * 1000)) // 1 год назад
+        val endDate = sdf.format(java.util.Date(now + 2L * 365 * 24 * 60 * 60 * 1000)) // 2 года вперёд
         return """
             ${SOAP_ENVELOPE_START}
             ${SOAP_HEADER_2007}
@@ -428,8 +434,8 @@ $SOAP_ENVELOPE_END"""
                         <t:BaseShape>AllProperties</t:BaseShape>
                     </ItemShape>
                     <CalendarView MaxEntriesReturned="2000"
-                                  StartDate="2020-01-01T00:00:00Z"
-                                  EndDate="2030-12-31T23:59:59Z"/>
+                                  StartDate="$startDate"
+                                  EndDate="$endDate"/>
                     <ParentFolderIds>
                         <t:DistinguishedFolderId Id="calendar"/>
                     </ParentFolderIds>

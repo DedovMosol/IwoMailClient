@@ -146,22 +146,104 @@ class EasCalendarService internal constructor(
     
     /**
      * Удаление события календаря
+     * КРИТИЧНО: Exchange 2007 SP1 синхронизирует календарь через EWS (syncCalendarEws),
+     * поэтому serverId — EWS ItemId (длинная base64 строка).
+     * EAS Sync Delete ожидает КОРОТКИЙ EAS ServerId (формат "22:2").
+     * Маршрутизируем удаление по формату serverId на Exchange 2007.
      */
     suspend fun deleteCalendarEvent(serverId: String): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
         
-        val calendarFolderId = getCalendarFolderId()
-        if (calendarFolderId == null) {
-            return EasResult.Error("Папка календаря не найдена")
-        }
+        val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         
-        // Всегда используем EAS Sync для удаления (как в старой версии)
-        return deleteCalendarEventEas(serverId, calendarFolderId)
+        return if (majorVersion >= 14) {
+            // Exchange 2010+: всегда EAS Sync Delete (serverId всегда EAS формат)
+            val calendarFolderId = getCalendarFolderId()
+                ?: return EasResult.Error("Папка календаря не найдена")
+            deleteCalendarEventEas(serverId, calendarFolderId)
+        } else {
+            // Exchange 2007 SP1: определяем формат serverId
+            // EAS ServerId: короткий, содержит ":" (напр. "22:2")
+            // EWS ItemId: длинная base64 строка без ":" (напр. "AAMkAD...")
+            val isEasServerId = serverId.contains(":") && serverId.length < 20
+            if (isEasServerId) {
+                val calendarFolderId = getCalendarFolderId()
+                    ?: return EasResult.Error("Папка календаря не найдена")
+                deleteCalendarEventEas(serverId, calendarFolderId)
+            } else {
+                // EWS ItemId — удаляем через EWS DeleteItem
+                // Если serverId содержит "|" — это формат "ItemId|ChangeKey", берём только ItemId
+                val ewsItemId = if (serverId.contains("|")) serverId.substringBefore("|") else serverId
+                deleteCalendarEventEws(ewsItemId)
+            }
+        }
     }
     
     // === Вспомогательные методы ===
+    
+    /**
+     * DRY: Общий метод получения актуального SyncKey для EAS операций (Create/Update/Delete).
+     * Шаг 1: Начальный Sync с SyncKey=0 → получаем первый SyncKey
+     * Шаг 2: Полное продвижение через <MoreAvailable> до актуального состояния
+     * КРИТИЧНО: без полного продвижения операции могут получить Status=3 (INVALID_SYNCKEY).
+     */
+    private suspend fun getAdvancedSyncKey(calendarFolderId: String): EasResult<String> {
+        val initialXml = EasXmlTemplates.syncInitial(calendarFolderId)
+        var syncKey = "0"
+        
+        val initialResult = deps.executeEasCommand("Sync", initialXml) { responseXml ->
+            deps.extractValue(responseXml, "SyncKey") ?: "0"
+        }
+        
+        when (initialResult) {
+            is EasResult.Success -> syncKey = initialResult.data
+            is EasResult.Error -> return EasResult.Error(initialResult.message)
+        }
+        
+        if (syncKey == "0") {
+            return EasResult.Error("Не удалось получить SyncKey")
+        }
+        
+        var moreAvailable = true
+        var syncIterations = 0
+        val maxSyncIterations = 50
+        
+        while (moreAvailable && syncIterations < maxSyncIterations) {
+            syncIterations++
+            val advanceXml = """<?xml version="1.0" encoding="UTF-8"?>
+<Sync xmlns="AirSync">
+    <Collections>
+        <Collection>
+            <SyncKey>$syncKey</SyncKey>
+            <CollectionId>$calendarFolderId</CollectionId>
+            <GetChanges>1</GetChanges>
+            <WindowSize>100</WindowSize>
+        </Collection>
+    </Collections>
+</Sync>""".trimIndent()
+            
+            val advanceResult = deps.executeEasCommand("Sync", advanceXml) { responseXml ->
+                val newKey = deps.extractValue(responseXml, "SyncKey")
+                val hasMore = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
+                Pair(newKey ?: syncKey, hasMore)
+            }
+            
+            when (advanceResult) {
+                is EasResult.Success -> {
+                    syncKey = advanceResult.data.first
+                    moreAvailable = advanceResult.data.second
+                }
+                is EasResult.Error -> {
+                    moreAvailable = false
+                }
+            }
+        }
+        
+        android.util.Log.d("EasCalendarService", "SyncKey advanced in $syncIterations iterations, syncKey=$syncKey")
+        return EasResult.Success(syncKey)
+    }
     
     private suspend fun getCalendarFolderId(): String? {
         if (cachedCalendarFolderId != null) {
@@ -366,64 +448,14 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
         val calendarFolderId = getCalendarFolderId()
             ?: return EasResult.Error("Папка календаря не найдена")
         
-        // Шаг 1: Получаем начальный SyncKey
-        val initialXml = EasXmlTemplates.syncInitial(calendarFolderId)
-        var syncKey = "0"
-        
-        val initialResult = deps.executeEasCommand("Sync", initialXml) { responseXml ->
-            deps.extractValue(responseXml, "SyncKey") ?: "0"
+        // Получаем актуальный SyncKey (DRY: общий метод для create/update/delete)
+        val syncKeyResult = getAdvancedSyncKey(calendarFolderId)
+        val syncKey = when (syncKeyResult) {
+            is EasResult.Success -> syncKeyResult.data
+            is EasResult.Error -> return syncKeyResult
         }
         
-        when (initialResult) {
-            is EasResult.Success -> syncKey = initialResult.data
-            is EasResult.Error -> return EasResult.Error(initialResult.message)
-        }
-        
-        if (syncKey == "0") {
-            return EasResult.Error("Не удалось получить SyncKey")
-        }
-        
-        // Шаг 2: Полное продвижение SyncKey до актуального состояния
-        // КРИТИЧНО для Exchange 2007 SP1: сервер может отклонить команду Add
-        // с начальным SyncKey (нужно сначала подтвердить все существующие элементы)
-        var moreAvailable = true
-        var syncIterations = 0
-        val maxSyncIterations = 50
-        
-        while (moreAvailable && syncIterations < maxSyncIterations) {
-            syncIterations++
-            val advanceXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
-            <GetChanges>1</GetChanges>
-            <WindowSize>100</WindowSize>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-            
-            val advanceResult = deps.executeEasCommand("Sync", advanceXml) { responseXml ->
-                val newKey = deps.extractValue(responseXml, "SyncKey")
-                val hasMore = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
-                Pair(newKey ?: syncKey, hasMore)
-            }
-            
-            when (advanceResult) {
-                is EasResult.Success -> {
-                    syncKey = advanceResult.data.first
-                    moreAvailable = advanceResult.data.second
-                }
-                is EasResult.Error -> {
-                    moreAvailable = false // Прерываем, пробуем с текущим syncKey
-                }
-            }
-        }
-        
-        android.util.Log.d("EasCalendarService", "createCalendarEventEas: SyncKey advanced in $syncIterations iterations, syncKey=$syncKey")
-        
-        // Шаг 3: Создание события
+        // Создание события
         val clientId = UUID.randomUUID().toString().replace("-", "").take(32)
         val startTimeStr = formatEasDate(startTime)
         val endTimeStr = formatEasDate(endTime)
@@ -525,15 +557,11 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
         val calendarFolderId = getCalendarFolderId()
             ?: return EasResult.Error("Папка календаря не найдена")
         
-        // Получаем SyncKey
-        val syncKeyResult = deps.refreshSyncKey(calendarFolderId, "0")
+        // Получаем актуальный SyncKey (DRY: общий метод для create/update/delete)
+        val syncKeyResult = getAdvancedSyncKey(calendarFolderId)
         val syncKey = when (syncKeyResult) {
             is EasResult.Success -> syncKeyResult.data
-            is EasResult.Error -> return EasResult.Error(syncKeyResult.message)
-        }
-        
-        if (syncKey == "0") {
-            return EasResult.Error("Не удалось получить SyncKey")
+            is EasResult.Error -> return syncKeyResult
         }
         
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
@@ -646,74 +674,44 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
     }
     
     private suspend fun deleteCalendarEventEas(serverId: String, calendarFolderId: String): EasResult<Boolean> {
-        // Шаг 1: Получаем начальный SyncKey
-        val initialXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>0</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-        
-        var syncKey = "0"
-        val initialResult = deps.executeEasCommand("Sync", initialXml) { responseXml ->
-            deps.extractValue(responseXml, "SyncKey") ?: "0"
+        // Получаем актуальный SyncKey (DRY: общий метод для create/update/delete)
+        var syncKeyResult = getAdvancedSyncKey(calendarFolderId)
+        var syncKey = when (syncKeyResult) {
+            is EasResult.Success -> syncKeyResult.data
+            is EasResult.Error -> return syncKeyResult
         }
         
-        when (initialResult) {
-            is EasResult.Success -> syncKey = initialResult.data
-            is EasResult.Error -> return EasResult.Error(initialResult.message)
-        }
+        // Удаление
+        val deleteResult = executeEasDelete(serverId, syncKey, calendarFolderId)
         
-        if (syncKey == "0") {
-            return EasResult.Error("Не удалось получить SyncKey")
-        }
+        // Retry при INVALID_SYNCKEY или неуспешном удалении: полный сброс SyncKey
+        val needsRetry = (deleteResult is EasResult.Success && !deleteResult.data) ||
+                         (deleteResult is EasResult.Error && deleteResult.message.contains("INVALID_SYNCKEY"))
         
-        // Шаг 2: Полное продвижение SyncKey до актуального состояния
-        // КРИТИЧНО: WindowSize=1 (минимум по спецификации MS-ASCMD).
-        // WindowSize=0 невалидно и может быть проигнорировано некоторыми серверами,
-        // что приводит к неактуальному SyncKey и последующему отказу удаления.
-        // Цикл нужен для обработки <MoreAvailable> — SyncKey продвигается пошагово.
-        var moreAvailable = true
-        var syncIterations = 0
-        val maxSyncIterations = 50
-        
-        while (moreAvailable && syncIterations < maxSyncIterations) {
-            syncIterations++
-            val syncXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
-            <GetChanges>1</GetChanges>
-            <WindowSize>100</WindowSize>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
+        if (needsRetry) {
+            android.util.Log.w("EasCalendarService", "Delete failed, retrying with full SyncKey reset for serverId=$serverId")
             
-            val syncResult = deps.executeEasCommand("Sync", syncXml) { responseXml ->
-                val newKey = deps.extractValue(responseXml, "SyncKey")
-                val hasMore = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
-                Pair(newKey ?: syncKey, hasMore)
+            syncKeyResult = getAdvancedSyncKey(calendarFolderId)
+            syncKey = when (syncKeyResult) {
+                is EasResult.Success -> syncKeyResult.data
+                is EasResult.Error -> return deleteResult // Не смогли — возвращаем исходную ошибку
             }
             
-            when (syncResult) {
-                is EasResult.Success -> {
-                    syncKey = syncResult.data.first
-                    moreAvailable = syncResult.data.second
-                }
-                is EasResult.Error -> {
-                    moreAvailable = false // Прерываем, пробуем удалить с текущим syncKey
-                }
-            }
+            return executeEasDelete(serverId, syncKey, calendarFolderId)
         }
         
-        android.util.Log.d("EasCalendarService", "deleteCalendarEventEas: SyncKey advanced in $syncIterations iterations, syncKey=$syncKey")
-        
-        // Шаг 3: Удаление
+        return deleteResult
+    }
+    
+    /**
+     * DRY: Выполнение EAS Sync Delete с указанным SyncKey.
+     * Используется в deleteCalendarEventEas (основная попытка + retry).
+     */
+    private suspend fun executeEasDelete(
+        serverId: String,
+        syncKey: String,
+        calendarFolderId: String
+    ): EasResult<Boolean> {
         val deleteXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
     <Collections>
@@ -729,7 +727,7 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
     </Collections>
 </Sync>""".trimIndent()
         
-        val deleteResult = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
+        return deps.executeEasCommand("Sync", deleteXml) { responseXml ->
             val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
             when (status) {
                 1 -> true  // Успех
@@ -738,79 +736,6 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
                 else -> false
             }
         }
-        
-        // Retry при INVALID_SYNCKEY или неуспешном удалении: полный сброс SyncKey
-        val needsRetry = (deleteResult is EasResult.Success && !deleteResult.data) ||
-                         (deleteResult is EasResult.Error && deleteResult.message.contains("INVALID_SYNCKEY"))
-        
-        if (needsRetry) {
-            android.util.Log.w("EasCalendarService", "Delete failed, retrying with full SyncKey reset for serverId=$serverId")
-            
-            // Полный сброс: SyncKey=0 → начальный → полное продвижение → удаление
-            var retryKey = "0"
-            val retryInitResult = deps.executeEasCommand("Sync", initialXml) { responseXml ->
-                deps.extractValue(responseXml, "SyncKey") ?: "0"
-            }
-            when (retryInitResult) {
-                is EasResult.Success -> retryKey = retryInitResult.data
-                is EasResult.Error -> return deleteResult // Не смогли даже инициализировать
-            }
-            if (retryKey == "0") return deleteResult
-            
-            // Полное продвижение
-            var retryMore = true
-            var retryIter = 0
-            while (retryMore && retryIter < maxSyncIterations) {
-                retryIter++
-                val retrySyncXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>$retryKey</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
-            <GetChanges>1</GetChanges>
-            <WindowSize>100</WindowSize>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-                
-                val retrySyncResult = deps.executeEasCommand("Sync", retrySyncXml) { responseXml ->
-                    val newKey = deps.extractValue(responseXml, "SyncKey")
-                    val hasMore = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
-                    Pair(newKey ?: retryKey, hasMore)
-                }
-                when (retrySyncResult) {
-                    is EasResult.Success -> {
-                        retryKey = retrySyncResult.data.first
-                        retryMore = retrySyncResult.data.second
-                    }
-                    is EasResult.Error -> retryMore = false
-                }
-            }
-            
-            // Повторная попытка удаления с полностью актуальным SyncKey
-            val retryDeleteXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>$retryKey</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
-            <Commands>
-                <Delete>
-                    <ServerId>$serverId</ServerId>
-                </Delete>
-            </Commands>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-            
-            return deps.executeEasCommand("Sync", retryDeleteXml) { responseXml ->
-                val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
-                status == 1 || status == 8
-            }
-        }
-        
-        return deleteResult
     }
     
     // === EWS методы (Exchange 2007) ===
@@ -1188,7 +1113,12 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
                     ?: return@withContext EasResult.Error("Ошибка выполнения EWS запроса")
                 
                 val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)
-                EasResult.Success(responseCode == "NoError")
+                when (responseCode) {
+                    "NoError" -> EasResult.Success(true)
+                    // ErrorItemNotFound — аналог EAS Status=8, событие уже удалено
+                    "ErrorItemNotFound" -> EasResult.Success(true)
+                    else -> EasResult.Error("EWS DeleteItem: $responseCode")
+                }
             } catch (e: Exception) {
                 EasResult.Error("Ошибка удаления события: ${e.message}")
             }
