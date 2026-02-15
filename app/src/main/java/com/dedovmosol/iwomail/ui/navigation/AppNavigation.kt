@@ -38,7 +38,9 @@ import java.net.URLEncoder
  * а хранятся здесь и очищаются после использования.
  */
 object VerificationSecrets {
+    @Volatile
     var password: String? = null
+    @Volatile
     var clientCertificatePassword: String? = null
     
     fun clear() {
@@ -55,6 +57,7 @@ private const val VERIFICATION_CLIENT_CERT_PASSWORD_KEY = "verification_client_c
  * Используется потому что URI нельзя передать через навигацию
  */
 object ShareIntentData {
+    @Volatile
     var attachments: List<android.net.Uri> = emptyList()
     
     fun clear() {

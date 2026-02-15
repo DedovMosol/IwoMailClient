@@ -2,15 +2,12 @@
 
 ## v1.6.2 (February 2026) — Short summary
 
-- Sync is faster and more stable: fewer duplicates, better cancellation, per-folder timeouts, batch mark-as-read.
-- Fixed memory leaks and race conditions (Push/Sync/notifications), improved behavior on large mailboxes.
-- UI refresh: cards, scrollbar, themes (4 instead of 7), drag-select, haptic feedback, and cleaner dialogs.
-- Widget reworked: up-to-date unread/event/task/recent-email data with proper scaling.
-- Calendar/tasks: recurring events, local trash, extended MS-ASCAL fields, event attachments and online links.
-- Drafts/contacts: local fallback for drafts, group selection, stronger email validation, duplicate checks on export.
-- Security hardening: no password transfer via routes, less sensitive logging, more robust EAS/EWS client handling.
-- Added security/memory/race/network audit: `docs/SECURITY_MEMORY_RACE_NETWORK_AUDIT.md`.
-- Compatibility retained: Exchange 2007 SP1+.
+- Stability and sync: improved behavior on large mailboxes, fewer duplicates, stronger protection from races/leaks, and more reliable Push/Sync/notifications.
+- Mail and contacts: improved reply/forward and mark-as-read flows, better drafts/folder handling, stronger contact validation/export checks.
+- Calendar, tasks, and widget: expanded support for recurring events/attachments/online links, plus fresher widget data and scaling.
+- Interface: consolidated themes and visual components, improved dialogs, scrollbar behavior, and UX interactions.
+- Security and reliability: stronger handling of sensitive data and added audit `docs/SECURITY_MEMORY_RACE_NETWORK_AUDIT.md`.
+- Compatibility: Exchange 2007 SP1+ retained.
 
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 

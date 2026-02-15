@@ -68,15 +68,10 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                 
                 showSyncStartedNotification(context)
                 
-                // Для ручной синхронизации используем WorkManager - он надёжнее
-                val workRequest = androidx.work.OneTimeWorkRequestBuilder<SyncWorker>()
-                    .setInputData(
-                        androidx.work.Data.Builder()
-                            .putBoolean("manual_sync", true)
-                            .build()
-                    )
-                    .build()
-                androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+                // Единая точка запуска ручной синхронизации:
+                // внутри SyncWorker.syncNow уже используется enqueueUniqueWork(KEEP)
+                // с общим именем MANUAL_SYNC_WORK.
+                SyncWorker.syncNow(context)
                 return
             }
             

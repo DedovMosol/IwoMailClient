@@ -36,11 +36,11 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 ## 🆕 What's New in v1.6.2
 
-- Rich Text editor, HTML signatures, folder management
-- Client certificates (mTLS), Certificate Pinning
-- Fixed: reply/forward (files, inline images), read status sync, deletion, system folders
-- Sync reentrancy protection, extended markAsRead error handling
-- Refactoring: 15 services, 6 repositories, performance improvements
+- Stability and sync: improved behavior on large mailboxes, fewer duplicates, stronger protection from races/leaks, and more reliable Push/Sync/notifications.
+- Mail and contacts: improved reply/forward and mark-as-read flows, better drafts/folder handling, stronger contact validation/export checks.
+- Calendar, tasks, and widget: expanded support for recurring events/attachments/online links, plus fresher widget data and scaling.
+- Interface: consolidated themes and visual components, improved dialogs, scrollbar behavior, and UX interactions.
+- Security: client certificates (mTLS), Certificate Pinning, and stronger handling of sensitive data.
 
 📋 Full changelog: [CHANGELOG_EN.md](docs/CHANGELOG_EN.md)
 

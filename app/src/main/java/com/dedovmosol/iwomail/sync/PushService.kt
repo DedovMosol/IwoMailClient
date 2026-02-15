@@ -68,6 +68,7 @@ class PushService : Service() {
         
     // NetworkCallback для отслеживания состояния сети
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile
     private var isNetworkAvailable = true
     
     companion object {
