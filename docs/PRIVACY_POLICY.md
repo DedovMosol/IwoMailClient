@@ -39,7 +39,7 @@ The following data is stored only on your device:
 
 The App connects only to:
 - Mail servers you configure (Exchange ActiveSync, Exchange Web Services, IMAP, POP3)
-- GitHub (only for checking app updates via `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`)
+- GitHub (only for checking app updates and rollbacks via `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`)
 - No third-party analytics or advertising services
 - No personal data is sent to the developer
 
@@ -75,7 +75,7 @@ The App can receive data from other applications via Android's standard sharing 
 
 ### Updates
 
-The app can check for updates by connecting to GitHub:
+The app can check for updates and rollbacks by connecting to GitHub:
 - Update information is fetched from `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`
 - Only version information and changelog are downloaded
 - APK files are downloaded directly from GitHub releases
@@ -130,7 +130,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 
 Приложение подключается только к:
 - Почтовым серверам, которые вы настроите (Exchange ActiveSync, Exchange Web Services, IMAP, POP3)
-- GitHub (только для проверки обновлений через `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`)
+- GitHub (только для проверки обновлений и откатов версий через `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`)
 - Никаких сторонних сервисов аналитики или рекламы
 - Никакие персональные данные не отправляются разработчику
 
@@ -166,13 +166,13 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 
 ### Обновления
 
-Приложение может проверять наличие обновлений, подключаясь к GitHub:
+Приложение может проверять наличие обновлений и откатов версий, подключаясь к GitHub:
 - Информация об обновлениях загружается с `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`
 - Загружается только информация о версии и список изменений
 - APK файлы скачиваются напрямую с GitHub releases
 - Никакие персональные данные не отправляются при проверке обновлений
 - При обнаружении новой версии отправляется push-уведомление (можно отключить в настройках уведомлений Android)
-- Обновления опциональны и требуют подтверждения пользователя
+- Обновления опциональны и требуют подтверждения пользователем
 
 ### Изменения политики
 
