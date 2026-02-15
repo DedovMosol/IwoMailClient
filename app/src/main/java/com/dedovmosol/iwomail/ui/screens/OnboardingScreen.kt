@@ -295,7 +295,6 @@ fun OnboardingScreen(
                 }
             }
         }
-    }
 }
 
 
@@ -326,19 +325,24 @@ private fun LanguageSelectionPage(
     val iconSize = if (isCompactHeight) 72.dp else if (isSmallScreen) 80.dp else 120.dp
     val iconInnerSize = if (isCompactHeight) 36.dp else if (isSmallScreen) 40.dp else 60.dp
     val spacerHeight = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
+    val scrollState = rememberScrollState()
     
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(
-                horizontal = 32.dp,
-                vertical = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(
+                    horizontal = 32.dp,
+                    vertical = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
+        ) {
         // Иконка с анимацией появления
         AnimatedVisibility(
             visible = visible,
@@ -414,6 +418,8 @@ private fun LanguageSelectionPage(
                 )
             }
         }
+
+        ScrollColumnScrollbar(scrollState)
     }
 }
 
@@ -471,16 +477,21 @@ private fun AnimationsSelectionPage(
     val iconSize = if (isCompactHeight) 72.dp else 120.dp
     val iconInnerSize = if (isCompactHeight) 36.dp else 60.dp
     val spacerHeight = if (isCompactHeight) 12.dp else 32.dp
+    val scrollState = rememberScrollState()
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 32.dp, vertical = if (isCompactHeight) 12.dp else 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 32.dp, vertical = if (isCompactHeight) 12.dp else 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
+        ) {
         // Иконка с анимацией появления
         AnimatedVisibility(
             visible = visible,
@@ -576,6 +587,8 @@ private fun AnimationsSelectionPage(
                 )
             }
         }
+
+        ScrollColumnScrollbar(scrollState)
     }
 }
 
@@ -600,21 +613,26 @@ private fun ThemeSelectionPage(
     val isCompactHeight = configuration.screenHeightDp < 500 ||
         (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
             configuration.smallestScreenWidthDp < 600)
+    val scrollState = rememberScrollState()
 
     val currentTheme = AppColorTheme.fromCode(selectedTheme)
     
     // Пульсация для выбранной темы
     val pulse = rememberPulseScale(animationsEnabled, from = 1f, to = 1.1f, durationMs = 1000)
     
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 32.dp, vertical = if (isCompactHeight) 12.dp else 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 32.dp, vertical = if (isCompactHeight) 12.dp else 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
+        ) {
         // Иконка с анимацией появления
         AnimatedVisibility(
             visible = visible,
@@ -777,6 +795,8 @@ private fun ThemeSelectionPage(
                 }
             }
         }
+
+        ScrollColumnScrollbar(scrollState)
     }
 }
 
@@ -804,19 +824,24 @@ private fun DraftModeSelectionPage(
     val iconSize = if (isCompactHeight) 72.dp else if (isSmallScreen) 80.dp else 120.dp
     val iconInnerSize = if (isCompactHeight) 36.dp else if (isSmallScreen) 40.dp else 60.dp
     val spacerHeight = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
+    val scrollState = rememberScrollState()
     
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(
-                horizontal = 32.dp,
-                vertical = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(
+                    horizontal = 32.dp,
+                    vertical = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
+        ) {
         AnimatedVisibility(
             visible = visible,
             enter = fadeIn(animationSpec = tween(500)) + scaleIn(
@@ -953,6 +978,8 @@ private fun DraftModeSelectionPage(
                 }
             }
         }
+
+        ScrollColumnScrollbar(scrollState)
     }
 }
 

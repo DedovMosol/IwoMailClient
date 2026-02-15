@@ -2502,11 +2502,24 @@ private fun CreateEventDialog(
                 }
                 
                 item {
-                    // Дата окончания
+                    // Дата окончания (при повторении — уточняем, что это конец каждого экземпляра)
+                    val isRussianLang = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+                    val endLabel = if (recurrenceType != -1) {
+                        if (isRussianLang) "Окончание каждого события" else "End of each event"
+                    } else {
+                        Strings.endDate
+                    }
                     Text(
-                        text = Strings.endDate,
+                        text = endLabel,
                         style = MaterialTheme.typography.labelMedium
                     )
+                    if (recurrenceType != -1) {
+                        Text(
+                            text = if (isRussianLang) "Задаёт длительность одного повторения" else "Sets the duration of each occurrence",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 
                 item {
