@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.AccountType
+import com.dedovmosol.iwomail.data.database.DraftMode
 import com.dedovmosol.iwomail.data.database.SyncMode
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.AccountRepository
@@ -75,10 +76,10 @@ fun AccountSettingsScreen(
 
     
     // Диалоги
-    var showSignaturesDialog by remember { mutableStateOf(false) }
-    var showCertificateDialog by remember { mutableStateOf(false) }
-    var showClientCertificateDialog by remember { mutableStateOf(false) }
-    var showClientCertPasswordDialog by remember { mutableStateOf(false) }
+    var showSignaturesDialog by rememberSaveable { mutableStateOf(false) }
+    var showCertificateDialog by rememberSaveable { mutableStateOf(false) }
+    var showClientCertificateDialog by rememberSaveable { mutableStateOf(false) }
+    var showClientCertPasswordDialog by rememberSaveable { mutableStateOf(false) }
     var pendingClientCertPath by remember { mutableStateOf<String?>(null) }
     var pendingClientCertFileName by remember { mutableStateOf<String?>(null) }
     var pendingOldClientCertPath by remember { mutableStateOf<String?>(null) }
@@ -324,7 +325,7 @@ fun AccountSettingsScreen(
     if (showCertificateDialog && !currentAccount.certificatePath.isNullOrBlank()) {
         val certFile = java.io.File(currentAccount.certificatePath!!)
         val certFileSize = if (certFile.exists()) "${certFile.length() / 1024} KB" else "—"
-        var showDeleteConfirm by remember { mutableStateOf(false) }
+        var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
         
         if (showDeleteConfirm) {
             com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -335,7 +336,7 @@ fun AccountSettingsScreen(
                     Text(com.dedovmosol.iwomail.ui.NotificationStrings.getDeleteCertificateWarning(isRu))
                 },
                 confirmButton = {
-                    TextButton(
+                    com.dedovmosol.iwomail.ui.theme.DeleteButton(
                         onClick = {
                             showDeleteConfirm = false
                             showCertificateDialog = false
@@ -351,15 +352,15 @@ fun AccountSettingsScreen(
                                 com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateRemoved(isRu),
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
-                        }
-                    ) {
-                        Text(com.dedovmosol.iwomail.ui.NotificationStrings.getRemove(isRu), color = MaterialTheme.colorScheme.error)
-                    }
+                        },
+                        text = com.dedovmosol.iwomail.ui.NotificationStrings.getRemove(isRu)
+                    )
                 },
                 dismissButton = {
-                    TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text(Strings.cancel)
-                    }
+                    com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                        onClick = { showDeleteConfirm = false },
+                        text = Strings.cancel
+                    )
                 }
             )
         }
@@ -413,9 +414,10 @@ fun AccountSettingsScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showCertificateDialog = false }) {
-                    Text(Strings.close)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showCertificateDialog = false },
+                    text = Strings.close
+                )
             }
         )
     }
@@ -425,7 +427,7 @@ fun AccountSettingsScreen(
     if (showClientCertificateDialog && !currentAccount.clientCertificatePath.isNullOrBlank()) {
         val certFile = java.io.File(currentAccount.clientCertificatePath!!)
         val certFileSize = if (certFile.exists()) "${certFile.length() / 1024} KB" else "—"
-        var showDeleteConfirm by remember { mutableStateOf(false) }
+        var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
         
         if (showDeleteConfirm) {
             com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -436,7 +438,7 @@ fun AccountSettingsScreen(
                     Text(if (isRu) "Сертификат и пароль будут удалены. Это действие нельзя отменить." else "Certificate and password will be deleted. This action cannot be undone.")
                 },
                 confirmButton = {
-                    TextButton(
+                    com.dedovmosol.iwomail.ui.theme.DeleteButton(
                         onClick = {
                             showDeleteConfirm = false
                             showClientCertificateDialog = false
@@ -454,15 +456,15 @@ fun AccountSettingsScreen(
                                 if (isRu) "Клиентский сертификат удалён" else "Client certificate removed",
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
-                        }
-                    ) {
-                        Text(com.dedovmosol.iwomail.ui.NotificationStrings.getRemove(isRu), color = MaterialTheme.colorScheme.error)
-                    }
+                        },
+                        text = com.dedovmosol.iwomail.ui.NotificationStrings.getRemove(isRu)
+                    )
                 },
                 dismissButton = {
-                    TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text(Strings.cancel)
-                    }
+                    com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                        onClick = { showDeleteConfirm = false },
+                        text = Strings.cancel
+                    )
                 }
             )
         }
@@ -516,9 +518,10 @@ fun AccountSettingsScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showClientCertificateDialog = false }) {
-                    Text(Strings.close)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showClientCertificateDialog = false },
+                    text = Strings.close
+                )
             }
         )
     }
@@ -569,7 +572,7 @@ fun AccountSettingsScreen(
                 }
             },
             confirmButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         if (clientCertPasswordInput.isBlank()) {
                             android.widget.Toast.makeText(
@@ -577,55 +580,57 @@ fun AccountSettingsScreen(
                                 if (isRu) "Введите пароль сертификата" else "Enter certificate password",
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
-                            return@TextButton
+                        } else {
+                            val newPath = pendingClientCertPath
+                            if (newPath != null) {
+                                val isValid = com.dedovmosol.iwomail.network.HttpClientProvider
+                                    .validateClientCertificate(newPath, clientCertPasswordInput)
+                                if (!isValid) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        if (isRu) "Неверный пароль или повреждённый сертификат" else "Invalid password or corrupted certificate",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    val oldPath = pendingOldClientCertPath
+                                    scope.launch {
+                                        accountRepo.updateClientCertificatePath(accountId, newPath)
+                                        accountRepo.updateClientCertificatePassword(accountId, clientCertPasswordInput)
+                                        oldPath?.let { path -> try { java.io.File(path).delete() } catch (_: Exception) {} }
+                                        com.dedovmosol.iwomail.network.HttpClientProvider.clearAllCertificateCache()
+                                        account = accountRepo.getAccount(accountId)
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            if (isRu) "Клиентский сертификат обновлён" else "Client certificate updated",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                        showClientCertPasswordDialog = false
+                                        pendingClientCertPath = null
+                                        pendingClientCertFileName = null
+                                        pendingOldClientCertPath = null
+                                        clientCertPasswordInput = ""
+                                        clientCertPasswordVisible = false
+                                    }
+                                }
+                            }
                         }
-                        val newPath = pendingClientCertPath ?: return@TextButton
-                        val isValid = com.dedovmosol.iwomail.network.HttpClientProvider
-                            .validateClientCertificate(newPath, clientCertPasswordInput)
-                        if (!isValid) {
-                            android.widget.Toast.makeText(
-                                context,
-                                if (isRu) "Неверный пароль или повреждённый сертификат" else "Invalid password or corrupted certificate",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                            return@TextButton
-                        }
-                        val oldPath = pendingOldClientCertPath
-                        scope.launch {
-                            accountRepo.updateClientCertificatePath(accountId, newPath)
-                            accountRepo.updateClientCertificatePassword(accountId, clientCertPasswordInput)
-                            oldPath?.let { path -> try { java.io.File(path).delete() } catch (_: Exception) {} }
-                            com.dedovmosol.iwomail.network.HttpClientProvider.clearAllCertificateCache()
-                            account = accountRepo.getAccount(accountId)
-                            android.widget.Toast.makeText(
-                                context,
-                                if (isRu) "Клиентский сертификат обновлён" else "Client certificate updated",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                            showClientCertPasswordDialog = false
-                            pendingClientCertPath = null
-                            pendingClientCertFileName = null
-                            pendingOldClientCertPath = null
-                            clientCertPasswordInput = ""
-                            clientCertPasswordVisible = false
-                        }
-                    }
-                ) {
-                    Text(Strings.save)
-                }
+                    },
+                    text = Strings.save
+                )
             },
             dismissButton = {
-                TextButton(onClick = {
-                    showClientCertPasswordDialog = false
-                    pendingClientCertPath?.let { path -> try { java.io.File(path).delete() } catch (_: Exception) {} }
-                    pendingClientCertPath = null
-                    pendingClientCertFileName = null
-                    pendingOldClientCertPath = null
-                    clientCertPasswordInput = ""
-                    clientCertPasswordVisible = false
-                }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showClientCertPasswordDialog = false
+                        pendingClientCertPath?.let { path -> try { java.io.File(path).delete() } catch (_: Exception) {} }
+                        pendingClientCertPath = null
+                        pendingClientCertFileName = null
+                        pendingOldClientCertPath = null
+                        clientCertPasswordInput = ""
+                        clientCertPasswordVisible = false
+                    },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -762,6 +767,99 @@ fun AccountSettingsScreen(
                 )
             }
             
+            // Режим черновиков (только для Exchange)
+            if (accountType == AccountType.EXCHANGE) {
+                item {
+                    val currentDraftMode = try {
+                        DraftMode.valueOf(currentAccount.draftMode)
+                    } catch (_: Exception) {
+                        DraftMode.SERVER
+                    }
+                    val draftModeText = if (currentDraftMode == DraftMode.LOCAL) {
+                        if (isRu) "Локальные" else "Local"
+                    } else {
+                        if (isRu) "Серверные" else "Server"
+                    }
+                    var expanded by remember { mutableStateOf(false) }
+                    Column {
+                        ListItem(
+                            headlineContent = { Text(if (isRu) "Режим черновиков (бета)" else "Draft mode (beta)") },
+                            supportingContent = { Text(draftModeText) },
+                            leadingContent = { Icon(AppIcons.Drafts, null) },
+                            trailingContent = {
+                                Icon(
+                                    imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                                    contentDescription = null
+                                )
+                            },
+                            modifier = Modifier.clickable { expanded = !expanded }
+                        )
+                        androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+                            Column(modifier = Modifier.padding(start = 56.dp)) {
+                                // Серверные
+                                Row(
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            if (currentDraftMode != DraftMode.SERVER) {
+                                                scope.launch {
+                                                    accountRepo.updateDraftMode(accountId, DraftMode.SERVER.name)
+                                                    account = accountRepo.getAccount(accountId)
+                                                }
+                                            }
+                                        }
+                                        .padding(vertical = 8.dp)
+                                ) {
+                                    RadioButton(
+                                        selected = currentDraftMode == DraftMode.SERVER,
+                                        onClick = {
+                                            if (currentDraftMode != DraftMode.SERVER) {
+                                                scope.launch {
+                                                    accountRepo.updateDraftMode(accountId, DraftMode.SERVER.name)
+                                                    account = accountRepo.getAccount(accountId)
+                                                }
+                                            }
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (isRu) "Серверные" else "Server")
+                                }
+                                // Локальные
+                                Row(
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            if (currentDraftMode != DraftMode.LOCAL) {
+                                                scope.launch {
+                                                    accountRepo.updateDraftMode(accountId, DraftMode.LOCAL.name)
+                                                    account = accountRepo.getAccount(accountId)
+                                                }
+                                            }
+                                        }
+                                        .padding(vertical = 8.dp)
+                                ) {
+                                    RadioButton(
+                                        selected = currentDraftMode == DraftMode.LOCAL,
+                                        onClick = {
+                                            if (currentDraftMode != DraftMode.LOCAL) {
+                                                scope.launch {
+                                                    accountRepo.updateDraftMode(accountId, DraftMode.LOCAL.name)
+                                                    account = accountRepo.getAccount(accountId)
+                                                }
+                                            }
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (isRu) "Локальные" else "Local")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
             // Синхронизация и очистка - открывает отдельный экран
             item {
                 ListItem(
@@ -819,9 +917,10 @@ fun SyncIntervalDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.cancel)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.cancel
+            )
         }
     )
 }
@@ -1199,7 +1298,7 @@ private fun CertificatePinningDisabled(
     Spacer(Modifier.height(4.dp))
     
     Text(
-        text = if (isRu) "Уязвимость к MITM атакам" else "Vulnerable to MITM attacks",
+        text = if (isRu) "Соединение уязвимо к MITM-атакам" else "Vulnerable to MITM attacks",
         style = MaterialTheme.typography.bodySmall
     )
     
@@ -1288,7 +1387,7 @@ private fun CertificatePinningDisabled(
             )
             Text(
                 text = if (isRu)
-                    "• Шифрование трафика (HTTPS/TLS)\n• Проверка сертификата от доверенного CA\n• Защита от большинства MITM атак"
+                    "• Шифрование трафика (HTTPS/TLS)\n• Проверка сертификата от доверенного CA\n• Защита от большинства MITM-атак"
                 else
                     "• Traffic encryption (HTTPS/TLS)\n• Certificate verification from trusted CA\n• Protection from most MITM attacks",
                 style = MaterialTheme.typography.bodySmall
@@ -1304,16 +1403,16 @@ private fun CertificatePinningDisabled(
             )
             Text(
                 text = if (isRu)
-                    "• Защиту от скомпрометированных CA\n• Проверку публичного ключа сервера\n• Обнаружение подмены сертификата\n• Работает с разными доменами (внутренний/внешний)"
+                    "• Защиту от скомпрометированных CA\n• Проверку публичного ключа сервера\n• Обнаружение подмены сертификата"
                 else
-                    "• Protection from compromised CAs\n• Verification of server's public key\n• Detection of certificate substitution\n• Works with different domains (internal/external)",
+                    "• Protection from compromised CAs\n• Verification of server's public key\n• Detection of certificate substitution",
                 style = MaterialTheme.typography.bodySmall
             )
             
             Spacer(Modifier.height(8.dp))
             
             Text(
-                text = if (isRu) "⚠️ Не работает если:" else "⚠️ Won't Work If:",
+                text = if (isRu) "⚠️ Не работает, если:" else "⚠️ Won't Work If:",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFFF9800)
@@ -1328,8 +1427,6 @@ private fun CertificatePinningDisabled(
             
             Spacer(Modifier.height(8.dp))
             
-            Spacer(Modifier.height(8.dp))
-            
             Text(
                 text = if (isRu) "✅ Работает при:" else "✅ Works When:",
                 style = MaterialTheme.typography.bodySmall,
@@ -1338,9 +1435,9 @@ private fun CertificatePinningDisabled(
             )
             Text(
                 text = if (isRu)
-                    "• Обновлении сертификата с тем же ключом (продление срока)\n• Смене домена (внутренний ↔ внешний) с тем же ключом\n• Использовании разных CN в сертификате"
+                    "• Обновлении сертификата с тем же ключом (продление срока)\n• Смене домена (внутренний ↔ внешний) с тем же ключом\n• Использовании разных CN в сертификате\n• Работе с разными доменами (внутренний/внешний)"
                 else
-                    "• Certificate renewal with same key (expiration extension)\n• Domain change (internal ↔ external) with same key\n• Using different CNs in certificate",
+                    "• Certificate renewal with same key (expiration extension)\n• Domain change (internal ↔ external) with same key\n• Using different CNs in certificate\n• Works with different domains (internal/external)",
                 style = MaterialTheme.typography.bodySmall
             )
             

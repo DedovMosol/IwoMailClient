@@ -1,10 +1,10 @@
-# iwo Mail Client
+﻿# iwo Mail Client
 
 🇷🇺 [Русская версия](README.md)
 
-Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and POP3 support.
+Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP and POP3 support.
 
-**Version:** 1.6.1  
+**Version:** 1.6.2  
 **Developer:** DedovMosol  
 **Telegram:** [@i_wantout](https://t.me/i_wantout)  
 **Email:** andreyid@outlook.com
@@ -17,13 +17,14 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
 - 🔒 **Exchange 2007 compatibility** — TLS 1.0-1.3 support via Conscrypt
 - 🔐 **Server certificates** — self-signed certificate support for corporate servers
+- 🔑 **Client certificates** — mTLS authentication via PKCS#12 (.p12/.pfx) for corporate environments with mutual TLS verification
 - 🌍 **Two languages** — 🇷🇺 Russian / 🇬🇧 English
 - 🎨 **Material Design 3** — modern interface with color themes
 - 🔔 **Push notifications** — instant notifications for new emails (Direct Push)
 
 ## 📱 Capabilities
 
-- ✅ **Mail** — sync, send with attachments, search, filters, favorites, folder management
+- ✅ **Mail** — sync, send with attachments, search, filters, favorites, folder management, drafts, scheduled send
 - ✅ **Contacts** — personal and GAL, groups, import/export (vCard, CSV)
 - ✅ **Calendar** — events with reminders, invite attendees
 - ✅ **Notes** — create, edit, sync
@@ -33,7 +34,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 - ✅ **Multiple accounts** — with individual signatures and settings
 - ✅ **MDN/DSN** — read and delivery receipt requests
 
-## 🆕 What's New in v1.6.1
+## 🆕 What's New in v1.6.2
 
 - Rich Text editor, HTML signatures, folder management
 - Client certificates (mTLS), Certificate Pinning
@@ -50,7 +51,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 **Version 1.6.1 changed the package name** from `com.iwo.iwomail` to `com.dedovmosol.iwomail`.
 
 **This means:**
-- ❌ APK update **is impossible** — Android treats it as a different app
+- ❌ APK update old versions **is impossible** — Android treats it as a different app
 - ⚠️ Full **reinstallation required** — uninstall old version, install new one
 - 💾 Data will be lost — export contacts/settings before updating
 - ✅ Future versions will update normally
@@ -132,7 +133,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync), IMAP and 
 
 ## 📖 Documentation
 
-- [Changelog](CHANGELOG_EN.md)
+- [Changelog](docs/CHANGELOG_EN.md)
 - [Project Architecture](docs/ARCHITECTURE.md)
 - [Privacy Policy](docs/PRIVACY_POLICY.md)
 

@@ -4,7 +4,7 @@
 
 ```
 test/
-└── java/com/iwo/mailclient/eas/
+└── java/com/dedovmosol/iwomail/eas/
     ├── EasXmlTemplatesTest.kt              # Тесты генерации XML-шаблонов
     ├── EasNotesServiceTest.kt               # Юнит-тесты сервиса заметок
     └── EasClientNotesIntegrationTest.kt     # Интеграционные тесты делегирования

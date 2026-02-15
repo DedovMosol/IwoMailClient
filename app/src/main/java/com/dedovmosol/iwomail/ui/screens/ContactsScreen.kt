@@ -102,7 +102,8 @@ fun ContactsScreen(
     val groupToRename = groups.find { it.id == groupToRenameId }
     var groupToDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
     val groupToDelete = groups.find { it.id == groupToDeleteId }
-    var showMoveToGroupDialog by remember { mutableStateOf<ContactEntity?>(null) }
+    var moveToGroupContactId by rememberSaveable { mutableStateOf<String?>(null) }
+    val showMoveToGroupDialog = moveToGroupContactId?.let { id -> localContacts.find { it.id == id } }
     
     // Избранные контакты
     val favoriteContacts by remember(accountId) { contactRepo.getFavoriteContacts(accountId) }.collectAsState(initial = emptyList())
@@ -110,7 +111,7 @@ fun ContactsScreen(
     // Exchange контакты из БД (синхронизированные в фоне)
     val exchangeContacts by remember(accountId) { contactRepo.getExchangeContacts(accountId) }.collectAsState(initial = emptyList())
     var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
-    var isSyncing by rememberSaveable { mutableStateOf(false) }
+    var isSyncing by remember { mutableStateOf(false) }
     var syncError by remember { mutableStateOf<String?>(null) }
     
     // Автоматическая синхронизация при первом открытии если нет данных
@@ -170,6 +171,10 @@ fun ContactsScreen(
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showExportDialog by rememberSaveable { mutableStateOf(false) }
+    var duplicateCheckContactId by rememberSaveable { mutableStateOf<String?>(null) }
+    val duplicateCheckContact = duplicateCheckContactId?.let { id -> localContacts.find { it.id == id } }
+    var duplicateExistingContactId by rememberSaveable { mutableStateOf<String?>(null) }
+    val duplicateExistingContact = duplicateExistingContactId?.let { id -> localContacts.find { it.id == id } }
     
     // Получаем объекты контактов по ID
     val editingContact = editingContactId?.let { id -> localContacts.find { it.id == id } }
@@ -181,6 +186,7 @@ fun ContactsScreen(
     // Импорт
     val importedMessage = if (isRussian) "Импортировано контактов:" else "Imported contacts:"
     val contactSavedMsg = if (isRussian) "Контакт сохранён" else "Contact saved"
+    val contactReplacedMsg = if (isRussian) "Контакт заменён" else "Contact replaced"
     val contactDeletedMsg = if (isRussian) "Контакт удалён" else "Contact deleted"
     val emailCopiedMsg = if (isRussian) "Email скопирован" else "Email copied"
     val noContactsToExportMsg = if (isRussian) "Нет контактов для экспорта" else "No contacts to export"
@@ -221,9 +227,11 @@ fun ContactsScreen(
         }
     }
     
-    // Фильтрация локальных контактов
-    LaunchedEffect(localContacts, localSearchQuery, selectedGroupId) {
+    // Фильтрация локальных контактов (исключая себя)
+    LaunchedEffect(localContacts, localSearchQuery, selectedGroupId, ownEmail) {
         filteredLocalContacts = localContacts.filter { contact ->
+            // Исключаем себя
+            val notSelf = ownEmail.isBlank() || contact.email.lowercase() != ownEmail
             // Фильтр по группе
             val matchesGroup = when (selectedGroupId) {
                 null -> true // Все контакты
@@ -237,7 +245,7 @@ fun ContactsScreen(
                 contact.email.contains(localSearchQuery, true) ||
                 contact.company.contains(localSearchQuery, true)
             
-            matchesGroup && matchesSearch
+            notSelf && matchesGroup && matchesSearch
         }
     }
     
@@ -321,7 +329,7 @@ fun ContactsScreen(
             title = { Text(Strings.deleteContact) },
             text = { Text(Strings.deleteContactConfirm) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         scope.launch {
                             contactRepo.deleteContact(contact.id)
@@ -333,9 +341,10 @@ fun ContactsScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialogId = null }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteDialogId = null },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -372,21 +381,32 @@ fun ContactsScreen(
                 showDeleteDialogId = contact.id
             },
             onAddToContacts = {
-                // Для Exchange контактов — добавляем как локальный контакт
+                // Для Exchange контактов — добавляем как локальный контакт с проверкой дубликата
                 scope.launch {
-                    contactRepo.addContact(
-                        accountId = accountId,
-                        displayName = contact.displayName,
-                        email = contact.email,
-                        firstName = contact.firstName,
-                        lastName = contact.lastName,
-                        phone = contact.phone,
-                        mobilePhone = contact.mobilePhone,
-                        company = contact.company,
-                        department = contact.department,
-                        jobTitle = contact.jobTitle
-                    )
-                    Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
+                    try {
+                        val existing = contactRepo.findLocalDuplicate(accountId, contact.email)
+                        if (existing != null) {
+                            duplicateCheckContactId = contact.id
+                            duplicateExistingContactId = existing.id
+                        } else {
+                            contactRepo.addContact(
+                                accountId = accountId,
+                                displayName = contact.displayName,
+                                email = contact.email,
+                                firstName = contact.firstName,
+                                lastName = contact.lastName,
+                                phone = contact.phone,
+                                mobilePhone = contact.mobilePhone,
+                                workPhone = contact.workPhone,
+                                company = contact.company,
+                                department = contact.department,
+                                jobTitle = contact.jobTitle
+                            )
+                            Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (_: Exception) {
+                        Toast.makeText(context, if (isRussian) "Ошибка сохранения контакта" else "Failed to save contact", Toast.LENGTH_SHORT).show()
+                    }
                 }
                 showContactDetailsId = null
             }
@@ -424,6 +444,89 @@ fun ContactsScreen(
         )
     }
 
+    // Диалог подтверждения дубликата при экспорте GAL → локальные контакты
+    if (duplicateCheckContact != null && duplicateExistingContact != null) {
+        val galContact = duplicateCheckContact!!
+        val existingContact = duplicateExistingContact!!
+        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+            onDismissRequest = {
+                duplicateCheckContactId = null
+                duplicateExistingContactId = null
+            },
+            icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
+            title = {
+                Text(if (isRussian) "Контакт уже существует" else "Contact already exists")
+            },
+            text = {
+                Column {
+                    Text(
+                        if (isRussian)
+                            "Контакт с email ${galContact.email} уже есть в личных контактах:"
+                        else
+                            "A contact with email ${galContact.email} already exists in personal contacts:"
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = existingContact.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (existingContact.company.isNotBlank()) {
+                        Text(
+                            text = existingContact.company,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        if (isRussian) "Заменить существующий контакт?" else "Replace existing contact?",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                contactRepo.deleteContact(existingContact.id)
+                                contactRepo.addContact(
+                                    accountId = accountId,
+                                    displayName = galContact.displayName,
+                                    email = galContact.email,
+                                    firstName = galContact.firstName,
+                                    lastName = galContact.lastName,
+                                    phone = galContact.phone,
+                                    mobilePhone = galContact.mobilePhone,
+                                    workPhone = galContact.workPhone,
+                                    company = galContact.company,
+                                    department = galContact.department,
+                                    jobTitle = galContact.jobTitle
+                                )
+                                Toast.makeText(context, contactReplacedMsg, Toast.LENGTH_SHORT).show()
+                            } catch (_: Exception) {
+                                Toast.makeText(context, if (isRussian) "Ошибка замены контакта" else "Failed to replace contact", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        duplicateCheckContactId = null
+                        duplicateExistingContactId = null
+                    },
+                    text = if (isRussian) "Заменить" else "Replace"
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        duplicateCheckContactId = null
+                        duplicateExistingContactId = null
+                    },
+                    text = Strings.cancel
+                )
+            }
+        )
+    }
+    
     // Диалог создания группы
     if (showCreateGroupDialog) {
         var newGroupName by rememberSaveable { mutableStateOf("") }
@@ -555,7 +658,7 @@ fun ContactsScreen(
                 }
             },
             confirmButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         if (newGroupName.isNotBlank()) {
                             scope.launch {
@@ -565,15 +668,15 @@ fun ContactsScreen(
                             showCreateGroupDialog = false
                         }
                     },
+                    text = Strings.save,
                     enabled = newGroupName.isNotBlank()
-                ) {
-                    Text(Strings.save)
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showCreateGroupDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showCreateGroupDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -702,7 +805,7 @@ fun ContactsScreen(
                 }
             },
             confirmButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         val nameChanged = newName.isNotBlank() && newName != group.name
                         val colorChanged = selectedColor != group.color
@@ -720,15 +823,15 @@ fun ContactsScreen(
                             groupToRenameId = null
                         }
                     },
+                    text = Strings.save,
                     enabled = (newName.isNotBlank() && newName != group.name) || (selectedColor != group.color)
-                ) {
-                    Text(Strings.save)
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { groupToRenameId = null }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { groupToRenameId = null },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -743,7 +846,7 @@ fun ContactsScreen(
             title = { Text(Strings.deleteGroup) },
             text = { Text(Strings.deleteGroupConfirm) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         scope.launch {
                             contactRepo.deleteGroup(group.id)
@@ -758,9 +861,10 @@ fun ContactsScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { groupToDeleteId = null }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { groupToDeleteId = null },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -768,7 +872,7 @@ fun ContactsScreen(
     // Диалог перемещения контакта в группу
     showMoveToGroupDialog?.let { contact ->
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { showMoveToGroupDialog = null },
+            onDismissRequest = { moveToGroupContactId = null },
             icon = { Icon(AppIcons.Folder, null) },
             title = { Text(Strings.moveToGroup) },
             text = {
@@ -789,36 +893,37 @@ fun ContactsScreen(
                                 scope.launch {
                                     contactRepo.moveContactToGroup(contact.id, null)
                                 }
-                                showMoveToGroupDialog = null
+                                moveToGroupContactId = null
                             }
                         )
                     }
                     // Группы
                     items(groups) { group ->
+                        val groupColor = try { Color(group.color) } catch (_: Exception) { MaterialTheme.colorScheme.primary }
                         ListItem(
                             headlineContent = { Text(group.name) },
-                            leadingContent = { 
-                                val groupColor = try { Color(group.color) } catch (_: Exception) { MaterialTheme.colorScheme.primary }
+                            leadingContent = {
                                 Icon(
-                                    AppIcons.Folder, 
+                                    AppIcons.Folder,
                                     null,
                                     tint = if (contact.groupId == group.id) MaterialTheme.colorScheme.primary else groupColor
-                                ) 
+                                )
                             },
                             modifier = Modifier.clickable {
                                 scope.launch {
                                     contactRepo.moveContactToGroup(contact.id, group.id)
                                 }
-                                showMoveToGroupDialog = null
+                                moveToGroupContactId = null
                             }
                         )
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showMoveToGroupDialog = null }) {
-                    Text(Strings.close)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { moveToGroupContactId = null },
+                    text = Strings.close
+                )
             },
             dismissButton = {}
         )
@@ -874,23 +979,36 @@ fun ContactsScreen(
                                     val contactsToCopy = selectedContacts.toList()
                                     scope.launch {
                                         var copied = 0
+                                        var skipped = 0
                                         contactsToCopy.forEach { contact ->
-                                            contactRepo.addContact(
-                                                accountId = accountId,
-                                                displayName = contact.displayName,
-                                                email = contact.email,
-                                                firstName = contact.firstName,
-                                                lastName = contact.lastName,
-                                                phone = contact.phone,
-                                                mobilePhone = contact.mobilePhone,
-                                                company = contact.company,
-                                                department = contact.department,
-                                                jobTitle = contact.jobTitle
-                                            )
-                                            copied++
+                                            try {
+                                                val existing = contactRepo.findLocalDuplicate(accountId, contact.email)
+                                                if (existing != null) {
+                                                    skipped++
+                                                } else {
+                                                    contactRepo.addContact(
+                                                        accountId = accountId,
+                                                        displayName = contact.displayName,
+                                                        email = contact.email,
+                                                        firstName = contact.firstName,
+                                                        lastName = contact.lastName,
+                                                        phone = contact.phone,
+                                                        mobilePhone = contact.mobilePhone,
+                                                        workPhone = contact.workPhone,
+                                                        company = contact.company,
+                                                        department = contact.department,
+                                                        jobTitle = contact.jobTitle
+                                                    )
+                                                    copied++
+                                                }
+                                            } catch (_: Exception) { /* skip failed contact */ }
                                         }
                                         val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
-                                        Toast.makeText(context, "$msg: $copied", Toast.LENGTH_SHORT).show()
+                                        val skippedMsg = if (skipped > 0) {
+                                            val dupText = if (isRussian) ", пропущено дубликатов" else ", duplicates skipped"
+                                            "$dupText: $skipped"
+                                        } else ""
+                                        Toast.makeText(context, "$msg: $copied$skippedMsg", Toast.LENGTH_SHORT).show()
                                         isSelectionMode = false
                                         selectedContactIds = emptySet()
                                     }
@@ -959,7 +1077,7 @@ fun ContactsScreen(
                                     title = { Text(Strings.deleteContacts) },
                                     text = { Text("${Strings.deleteContactsConfirm} ${selectedContactIds.size}") },
                                     confirmButton = {
-                                        com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                                        com.dedovmosol.iwomail.ui.theme.DeleteButton(
                                             onClick = {
                                                 val idsToDelete = selectedContactIds.toList()
                                                 showDeleteConfirm = false
@@ -974,9 +1092,10 @@ fun ContactsScreen(
                                         )
                                     },
                                     dismissButton = {
-                                        TextButton(onClick = { showDeleteConfirm = false }) {
-                                            Text(Strings.cancel)
-                                        }
+                                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                                            onClick = { showDeleteConfirm = false },
+                                            text = Strings.cancel
+                                        )
                                     }
                                 )
                             }
@@ -1163,14 +1282,15 @@ fun ContactsScreen(
                             selectedContactIds = setOf(it.id)
                         }
                     },
-                    onContactMoveToGroup = { showMoveToGroupDialog = it },
+                    onContactMoveToGroup = { moveToGroupContactId = it.id },
                     onContactEdit = { editingContactId = it.id },
                     onContactDelete = { showDeleteDialogId = it.id },
                     onContactToggleFavorite = { contact ->
                         scope.launch { contactRepo.toggleFavorite(contact.id) }
                     },
                     isSelectionMode = isSelectionMode,
-                    selectedContactIds = selectedContactIds
+                    selectedContactIds = selectedContactIds,
+                    onDragSelect = { newIds -> selectedContactIds = newIds }
                 )
                 1 -> OrganizationContactsList(
                     contacts = filteredExchangeContacts,
@@ -1213,7 +1333,8 @@ fun ContactsScreen(
                         }
                     },
                     isSelectionMode = isSelectionMode,
-                    selectedContactIds = selectedContactIds
+                    selectedContactIds = selectedContactIds,
+                    onDragSelect = { newIds -> selectedContactIds = newIds }
                 )
             }
         }
@@ -1238,7 +1359,8 @@ private fun PersonalContactsList(
     onContactDelete: (ContactEntity) -> Unit,
     onContactToggleFavorite: (ContactEntity) -> Unit = {},
     isSelectionMode: Boolean = false,
-    selectedContactIds: Set<String> = emptySet()
+    selectedContactIds: Set<String> = emptySet(),
+    onDragSelect: (Set<String>) -> Unit = {}
 ) {
     var expandedGroupMenu by remember { mutableStateOf<String?>(null) }
     
@@ -1246,8 +1368,20 @@ private fun PersonalContactsList(
     val groupsMap = remember(groups) { groups.associateBy { it.id } }
     
     val contactsListState = rememberLazyListState()
+    
+    // Drag selection
+    val contactKeys = remember(groupedContacts) {
+        groupedContacts.values.flatten().map { it.id }
+    }
+    val dragModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
+        listState = contactsListState,
+        itemKeys = contactKeys,
+        selectedIds = selectedContactIds,
+        onSelectionChange = onDragSelect
+    )
+    
     Box(modifier = Modifier.fillMaxSize()) {
-    LazyColumn(state = contactsListState, modifier = Modifier.fillMaxSize()) {
+    LazyColumn(state = contactsListState, modifier = dragModifier.fillMaxSize()) {
         // Фильтр по группам (горизонтальный скролл чипов)
         item {
             androidx.compose.foundation.lazy.LazyRow(
@@ -1278,7 +1412,7 @@ private fun PersonalContactsList(
                                 AppIcons.Star,
                                 null,
                                 modifier = Modifier.size(18.dp),
-                                tint = Color(0xFFFFB300)
+                                tint = com.dedovmosol.iwomail.ui.theme.AppColors.favorites
                             )
                         }
                     )
@@ -1416,7 +1550,8 @@ private fun OrganizationContactsList(
     onContactLongClick: (ContactEntity) -> Unit = {},
     onSyncClick: () -> Unit,
     isSelectionMode: Boolean = false,
-    selectedContactIds: Set<String> = emptySet()
+    selectedContactIds: Set<String> = emptySet(),
+    onDragSelect: (Set<String>) -> Unit = {}
 ) {
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     
@@ -1538,10 +1673,19 @@ private fun OrganizationContactsList(
             else -> {
                 // Показываем контакты
                 val orgListState = rememberLazyListState()
+                val orgContactKeys = remember(groupedContacts) {
+                    groupedContacts.values.flatten().map { it.id }
+                }
+                val orgDragModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
+                    listState = orgListState,
+                    itemKeys = orgContactKeys,
+                    selectedIds = selectedContactIds,
+                    onSelectionChange = onDragSelect
+                )
                 Box(modifier = Modifier.fillMaxSize().weight(1f)) {
                     LazyColumn(
                         state = orgListState,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = orgDragModifier.fillMaxSize()
                     ) {
                         groupedContacts.forEach { (letter, letterContacts) ->
                             item {
@@ -1625,9 +1769,12 @@ private fun ExchangeContactItem(
             }
         },
         modifier = Modifier
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
+            .then(
+                if (isSelectionMode) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                }
             )
             .background(
                 if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
@@ -1702,7 +1849,7 @@ private fun ContactItemWithGroup(
                         AppIcons.Star,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
-                        tint = Color(0xFFFFB300)
+                        tint = com.dedovmosol.iwomail.ui.theme.AppColors.favorites
                     )
                 }
             }
@@ -1804,7 +1951,7 @@ private fun ContactItemWithGroup(
                                 Icon(
                                     if (contact.isFavorite) AppIcons.Star else AppIcons.StarOutline, 
                                     null,
-                                    tint = Color(0xFFFFB300)
+                                    tint = com.dedovmosol.iwomail.ui.theme.AppColors.favorites
                                 ) 
                             }
                         )
@@ -1837,9 +1984,12 @@ private fun ContactItemWithGroup(
             }
         },
         modifier = Modifier
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
+            .then(
+                if (isSelectionMode) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                }
             )
             .background(
                 if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
@@ -2051,20 +2201,20 @@ private fun ContactEditDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = {
                     val name = displayName.ifBlank { "$firstName $lastName".trim().ifBlank { email } }
                     onSave(name, email, firstName, lastName, phone, mobilePhone, workPhone, company, department, jobTitle, notes)
                 },
+                text = Strings.save,
                 enabled = displayName.isNotBlank() || email.isNotBlank() || firstName.isNotBlank() || lastName.isNotBlank()
-            ) {
-                Text(Strings.save)
-            }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.cancel)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.cancel
+            )
         }
     )
 }
@@ -2218,7 +2368,7 @@ private fun ContactDetailsDialog(
                         Icon(
                             AppIcons.Email, 
                             null, 
-                            tint = Color(0xFF4CAF50),
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.calendar,
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -2273,12 +2423,12 @@ private fun ContactDetailsDialog(
                                     AppIcons.ContentCopy, 
                                     null, 
                                     modifier = Modifier.size(18.dp),
-                                    tint = Color(0xFF9C27B0)
+                                    tint = com.dedovmosol.iwomail.ui.theme.AppColors.tasks
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     Strings.copyEmail, 
-                                    color = Color(0xFF9C27B0),
+                                    color = com.dedovmosol.iwomail.ui.theme.AppColors.tasks,
                                     maxLines = 2,
                                     style = MaterialTheme.typography.labelSmall
                                 )
@@ -2423,9 +2573,10 @@ private fun ExportDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.close)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.close
+            )
         },
         dismissButton = {}
     )

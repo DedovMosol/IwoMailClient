@@ -1,6 +1,6 @@
 # Privacy Policy / Политика конфиденциальности
 
-**Last updated / Последнее обновление:** February 6, 2026
+**Last updated / Последнее обновление:** February 15, 2026
 
 ---
 
@@ -14,7 +14,7 @@ iwo Mail Client ("the App") is developed by DedovMosol. This Privacy Policy expl
 
 **We do NOT collect, store, or transmit any personal data to external servers.**
 
-The App operates entirely on your device. All your data remains on your device and is transmitted only to the mail servers you configure (Exchange, IMAP, POP3).
+The App operates entirely on your device. All your data remains on your device and is transmitted only to the mail servers you configure (Exchange ActiveSync / EWS, IMAP, POP3).
 
 ### Data Stored Locally
 
@@ -22,6 +22,8 @@ The following data is stored only on your device:
 - Email account credentials (encrypted)
 - Client certificates (.p12/.pfx files with passwords, encrypted) for mTLS authentication
 - Email messages and attachments (cached locally)
+- Drafts (stored locally and/or on the mail server)
+- Scheduled (deferred) emails awaiting send time
 - HTML signatures with formatting
 - Contacts (personal and from corporate address book)
 - Calendar events and reminders
@@ -36,7 +38,7 @@ The following data is stored only on your device:
 ### Data Transmission
 
 The App connects only to:
-- Mail servers you configure (Exchange ActiveSync, IMAP, POP3)
+- Mail servers you configure (Exchange ActiveSync, Exchange Web Services, IMAP, POP3)
 - GitHub (only for checking app updates via `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`)
 - No third-party analytics or advertising services
 - No personal data is sent to the developer
@@ -48,9 +50,10 @@ The App requests the following permissions:
 - **Network state** — to check network connectivity before sync
 - **Notifications** — to notify about new emails, calendar events, task reminders, and available app updates
 - **Boot completed** — to start background sync after device restart
-- **Foreground service** — for reliable background synchronization
-- **Exact alarms** — for scheduled email sending and reminders
+- **Foreground service** — for reliable background synchronization (including Direct Push — a persistent connection to the Exchange server for instant email delivery)
+- **Exact alarms** — for scheduled (deferred) email sending, calendar reminders, and task reminders
 - **Battery optimization exemption** — to ensure reliable background sync
+- **Vibration** — for haptic feedback in the app
 - **Install packages** — to install app updates downloaded from GitHub
 
 ### Security
@@ -62,6 +65,13 @@ The App requests the following permissions:
 - Certificate Pinning (Public Key Pinning) protection against MITM attacks — binds to server's public key (SHA-256 hash)
 - No data is shared with third parties, including the developer
 - The app has no backend servers — all data stays on your device
+
+### Interaction with Other Apps
+
+The App can receive data from other applications via Android's standard sharing mechanism:
+- **mailto: links** — the App can be selected as the default email client to handle mailto: links from browsers and other apps
+- **Share intent** — other apps can share text, files, and attachments to compose a new email
+- No data received from other apps is transmitted anywhere except to the mail server you configured when sending the email
 
 ### Updates
 
@@ -95,7 +105,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 
 **Мы НЕ собираем, не храним и не передаём персональные данные на внешние серверы.**
 
-Приложение работает полностью на вашем устройстве. Все ваши данные остаются на устройстве и передаются только на почтовые серверы, которые вы настроите (Exchange, IMAP, POP3).
+Приложение работает полностью на вашем устройстве. Все ваши данные остаются на устройстве и передаются только на почтовые серверы, которые вы настроите (Exchange ActiveSync / EWS, IMAP, POP3).
 
 ### Данные, хранящиеся локально
 
@@ -103,6 +113,8 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 - Учётные данные почтовых аккаунтов (в зашифрованном виде)
 - Клиентские сертификаты (.p12/.pfx файлы с паролями, зашифрованы) для mTLS аутентификации
 - Письма и вложения (локальный кэш)
+- Черновики (хранятся локально и/или на почтовом сервере)
+- Отложенные письма, ожидающие времени отправки
 - HTML-подписи с форматированием
 - Контакты (личные и из корпоративной адресной книги)
 - События календаря и напоминания
@@ -117,7 +129,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 ### Передача данных
 
 Приложение подключается только к:
-- Почтовым серверам, которые вы настроите (Exchange ActiveSync, IMAP, POP3)
+- Почтовым серверам, которые вы настроите (Exchange ActiveSync, Exchange Web Services, IMAP, POP3)
 - GitHub (только для проверки обновлений через `https://raw.githubusercontent.com/DedovMosol/IwoMailClient/main/update.json`)
 - Никаких сторонних сервисов аналитики или рекламы
 - Никакие персональные данные не отправляются разработчику
@@ -129,9 +141,10 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 - **Состояние сети** — для проверки подключения перед синхронизацией
 - **Уведомления** — для оповещения о новых письмах, событиях календаря, напоминаниях о задачах и доступных обновлениях приложения
 - **Автозапуск** — для запуска фоновой синхронизации после перезагрузки
-- **Фоновая служба** — для надёжной фоновой синхронизации
-- **Точные будильники** — для отложенной отправки писем и напоминаний
+- **Фоновая служба** — для надёжной фоновой синхронизации (включая Direct Push — постоянное соединение с сервером Exchange для мгновенной доставки писем)
+- **Точные будильники** — для отложенной отправки писем, напоминаний календаря и напоминаний о задачах
 - **Исключение оптимизации батареи** — для надёжной фоновой синхронизации
+- **Вибрация** — для тактильной обратной связи в приложении
 - **Установка пакетов** — для установки обновлений, скачанных с GitHub
 
 ### Безопасность
@@ -143,6 +156,13 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 - Защита Certificate Pinning (Public Key Pinning) от MITM атак — привязка к публичному ключу сервера (SHA-256 хэш)
 - Данные не передаются третьим лицам, включая разработчика
 - Приложение не имеет собственных серверов — все данные остаются на вашем устройстве
+
+### Взаимодействие с другими приложениями
+
+Приложение может получать данные от других приложений через стандартный механизм Android:
+- **Ссылки mailto:** — приложение может быть выбрано почтовым клиентом по умолчанию для обработки ссылок mailto: из браузеров и других приложений
+- **Отправка через «Поделиться»** — другие приложения могут отправлять текст, файлы и вложения для создания нового письма
+- Данные, полученные от других приложений, не передаются никуда, кроме почтового сервера, настроенного вами, при отправке письма
 
 ### Обновления
 

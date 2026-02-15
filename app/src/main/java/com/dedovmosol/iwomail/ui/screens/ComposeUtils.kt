@@ -4,6 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import com.dedovmosol.iwomail.util.HtmlRegex
 import java.io.ByteArrayOutputStream
 
@@ -12,6 +19,94 @@ private val BLOCK_END_REGEX = Regex("</(?:p|div|li|tr)>", RegexOption.IGNORE_CAS
 private val TD_END_REGEX = Regex("</td>", RegexOption.IGNORE_CASE)
 private val SPACES_REGEX = Regex("[ \\t]+")
 private val NEWLINES_REGEX = Regex("\\n{3,}")
+
+private val EMAIL_VALIDATION_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+private val GROUP_TOKEN_REGEX = Regex("^\\[.+]$")
+
+/**
+ * Проверяет, является ли строка валидным email-адресом
+ */
+fun isValidEmail(email: String): Boolean {
+    return EMAIL_VALIDATION_REGEX.matches(email.trim())
+}
+
+/**
+ * Проверяет, является ли токен ссылкой на группу контактов [GroupName]
+ */
+fun isGroupToken(token: String): Boolean {
+    return GROUP_TOKEN_REGEX.matches(token.trim())
+}
+
+/**
+ * Проверяет список получателей (разделённых запятыми/точками с запятой).
+ * Пустая строка считается валидной (поле необязательное).
+ * Токены [GroupName] считаются валидными (группа контактов).
+ * Возвращает true если все адреса валидны.
+ */
+fun isValidRecipientList(recipients: String): Boolean {
+    if (recipients.isBlank()) return true
+    return recipients.split(",", ";")
+        .filter { it.isNotBlank() }
+        .all { val trimmed = it.trim(); isValidEmail(trimmed) || isGroupToken(trimmed) }
+}
+
+/**
+ * Раскрывает [GroupName] токены в списке получателей, заменяя их на email из маппинга.
+ * Обычные email-адреса остаются как есть.
+ */
+fun expandGroupTokens(recipients: String, groupMappings: Map<String, List<String>>): String {
+    if (recipients.isBlank()) return recipients
+    val tokens = recipients.split(",", ";").map { it.trim() }.filter { it.isNotBlank() }
+    val expanded = tokens.flatMap { token ->
+        if (isGroupToken(token)) {
+            val groupName = token.removePrefix("[").removeSuffix("]")
+            // Если группа не найдена в маппинге — пропускаем (не отправлять [GroupName] на сервер)
+            groupMappings[groupName] ?: emptyList()
+        } else {
+            listOf(token)
+        }
+    }
+    return expanded.distinct().joinToString(", ")
+}
+
+/**
+ * VisualTransformation для подкраски токенов [GroupName] цветом группы контактов.
+ * Текст не меняется, только добавляется SpanStyle с цветом и жирным шрифтом.
+ */
+class GroupColorVisualTransformation(
+    private val groupColors: Map<String, Int>
+) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        if (groupColors.isEmpty()) return TransformedText(text, OffsetMapping.Identity)
+        val raw = text.text
+        val builder = AnnotatedString.Builder(raw)
+        // Копируем существующие стили из оригинала
+        text.spanStyles.forEach { builder.addStyle(it.item, it.start, it.end) }
+        // Ищем все [GroupName] токены и подкрашиваем
+        var i = 0
+        while (i < raw.length) {
+            if (raw[i] == '[') {
+                val end = raw.indexOf(']', i)
+                if (end > i) {
+                    val name = raw.substring(i + 1, end)
+                    val color = groupColors[name]
+                    if (color != null) {
+                        builder.addStyle(
+                            SpanStyle(color = Color(color), fontWeight = FontWeight.Bold),
+                            i, end + 1
+                        )
+                    }
+                    i = end + 1
+                } else {
+                    i++
+                }
+            } else {
+                i++
+            }
+        }
+        return TransformedText(builder.toAnnotatedString(), OffsetMapping.Identity)
+    }
+}
 
 /**
  * Форматирует дату для отображения в письмах/цитатах

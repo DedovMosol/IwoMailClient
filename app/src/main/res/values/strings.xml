@@ -26,5 +26,13 @@
     <string name="widget_add_account">Add account</string>
     <string name="widget_search_mail">Search mail</string>
     <string name="widget_calendar">Calendar</string>
+    <string name="widget_tasks">Tasks</string>
+    <string name="widget_no_new_mail">No new mail</string>
+    <string name="widget_notes">Notes</string>
+    <string name="widget_synced_ago">Updated %s ago</string>
+    <string name="widget_synced_just_now">Just now</string>
+    <string name="widget_no_events_today">No events today</string>
+    <string name="widget_no_tasks">No tasks today</string>
+    <string name="widget_no_notes">No notes</string>
     <string name="loading">Loading…</string>
 </resources>

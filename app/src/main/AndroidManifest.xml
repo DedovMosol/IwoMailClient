@@ -21,6 +21,9 @@
     <!-- Для работы в фоне без ограничений батареи -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     
+    <!-- Вибрация -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    
     <!-- Для установки обновлений -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -175,6 +178,13 @@
                 <action android:name="android.intent.action.POWER_CONNECTED" />
             </intent-filter>
         </receiver>
+        
+        <!-- Конфигурация виджета (проверка наличия аккаунта) -->
+        <activity
+            android:name=".widget.WidgetConfigActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true" />
         
         <!-- Виджет почты -->
         <receiver

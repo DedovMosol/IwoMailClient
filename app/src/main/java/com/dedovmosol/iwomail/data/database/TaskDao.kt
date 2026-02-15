@@ -102,4 +102,24 @@ interface TaskDao {
         AND dueDate < :endOfDay
     """)
     suspend fun getTodayTasksCount(accountId: Long, endOfDay: Long): Int
+
+    @Query("SELECT COUNT(*) FROM tasks WHERE complete = 0 AND isDeleted = 0")
+    suspend fun getActiveTasksCountGlobal(): Int
+
+    @Query("""
+        SELECT COUNT(*) FROM tasks 
+        WHERE complete = 0 AND isDeleted = 0
+        AND dueDate > 0 AND dueDate < :endOfDay
+    """)
+    suspend fun getTodayTasksCountGlobal(endOfDay: Long): Int
+
+    @Query("""
+        SELECT * FROM tasks 
+        WHERE complete = 0 AND isDeleted = 0
+        ORDER BY 
+            CASE WHEN dueDate > 0 THEN 0 ELSE 1 END,
+            dueDate ASC
+        LIMIT 1
+    """)
+    suspend fun getNextTaskGlobalSync(): TaskEntity?
 }

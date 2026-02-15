@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,8 +44,7 @@ fun SettingsScreen(
     onAddAccount: () -> Unit = {},
     onNavigateToPersonalization: () -> Unit = {},
     onNavigateToAccountSettings: (Long) -> Unit = {},
-    onNoAccountsLeft: () -> Unit = {},
-    onNavigateToAbout: () -> Unit = {}
+    onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -52,30 +52,32 @@ fun SettingsScreen(
     val isRu = isRussian()
     
     val accounts by accountRepo.accounts.collectAsState(initial = emptyList())
-    var accountToDelete by remember { mutableStateOf<AccountEntity?>(null) }
+    var accountToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val accountToDelete = accountToDeleteId?.let { id -> accounts.find { it.id == id } }
     
     // Диалог подтверждения удаления — стиль единый с удалением писем, событий, задач и т.д.
     accountToDelete?.let { account ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { accountToDelete = null },
+            onDismissRequest = { accountToDeleteId = null },
             icon = { Icon(AppIcons.Delete, null) },
             title = { Text(Strings.deleteAccount) },
             text = { Text("${account.displayName}: ${Strings.deleteAccountConfirm}") },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         scope.launch {
                             accountRepo.deleteAccount(account.id)
-                            accountToDelete = null
+                            accountToDeleteId = null
                         }
                     },
                     text = Strings.delete
                 )
             },
             dismissButton = {
-                TextButton(onClick = { accountToDelete = null }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { accountToDeleteId = null },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -124,7 +126,7 @@ fun SettingsScreen(
             items(accounts, key = { it.id }) { account ->
                 AccountCard(
                     account = account,
-                    onDeleteClick = { accountToDelete = account },
+                    onDeleteClick = { accountToDeleteId = account.id },
                     onSettingsClick = { onNavigateToAccountSettings(account.id) }
                 )
             }
@@ -179,20 +181,6 @@ fun SettingsScreen(
                 )
             }
             
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-            
-            // О приложении - открывает отдельный экран
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.aboutApp) },
-                    supportingContent = { Text("${Strings.version} ${com.dedovmosol.iwomail.BuildConfig.VERSION_NAME}") },
-                    leadingContent = { Icon(AppIcons.Info, null) },
-                    trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                    modifier = Modifier.clickable { onNavigateToAbout() }
-                )
-            }
         }
     }
 }
@@ -329,10 +317,10 @@ private fun AccountSettingsItem(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val isRu = isRussian()
-    var showSyncModeDialog by remember { mutableStateOf(false) }
-    var showSyncIntervalDialog by remember { mutableStateOf(false) }
-    var showSignatureDialog by remember { mutableStateOf(false) }
-    var showCertificateDialog by remember { mutableStateOf(false) }
+    var showSyncModeDialog by rememberSaveable { mutableStateOf(false) }
+    var showSyncIntervalDialog by rememberSaveable { mutableStateOf(false) }
+    var showSignatureDialog by rememberSaveable { mutableStateOf(false) }
+    var showCertificateDialog by rememberSaveable { mutableStateOf(false) }
     var signatureText by remember(account.signature) { mutableStateOf(account.signature) }
     
     // Получаем имя файла сертификата для экспорта
@@ -514,7 +502,7 @@ private fun AccountSettingsItem(
                         }
                         
                         // Удалить
-                        var showDeleteConfirm by remember { mutableStateOf(false) }
+                        var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
                         
                         if (showDeleteConfirm) {
                             com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -525,7 +513,7 @@ private fun AccountSettingsItem(
                                     Text(Strings.removeCertificateWarning)
                                 },
                                 confirmButton = {
-                                    TextButton(
+                                    com.dedovmosol.iwomail.ui.theme.DeleteButton(
                                         onClick = {
                                             showDeleteConfirm = false
                                             showCertificateDialog = false
@@ -537,15 +525,15 @@ private fun AccountSettingsItem(
                                                 NotificationStrings.getCertificateRemoved(isRu),
                                                 android.widget.Toast.LENGTH_SHORT
                                             ).show()
-                                        }
-                                    ) {
-                                        Text(Strings.removeAction, color = MaterialTheme.colorScheme.error)
-                                    }
+                                        },
+                                        text = Strings.removeAction
+                                    )
                                 },
                                 dismissButton = {
-                                    TextButton(onClick = { showDeleteConfirm = false }) {
-                                        Text(Strings.cancel)
-                                    }
+                                    com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                                        onClick = { showDeleteConfirm = false },
+                                        text = Strings.cancel
+                                    )
                                 }
                             )
                         }
@@ -565,9 +553,10 @@ private fun AccountSettingsItem(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showCertificateDialog = false }) {
-                    Text(Strings.close)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showCertificateDialog = false },
+                    text = Strings.close
+                )
             }
         )
     }
@@ -601,9 +590,10 @@ private fun AccountSettingsItem(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSyncModeDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showSyncModeDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -638,9 +628,10 @@ private fun AccountSettingsItem(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSyncIntervalDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showSyncIntervalDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -669,20 +660,20 @@ private fun AccountSettingsItem(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        TextButton(onClick = { 
-                            signatureText = account.signature
-                            showSignatureDialog = false 
-                        }) {
-                            Text(Strings.cancel)
-                        }
-                        TextButton(
+                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                            onClick = { 
+                                signatureText = account.signature
+                                showSignatureDialog = false 
+                            },
+                            text = Strings.cancel
+                        )
+                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                             onClick = {
                                 onSignatureChange(signatureText)
                                 showSignatureDialog = false
-                            }
-                        ) {
-                            Text(Strings.save)
-                        }
+                            },
+                            text = Strings.save
+                        )
                     }
                 }
             },
@@ -811,7 +802,7 @@ private fun AccountSettingsItem(
             }
             
             // Подписи (несколько для каждого аккаунта)
-            var showSignaturesDialog by remember { mutableStateOf(false) }
+            var showSignaturesDialog by rememberSaveable { mutableStateOf(false) }
             var signatures by remember { mutableStateOf<List<com.dedovmosol.iwomail.data.database.SignatureEntity>>(emptyList()) }
             val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
             
@@ -849,7 +840,7 @@ private fun AccountSettingsItem(
             )
             
             // Автоматическая очистка
-            var showAutoCleanupDialog by remember { mutableStateOf(false) }
+            var showAutoCleanupDialog by rememberSaveable { mutableStateOf(false) }
             
             if (showAutoCleanupDialog) {
                 AutoCleanupDialog(
@@ -875,7 +866,7 @@ private fun AccountSettingsItem(
             
             // Синхронизация контактов (только для Exchange)
             if (accountType == AccountType.EXCHANGE) {
-                var showContactsSyncDialog by remember { mutableStateOf(false) }
+                var showContactsSyncDialog by rememberSaveable { mutableStateOf(false) }
                 
                 if (showContactsSyncDialog) {
                     ContactsSyncDialog(
@@ -997,9 +988,10 @@ fun ContactsSyncDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.cancel)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.cancel
+            )
         }
     )
 }
@@ -1012,11 +1004,8 @@ private fun getThemeDisplayName(theme: AppColorTheme, isRu: Boolean): String {
     return when (theme) {
         AppColorTheme.PURPLE -> Strings.themePurple
         AppColorTheme.BLUE -> Strings.themeBlue
-        AppColorTheme.RED -> Strings.themeRed
         AppColorTheme.YELLOW -> Strings.themeYellow
-        AppColorTheme.ORANGE -> Strings.themeOrange
         AppColorTheme.GREEN -> Strings.themeGreen
-        AppColorTheme.PINK -> Strings.themePink
     }
 }
 
@@ -1162,9 +1151,10 @@ fun AutoCleanupDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.close)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.close
+            )
         }
     )
 }
@@ -1256,9 +1246,11 @@ fun SignaturesManagementDialog(
     val scope = rememberCoroutineScope()
     val database = remember { com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context) }
     
-    var showAddDialog by remember { mutableStateOf(false) }
-    var editingSignature by remember { mutableStateOf<com.dedovmosol.iwomail.data.database.SignatureEntity?>(null) }
-    var signatureToDelete by remember { mutableStateOf<com.dedovmosol.iwomail.data.database.SignatureEntity?>(null) }
+    var showAddDialog by rememberSaveable { mutableStateOf(false) }
+    var editingSignatureId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val editingSignature = editingSignatureId?.let { id -> signatures.find { it.id == id } }
+    var signatureToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val signatureToDelete = signatureToDeleteId?.let { id -> signatures.find { it.id == id } }
     
     // Диалог добавления/редактирования подписи
     if (showAddDialog || editingSignature != null) {
@@ -1309,11 +1301,11 @@ fun SignaturesManagementDialog(
                     }
                 }
                 showAddDialog = false
-                editingSignature = null
+                editingSignatureId = null
             },
             onDismiss = {
                 showAddDialog = false
-                editingSignature = null
+                editingSignatureId = null
             }
         )
     }
@@ -1321,12 +1313,12 @@ fun SignaturesManagementDialog(
     // Диалог подтверждения удаления
     signatureToDelete?.let { signature ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { signatureToDelete = null },
+            onDismissRequest = { signatureToDeleteId = null },
             icon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(Strings.deleteSignatureTitle) },
             text = { Text(signature.name) },
             confirmButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         scope.launch {
                             val wasDefault = signature.isDefault
@@ -1346,16 +1338,16 @@ fun SignaturesManagementDialog(
                             
                             onSignaturesChanged(database.signatureDao().getSignaturesByAccountList(accountId))
                         }
-                        signatureToDelete = null
-                    }
-                ) {
-                    Text(Strings.delete, color = MaterialTheme.colorScheme.error)
-                }
+                        signatureToDeleteId = null
+                    },
+                    text = Strings.delete
+                )
             },
             dismissButton = {
-                TextButton(onClick = { signatureToDelete = null }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { signatureToDeleteId = null },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -1377,7 +1369,7 @@ fun SignaturesManagementDialog(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { editingSignature = signature }
+                                .clickable { editingSignatureId = signature.id }
                                 .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1415,7 +1407,7 @@ fun SignaturesManagementDialog(
                                     maxLines = 1
                                 )
                             }
-                            IconButton(onClick = { signatureToDelete = signature }) {
+                            IconButton(onClick = { signatureToDeleteId = signature.id }) {
                                 Icon(
                                     AppIcons.Delete,
                                     null,
@@ -1443,9 +1435,10 @@ fun SignaturesManagementDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.close)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.close
+            )
         }
     )
 }
@@ -1615,17 +1608,17 @@ private fun SignatureEditDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = { onSave(name, text, isDefault, isHtml) },
+                text = Strings.save,
                 enabled = name.isNotBlank() && text.isNotBlank()
-            ) {
-                Text(Strings.save)
-            }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.cancel)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.cancel
+            )
         }
     )
 }

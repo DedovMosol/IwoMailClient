@@ -184,19 +184,19 @@ fun ScheduleSendDialog(
                 }
             },
             confirmButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { 
                         onSchedule(customDate.timeInMillis)
                     },
+                    text = Strings.schedule,
                     enabled = customDate.timeInMillis > System.currentTimeMillis()
-                ) {
-                    Text(Strings.schedule)
-                }
+                )
             },
             dismissButton = {
-                TextButton(onClick = { showCustomPicker = false }) {
-                    Text(Strings.back)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showCustomPicker = false },
+                    text = Strings.back
+                )
             }
         )
     } else {
@@ -249,9 +249,10 @@ fun ScheduleSendDialog(
                 }
             },
             confirmButton = {
-                TextButton(onClick = onDismiss) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = onDismiss,
+                    text = Strings.cancel
+                )
             }
         )
     }

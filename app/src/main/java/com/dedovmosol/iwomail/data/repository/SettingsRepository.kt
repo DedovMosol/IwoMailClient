@@ -59,6 +59,12 @@ class SettingsRepository private constructor(private val context: Context) {
     private val cachedUpdateCheckInterval = AtomicReference<UpdateCheckInterval?>(null)
     private val cachedLastUpdateCheckTime = AtomicReference<Long?>(null)
     private val cachedUpdateDismissedVersion = AtomicReference<Int?>(null)
+    private val cachedSoundEnabled = AtomicReference<Boolean?>(null)
+    private val cachedScrollbarColor = AtomicReference<String?>(null)
+    private val cachedDefaultDraftMode = AtomicReference<String?>(null)
+    
+    // Кэшированные цвета скроллбара по дням недели
+    private val cachedDayScrollbarColors = java.util.concurrent.ConcurrentHashMap<Int, String>()
     
     // Кэшированные значения для per-account настроек (thread-safe Map)
     private val cachedContactsSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
@@ -86,9 +92,12 @@ class SettingsRepository private constructor(private val context: Context) {
                 cachedLastNotificationCheckTime.set(prefs[Keys.LAST_NOTIFICATION_CHECK_TIME] ?: 0L)
                 cachedLastTrashCleanupTime.set(prefs[Keys.LAST_TRASH_CLEANUP_TIME] ?: 0L)
                 cachedOnboardingShown.set(prefs[Keys.ONBOARDING_SHOWN] ?: false)
+                cachedDefaultDraftMode.set(prefs[Keys.DEFAULT_DRAFT_MODE] ?: "SERVER")
                 cachedUpdateCheckInterval.set(UpdateCheckInterval.fromName(prefs[Keys.UPDATE_CHECK_INTERVAL] ?: UpdateCheckInterval.DAILY.name))
                 cachedLastUpdateCheckTime.set(prefs[Keys.LAST_UPDATE_CHECK_TIME] ?: 0L)
                 cachedUpdateDismissedVersion.set(prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0)
+                cachedSoundEnabled.set(prefs[Keys.SOUND_ENABLED] ?: true)
+                cachedScrollbarColor.set(prefs[Keys.SCROLLBAR_COLOR] ?: "blue")
                 
                 // Темы по дням недели
                 cachedDayThemes[java.util.Calendar.MONDAY] = prefs[Keys.THEME_MONDAY] ?: "purple"
@@ -98,6 +107,15 @@ class SettingsRepository private constructor(private val context: Context) {
                 cachedDayThemes[java.util.Calendar.FRIDAY] = prefs[Keys.THEME_FRIDAY] ?: "purple"
                 cachedDayThemes[java.util.Calendar.SATURDAY] = prefs[Keys.THEME_SATURDAY] ?: "purple"
                 cachedDayThemes[java.util.Calendar.SUNDAY] = prefs[Keys.THEME_SUNDAY] ?: "purple"
+                
+                // Цвета скроллбара по дням недели
+                cachedDayScrollbarColors[java.util.Calendar.MONDAY] = prefs[Keys.SCROLLBAR_MONDAY] ?: "blue"
+                cachedDayScrollbarColors[java.util.Calendar.TUESDAY] = prefs[Keys.SCROLLBAR_TUESDAY] ?: "blue"
+                cachedDayScrollbarColors[java.util.Calendar.WEDNESDAY] = prefs[Keys.SCROLLBAR_WEDNESDAY] ?: "blue"
+                cachedDayScrollbarColors[java.util.Calendar.THURSDAY] = prefs[Keys.SCROLLBAR_THURSDAY] ?: "blue"
+                cachedDayScrollbarColors[java.util.Calendar.FRIDAY] = prefs[Keys.SCROLLBAR_FRIDAY] ?: "blue"
+                cachedDayScrollbarColors[java.util.Calendar.SATURDAY] = prefs[Keys.SCROLLBAR_SATURDAY] ?: "blue"
+                cachedDayScrollbarColors[java.util.Calendar.SUNDAY] = prefs[Keys.SCROLLBAR_SUNDAY] ?: "blue"
                 
                 // Per-account настройки НЕ загружаем заранее (lazy load при первом обращении)
             } catch (e: Exception) {
@@ -121,9 +139,12 @@ class SettingsRepository private constructor(private val context: Context) {
                     cachedLastNotificationCheckTime.set(prefs[Keys.LAST_NOTIFICATION_CHECK_TIME] ?: 0L)
                     cachedLastTrashCleanupTime.set(prefs[Keys.LAST_TRASH_CLEANUP_TIME] ?: 0L)
                     cachedOnboardingShown.set(prefs[Keys.ONBOARDING_SHOWN] ?: false)
+                    cachedDefaultDraftMode.set(prefs[Keys.DEFAULT_DRAFT_MODE] ?: "SERVER")
                     cachedUpdateCheckInterval.set(UpdateCheckInterval.fromName(prefs[Keys.UPDATE_CHECK_INTERVAL] ?: UpdateCheckInterval.DAILY.name))
                     cachedLastUpdateCheckTime.set(prefs[Keys.LAST_UPDATE_CHECK_TIME] ?: 0L)
                     cachedUpdateDismissedVersion.set(prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0)
+                    cachedSoundEnabled.set(prefs[Keys.SOUND_ENABLED] ?: true)
+                    cachedScrollbarColor.set(prefs[Keys.SCROLLBAR_COLOR] ?: "blue")
                     
                     // Темы по дням недели
                     cachedDayThemes[java.util.Calendar.MONDAY] = prefs[Keys.THEME_MONDAY] ?: "purple"
@@ -133,6 +154,15 @@ class SettingsRepository private constructor(private val context: Context) {
                     cachedDayThemes[java.util.Calendar.FRIDAY] = prefs[Keys.THEME_FRIDAY] ?: "purple"
                     cachedDayThemes[java.util.Calendar.SATURDAY] = prefs[Keys.THEME_SATURDAY] ?: "purple"
                     cachedDayThemes[java.util.Calendar.SUNDAY] = prefs[Keys.THEME_SUNDAY] ?: "purple"
+                    
+                    // Цвета скроллбара по дням недели
+                    cachedDayScrollbarColors[java.util.Calendar.MONDAY] = prefs[Keys.SCROLLBAR_MONDAY] ?: "blue"
+                    cachedDayScrollbarColors[java.util.Calendar.TUESDAY] = prefs[Keys.SCROLLBAR_TUESDAY] ?: "blue"
+                    cachedDayScrollbarColors[java.util.Calendar.WEDNESDAY] = prefs[Keys.SCROLLBAR_WEDNESDAY] ?: "blue"
+                    cachedDayScrollbarColors[java.util.Calendar.THURSDAY] = prefs[Keys.SCROLLBAR_THURSDAY] ?: "blue"
+                    cachedDayScrollbarColors[java.util.Calendar.FRIDAY] = prefs[Keys.SCROLLBAR_FRIDAY] ?: "blue"
+                    cachedDayScrollbarColors[java.util.Calendar.SATURDAY] = prefs[Keys.SCROLLBAR_SATURDAY] ?: "blue"
+                    cachedDayScrollbarColors[java.util.Calendar.SUNDAY] = prefs[Keys.SCROLLBAR_SUNDAY] ?: "blue"
                 }
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "Failed to update settings cache", e)
@@ -165,6 +195,18 @@ class SettingsRepository private constructor(private val context: Context) {
         val LAST_UPDATE_CHECK_TIME = longPreferencesKey("last_update_check_time")
         val UPDATE_DISMISSED_VERSION = intPreferencesKey("update_dismissed_version")
         val LAST_APP_VERSION = intPreferencesKey("last_app_version")
+        val LAST_INSTALL_TIME = longPreferencesKey("last_install_time")
+        val SOUND_ENABLED = booleanPreferencesKey("sound_enabled")
+        val SCROLLBAR_COLOR = stringPreferencesKey("scrollbar_color")
+        val SCROLLBAR_MONDAY = stringPreferencesKey("scrollbar_monday")
+        val SCROLLBAR_TUESDAY = stringPreferencesKey("scrollbar_tuesday")
+        val SCROLLBAR_WEDNESDAY = stringPreferencesKey("scrollbar_wednesday")
+        val SCROLLBAR_THURSDAY = stringPreferencesKey("scrollbar_thursday")
+        val SCROLLBAR_FRIDAY = stringPreferencesKey("scrollbar_friday")
+        val SCROLLBAR_SATURDAY = stringPreferencesKey("scrollbar_saturday")
+        val SCROLLBAR_SUNDAY = stringPreferencesKey("scrollbar_sunday")
+        
+        val DEFAULT_DRAFT_MODE = stringPreferencesKey("default_draft_mode")
         
         // Динамические ключи для аккаунтов
         fun initialSyncCompleted(accountId: Long) = booleanPreferencesKey("initial_sync_completed_$accountId")
@@ -334,12 +376,21 @@ class SettingsRepository private constructor(private val context: Context) {
         return cachedLastNotificationCheckTime.get() ?: 0L
     }
     
+    // Миграция удалённых тем (red, orange, pink) → purple
+    private fun migrateThemeCode(code: String): String {
+        return when (code) {
+            "red", "orange", "pink" -> "purple"
+            else -> code
+        }
+    }
+
     // Цветовая тема
     val colorTheme: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[Keys.COLOR_THEME] ?: "purple"
+        migrateThemeCode(prefs[Keys.COLOR_THEME] ?: "purple")
     }
     
     suspend fun setColorTheme(themeCode: String) {
+        cachedColorTheme.set(themeCode) // Обновляем кэш сразу (виджет читает кэш)
         context.dataStore.edit { prefs ->
             prefs[Keys.COLOR_THEME] = themeCode
         }
@@ -347,7 +398,7 @@ class SettingsRepository private constructor(private val context: Context) {
     
     fun getColorThemeSync(): String {
         // Используем кэш (всегда доступен после инициализации)
-        return cachedColorTheme.get() ?: "purple"
+        return migrateThemeCode(cachedColorTheme.get() ?: "purple")
     }
     
     // Темы по дням недели
@@ -380,6 +431,77 @@ class SettingsRepository private constructor(private val context: Context) {
     fun getAnimationsEnabledSync(): Boolean {
         // Используем кэш (всегда доступен после инициализации)
         return cachedAnimationsEnabled.get() ?: true
+    }
+    
+    // Звуки приложения
+    val soundEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[Keys.SOUND_ENABLED] ?: true
+    }
+    
+    suspend fun setSoundEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.SOUND_ENABLED] = enabled
+        }
+    }
+    
+    fun getSoundEnabledSync(): Boolean {
+        return cachedSoundEnabled.get() ?: true
+    }
+    
+    // Цвет скроллбара
+    val scrollbarColor: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[Keys.SCROLLBAR_COLOR] ?: "blue"
+    }
+    
+    suspend fun setScrollbarColor(colorCode: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.SCROLLBAR_COLOR] = colorCode
+        }
+    }
+    
+    fun getScrollbarColorSync(): String {
+        return cachedScrollbarColor.get() ?: "blue"
+    }
+    
+    // Цвет скроллбара по дням недели
+    fun getDayScrollbarColor(dayOfWeek: Int): Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[getDayScrollbarKey(dayOfWeek)] ?: "blue"
+    }
+    
+    suspend fun setDayScrollbarColor(dayOfWeek: Int, colorCode: String) {
+        context.dataStore.edit { prefs ->
+            prefs[getDayScrollbarKey(dayOfWeek)] = colorCode
+        }
+    }
+    
+    fun getDayScrollbarColorSync(dayOfWeek: Int): String {
+        return cachedDayScrollbarColors[dayOfWeek] ?: "blue"
+    }
+    
+    private fun getDayScrollbarKey(dayOfWeek: Int): Preferences.Key<String> {
+        return when (dayOfWeek) {
+            java.util.Calendar.MONDAY -> Keys.SCROLLBAR_MONDAY
+            java.util.Calendar.TUESDAY -> Keys.SCROLLBAR_TUESDAY
+            java.util.Calendar.WEDNESDAY -> Keys.SCROLLBAR_WEDNESDAY
+            java.util.Calendar.THURSDAY -> Keys.SCROLLBAR_THURSDAY
+            java.util.Calendar.FRIDAY -> Keys.SCROLLBAR_FRIDAY
+            java.util.Calendar.SATURDAY -> Keys.SCROLLBAR_SATURDAY
+            java.util.Calendar.SUNDAY -> Keys.SCROLLBAR_SUNDAY
+            else -> Keys.SCROLLBAR_MONDAY
+        }
+    }
+    
+    /**
+     * Получить текущий цвет скроллбара с учётом расписания по дням
+     */
+    fun getCurrentScrollbarColorSync(): String {
+        val dailyEnabled = getDailyThemesEnabledSync()
+        return if (dailyEnabled) {
+            val dayOfWeek = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK)
+            getDayScrollbarColorSync(dayOfWeek)
+        } else {
+            getScrollbarColorSync()
+        }
     }
     
     // Автоочистка папок (настройки хранятся в AccountEntity)
@@ -488,17 +610,18 @@ class SettingsRepository private constructor(private val context: Context) {
     // Получить тему для конкретного дня (1=Воскресенье, 2=Понедельник, ..., 7=Суббота)
     fun getDayTheme(dayOfWeek: Int): Flow<String> = context.dataStore.data.map { prefs ->
         val key = getDayKey(dayOfWeek)
-        prefs[key] ?: "purple"
+        migrateThemeCode(prefs[key] ?: "purple")
     }
     
     suspend fun setDayTheme(dayOfWeek: Int, themeCode: String) {
+        cachedDayThemes[dayOfWeek] = themeCode // Обновляем кэш сразу (виджет читает кэш)
         context.dataStore.edit { prefs ->
             prefs[getDayKey(dayOfWeek)] = themeCode
         }
     }
     
     fun getDayThemeSync(dayOfWeek: Int): String {
-        return cachedDayThemes[dayOfWeek] ?: "purple"
+        return migrateThemeCode(cachedDayThemes[dayOfWeek] ?: "purple")
     }
     
     private fun getDayKey(dayOfWeek: Int): Preferences.Key<String> {
@@ -540,6 +663,17 @@ class SettingsRepository private constructor(private val context: Context) {
     
     fun getOnboardingShownSync(): Boolean {
         return cachedOnboardingShown.get() ?: false
+    }
+    
+    // Режим черновиков по умолчанию (для новых аккаунтов)
+    suspend fun setDefaultDraftMode(mode: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.DEFAULT_DRAFT_MODE] = mode
+        }
+    }
+    
+    fun getDefaultDraftModeSync(): String {
+        return cachedDefaultDraftMode.get() ?: "SERVER"
     }
     
     // Интервал проверки обновлений
@@ -608,6 +742,16 @@ class SettingsRepository private constructor(private val context: Context) {
     suspend fun setLastAppVersion(versionCode: Int) {
         context.dataStore.edit { prefs ->
             prefs[Keys.LAST_APP_VERSION] = versionCode
+        }
+    }
+    
+    suspend fun getLastInstallTime(): Long {
+        return context.dataStore.data.first()[Keys.LAST_INSTALL_TIME] ?: 0L
+    }
+    
+    suspend fun setLastInstallTime(time: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.LAST_INSTALL_TIME] = time
         }
     }
     

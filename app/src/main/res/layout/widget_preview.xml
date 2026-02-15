@@ -3,95 +3,84 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp"
-    android:background="@drawable/widget_background">
+    android:background="@drawable/widget_gradient_purple">
 
+    <!-- Верхняя часть — градиент + поиск + дата -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
+        android:orientation="vertical"
+        android:padding="14dp">
 
-        <ImageView
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_email"
-            android:contentDescription="@null" />
-
+        <!-- Строка поиска -->
         <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:layout_marginStart="8dp">
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:background="@drawable/widget_search_bg"
+            android:gravity="center_vertical"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_search"
+                android:tint="#757575"
+                android:contentDescription="@null" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="5"
-                android:textSize="20sp"
-                android:textStyle="bold"
-                android:textColor="?android:attr/textColorPrimary" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/widget_unread"
-                android:textSize="11sp"
-                android:textColor="?android:attr/textColorSecondary" />
+                android:layout_marginStart="10dp"
+                android:text="@string/widget_search_mail"
+                android:textColor="#757575"
+                android:textSize="14sp" />
         </LinearLayout>
 
-        <ImageView
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:padding="12dp"
-            android:src="@drawable/ic_edit"
-            android:background="@drawable/widget_button_background"
-            android:contentDescription="@null" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="iwo Mail"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/widget_calendar"
+            android:textColor="#CCFFFFFF"
+            android:textSize="13sp" />
     </LinearLayout>
 
+    <!-- Нижняя часть — тёмный блок -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginTop="8dp">
-
-        <ImageView
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:src="@drawable/ic_calendar_month"
-            android:contentDescription="@null" />
+        android:background="#E6181828"
+        android:padding="12dp">
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="2"
-            android:textSize="16sp"
-            android:layout_marginStart="6dp"
-            android:textColor="?android:attr/textColorPrimary" />
+            android:text="@string/shortcut_compose"
+            android:textColor="#EEEEEE"
+            android:textSize="12sp"
+            android:drawableStart="@drawable/ic_edit"
+            android:drawablePadding="4dp"
+            android:drawableTint="#EEEEEE" />
 
         <ImageView
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:src="@drawable/ic_task"
-            android:contentDescription="@null" />
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="3"
-            android:textSize="16sp"
-            android:layout_marginStart="6dp"
-            android:textColor="?android:attr/textColorPrimary" />
-
-        <ImageView
-            android:layout_width="28dp"
-            android:layout_height="28dp"
-            android:src="@drawable/ic_search"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:src="@drawable/ic_sync"
+            android:tint="#B3EEEEEE"
             android:contentDescription="@null" />
     </LinearLayout>
 

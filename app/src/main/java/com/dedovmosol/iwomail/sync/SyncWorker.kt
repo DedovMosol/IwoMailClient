@@ -21,6 +21,7 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.TimeUnit
 
 /**
@@ -142,30 +143,40 @@ class SyncWorker(
                 allFolders.filter { it.type in userFolderTypes }
             
             // Синхронизируем письма: сначала инкрементально, при ошибке - полный ресинк
+            // Per-folder таймаут (300 сек) — защита от превышения WorkManager ~10 мин лимита.
             for (folder in foldersToSync) {
                 try {
                     // Сначала пробуем инкрементальную синхронизацию (экономит трафик/батарею)
-                    val result = mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
-                    if (result is EasResult.Error) {
+                    val result = kotlinx.coroutines.withTimeoutOrNull(300_000L) {
+                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
+                    }
+                    if (result == null) {
+                        // Таймаут — переходим к следующей папке
+                        android.util.Log.w("SyncWorker", "Sync timeout for folder ${folder.id}, skipping")
+                        hasErrors = true
+                    } else if (result is EasResult.Error) {
                         // При ошибке делаем полный ресинк как страховку
-                        val retryResult = mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
-                        if (retryResult is EasResult.Error) {
+                        val retryResult = kotlinx.coroutines.withTimeoutOrNull(300_000L) {
+                            mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                        }
+                        if (retryResult == null || retryResult is EasResult.Error) {
                             hasErrors = true
                         }
                     }
                 } catch (_: Exception) {
                     // При исключении тоже пробуем полный ресинк
                     try {
-                mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                        kotlinx.coroutines.withTimeoutOrNull(300_000L) {
+                            mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                        }
                     } catch (_: Exception) {
                         hasErrors = true
                     }
                 }
             }
             
-            // Проверяем новые письма для этого аккаунта
-            // КРИТИЧНО: Используем getNewEmailsForNotification - не зависит от статуса прочитанности
-            val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
+            // Уведомления только для НЕПРОЧИТАННЫХ писем (read = 0)
+            val newEmailEntities = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
             
             // Фильтруем уже показанные уведомления
             val shownNotifications = getShownNotifications(applicationContext)
@@ -204,12 +215,25 @@ class SyncWorker(
             }
             
             val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-            if (notificationsEnabled) {
-                for ((accountId, emails) in newEmailsByAccount) {
-                    val account = accounts.find { it.id == accountId } ?: continue
-                    showNotification(emails, account.email, accountId)
-                    // Помечаем как показанные
-                    markNotificationsAsShown(applicationContext, emails.map { "${accountId}_${it.id}" })
+            if (notificationsEnabled && !MailApplication.isInForeground) {
+                // Shared Mutex с PushService: атомарный re-filter+show+mark
+                // предотвращает дубликаты при одновременном sync
+                PushService.notificationMutex.withLock {
+                    for ((accountId, emails) in newEmailsByAccount) {
+                        // Re-filter: PushService мог показать уведомления пока мы загружали тела
+                        val shownNow = getShownNotifications(applicationContext)
+                        val filtered = emails.filter { e ->
+                            !shownNow.contains("${accountId}_${e.id}")
+                        }.filter { e ->
+                            // Повторная проверка read-статуса под mutex:
+                            // письмо могло стать прочитанным между выборкой и показом уведомления.
+                            database.emailDao().getEmail(e.id)?.read == false
+                        }
+                        if (filtered.isEmpty()) continue
+                        val account = accounts.find { it.id == accountId } ?: continue
+                        showNotification(filtered, account.email, accountId)
+                        markNotificationsAsShown(applicationContext, filtered.map { "${accountId}_${it.id}" })
+                    }
                 }
             }
         }

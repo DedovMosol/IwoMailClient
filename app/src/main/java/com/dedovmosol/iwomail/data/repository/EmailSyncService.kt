@@ -311,6 +311,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 }
                 
                 val parsedDate = parseEwsDate(draft.dateCreated)
+                val effectiveDate = if (parsedDate > 0L) parsedDate
+                    else existingEmail?.dateReceived?.takeIf { it > 0L }
+                    ?: System.currentTimeMillis()
                 val preview = stripHtml(draft.body).take(150).replace("\n", " ").trim()
                 EmailEntity(
                     id = "${accountId}_${draft.serverId}",
@@ -325,7 +328,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     preview = preview,
                     body = draft.body,
                     bodyType = 2,
-                    dateReceived = parsedDate,
+                    dateReceived = effectiveDate,
                     read = true,
                     importance = 1,
                     hasAttachments = draft.hasAttachments || draft.attachments.isNotEmpty()
@@ -432,6 +435,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     if (result.data.emails.isNotEmpty()) {
                         val emailEntities = result.data.emails.map { email ->
                             val parsedDate = parseDate(email.dateReceived)
+                            // Если сервер не вернул дату — используем текущее время
+                            // (insertAllIgnore не перезапишет существующие письма)
+                            val effectiveDate = if (parsedDate > 0L) parsedDate else System.currentTimeMillis()
                             EmailEntity(
                                 id = "${accountId}_${email.serverId}",
                                 accountId = accountId,
@@ -445,7 +451,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 preview = stripHtml(email.body).take(150).replace("\n", " ").trim(),
                                 body = "",
                                 bodyType = email.bodyType,
-                                dateReceived = parsedDate,
+                                dateReceived = effectiveDate,
                                 read = email.read,
                                 flagged = email.flagged,
                                 importance = email.importance,
@@ -691,7 +697,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             }
             var newEmailsCount = 0
             
-            val windowSize = 100
+            val windowSize = 200  // Exchange 2007 SP1 поддерживает до 512; 200 — баланс скорости и совместимости
             val includeMime = folder.type == FolderType.SENT_ITEMS && !isFullResync
             
             if (syncKey == "0") {
@@ -723,7 +729,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             var consecutiveErrors = 0
             val maxConsecutiveErrors = 5
             val syncStartTime = System.currentTimeMillis()
-            val maxSyncDurationMs = if (isFullResync) 600_000L else 180_000L
+            val maxSyncDurationMs = if (isFullResync) 900_000L else 300_000L  // 15 мин / 5 мин — для больших ящиков (3000+ писем)
             var previousSyncKey = syncKey
             var sameKeyCount = 0
             var emptyDataCount = 0
@@ -894,6 +900,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val emailId = "${accountId}_${email.serverId}"
             val existingEmail = existingEmailsMap[emailId]
             val parsedDate = parseDate(email.dateReceived)
+            // Если сервер не вернул DateReceived (parsedDate=0), сохраняем существующую дату.
+            // Только для действительно новых писем без даты используем текущее время.
+            val effectiveDate = if (parsedDate > 0L) parsedDate
+                else existingEmail?.dateReceived?.takeIf { it > 0L }
+                ?: System.currentTimeMillis()
             EmailEntity(
                 id = emailId,
                 accountId = accountId,
@@ -908,7 +919,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 body = existingEmail?.body?.takeIf { it.isNotBlank() }
                     ?: if (folder.type == FolderType.DRAFTS && email.body.isNotBlank()) email.body else "",
                 bodyType = email.bodyType,
-                dateReceived = parsedDate,
+                dateReceived = effectiveDate,
                 read = email.read,
                 flagged = email.flagged,
                 importance = email.importance,
@@ -1527,12 +1538,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     // === Утилитные методы ===
     
     private fun parseEwsDate(dateStr: String): Long {
-        if (dateStr.isBlank()) return System.currentTimeMillis()
+        if (dateStr.isBlank()) return 0L
         return try {
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
-                .parse(dateStr.substringBefore("Z"))?.time ?: System.currentTimeMillis()
+                .parse(dateStr.substringBefore("Z"))?.time ?: 0L
         } catch (e: Exception) {
-            System.currentTimeMillis()
+            0L
         }
     }
     
@@ -1563,7 +1574,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 // Пробуем следующий формат
             }
         }
-                0L
+        0L
     } catch (e: Exception) {
         0L
     }

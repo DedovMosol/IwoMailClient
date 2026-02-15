@@ -3,6 +3,7 @@ package com.dedovmosol.iwomail.util
 import android.content.Context
 import android.media.MediaPlayer
 import com.dedovmosol.iwomail.R
+import com.dedovmosol.iwomail.data.repository.SettingsRepository
 
 /**
  * Утилита для воспроизведения звуков приложения
@@ -34,6 +35,7 @@ object SoundPlayer {
     }
     
     private fun playSound(context: Context, resId: Int) {
+        if (!SettingsRepository.getInstance(context).getSoundEnabledSync()) return
         synchronized(lock) {
             try {
                 // Освобождаем предыдущий плеер

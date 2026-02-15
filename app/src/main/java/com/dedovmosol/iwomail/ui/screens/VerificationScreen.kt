@@ -83,18 +83,19 @@ fun VerificationScreen(
     val emailMismatchTitle = Strings.emailMismatch
     val isRussianLang = com.dedovmosol.iwomail.ui.isRussian()
     
-    // Функция для создания savedData (сохраняем всё кроме domain, username, password)
+    // Функция для создания savedData (пароль не сохраняем)
     fun createSavedData(): String {
         val certPath = certificatePath ?: ""
         val clientCertPath = clientCertificatePath ?: ""
-        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$clientCertPath"
+        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$clientCertPath|$domain|$username"
     }
     
-    // Функция для создания savedData при несовпадении email (сохраняем ВСЁ включая domain, username, password)
+    // Функция для создания savedData при несовпадении email
+    // Пароль НЕ сохраняем, чтобы не передавать секреты через navigation route
     fun createSavedDataForEmailMismatch(): String {
         val certPath = certificatePath ?: ""
         val clientCertPath = clientCertificatePath ?: ""
-        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$domain|$username|$password|$clientCertPath"
+        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$domain|$username|$clientCertPath"
     }
     
     var statusText by remember { mutableStateOf(verifyingAccountText) }
@@ -223,12 +224,12 @@ fun VerificationScreen(
         LaunchedEffect(Unit) { visible = true }
         
         val scale by animateFloatAsState(
-            targetValue = if (visible && animationsEnabled) 1f else 0.8f,
+            targetValue = if (animationsEnabled) { if (visible) 1f else 0.8f } else 1f,
             animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
             label = "scale"
         )
         val alpha by animateFloatAsState(
-            targetValue = if (visible) 1f else 0f,
+            targetValue = if (animationsEnabled) { if (visible) 1f else 0f } else 1f,
             animationSpec = tween(200),
             label = "alpha"
         )
@@ -385,7 +386,7 @@ fun VerificationScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             // Кнопка 1: Использовать основной ящик (рекомендуется)
-                            com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                                 onClick = {
                                     scope.launch {
                                         showMismatchDialog = false
@@ -551,16 +552,15 @@ fun VerificationScreen(
                             }
                             
                             // Кнопка 3: Отменить
-                            TextButton(
+                            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                                 onClick = {
                                     showMismatchDialog = false
                                     onError("CLEAR_EMAIL", createSavedDataForEmailMismatch())
                                 },
+                                text = if (isRussianLang) "Отменить" else "Cancel",
                                 enabled = !isCheckingAccess,
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(if (isRussianLang) "Отменить" else "Cancel")
-                            }
+                            )
                         }
                     }
                 }

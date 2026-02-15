@@ -1,4 +1,4 @@
-# Reference project (fork)
+﻿# Reference project (fork)
 reference/
 
 # Old versions for comparison
@@ -10,14 +10,16 @@ run-tests.bat
 
 # Architecture & internal documentation (personal notes)
 ARCHITECTURE.md
+docs/ARCHITECTURE.md
 EXCHANGE_DELETE_OPTIMIZATION.md
 BUGFIX_PLAN.md
-docs/ARCHITECTURE.md
+
 docs/REFACTORING_PLAN.md
 docs/plan_ios_install.md
 docs/DRAFTS_IMPLEMENTATION.md
 docs/ISSUES_AND_FIXES.md
 docs/ROADMAP.md
+docs/XMLPULLPARSER_MIGRATION_PLAN.md
 
 # IDE configuration
 .cursorrules
@@ -152,3 +154,8 @@ mapping.txt
 
 # Update metadata (generated for GitHub)
 update.json
+
+# Easter egg audio (copyrighted music)
+app/src/main/res/raw/pashalka_iwo.m4a
+
+docs/SECURITY_MEMORY_RACE_NETWORK_AUDIT.md

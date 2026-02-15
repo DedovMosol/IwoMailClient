@@ -11,6 +11,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -30,6 +31,24 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLDecoder
 import java.net.URLEncoder
+
+/**
+ * In-memory хранилище секретов для экрана верификации.
+ * Пароли не передаются через navigation route (был открытый Base64),
+ * а хранятся здесь и очищаются после использования.
+ */
+object VerificationSecrets {
+    var password: String? = null
+    var clientCertificatePassword: String? = null
+    
+    fun clear() {
+        password = null
+        clientCertificatePassword = null
+    }
+}
+
+private const val VERIFICATION_PASSWORD_KEY = "verification_password"
+private const val VERIFICATION_CLIENT_CERT_PASSWORD_KEY = "verification_client_cert_password"
 
 /**
  * Глобальное хранилище для вложений из Share intent
@@ -123,17 +142,20 @@ sealed class Screen(val route: String) {
             clientCertificatePassword: String? = null,
             isFirstAccount: Boolean = false
         ): String {
+            // Секреты передаём через in-memory carrier, НЕ через route
+            VerificationSecrets.password = password
+            VerificationSecrets.clientCertificatePassword = clientCertificatePassword
+            
             val certPathEncoded = certificatePath ?: ""
             val clientCertPathEncoded = clientCertificatePath ?: ""
-            val clientCertPasswordEncoded = clientCertificatePassword ?: ""
-            // URL-encode каждый параметр, чтобы символы | в пароле/полях не ломали split
+            // URL-encode каждый параметр, чтобы символы | в полях не ломали split
             val enc = { s: String -> URLEncoder.encode(s, "UTF-8") }
             val data = listOf(
                 enc(email), enc(displayName), enc(serverUrl), enc(username),
-                enc(password), enc(domain), enc(acceptAllCerts.toString()), enc(color.toString()),
+                enc(domain), enc(acceptAllCerts.toString()), enc(color.toString()),
                 enc(incomingPort.toString()), enc(outgoingServer), enc(outgoingPort.toString()),
                 enc(useSSL.toString()), enc(syncMode), enc(certPathEncoded),
-                enc(isFirstAccount.toString()), enc(clientCertPathEncoded), enc(clientCertPasswordEncoded)
+                enc(isFirstAccount.toString()), enc(clientCertPathEncoded)
             ).joinToString("|")
             val encoded = android.util.Base64.encodeToString(
                 data.toByteArray(Charsets.UTF_8),
@@ -277,6 +299,7 @@ fun AppNavigation(
     shortcutSearch: Boolean = false,
     shortcutCalendar: Boolean = false,
     shortcutTasks: Boolean = false,
+    shortcutNotes: Boolean = false,
     onShortcutHandled: () -> Unit = {},
     openUpdates: Boolean = false,
     onUpdatesHandled: () -> Unit = {},
@@ -289,8 +312,8 @@ fun AppNavigation(
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     
     // Определяем стартовый экран
-    var startDestination by remember { mutableStateOf<String?>(null) }
-    var hasCheckedAccounts by remember { mutableStateOf(false) }
+    var startDestination by rememberSaveable { mutableStateOf<String?>(null) }
+    var hasCheckedAccounts by rememberSaveable { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
         try {
@@ -320,8 +343,8 @@ fun AppNavigation(
     
     // Обработка переключения аккаунта при клике на уведомление
     // Храним ID последнего обработанного аккаунта, чтобы повторные уведомления обрабатывались
-    var lastSwitchedAccountId by remember { mutableStateOf<Long?>(null) }
-    var accountSwitchCompleted by remember { mutableStateOf(switchToAccountId == null) }
+    var lastSwitchedAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var accountSwitchCompleted by rememberSaveable { mutableStateOf(switchToAccountId == null) }
     
     LaunchedEffect(switchToAccountId, hasCheckedAccounts) {
         if (switchToAccountId != null && switchToAccountId > 0 && switchToAccountId != lastSwitchedAccountId && hasCheckedAccounts) {
@@ -348,7 +371,7 @@ fun AppNavigation(
     }
     
     // Обработка mailto: и SEND intent'ов — открываем экран создания письма
-    var composeHandled by remember { mutableStateOf(false) }
+    var composeHandled by rememberSaveable { mutableStateOf(false) }
     
     LaunchedEffect(composeToEmail, composeSubject, composeBody, composeAttachments, hasCheckedAccounts, startDestination) {
         if ((composeToEmail != null || composeSubject != null || composeBody != null || composeAttachments.isNotEmpty()) && 
@@ -378,7 +401,7 @@ fun AppNavigation(
     // Обработка перехода на конкретное письмо (из уведомления)
     // Храним ID последнего обработанного письма вместо boolean,
     // чтобы повторное уведомление (с другим emailId) тоже обрабатывалось
-    var lastHandledEmailId by remember { mutableStateOf<String?>(null) }
+    var lastHandledEmailId by rememberSaveable { mutableStateOf<String?>(null) }
     
     LaunchedEffect(openEmailId, hasCheckedAccounts, startDestination, accountSwitchCompleted) {
         // Обрабатываем только когда всё готово (включая переключение аккаунта)
@@ -457,9 +480,9 @@ fun AppNavigation(
     }
     
     // Обработка App Shortcuts
-    var shortcutHandled by remember { mutableStateOf(false) }
+    var shortcutHandled by rememberSaveable { mutableStateOf(false) }
     
-    LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, shortcutCalendar, shortcutTasks, hasCheckedAccounts, startDestination) {
+    LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, shortcutCalendar, shortcutTasks, shortcutNotes, hasCheckedAccounts, startDestination) {
         if (!shortcutHandled && hasCheckedAccounts && startDestination == Screen.Main.route) {
             when {
                 shortcutCompose -> {
@@ -516,6 +539,16 @@ fun AppNavigation(
                     kotlinx.coroutines.delay(300)
                     try {
                         navController.navigate(Screen.Tasks.createRoute()) {
+                            launchSingleTop = true
+                        }
+                        onShortcutHandled()
+                    } catch (_: Exception) { }
+                }
+                shortcutNotes -> {
+                    shortcutHandled = true
+                    kotlinx.coroutines.delay(300)
+                    try {
+                        navController.navigate(Screen.Notes.route) {
                             launchSingleTop = true
                         }
                         onShortcutHandled()
@@ -625,6 +658,9 @@ fun AppNavigation(
                 },
                 onNavigateToTasksToday = {
                     navController.navigate(Screen.Tasks.createRoute(filter = "TODAY"))
+                },
+                onNavigateToAbout = {
+                    navController.navigate(Screen.About.route)
                 }
             )
         }
@@ -681,6 +717,13 @@ fun AppNavigation(
                     }
                 },
                 onNavigateToVerification = { email, displayName, serverUrl, username, password, domain, acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode, certificatePath, clientCertificatePath, clientCertificatePassword ->
+                    // Дублируем секреты в SavedStateHandle как fallback,
+                    // если in-memory carrier будет очищен до чтения в Verification.
+                    navController.currentBackStackEntry?.savedStateHandle?.set(VERIFICATION_PASSWORD_KEY, password)
+                    navController.currentBackStackEntry?.savedStateHandle?.set(
+                        VERIFICATION_CLIENT_CERT_PASSWORD_KEY,
+                        clientCertificatePassword
+                    )
                     // Проверяем, первый ли это аккаунт (нет previousBackStackEntry = пришли с Onboarding)
                     val isFirstAccount = navController.previousBackStackEntry == null
                     navController.navigate(
@@ -720,29 +763,63 @@ fun AppNavigation(
             // URL-decode каждый параметр (обратная операция к createRoute)
             val dec = { s: String -> try { URLDecoder.decode(s, "UTF-8") } catch (_: Exception) { s } }
             val parts = rawParts.map { dec(it) }
-            if (parts.size >= 13) {
-                val certificatePath = if (parts.size >= 14 && parts[13].isNotBlank()) parts[13] else null
-                val isFirstAccount = if (parts.size >= 15) parts[14].toBoolean() else false
-                val clientCertificatePath = if (parts.size >= 16 && parts[15].isNotBlank()) parts[15] else null
-                val clientCertificatePassword = if (parts.size >= 17 && parts[16].isNotBlank()) parts[16] else null
+            val setupBackStackEntry = navController.previousBackStackEntry
+            // Секреты читаем один раз при первом входе на экран.
+            // Иначе после onSuccess/onError (где секреты очищаются) возможна
+            // ложная ветка "Verification session expired" на промежуточной рекомпозиции.
+            val initialPassword = remember(backStackEntry.id) {
+                VerificationSecrets.password
+                    ?: setupBackStackEntry?.savedStateHandle?.get<String>(VERIFICATION_PASSWORD_KEY)
+            }
+            val initialClientCertificatePassword = remember(backStackEntry.id) {
+                VerificationSecrets.clientCertificatePassword
+                    ?: setupBackStackEntry?.savedStateHandle?.get<String>(VERIFICATION_CLIENT_CERT_PASSWORD_KEY)
+            }
+            if (initialPassword.isNullOrEmpty()) {
+                VerificationSecrets.clear()
+                setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_PASSWORD_KEY)
+                setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_CLIENT_CERT_PASSWORD_KEY)
+                LaunchedEffect(Unit) {
+                    navController.navigate(
+                        Screen.Setup.createRoute(
+                            verificationError = "Verification session expired. Please re-enter password."
+                        )
+                    ) {
+                        popUpTo(Screen.Setup.route) { inclusive = true }
+                    }
+                }
+                return@composable
+            }
+            // Формат route (без password/clientCertPassword):
+            // 0=email, 1=displayName, 2=serverUrl, 3=username,
+            // 4=domain, 5=acceptAllCerts, 6=color, 7=incomingPort,
+            // 8=outgoingServer, 9=outgoingPort, 10=useSSL, 11=syncMode,
+            // 12=certPath, 13=isFirstAccount, 14=clientCertPath
+            if (parts.size >= 12) {
+                val certificatePath = if (parts.size >= 13 && parts[12].isNotBlank()) parts[12] else null
+                val isFirstAccount = if (parts.size >= 14) parts[13].toBoolean() else false
+                val clientCertificatePath = if (parts.size >= 15 && parts[14].isNotBlank()) parts[14] else null
                 VerificationScreen(
                     email = parts[0],
                     displayName = parts[1],
                     serverUrl = parts[2],
                     username = parts[3],
-                    password = parts[4],
-                    domain = parts[5],
-                    acceptAllCerts = parts[6].toBoolean(),
-                    color = parts[7].toIntOrNull() ?: 0xFF1976D2.toInt(),
-                    incomingPort = parts[8].toIntOrNull() ?: 443,
-                    outgoingServer = parts[9],
-                    outgoingPort = parts[10].toIntOrNull() ?: 587,
-                    useSSL = parts[11].toBoolean(),
-                    syncMode = try { com.dedovmosol.iwomail.data.database.SyncMode.valueOf(parts[12]) } catch (e: Exception) { com.dedovmosol.iwomail.data.database.SyncMode.SCHEDULED },
+                    password = initialPassword,
+                    domain = parts[4],
+                    acceptAllCerts = parts[5].toBoolean(),
+                    color = parts[6].toIntOrNull() ?: 0xFF1976D2.toInt(),
+                    incomingPort = parts[7].toIntOrNull() ?: 443,
+                    outgoingServer = parts[8],
+                    outgoingPort = parts[9].toIntOrNull() ?: 587,
+                    useSSL = parts[10].toBoolean(),
+                    syncMode = try { com.dedovmosol.iwomail.data.database.SyncMode.valueOf(parts[11]) } catch (e: Exception) { com.dedovmosol.iwomail.data.database.SyncMode.SCHEDULED },
                     certificatePath = certificatePath,
                     clientCertificatePath = clientCertificatePath,
-                    clientCertificatePassword = clientCertificatePassword,
+                    clientCertificatePassword = initialClientCertificatePassword,
                     onSuccess = {
+                        VerificationSecrets.clear()
+                        setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_PASSWORD_KEY)
+                        setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_CLIENT_CERT_PASSWORD_KEY)
                         if (isFirstAccount) {
                             // Первый аккаунт — показываем экран "Добавить ещё аккаунт?"
                             navController.navigate(Screen.AddAnotherAccount.route) {
@@ -756,6 +833,9 @@ fun AppNavigation(
                         }
                     },
                     onError = { error, savedData ->
+                        VerificationSecrets.clear()
+                        setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_PASSWORD_KEY)
+                        setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_CLIENT_CERT_PASSWORD_KEY)
                         navController.navigate(Screen.Setup.createRoute(verificationError = error, savedData = savedData)) {
                             popUpTo(Screen.Setup.route) { inclusive = true }
                         }
@@ -930,9 +1010,6 @@ fun AppNavigation(
                     navController.navigate(Screen.Setup.route) {
                         popUpTo(0) { inclusive = true }
                     }
-                },
-                onNavigateToAbout = {
-                    navController.navigate(Screen.About.route)
                 }
             )
         }

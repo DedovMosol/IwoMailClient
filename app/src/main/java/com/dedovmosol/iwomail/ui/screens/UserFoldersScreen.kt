@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -67,24 +68,26 @@ fun UserFoldersScreen(
     }
     
     // Состояния
-    var isSyncing by rememberSaveable { mutableStateOf(false) }
+    var isSyncing by remember { mutableStateOf(false) }
     
     // Диалог создания папки
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var newFolderName by rememberSaveable { mutableStateOf("") }
-    var isCreatingFolder by rememberSaveable { mutableStateOf(false) }
+    var isCreatingFolder by remember { mutableStateOf(false) }
     
     // Контекстное меню (long press)
     var folderForMenu by remember { mutableStateOf<FolderEntity?>(null) }
     
-    // Диалог переименования
-    var folderToRename by remember { mutableStateOf<FolderEntity?>(null) }
+    // Диалог переименования — ID сохраняется при повороте
+    var folderToRenameId by rememberSaveable { mutableStateOf<String?>(null) }
+    val folderToRename = folderToRenameId?.let { id -> userFolders.find { it.id == id } }
     var renameNewName by rememberSaveable { mutableStateOf("") }
-    var isRenamingFolder by rememberSaveable { mutableStateOf(false) }
+    var isRenamingFolder by remember { mutableStateOf(false) }
     
-    // Диалог удаления
-    var folderToDelete by remember { mutableStateOf<FolderEntity?>(null) }
-    var isDeletingFolder by rememberSaveable { mutableStateOf(false) }
+    // Диалог удаления — ID сохраняется при повороте
+    var folderToDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
+    val folderToDelete = folderToDeleteId?.let { id -> userFolders.find { it.id == id } }
+    var isDeletingFolder by remember { mutableStateOf(false) }
     
     // Кэш строк для use в корутинах (вне @Composable)
     val foldersSyncedText = Strings.foldersSynced
@@ -171,7 +174,15 @@ fun UserFoldersScreen(
                 .background(Color.White)
                 .padding(padding)
         ) {
-            if (userFolders.isEmpty() && !isSyncing) {
+            if (userFolders.isEmpty() && isSyncing) {
+                // Загрузка — индикатор по центру
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
+            } else if (userFolders.isEmpty()) {
                 // Пустой экран
                 Box(
                     modifier = Modifier.fillMaxSize(),
@@ -260,7 +271,7 @@ fun UserFoldersScreen(
                 )
             },
             confirmButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         val accId = accountId
                         if (accId > 0 && newFolderName.isNotBlank() && !isCreatingFolder) {
@@ -284,22 +295,19 @@ fun UserFoldersScreen(
                             }
                         }
                     },
-                    enabled = newFolderName.isNotBlank() && !isCreatingFolder
-                ) {
-                    if (isCreatingFolder) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(Strings.save)
-                    }
-                }
+                    enabled = newFolderName.isNotBlank() && !isCreatingFolder,
+                    isLoading = isCreatingFolder,
+                    text = Strings.save
+                )
             },
             dismissButton = {
-                TextButton(onClick = {
-                    showCreateDialog = false
-                    newFolderName = ""
-                }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showCreateDialog = false
+                        newFolderName = ""
+                    },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -308,32 +316,49 @@ fun UserFoldersScreen(
     folderForMenu?.let { folder ->
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = { folderForMenu = null },
-            title = { Text(folder.displayName) },
-            text = {
-                Column {
-                    ListItem(
-                        headlineContent = { Text(Strings.rename) },
-                        leadingContent = { Icon(AppIcons.Edit, null) },
-                        modifier = Modifier.clickable {
-                            folderForMenu = null
-                            renameNewName = folder.displayName
-                            folderToRename = folder
-                        }
-                    )
-                    ListItem(
-                        headlineContent = { Text(Strings.delete, color = MaterialTheme.colorScheme.error) },
-                        leadingContent = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
-                        modifier = Modifier.clickable {
-                            folderForMenu = null
-                            folderToDelete = folder
-                        }
+            title = {
+                Text(
+                    text = folder.displayName,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            },
+            confirmButton = {
+                // Удалить справа (красная обводка)
+                OutlinedButton(
+                    onClick = {
+                        folderForMenu = null
+                        folderToDeleteId = folder.id
+                    },
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
+                    ),
+                    border = BorderStroke(1.dp, com.dedovmosol.iwomail.ui.theme.AppColors.delete)
+                ) {
+                    Icon(
+                        AppIcons.Delete,
+                        contentDescription = Strings.delete,
+                        modifier = Modifier.size(20.dp),
+                        tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                     )
                 }
             },
-            confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { folderForMenu = null }) {
-                    Text(Strings.cancel)
+                // Переименовать слева (цвет из темы)
+                OutlinedButton(
+                    onClick = {
+                        folderForMenu = null
+                        renameNewName = folder.displayName
+                        folderToRenameId = folder.id
+                    },
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = LocalColorTheme.current.gradientStart
+                    )
+                ) {
+                    Icon(
+                        AppIcons.Edit,
+                        contentDescription = Strings.rename,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         )
@@ -343,7 +368,7 @@ fun UserFoldersScreen(
     folderToRename?.let { folder ->
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = {
-                folderToRename = null
+                folderToRenameId = null
                 renameNewName = ""
             },
             title = { Text(Strings.renameFolder) },
@@ -357,7 +382,7 @@ fun UserFoldersScreen(
                 )
             },
             confirmButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         val accId = accountId
                         if (accId > 0 && !isRenamingFolder) {
@@ -377,27 +402,24 @@ fun UserFoldersScreen(
                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                     }
                                 }
-                                folderToRename = null
+                                folderToRenameId = null
                                 renameNewName = ""
                             }
                         }
                     },
-                    enabled = renameNewName.isNotBlank() && !isRenamingFolder
-                ) {
-                    if (isRenamingFolder) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text(Strings.save)
-                    }
-                }
+                    enabled = renameNewName.isNotBlank() && !isRenamingFolder,
+                    isLoading = isRenamingFolder,
+                    text = Strings.save
+                )
             },
             dismissButton = {
-                TextButton(onClick = {
-                    folderToRename = null
-                    renameNewName = ""
-                }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        folderToRenameId = null
+                        renameNewName = ""
+                    },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -405,12 +427,12 @@ fun UserFoldersScreen(
     // Диалог удаления
     folderToDelete?.let { folder ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { folderToDelete = null },
+            onDismissRequest = { folderToDeleteId = null },
             icon = { Icon(AppIcons.Delete, null) },
             title = { Text(Strings.deleteFolder) },
             text = { Text(Strings.deleteFolderConfirm) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         val accId = accountId
                         if (accId > 0 && !isDeletingFolder) {
@@ -431,7 +453,7 @@ fun UserFoldersScreen(
                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                     }
                                 }
-                                folderToDelete = null
+                                folderToDeleteId = null
                             }
                         }
                     },
@@ -445,9 +467,10 @@ fun UserFoldersScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { folderToDelete = null }) {
-                    Text(Strings.no)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { folderToDeleteId = null },
+                    text = Strings.no
+                )
             }
         )
     }
@@ -481,18 +504,18 @@ private fun UserFolderItem(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Иконка папки (тёмно-жёлтая, как в оригинале)
+            // Иконка папки — контрастный цвет темы
             Box(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFFE6A800).copy(alpha = 0.12f)),
+                    .background(com.dedovmosol.iwomail.ui.theme.AppColors.folder.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     AppIcons.Folder,
                     contentDescription = null,
-                    tint = Color(0xFFE6A800),
+                    tint = com.dedovmosol.iwomail.ui.theme.AppColors.folder,
                     modifier = Modifier.size(22.dp)
                 )
             }

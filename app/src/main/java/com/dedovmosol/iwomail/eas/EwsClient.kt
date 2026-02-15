@@ -110,22 +110,21 @@ class EwsClient(
                 val response1 = httpClient.newCall(request1).execute()
                 android.util.Log.d("NTM", "Step 1 response: code=${response1.code}")
                 
-                if (response1.code != 401) {
-                    // Если не 401, возможно сервер принял без NTLM
-                    if (response1.isSuccessful) {
-                        val body = response1.body?.string()
-                        response1.close()
-                        android.util.Log.d("NTM", "Step 1 SUCCESS (no NTLM needed)")
-                        return@withContext body
+                val wwwAuth: String
+                response1.use { resp1 ->
+                    if (resp1.code != 401) {
+                        // Если не 401, возможно сервер принял без NTLM
+                        if (resp1.isSuccessful) {
+                            val body = resp1.body?.string()
+                            android.util.Log.d("NTM", "Step 1 SUCCESS (no NTLM needed)")
+                            return@withContext body
+                        }
+                        android.util.Log.e("NTM", "Step 1 unexpected code: ${resp1.code}")
+                        return@withContext null
                     }
-                    response1.close()
-                    android.util.Log.e("NTM", "Step 1 unexpected code: ${response1.code}")
-                    return@withContext null
+                    // === Шаг 2: Получаем Type 2 (Challenge) ===
+                    wwwAuth = resp1.header("WWW-Authenticate") ?: ""
                 }
-                
-                // === Шаг 2: Получаем Type 2 (Challenge) ===
-                val wwwAuth = response1.header("WWW-Authenticate") ?: ""
-                response1.close()
                 android.util.Log.d("NTM", "Step 2: Got WWW-Authenticate header, length=${wwwAuth.length}")
                 
                 val type2Message = ntlmAuth.parseType2FromHeader(wwwAuth)
@@ -148,25 +147,23 @@ class EwsClient(
                     .header("Connection", "keep-alive")
                     .build()
                 
-                val response3 = httpClient.newCall(request3).execute()
-                android.util.Log.d("NTM", "Step 3 response: code=${response3.code}")
-                
-                if (response3.isSuccessful) {
-                    val body = response3.body?.string()
-                    response3.close()
-                    android.util.Log.d("NTM", "Step 3 SUCCESS, body length=${body?.length ?: 0}")
-                    body
-                } else {
-                    // HTTP 500 от EWS часто содержит SOAP Fault с описанием ошибки
-                    val errorBody = response3.body?.string()
-                    response3.close()
-                    android.util.Log.e("NTM", "Step 3 FAILED: HTTP ${response3.code}")
-                    android.util.Log.e("NTM", "Full error response: $errorBody")
-                    // Для HTTP 500 пробуем вернуть тело - там может быть валидный SOAP с ошибкой
-                    if (response3.code == 500 && errorBody != null && errorBody.contains("soap")) {
-                        errorBody
+                httpClient.newCall(request3).execute().use { response3 ->
+                    android.util.Log.d("NTM", "Step 3 response: code=${response3.code}")
+                    
+                    if (response3.isSuccessful) {
+                        val body = response3.body?.string()
+                        android.util.Log.d("NTM", "Step 3 SUCCESS, body length=${body?.length ?: 0}")
+                        body
                     } else {
-                        null
+                        // HTTP 500 от EWS часто содержит SOAP Fault с описанием ошибки
+                        val errorBody = response3.body?.string()
+                        android.util.Log.e("NTM", "Step 3 FAILED: HTTP ${response3.code}, bodyLen=${errorBody?.length ?: 0}")
+                        // Для HTTP 500 пробуем вернуть тело - там может быть валидный SOAP с ошибкой
+                        if (response3.code == 500 && errorBody != null && errorBody.contains("soap")) {
+                            errorBody
+                        } else {
+                            null
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -192,19 +189,18 @@ class EwsClient(
                     .build()
                 
                 android.util.Log.d("BAS", "Executing request to $ewsUrl")
-                val response = httpClient.newCall(request).execute()
-                android.util.Log.d("BAS", "Response: code=${response.code}, successful=${response.isSuccessful}")
-                
-                if (response.isSuccessful) {
-                    val body = response.body?.string()
-                    response.close()
-                    android.util.Log.d("BAS", "SUCCESS: body length=${body?.length ?: 0}")
-                    body
-                } else {
-                    val errorBody = response.body?.string()
-                    response.close()
-                    android.util.Log.e("BAS", "FAILED: HTTP ${response.code}, body=${errorBody?.take(200)}")
-                    null
+                httpClient.newCall(request).execute().use { response ->
+                    android.util.Log.d("BAS", "Response: code=${response.code}, successful=${response.isSuccessful}")
+                    
+                    if (response.isSuccessful) {
+                        val body = response.body?.string()
+                        android.util.Log.d("BAS", "SUCCESS: body length=${body?.length ?: 0}")
+                        body
+                    } else {
+                        val errorBody = response.body?.string()
+                        android.util.Log.e("BAS", "FAILED: HTTP ${response.code}, bodyLen=${errorBody?.length ?: 0}")
+                        null
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("BAS", "EXCEPTION: ${e.message}", e)

@@ -46,6 +46,8 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.ui.components.EasterEggPlayer
+import com.dedovmosol.iwomail.ui.components.EasterEggOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -112,7 +114,7 @@ private fun getAvatarColor(name: String): Color {
     return avatarColors[index]
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun SearchScreen(
     onBackClick: () -> Unit,
@@ -121,6 +123,7 @@ fun SearchScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val currentLanguage = LocalLanguage.current
@@ -128,6 +131,7 @@ fun SearchScreen(
     
     var query by rememberSaveable { mutableStateOf("") }
     var dateFilter by rememberSaveable { mutableStateOf(DateFilter.ALL) }
+    var showEasterEgg by rememberSaveable { mutableStateOf(false) }
     
     var searchResultIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var allResults by remember { mutableStateOf<List<EmailEntity>>(emptyList()) }
@@ -157,6 +161,12 @@ fun SearchScreen(
     
     fun search() {
         if (query.length < 2) return
+        // Easter egg: "I Want Out"
+        if (query.trim().equals("I Want Out", ignoreCase = true)) {
+            keyboardController?.hide()
+            showEasterEgg = true
+            return
+        }
         activeAccount?.let { account ->
             scope.launch {
                 isSearching = true
@@ -197,26 +207,18 @@ fun SearchScreen(
     
     fun markSelectedAsRead(read: Boolean) {
         scope.launch {
-            var hasError = false
-            var errorMsg = ""
-            val successIds = mutableSetOf<String>()
-            selectedIds.forEach { id -> 
-                when (val result = mailRepo.markAsRead(id, read)) {
-                    is EasResult.Success -> successIds.add(id)
-                    is EasResult.Error -> {
-                        hasError = true
-                        errorMsg = result.message
+            val ids = selectedIds.toList()
+            selectedIds = emptySet()
+            when (val result = mailRepo.markAsReadBatch(ids, read)) {
+                is EasResult.Success -> {
+                    allResults = allResults.map { email ->
+                        if (email.id in ids) email.copy(read = read) else email
                     }
                 }
+                is EasResult.Error -> {
+                    android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
-            // Обновляем локально только успешные
-            allResults = allResults.map { email ->
-                if (email.id in successIds) email.copy(read = read) else email
-            }
-            if (hasError) {
-                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
-            }
-            selectedIds = emptySet()
         }
     }
     
@@ -238,17 +240,21 @@ fun SearchScreen(
             title = { Text(if (selectedIds.size == 1) Strings.deleteEmail else Strings.deleteEmails) },
             text = { Text(Strings.emailsWillBeMovedToTrash(selectedIds.size)) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = { showDeleteDialog = false; deleteSelected() },
                     text = Strings.yes
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text(Strings.no) }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteDialog = false },
+                    text = Strings.no
+                )
             }
         )
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         contentWindowInsets = WindowInsets.statusBars,
         topBar = {
@@ -466,6 +472,22 @@ fun SearchScreen(
             }
         }
     }
+
+    // Останавливаем музыку при уходе с экрана (свайп назад / навигация)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (EasterEggPlayer.isPlaying) {
+                EasterEggPlayer.stop()
+            }
+        }
+    }
+
+    // Easter egg overlay
+    EasterEggOverlay(
+        visible = showEasterEgg || EasterEggPlayer.isPlaying,
+        onDismiss = { showEasterEgg = false }
+    )
+    } // Box
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -691,7 +713,7 @@ private fun SearchResultItem(
                 Spacer(modifier = Modifier.width(8.dp))
                 Icon(
                     AppIcons.Star, Strings.favorites,
-                    tint = Color(0xFFFFB300),
+                    tint = com.dedovmosol.iwomail.ui.theme.AppColors.favorites,
                     modifier = Modifier.size(20.dp)
                 )
             }

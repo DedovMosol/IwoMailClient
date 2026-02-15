@@ -24,7 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -64,6 +66,7 @@ fun NotesScreen(
     // Отдельный scope для синхронизации, чтобы не отменялась при навигации
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
     
+    val haptic = LocalHapticFeedback.current
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
     
@@ -72,8 +75,6 @@ fun NotesScreen(
     val deletedCount by remember(accountId) { noteRepo.getDeletedNotesCount(accountId) }.collectAsState(initial = 0)
     val deletingNotesText = Strings.deletingNotes(deletedNotes.size)
     val notesTrashEmptiedText = Strings.notesTrashEmptied
-    val noteDeletedText = Strings.noteDeleted
-    val notesDeletedText = Strings.notesDeleted
     val noteRestoredText = Strings.noteRestored
     val notesRestoredText = Strings.notesRestored
     val deletedPermanentlyText = Strings.deletedPermanently
@@ -94,8 +95,8 @@ fun NotesScreen(
         delay(300)
         debouncedSearchQuery = searchQuery
     }
-    var isSyncing by rememberSaveable { mutableStateOf(false) }
-    // КРИТИЧНО: rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
+    var isSyncing by remember { mutableStateOf(false) }
+    // КРИТИЧНО: dataLoaded rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
     var dataLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(notes) {
         if (notes.isNotEmpty()) dataLoaded = true
@@ -164,7 +165,7 @@ fun NotesScreen(
 
     // Диалог просмотра заметки
     selectedNote?.let { note ->
-        val noteDeletedText = Strings.noteDeleted
+        val noteMovedToTrashText = Strings.noteMovedToTrash
         val noteDeletedPermanentlyText = Strings.deletedPermanently
         val noteRestoredText = Strings.noteRestored
         val undoText = Strings.undo
@@ -212,7 +213,7 @@ fun NotesScreen(
                         }
                         when (result) {
                             is EasResult.Success -> {
-                                Toast.makeText(context, noteDeletedText, Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, noteMovedToTrashText, Toast.LENGTH_SHORT).show()
                                 showDeletedTab = true
                                 // Синхронизация уже происходит внутри deleteNote()
                             }
@@ -275,7 +276,7 @@ fun NotesScreen(
             title = { Text(Strings.emptyTrash) },
             text = { Text(Strings.emptyNotesTrashConfirm) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showEmptyTrashConfirm = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
@@ -315,9 +316,10 @@ fun NotesScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showEmptyTrashConfirm = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showEmptyTrashConfirm = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -326,13 +328,14 @@ fun NotesScreen(
     // Soft-delete: без прогресс-бара, просто удаляем
     if (showDeleteSelectedDialog) {
         val count = selectedIds.size
+        val movedToTrashMsg = Strings.notesMovedToTrash(count)
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeleteSelectedDialog = false },
             icon = { Icon(AppIcons.Delete, null) },
             title = { Text(Strings.delete) },
             text = { Text(if (count == 1) Strings.deleteNoteConfirm else Strings.deleteNotesConfirm(count)) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeleteSelectedDialog = false
                         val notesToDelete = notes.filter { it.id in selectedIds }
@@ -344,8 +347,7 @@ fun NotesScreen(
                                 }
                                 when (result) {
                                     is EasResult.Success -> {
-                                        val msg = if (notesToDelete.size > 1) notesDeletedText else noteDeletedText
-                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, movedToTrashMsg, Toast.LENGTH_SHORT).show()
                                         showDeletedTab = true
                                     }
                                     is EasResult.Error -> {
@@ -360,7 +362,10 @@ fun NotesScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteSelectedDialog = false }) { Text(Strings.cancel) }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteSelectedDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -377,7 +382,7 @@ fun NotesScreen(
             title = { Text(Strings.deletePermanently) },
             text = { Text(if (count == 1) Strings.deleteNotePermanentlyConfirm else "${Strings.deletePermanently}: $count") },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeletePermanentlyDialog = false
                         val notesToDelete = deletedNotes.filter { it.id in selectedIds }
@@ -413,7 +418,10 @@ fun NotesScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeletePermanentlyDialog = false }) { Text(Strings.cancel) }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeletePermanentlyDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -674,27 +682,40 @@ fun NotesScreen(
                         .padding(32.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            AppIcons.StickyNote,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = Strings.noNotes,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (!dataLoaded || isSyncing) {
+                        CircularProgressIndicator()
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                AppIcons.StickyNote,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = Strings.noNotes,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             } else {
                 // Список заметок
+                // Drag selection
+                val noteKeys = remember(filteredNotes) { filteredNotes.map { it.id } }
+                val dragModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
+                    listState = listState,
+                    itemKeys = noteKeys,
+                    selectedIds = selectedIds,
+                    onSelectionChange = { newIds -> selectedIds = newIds }
+                )
+                
                 Box(modifier = Modifier.fillMaxSize()) {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = dragModifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -737,6 +758,7 @@ fun NotesScreen(
                             isSelectionMode = isSelectionMode,
                             onClick = {
                                 if (isSelectionMode) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     selectedIds = if (note.id in selectedIds) selectedIds - note.id else selectedIds + note.id
                                 } else {
                                     selectedNote = note
@@ -744,6 +766,7 @@ fun NotesScreen(
                             },
                             onLongClick = {
                                 if (!isSelectionMode) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     selectedIds = selectedIds + note.id
                                 }
                             }
@@ -777,7 +800,13 @@ private fun NoteCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .then(
+                if (isSelectionMode) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                }
+            ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = backgroundColor
@@ -981,15 +1010,15 @@ private fun NoteDetailDialog(
                 OutlinedButton(
                     onClick = onDeleteClick,
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFFF44336)
+                        contentColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                     ),
-                    border = BorderStroke(1.dp, Color(0xFFF44336))
+                    border = BorderStroke(1.dp, com.dedovmosol.iwomail.ui.theme.AppColors.delete)
                 ) {
                     Icon(
                         AppIcons.DeleteForever,
                         contentDescription = Strings.deletePermanently,
                         modifier = Modifier.size(20.dp),
-                        tint = Color(0xFFF44336)
+                        tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                     )
                 }
             } else {
@@ -997,15 +1026,15 @@ private fun NoteDetailDialog(
                 OutlinedButton(
                     onClick = onDeleteClick,
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFFF44336)
+                        contentColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                     ),
-                    border = BorderStroke(1.dp, Color(0xFFF44336))
+                    border = BorderStroke(1.dp, com.dedovmosol.iwomail.ui.theme.AppColors.delete)
                 ) {
                     Icon(
                         AppIcons.Delete,
                         contentDescription = Strings.delete,
                         modifier = Modifier.size(20.dp),
-                        tint = Color(0xFFF44336)
+                        tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                     )
                 }
             }
@@ -1215,28 +1244,23 @@ private fun CreateNoteDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = {
                     if (isValid) {
                         onSave(subject, body)
                     }
                 },
-                enabled = isValid && !isCreating
-            ) {
-                if (isCreating) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(Strings.save)
-                }
-            }
+                enabled = isValid && !isCreating,
+                isLoading = isCreating,
+                text = Strings.save
+            )
         },
         dismissButton = {
-            TextButton(
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = onDismiss,
+                text = Strings.cancel,
                 enabled = !isCreating
-            ) {
-                Text(Strings.cancel)
-            }
+            )
         }
     )
 }

@@ -16,7 +16,7 @@ import android.util.Base64
 // Предкомпилированные regex для производительности
 private val FETCH_STATUS_REGEX = "<Fetch>.*?<Status>(\\d+)</Status>".toRegex(RegexOption.DOT_MATCHES_ALL)
 private val DATA_REGEX = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-private val SAFE_FILENAME_REGEX = Regex("[^a-zA-Z0-9._-]")
+private val SAFE_FILENAME_REGEX = Regex("[\\\\/:*?\"<>|]")
 
 /**
  * Менеджер для работы с вложениями Exchange

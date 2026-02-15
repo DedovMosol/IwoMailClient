@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
+import com.dedovmosol.iwomail.ui.theme.AppColors
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 
 /**
@@ -45,7 +46,8 @@ fun DrawerContent(
     onCalendarClick: () -> Unit = {},
     onTasksClick: () -> Unit = {},
     onCreateFolder: () -> Unit = {},
-    onFolderLongClick: (FolderEntity) -> Unit = {}
+    onFolderLongClick: (FolderEntity) -> Unit = {},
+    onAboutClick: () -> Unit = {}
 ) {
     LazyColumn {
         // Шапка с аккаунтом
@@ -103,7 +105,7 @@ fun DrawerContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(AppIcons.Star, null, tint = Color(0xFFFFB300))
+                    Icon(AppIcons.Star, null, tint = AppColors.favorites)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.favorites,
@@ -142,7 +144,7 @@ fun DrawerContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(AppIcons.People, null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(AppIcons.People, null, tint = AppColors.contacts)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.contacts,
@@ -166,7 +168,7 @@ fun DrawerContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(AppIcons.StickyNote, null, tint = Color(0xFFFF9800))
+                    Icon(AppIcons.StickyNote, null, tint = AppColors.notes)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.notes,
@@ -198,7 +200,7 @@ fun DrawerContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(AppIcons.CalendarMonth, null, tint = Color(0xFF4CAF50))
+                    Icon(AppIcons.CalendarMonth, null, tint = AppColors.calendar)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.calendar,
@@ -230,7 +232,7 @@ fun DrawerContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(AppIcons.CheckCircle, null, tint = Color(0xFF9C27B0))
+                    Icon(AppIcons.CheckCircle, null, tint = AppColors.tasks)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.tasks,
@@ -267,7 +269,7 @@ fun DrawerContent(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             ListItem(
                 headlineContent = { Text(Strings.createFolder) },
-                leadingContent = { Icon(AppIcons.CreateNewFolder, null) },
+                leadingContent = { Icon(AppIcons.CreateNewFolder, null, tint = AppColors.createFolder) },
                 modifier = Modifier.clickable(onClick = onCreateFolder)
             )
         }
@@ -276,8 +278,17 @@ fun DrawerContent(
         item {
             ListItem(
                 headlineContent = { Text(Strings.settings) },
-                leadingContent = { Icon(AppIcons.Settings, null) },
+                leadingContent = { Icon(AppIcons.Settings, null, tint = AppColors.settings) },
                 modifier = Modifier.clickable(onClick = onSettingsClick)
+            )
+        }
+        
+        // О приложении
+        item {
+            ListItem(
+                headlineContent = { Text(Strings.aboutApp) },
+                leadingContent = { Icon(AppIcons.Info, null, tint = AppColors.settings) },
+                modifier = Modifier.clickable(onClick = onAboutClick)
             )
         }
     }
@@ -427,12 +438,8 @@ fun FolderItem(
         else -> AppIcons.Folder
     }
     
-    // Цвет иконки - корзина и спам имеют красный цвет
-    val iconTint = when (folder.type) {
-        4 -> MaterialTheme.colorScheme.error // Удалённые
-        11 -> Color(0xFFE53935) // Спам - красный
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    // Контрастные цвета иконок (из единого источника AppColors)
+    val iconTint = AppColors.folderTint(folder.type)
     
     // Локализованное название папки
     val displayName = Strings.getFolderName(folder.type, folder.displayName)

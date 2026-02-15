@@ -5,7 +5,10 @@ import android.net.Uri
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -56,7 +59,7 @@ private val CN_REGEX = Regex("CN=([^/><]+)", RegexOption.IGNORE_CASE)
 private val NAME_BEFORE_BRACKET_REGEX = Regex("^\"?([^\"<]+)\"?\\s*<")
 private val EMAIL_IN_BRACKETS_REGEX = Regex("<([^>]+@[^>]+)>")
 private val CID_REGEX = Regex("cid:([^\"'\\s>]+)")
-private val SAFE_FILENAME_REGEX = Regex("[^a-zA-Z0-9._-]")
+private val SAFE_FILENAME_REGEX = Regex("[\\\\/:*?\"<>|]")
 // Regex для парсинга задачи из письма
 private val TASK_SUBJECT_REGEX = Regex("^Задача:\\s*(.+)$|^Task:\\s*(.+)$", RegexOption.IGNORE_CASE)
 // Regex для обнаружения URL, email и телефонов в plain-text теле
@@ -122,8 +125,56 @@ fun EmailDetailScreen(
     var isLoadingBody by remember { mutableStateOf(false) } // НЕ saveable - сбрасывается при входе
     var bodyLoadError by remember { mutableStateOf<String?>(null) } // НЕ saveable
     
+    // Save As: запоминаем вложение для сохранения через системный файл-пикер
+    var pendingSaveAsAttachment by remember { mutableStateOf<AttachmentEntity?>(null) }
+    val saveAsLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        val attachment = pendingSaveAsAttachment ?: return@rememberLauncherForActivityResult
+        pendingSaveAsAttachment = null
+        scope.launch {
+            try {
+                val sourceFile = if (attachment.downloaded && attachment.localPath != null) {
+                    File(attachment.localPath)
+                } else null
+                if (sourceFile != null && sourceFile.exists() && uri != null) {
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            sourceFile.inputStream().use { it.copyTo(out) }
+                        }
+                    }
+                    val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
+                    Toast.makeText(context, savedMsg, Toast.LENGTH_SHORT).show()
+                } else if (uri != null) {
+                    // Нужно сначала скачать
+                    downloadingId = attachment.id
+                    val account = accountRepo.getActiveAccountSync()
+                    val easClient = account?.let { accountRepo.createEasClient(it.id) }
+                    if (easClient != null) {
+                        when (val result = withContext(Dispatchers.IO) { easClient.downloadAttachment(attachment.fileReference) }) {
+                            is EasResult.Success -> {
+                                withContext(Dispatchers.IO) {
+                                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                                        out.write(result.data)
+                                    }
+                                }
+                                val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
+                                Toast.makeText(context, savedMsg, Toast.LENGTH_SHORT).show()
+                            }
+                            is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    downloadingId = null
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                downloadingId = null
+            }
+        }
+    }
+    
     // Диалог выбора папки для перемещения
-    var showMoveDialog by remember { mutableStateOf(false) }
+    var showMoveDialog by rememberSaveable { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<com.dedovmosol.iwomail.data.database.FolderEntity>>(emptyList()) }
     var isMoving by remember { mutableStateOf(false) }
     var isRestoring by remember { mutableStateOf(false) }
@@ -328,7 +379,12 @@ fun EmailDetailScreen(
                     mailRepo.loadEmailBody(emailId)
                 }
                 when (result) {
-                    is EasResult.Success -> { /* тело обновится через Flow */ }
+                    is EasResult.Success -> {
+                        // Тело загружено — ПОСЛЕДОВАТЕЛЬНО обновляем FileReference вложений
+                        launch(Dispatchers.IO) {
+                            try { mailRepo.refreshAttachmentMetadata(emailId) } catch (_: Exception) {}
+                        }
+                    }
                     is EasResult.Error -> {
                         if (result.message == "OBJECT_NOT_FOUND") {
                             // Письмо удалено на сервере - показываем Toast и возвращаемся
@@ -349,18 +405,27 @@ fun EmailDetailScreen(
             } finally {
                 isLoadingBody = false
             }
+        } else if (currentEmail.body.isNotEmpty() && !isLoadingBody) {
+            // Тело уже есть — фоновое обновление body + FileReference вложений
+            // ПОСЛЕДОВАТЕЛЬНО (не параллельно) чтобы не было race condition с EAS командами
+            // Проверяем isLoadingBody чтобы не дублировать запрос с кнопкой Refresh
+            isLoadingBody = true
+            launch(Dispatchers.IO) {
+                try {
+                    mailRepo.loadEmailBody(emailId, forceReload = true)
+                    mailRepo.refreshAttachmentMetadata(emailId)
+                } catch (_: Exception) {}
+                finally { withContext(Dispatchers.Main) { isLoadingBody = false } }
+            }
         }
     }
     
-    // Состояние меню
-    var showMoreMenu by remember { mutableStateOf(false) }
-    
     // Диалог подтверждения удаления
-    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
     
     // Диалог отчёта о прочтении (MDN)
-    var showMdnDialog by remember { mutableStateOf(false) }
+    var showMdnDialog by rememberSaveable { mutableStateOf(false) }
     var isSendingMdn by remember { mutableStateOf(false) }
     
     // Показываем диалог MDN если есть запрос и ещё не отправлен
@@ -411,15 +476,14 @@ fun EmailDetailScreen(
                 }
             },
             dismissButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { 
                         showMdnDialog = false
                         scope.launch { mailRepo.markMdnSent(emailId) }
                     },
+                    text = Strings.no,
                     enabled = !isSendingMdn
-                ) {
-                    Text(Strings.no)
-                }
+                )
             }
         )
     }
@@ -432,7 +496,7 @@ fun EmailDetailScreen(
             title = { Text(Strings.deleteEmail) },
             text = { Text(if (isInTrash) Strings.emailWillBeDeletedPermanently else Strings.emailWillBeMovedToTrash) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         scope.launch {
                             isDeleting = true
@@ -470,9 +534,10 @@ fun EmailDetailScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
-                    Text(Strings.no)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteDialog = false },
+                    text = Strings.no
+                )
             }
         )
     }
@@ -543,9 +608,10 @@ fun EmailDetailScreen(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { showMoveDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showMoveDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -560,67 +626,106 @@ fun EmailDetailScreen(
                     }
                 },
                 actions = {
-                    // Кнопка перемещения или восстановления
-                    if (isInTrash) {
-                        // В корзине - показываем кнопку Восстановить
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    isRestoring = true
-                                    val result = withContext(Dispatchers.IO) {
-                                        mailRepo.restoreFromTrash(listOf(emailId))
+                    // Обновить письмо (sync папки + перезагрузка тела)
+                    IconButton(
+                        onClick = {
+                            val currentEmail = email ?: return@IconButton
+                            scope.launch {
+                                isLoadingBody = true
+                                bodyLoadError = null
+                                try {
+                                    // Сначала синхронизируем папку — обновляет SyncKey и FileReference вложений
+                                    withContext(Dispatchers.IO) {
+                                        mailRepo.syncEmails(currentEmail.accountId, currentEmail.folderId)
+                                    }
+                                    // Затем перезагружаем тело письма
+                                    val result = kotlinx.coroutines.withTimeoutOrNull(30_000L) {
+                                        mailRepo.loadEmailBody(emailId, forceReload = true)
                                     }
                                     when (result) {
                                         is EasResult.Success -> {
-                                            Toast.makeText(context, NotificationStrings.getRestored(isRussian), Toast.LENGTH_SHORT).show()
-                                            onBackClick()
+                                            Toast.makeText(
+                                                context,
+                                                if (isRussian) "Письмо обновлено" else "Email refreshed",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                         }
                                         is EasResult.Error -> {
-                                            val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                            Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                            bodyLoadError = result.message
+                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        }
+                                        null -> {
+                                            bodyLoadError = if (isRussian) "Таймаут загрузки" else "Loading timeout"
                                         }
                                     }
-                                    isRestoring = false
+                                } catch (e: Exception) {
+                                    bodyLoadError = e.message
+                                } finally {
+                                    isLoadingBody = false
                                 }
-                            },
-                            enabled = !isRestoring
-                        ) {
-                            if (isRestoring) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
-                            } else {
-                                Icon(AppIcons.Restore, Strings.restore, tint = Color.White)
                             }
-                        }
-                    } else {
-                        // Не в корзине - показываем кнопку Переместить
-                        IconButton(onClick = { showMoveDialog = true }) {
-                            Icon(AppIcons.DriveFileMove, Strings.moveTo, tint = Color.White)
-                        }
+                        },
+                        enabled = !isLoadingBody
+                    ) {
+                        Icon(AppIcons.Refresh, Strings.refresh, tint = Color.White)
                     }
-                    IconButton(onClick = { showDeleteDialog = true }) {
-                        Icon(AppIcons.Delete, Strings.delete, tint = Color.White)
-                    }
+                    
+                    // Overflow menu (троеточие)
+                    var showOverflowMenu by remember { mutableStateOf(false) }
                     Box {
-                        IconButton(onClick = { showMoreMenu = true }) {
+                        IconButton(onClick = { showOverflowMenu = true }) {
                             Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
                         }
                         DropdownMenu(
-                            expanded = showMoreMenu,
-                            onDismissRequest = { showMoreMenu = false }
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            // Переслать
                             DropdownMenuItem(
                                 text = { Text(Strings.forward) },
-                                onClick = { 
-                                    showMoreMenu = false
-                                    onForwardClick()
-                                },
+                                onClick = { showOverflowMenu = false; onForwardClick() },
                                 leadingIcon = { Icon(AppIcons.Forward, null) }
                             )
+                            // Переместить / Восстановить
+                            if (isInTrash) {
+                                DropdownMenuItem(
+                                    text = { Text(Strings.restore) },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        scope.launch {
+                                            isRestoring = true
+                                            val result = withContext(Dispatchers.IO) {
+                                                mailRepo.restoreFromTrash(listOf(emailId))
+                                            }
+                                            when (result) {
+                                                is EasResult.Success -> {
+                                                    Toast.makeText(context, NotificationStrings.getRestored(isRussian), Toast.LENGTH_SHORT).show()
+                                                    onBackClick()
+                                                }
+                                                is EasResult.Error -> {
+                                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
+                                                    Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                            isRestoring = false
+                                        }
+                                    },
+                                    leadingIcon = { Icon(AppIcons.Restore, null) },
+                                    enabled = !isRestoring
+                                )
+                            } else {
+                                DropdownMenuItem(
+                                    text = { Text(Strings.moveTo) },
+                                    onClick = { showOverflowMenu = false; showMoveDialog = true },
+                                    leadingIcon = { Icon(AppIcons.DriveFileMove, null) }
+                                )
+                            }
+                            // Отметить непрочитанным
                             DropdownMenuItem(
                                 text = { Text(Strings.markUnread) },
-                                onClick = { 
-                                    showMoreMenu = false
-                                    scope.launch { 
+                                onClick = {
+                                    showOverflowMenu = false
+                                    scope.launch {
                                         when (val result = mailRepo.markAsRead(emailId, false)) {
                                             is EasResult.Success -> { /* OK */ }
                                             is EasResult.Error -> {
@@ -631,34 +736,12 @@ fun EmailDetailScreen(
                                 },
                                 leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
                             )
-                            // Избранное только если НЕ в корзине и НЕ черновик
-                            if (!isInTrash && !isInDrafts) {
-                                DropdownMenuItem(
-                                    text = { Text(if (email?.flagged == true) Strings.removeFromFavorites else Strings.addToFavorites) },
-                                    onClick = { 
-                                        showMoreMenu = false
-                                        scope.launch { mailRepo.toggleFlag(emailId) }
-                                    },
-                                    leadingIcon = { 
-                                        Icon(
-                                            if (email?.flagged == true) AppIcons.Star else AppIcons.StarOutline, 
-                                            null
-                                        ) 
-                                    }
-                                )
-                            }
-                            // Переместить только если НЕ в корзине
-                            if (!isInTrash) {
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = { Text(Strings.moveTo) },
-                                    onClick = { 
-                                        showMoreMenu = false
-                                        showMoveDialog = true
-                                    },
-                                    leadingIcon = { Icon(AppIcons.DriveFileMove, null) }
-                                )
-                            }
+                            // Удалить
+                            DropdownMenuItem(
+                                text = { Text(Strings.delete) },
+                                onClick = { showOverflowMenu = false; showDeleteDialog = true },
+                                leadingIcon = { Icon(AppIcons.Delete, null) }
+                            )
                         }
                     }
                 },
@@ -798,7 +881,7 @@ fun EmailDetailScreen(
                             Icon(
                                 imageVector = if (currentEmail.flagged) AppIcons.Star else AppIcons.StarOutline,
                                 contentDescription = Strings.favorites,
-                                tint = if (currentEmail.flagged) MaterialTheme.colorScheme.primary 
+                                tint = if (currentEmail.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites 
                                        else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -1558,6 +1641,54 @@ fun EmailDetailScreen(
                                     downloadingId = null
                                 }
                             }
+                        },
+                        onSaveClick = { attachment ->
+                            scope.launch {
+                                try {
+                                    downloadingId = attachment.id
+                                    // Если уже скачано (кеш от «Открыть») — берём оттуда, иначе качаем с сервера напрямую (без кеширования)
+                                    val data: ByteArray? = if (attachment.downloaded && attachment.localPath != null) {
+                                        val f = File(attachment.localPath)
+                                        if (f.exists()) withContext(Dispatchers.IO) { f.readBytes() } else null
+                                    } else {
+                                        val account = accountRepo.getActiveAccountSync()
+                                        val easClient = account?.let { accountRepo.createEasClient(it.id) }
+                                        when (val res = easClient?.let { withContext(Dispatchers.IO) { it.downloadAttachment(attachment.fileReference) } }) {
+                                            is EasResult.Success -> res.data
+                                            is EasResult.Error -> { Toast.makeText(context, res.message, Toast.LENGTH_LONG).show(); null }
+                                            else -> null
+                                        }
+                                    }
+                                    if (data != null) {
+                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
+                                        withContext(Dispatchers.IO) {
+                                            val contentValues = android.content.ContentValues().apply {
+                                                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
+                                                put(android.provider.MediaStore.Downloads.MIME_TYPE,
+                                                    android.webkit.MimeTypeMap.getSingleton()
+                                                        .getMimeTypeFromExtension(File(safeFileName).extension) ?: "application/octet-stream")
+                                                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/IwoMail")
+                                            }
+                                            val uri = context.contentResolver.insert(
+                                                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
+                                            )
+                                            uri?.let { 
+                                                context.contentResolver.openOutputStream(it)?.use { out -> out.write(data) }
+                                            }
+                                        }
+                                        val savedMsg = if (isRussian) "Сохранено в Downloads/IwoMail/" else "Saved to Downloads/IwoMail/"
+                                        Toast.makeText(context, savedMsg, Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                                } finally {
+                                    downloadingId = null
+                                }
+                            }
+                        },
+                        onSaveAsClick = { attachment ->
+                            pendingSaveAsAttachment = attachment
+                            saveAsLauncher.launch(attachment.displayName)
                         }
                     )
                 }
@@ -1773,9 +1904,10 @@ fun EmailDetailScreen(
                                                 override fun onPageFinished(view: WebView?, url: String?) {
                                                     super.onPageFinished(view, url)
                                                     view?.postDelayed({
-                                                        val contentHeight = (view.contentHeight * view.scale).toInt()
-                                                        if (contentHeight > 0) {
-                                                            webViewHeight = contentHeight + 32 // +padding
+                                                        val density = view.resources.displayMetrics.density
+                                                        val contentHeightDp = (view.contentHeight * view.scale / density).toInt()
+                                                        if (contentHeightDp > 0) {
+                                                            webViewHeight = contentHeightDp + 16 // +padding
                                                         }
                                                     }, 100)
                                                 }
@@ -2027,11 +2159,14 @@ fun EmailDetailScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AttachmentsSection(
     attachments: List<AttachmentEntity>,
     downloadingId: Long?,
-    onAttachmentClick: (AttachmentEntity) -> Unit
+    onAttachmentClick: (AttachmentEntity) -> Unit,
+    onSaveClick: (AttachmentEntity) -> Unit = {},
+    onSaveAsClick: (AttachmentEntity) -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -2045,59 +2180,88 @@ private fun AttachmentsSection(
         )
         
         attachments.forEach { attachment ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clickable { onAttachmentClick(attachment) }
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            var showSaveMenu by remember { mutableStateOf(false) }
+            
+            Box {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .combinedClickable(
+                            onClick = { onAttachmentClick(attachment) },
+                            onLongClick = { showSaveMenu = true }
+                        )
                 ) {
-                    Icon(
-                        AppIcons.fileIconFor(attachment.displayName),
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                        tint = Color.Unspecified
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            AppIcons.fileIconFor(attachment.displayName),
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = Color.Unspecified
+                        )
+                        
+                        Spacer(modifier = Modifier.width(12.dp))
+                        
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = attachment.displayName,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = formatFileSize(attachment.estimatedSize),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        
+                        when {
+                            downloadingId == attachment.id -> {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                            attachment.downloaded -> {
+                                Icon(
+                                    AppIcons.CheckCircle,
+                                    Strings.downloaded,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            else -> {
+                                Icon(
+                                    AppIcons.Download,
+                                    Strings.download,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                DropdownMenu(
+                    expanded = showSaveMenu,
+                    onDismissRequest = { showSaveMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(Strings.save) },
+                        onClick = {
+                            showSaveMenu = false
+                            onSaveClick(attachment)
+                        },
+                        leadingIcon = { Icon(AppIcons.Download, contentDescription = null) }
                     )
-                    
-                    Spacer(modifier = Modifier.width(12.dp))
-                    
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = attachment.displayName,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = formatFileSize(attachment.estimatedSize),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    
-                    when {
-                        downloadingId == attachment.id -> {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        }
-                        attachment.downloaded -> {
-                            Icon(
-                                AppIcons.CheckCircle,
-                                Strings.downloaded,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        else -> {
-                            Icon(
-                                AppIcons.Download,
-                                Strings.download,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                    DropdownMenuItem(
+                        text = { Text(Strings.saveAs) },
+                        onClick = {
+                            showSaveMenu = false
+                            onSaveAsClick(attachment)
+                        },
+                        leadingIcon = { Icon(AppIcons.Folder, contentDescription = null) }
+                    )
                 }
             }
         }

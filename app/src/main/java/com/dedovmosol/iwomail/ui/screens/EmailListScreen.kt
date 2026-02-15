@@ -11,6 +11,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -61,10 +62,11 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-private val dayFormat = SimpleDateFormat("EEE", Locale.getDefault())
-private val dateFormat = SimpleDateFormat("d MMM", Locale.getDefault())
-private val fullDateFormat = SimpleDateFormat("dd.MM.yy", Locale.getDefault())
+// ThreadLocal гарантирует thread-safety для SimpleDateFormat (каждый поток — свой экземпляр)
+private val timeFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+private val dayFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("EEE", Locale.getDefault()) }
+private val dateFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("d MMM", Locale.getDefault()) }
+private val fullDateFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yy", Locale.getDefault()) }
 
 // Цвета для аватаров как в Gmail — стабильные для каждой буквы
 private val avatarColors = listOf(
@@ -170,6 +172,7 @@ fun EmailListScreen(
     val accountRepo = remember { com.dedovmosol.iwomail.data.repository.AccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
+    val hapticScreen = LocalHapticFeedback.current
     
     val isFavorites = folderId == "favorites"
     val isTodayAll = folderId == "TODAY_ALL"
@@ -332,15 +335,13 @@ fun EmailListScreen(
             
             try {
                 // Синхронизируем папку (для Черновиков вызовется syncDrafts)
-                // КРИТИЧНО: Для INBOX и SENT_ITEMS Exchange аккаунтов ВСЕГДА используем forceFullSync
-                // при РУЧНОМ обновлении (pull-to-refresh). Это гарантирует получение новых писем,
-                // даже если SyncKey устарел или был получен на другом устройстве.
-                // Для SENT_ITEMS: после отправки письмо может не появиться из-за гонки syncKey,
-                // полная ресинхронизация гарантирует его отображение.
-                val isExchange = activeAccount?.accountType == AccountType.EXCHANGE.name
-                val forceFullSync = isExchange && (folder?.type == FolderType.INBOX || folder?.type == FolderType.SENT_ITEMS)
+                // Используем инкрементальную синхронизацию (forceFullSync=false).
+                // При невалидном SyncKey сервер вернёт status 3/12,
+                // и syncEmailsEas автоматически выполнит полный ресинк.
+                // Это критично для больших ящиков (3000+ писем) — избегаем
+                // ненужной полной ресинхронизации при каждом pull-to-refresh.
                 val result = withContext(Dispatchers.IO) {
-                    mailRepo.syncEmails(accountId, folderId, forceFullSync = forceFullSync)
+                    mailRepo.syncEmails(accountId, folderId, forceFullSync = false)
                 }
                 when (result) {
                     is EasResult.Success -> {}
@@ -535,21 +536,14 @@ fun EmailListScreen(
     
     fun markSelectedAsRead(read: Boolean) {
         scope.launch {
-            var hasError = false
-            var errorMsg = ""
-            selectedIds.forEach { id -> 
-                when (val result = mailRepo.markAsRead(id, read)) {
-                    is EasResult.Success -> { /* OK */ }
-                    is EasResult.Error -> {
-                        hasError = true
-                        errorMsg = result.message
-                    }
+            val ids = selectedIds.toList()
+            selectedIds = emptySet()
+            when (val result = mailRepo.markAsReadBatch(ids, read)) {
+                is EasResult.Success -> { /* OK */ }
+                is EasResult.Error -> {
+                    android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
-            if (hasError) {
-                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
-            }
-            selectedIds = emptySet()
         }
     }
     
@@ -579,7 +573,7 @@ fun EmailListScreen(
                 ) 
             },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeleteDialog = false
                         deleteSelected()
@@ -588,9 +582,10 @@ fun EmailListScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
-                    Text(Strings.no)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteDialog = false },
+                    text = Strings.no
+                )
             }
         )
     }
@@ -609,7 +604,7 @@ fun EmailListScreen(
                 ) 
             },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeletePermanentlyDialog = false
                         deleteSelectedPermanently()
@@ -618,9 +613,10 @@ fun EmailListScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeletePermanentlyDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeletePermanentlyDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -636,7 +632,7 @@ fun EmailListScreen(
             title = { Text(Strings.emptyTrash) },
             text = { Text(Strings.emptyTrashConfirm) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showEmptyTrashDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
@@ -674,9 +670,10 @@ fun EmailListScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showEmptyTrashDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showEmptyTrashDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -762,7 +759,10 @@ fun EmailListScreen(
                 if (isMoving) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                 } else {
-                    TextButton(onClick = { showMoveDialog = false }) { Text(Strings.cancel) } 
+                    com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                        onClick = { showMoveDialog = false },
+                        text = Strings.cancel
+                    )
                 }
             }
         )
@@ -931,6 +931,7 @@ fun EmailListScreen(
                 isSent = isSentFolder,
                 onEmailClick = { email ->
                     if (isSelectionMode) {
+                        hapticScreen.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         selectedIds = if (email.id in selectedIds) selectedIds - email.id else selectedIds + email.id
                     } else {
                         // Для черновиков открываем ComposeScreen, для остальных - EmailDetailScreen
@@ -941,11 +942,15 @@ fun EmailListScreen(
                         }
                     }
                 },
-                onLongClick = { email -> selectedIds = selectedIds + email.id },
+                onLongClick = { email ->
+                    hapticScreen.performHapticFeedback(HapticFeedbackType.LongPress)
+                    selectedIds = selectedIds + email.id
+                },
                 onStarClick = { email -> scope.launch { mailRepo.toggleFlag(email.id) } },
                 onSelectAll = { selectedIds = if (selectedIds.size == filteredEmails.size) emptySet() else filteredEmails.map { it.id }.toSet() },
                 onRetry = { refresh() },
-                onDismissError = { errorMessage = null }
+                onDismissError = { errorMessage = null },
+                onDragSelect = { newIds -> selectedIds = newIds }
             )
         }
     }
@@ -1141,7 +1146,8 @@ private fun EmailList(
     onStarClick: (EmailEntity) -> Unit,
     onSelectAll: () -> Unit,
     onRetry: () -> Unit,
-    onDismissError: () -> Unit
+    onDismissError: () -> Unit,
+    onDragSelect: (Set<String>) -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -1164,24 +1170,28 @@ private fun EmailList(
             errorMessage != null && emails.isEmpty() -> {
                 ErrorContent(message = errorMessage, onRetry = onRetry, modifier = Modifier.fillMaxSize())
             }
-            emails.isEmpty() && !isRefreshing -> {
-                // Pull-to-refresh для пустого состояния
+            emails.isEmpty() -> {
+                // Пустое состояние — загрузка или нет писем
                 Box(
-                    modifier = if (!isFavorites && !isTodayAll) Modifier.fillMaxSize().pullRefresh(pullRefreshState) else Modifier.fillMaxSize()
+                    modifier = if (!isFavorites && !isTodayAll) Modifier.fillMaxSize().pullRefresh(pullRefreshState) else Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    EmptyContent(
-                        message = if (isFavorites) Strings.noFavoriteEmails else Strings.noEmails,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    
-                // Индикатор обновления для пустого состояния
-                    if (!isFavorites && !isTodayAll && (isRefreshing || pullRefreshState.progress > 0)) {
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.TopCenter
-                        ) {
+                    if (isRefreshing) {
+                        // Крутящийся конверт по центру при синхронизации пустой папки
+                        EnvelopeRefreshIndicator(
+                            refreshing = true,
+                            state = pullRefreshState
+                        )
+                    } else {
+                        EmptyContent(
+                            message = if (isFavorites) Strings.noFavoriteEmails else Strings.noEmails,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        
+                        // Индикатор при pull-to-refresh пустого списка
+                        if (!isFavorites && !isTodayAll && pullRefreshState.progress > 0) {
                             EnvelopeRefreshIndicator(
-                                refreshing = isRefreshing,
+                                refreshing = false,
                                 state = pullRefreshState
                             )
                         }
@@ -1206,7 +1216,8 @@ private fun EmailList(
                         onLongClick = onLongClick,
                         onStarClick = onStarClick,
                         onSelectAll = onSelectAll,
-                        onDismissError = onDismissError
+                        onDismissError = onDismissError,
+                        onDragSelect = onDragSelect
                     )
                     
                     // Скроллбар
@@ -1335,7 +1346,8 @@ private fun EmailListContent(
     onLongClick: (EmailEntity) -> Unit,
     onStarClick: (EmailEntity) -> Unit,
     onSelectAll: () -> Unit,
-    onDismissError: () -> Unit
+    onDismissError: () -> Unit,
+    onDragSelect: (Set<String>) -> Unit = {}
 ) {
     val context = LocalContext.current
     val database = remember { MailDatabase.getInstance(context) }
@@ -1368,7 +1380,19 @@ private fun EmailListContent(
         }
     }
     
-    LazyColumn(state = listState) {
+    // === Drag Selection (переиспользуемый модификатор) ===
+    val emailKeys = remember(emails) { emails.map { it.id } }
+    val dragSelectModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
+        listState = listState,
+        itemKeys = emailKeys,
+        selectedIds = selectedIds,
+        onSelectionChange = onDragSelect
+    )
+    
+    LazyColumn(
+        state = listState,
+        modifier = dragSelectModifier
+    ) {
         if (isSelectionMode) {
             item {
                 Row(
@@ -1394,6 +1418,7 @@ private fun EmailListContent(
                 isSelectionMode = isSelectionMode,
                 showStar = !isTrashOrSpam && !isDrafts,
                 isSent = isSent,
+                isDrafts = isDrafts,
                 imagePreviewPath = imagePreviewCache[email.id],
                 onClick = { onEmailClick(email) },
                 onLongClick = { onLongClick(email) },
@@ -1411,6 +1436,7 @@ private fun EmailListItem(
     isSelectionMode: Boolean,
     showStar: Boolean = true,
     isSent: Boolean = false,
+    isDrafts: Boolean = false,
     imagePreviewPath: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -1430,11 +1456,20 @@ private fun EmailListItem(
     )
     
     Surface(
-        modifier = Modifier.fillMaxWidth().combinedClickable(
-            onClick = onClick, 
-            onLongClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                onLongClick()
+        modifier = Modifier.fillMaxWidth().then(
+            if (isSelectionMode) {
+                // В режиме выбора — только клик (без long press),
+                // чтобы drag selection на LazyColumn работал
+                Modifier.clickable(onClick = onClick)
+            } else {
+                // Обычный режим — long press входит в режим выбора
+                Modifier.combinedClickable(
+                    onClick = onClick,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLongClick()
+                    }
+                )
             }
         ),
         color = backgroundColor
@@ -1559,12 +1594,21 @@ private fun EmailListItem(
                             AppIcons.PriorityHigh, 
                             contentDescription = Strings.important,
                             modifier = Modifier.size(16.dp), 
-                            tint = Color(0xFFE53935) // Красный
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.trash
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     if (email.hasAttachments) {
                         Icon(AppIcons.Attachment, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    if (isDrafts) {
+                        val isLocalDraft = email.serverId.startsWith("local_draft_")
+                        Text(
+                            text = if (isLocalDraft) "[${Strings.localDraft}]" else "[${Strings.serverDraft}]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isLocalDraft) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
+                        )
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     Text(
@@ -1621,7 +1665,7 @@ private fun EmailListItem(
                     Icon(
                         imageVector = if (email.flagged) AppIcons.Star else AppIcons.StarOutline,
                         contentDescription = Strings.favorites,
-                        tint = if (email.flagged) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (email.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -1687,9 +1731,9 @@ private fun formatDate(timestamp: Long): String {
     val today = Calendar.getInstance()
     
     return when {
-        diff < 24 * 60 * 60 * 1000 && calendar.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) -> timeFormat.format(timestamp)
-        diff < 7 * 24 * 60 * 60 * 1000 -> dayFormat.format(timestamp)
-        calendar.get(Calendar.YEAR) == today.get(Calendar.YEAR) -> dateFormat.format(timestamp)
-        else -> fullDateFormat.format(timestamp)
+        diff < 24 * 60 * 60 * 1000 && calendar.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) -> timeFormat.get().format(timestamp)
+        diff < 7 * 24 * 60 * 60 * 1000 -> dayFormat.get().format(timestamp)
+        calendar.get(Calendar.YEAR) == today.get(Calendar.YEAR) -> dateFormat.get().format(timestamp)
+        else -> fullDateFormat.get().format(timestamp)
     }
 }

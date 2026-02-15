@@ -607,18 +607,20 @@ private fun UpdateDownloadDialog(
                 ) {
                     // Кнопка "Позже" слева
                     if (downloadState !is DownloadState.Downloading) {
-                        TextButton(onClick = onDismiss) {
-                            Text(Strings.later)
-                        }
+                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                            onClick = onDismiss,
+                            text = Strings.later
+                        )
                     } else {
-                        TextButton(onClick = {
-                            downloadJob?.cancel()
-                            downloadJob = null
-                            downloadState = DownloadState.Idle
-                            updateChecker.clearUpdateFiles()
-                        }) {
-                            Text(Strings.cancel)
-                        }
+                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                            onClick = {
+                                downloadJob?.cancel()
+                                downloadJob = null
+                                downloadState = DownloadState.Idle
+                                updateChecker.clearUpdateFiles()
+                            },
+                            text = Strings.cancel
+                        )
                     }
                     
                     // Кнопка действия справа с градиентом
@@ -745,7 +747,7 @@ private fun RollbackDialog(
                 onDismiss()
             }
         },
-        icon = { Icon(AppIcons.Restore, null, tint = MaterialTheme.colorScheme.error) },
+        icon = { Icon(AppIcons.Restore, null) },
         title = { Text("${Strings.rollbackTitle} v${previousInfo.versionName}") },
         text = {
             Column(
@@ -889,18 +891,20 @@ private fun RollbackDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (downloadState !is DownloadState.Downloading) {
-                        TextButton(onClick = onDismiss) {
-                            Text(Strings.cancel)
-                        }
+                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                            onClick = onDismiss,
+                            text = Strings.cancel
+                        )
                     } else {
-                        TextButton(onClick = {
-                            downloadJob?.cancel()
-                            downloadJob = null
-                            downloadState = DownloadState.Idle
-                            updateChecker.clearUpdateFiles()
-                        }) {
-                            Text(Strings.cancel)
-                        }
+                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                            onClick = {
+                                downloadJob?.cancel()
+                                downloadJob = null
+                                downloadState = DownloadState.Idle
+                                updateChecker.clearUpdateFiles()
+                            },
+                            text = Strings.cancel
+                        )
                     }
                     
                     when (downloadState) {

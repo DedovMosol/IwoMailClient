@@ -15,7 +15,8 @@ import com.dedovmosol.iwomail.imap.ImapClient
 import com.dedovmosol.iwomail.pop3.Pop3Client
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -33,6 +34,8 @@ class AccountRepository(private val context: Context) {
     // Кэш EAS клиентов для предотвращения утечек памяти
     // Каждый EasClient создаёт OkHttpClient с connection pool
     private val easClientCache = ConcurrentHashMap<Long, EasClient>()
+    // Per-account Mutex для атомарного создания EasClient (избегаем computeIfAbsent из-за suspend)
+    private val easClientLocks = ConcurrentHashMap<Long, Mutex>()
     
     private val securePrefs by lazy {
         try {
@@ -181,6 +184,9 @@ class AccountRepository(private val context: Context) {
         
         return when (connectionResult) {
             is EasResult.Success -> {
+                // Глобальный дефолт режима черновиков (из онбординга или настроек)
+                val defaultDraftMode = SettingsRepository.getInstance(context).getDefaultDraftModeSync()
+                
                 val account = AccountEntity(
                     email = email,
                     displayName = displayName,
@@ -197,7 +203,8 @@ class AccountRepository(private val context: Context) {
                     useSSL = useSSL,
                     syncMode = syncMode.name,
                     certificatePath = certificatePath,
-                    clientCertificatePath = clientCertificatePath
+                    clientCertificatePath = clientCertificatePath,
+                    draftMode = defaultDraftMode
                 )
                 
                 val accountId = accountDao.insert(account)
@@ -213,20 +220,6 @@ class AccountRepository(private val context: Context) {
                 
                 // Запускаем немедленную синхронизацию для нового аккаунта
                 com.dedovmosol.iwomail.sync.SyncWorker.syncNow(context)
-                
-                // Для Exchange аккаунтов запускаем синхронизацию календаря и задач в фоне
-                if (accountType == AccountType.EXCHANGE) {
-                    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                        try {
-                            val calendarRepo = CalendarRepository(context)
-                            calendarRepo.syncCalendar(accountId)
-                        } catch (_: Exception) { }
-                        try {
-                            val taskRepo = TaskRepository(context)
-                            taskRepo.syncTasks(accountId)
-                        } catch (_: Exception) { }
-                    }
-                }
                 
                 // Запускаем PushService только для Exchange аккаунтов с режимом PUSH
                 if (accountType == AccountType.EXCHANGE && syncMode == SyncMode.PUSH) {
@@ -330,6 +323,9 @@ class AccountRepository(private val context: Context) {
                 accountDao.setActiveAccount(it.id)
             }
         }
+        
+        // Обновляем виджет (покажет NoAccountView если аккаунтов не осталось)
+        com.dedovmosol.iwomail.widget.updateMailWidget(context)
     }
     
     suspend fun setActiveAccount(accountId: Long) {
@@ -378,53 +374,60 @@ class AccountRepository(private val context: Context) {
      * Кэширование предотвращает создание множества OkHttpClient и утечки памяти
      */
     suspend fun createEasClient(accountId: Long): EasClient? {
-        // Проверяем кэш
+        // Fast path — без блокировки
         easClientCache[accountId]?.let { return it }
         
-        val account = accountDao.getAccount(accountId) ?: return null
-        val password = getPassword(accountId) ?: return null
-        val clientCertPassword = getClientCertPassword(accountId)
-        
-        // Получаем информацию о привязанном сертификате для Certificate Pinning
-        val pinnedCertInfo = if (account.pinnedCertificateHash != null && 
-                                  account.certificatePinningEnabled) {
-            com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo(
-                hash = account.pinnedCertificateHash,
-                cn = account.pinnedCertificateCN ?: "Unknown",
-                organization = account.pinnedCertificateOrg ?: "Unknown",
-                validFrom = account.pinnedCertificateValidFrom ?: 0L,
-                validTo = account.pinnedCertificateValidTo ?: 0L
-            )
-        } else {
-            null
+        // Per-account Mutex: не блокируем другие аккаунты
+        val mutex = easClientLocks.getOrPut(accountId) { Mutex() }
+        return mutex.withLock {
+            // Double-check под локом: другой поток мог создать клиент пока мы ждали
+            easClientCache[accountId]?.let { return@withLock it }
+            
+            val account = accountDao.getAccount(accountId) ?: return@withLock null
+            val password = getPassword(accountId) ?: return@withLock null
+            val clientCertPassword = getClientCertPassword(accountId)
+            
+            // Получаем информацию о привязанном сертификате для Certificate Pinning
+            val pinnedCertInfo = if (account.pinnedCertificateHash != null && 
+                                      account.certificatePinningEnabled) {
+                com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo(
+                    hash = account.pinnedCertificateHash,
+                    cn = account.pinnedCertificateCN ?: "Unknown",
+                    organization = account.pinnedCertificateOrg ?: "Unknown",
+                    validFrom = account.pinnedCertificateValidFrom ?: 0L,
+                    validTo = account.pinnedCertificateValidTo ?: 0L
+                )
+            } else {
+                null
+            }
+            
+            val client = try {
+                EasClient(
+                    serverUrl = account.serverUrl,
+                    username = account.username,
+                    password = password,
+                    domain = account.domain,
+                    acceptAllCerts = account.acceptAllCerts,
+                    port = account.incomingPort,
+                    useHttps = account.useSSL,
+                    deviceIdSuffix = account.email, // Используем email для стабильного deviceId
+                    initialPolicyKey = account.policyKey, // Передаём сохранённый PolicyKey
+                    certificatePath = account.certificatePath,
+                    clientCertificatePath = account.clientCertificatePath,
+                    clientCertificatePassword = clientCertPassword,
+                    pinnedCertInfo = pinnedCertInfo,  // Передаём информацию для Certificate Pinning
+                    accountId = accountId  // Передаём ID для отслеживания изменений
+                )
+            } catch (e: IllegalArgumentException) {
+                // Клиентский сертификат указан без пароля
+                android.util.Log.e("AccountRepository", "Failed to create EasClient: ${e.message}")
+                return@withLock null
+            }
+            
+            // Сохраняем в кэш
+            easClientCache[accountId] = client
+            client
         }
-        
-        val client = try {
-            EasClient(
-                serverUrl = account.serverUrl,
-                username = account.username,
-                password = password,
-                domain = account.domain,
-                acceptAllCerts = account.acceptAllCerts,
-                port = account.incomingPort,
-                useHttps = account.useSSL,
-                deviceIdSuffix = account.email, // Используем email для стабильного deviceId
-                initialPolicyKey = account.policyKey, // Передаём сохранённый PolicyKey
-                certificatePath = account.certificatePath,
-                clientCertificatePath = account.clientCertificatePath,
-                clientCertificatePassword = clientCertPassword,
-                pinnedCertInfo = pinnedCertInfo,  // Передаём информацию для Certificate Pinning
-                accountId = accountId  // Передаём ID для отслеживания изменений
-            )
-        } catch (e: IllegalArgumentException) {
-            // Клиентский сертификат указан без пароля
-            android.util.Log.e("AccountRepository", "Failed to create EasClient: ${e.message}")
-            return null
-        }
-        
-        // Сохраняем в кэш
-        easClientCache[accountId] = client
-        return client
     }
     
     /**
@@ -432,6 +435,7 @@ class AccountRepository(private val context: Context) {
      */
     fun clearEasClientCache(accountId: Long) {
         easClientCache.remove(accountId)
+        easClientLocks.remove(accountId)
     }
     
     /**
@@ -439,6 +443,7 @@ class AccountRepository(private val context: Context) {
      */
     fun clearAllEasClientCache() {
         easClientCache.clear()
+        easClientLocks.clear()
     }
     
     /**
@@ -802,6 +807,10 @@ class AccountRepository(private val context: Context) {
         accountDao.updateCertificatePinningEnabled(accountId, enabled)
         // Очищаем кэш клиента чтобы использовались новые настройки
         clearEasClientCache(accountId)
+    }
+    
+    suspend fun updateDraftMode(accountId: Long, mode: String) {
+        accountDao.updateDraftMode(accountId, mode)
     }
 }
 

@@ -45,6 +45,7 @@ import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -288,16 +289,16 @@ fun SetupScreen(
                     certificatePath = parts[10]
                     certificateFileName = File(parts[10]).name
                 }
-                // Восстанавливаем domain, username, password если они есть
-                if (parts.size >= 14) {
+                // Восстанавливаем domain и username; пароль не восстанавливаем (секрет не идёт через route)
+                if (parts.size >= 13) {
                     domain = parts[11]
                     username = parts[12]
-                    password = parts[13]
+                    password = ""
                 }
                 // Восстанавливаем клиентский сертификат если есть
-                if (parts.size >= 15 && parts[14].isNotBlank()) {
-                    clientCertificatePath = parts[14]
-                    clientCertificateFileName = File(parts[14]).name
+                if (parts.size >= 14 && parts[13].isNotBlank()) {
+                    clientCertificatePath = parts[13]
+                    clientCertificateFileName = File(parts[13]).name
                 }
             }
             errorMessage = emailMismatchText
@@ -318,7 +319,7 @@ fun SetupScreen(
     }
     
     // Восстановление данных из savedData (при возврате с ошибкой верификации)
-    // Формат: email|displayName|serverUrl|acceptAllCerts|color|incomingPort|outgoingServer|outgoingPort|useSSL|syncMode|certificatePath|clientCertificatePath
+    // Формат: email|displayName|serverUrl|acceptAllCerts|color|incomingPort|outgoingServer|outgoingPort|useSSL|syncMode|certificatePath|clientCertificatePath|domain|username
     // При CLEAR_EMAIL данные уже восстановлены выше, поэтому пропускаем
     LaunchedEffect(savedData) {
         if (savedData != null && initialError != "CLEAR_EMAIL") {
@@ -344,7 +345,13 @@ fun SetupScreen(
                     clientCertificatePath = parts[11]
                     clientCertificateFileName = File(parts[11]).name
                 }
-                // domain, username, password НЕ восстанавливаем — пользователь должен ввести заново
+                // Пароль НЕ восстанавливаем (секрет не идёт через route),
+                // но domain/username восстанавливаем чтобы не ломать повторную авторизацию.
+                // Поддерживаем старый формат savedData без этих полей.
+                if (parts.size >= 14) {
+                    domain = parts[12]
+                    username = parts[13]
+                }
             }
         }
     }
@@ -386,9 +393,10 @@ fun SetupScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showLanguageDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showLanguageDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -471,11 +479,16 @@ fun SetupScreen(
             }
         }
     ) { padding ->
-        Column(
+        val scrollState = rememberScrollState()
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
+        ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
         ) {
             // Приветственный блок для нового аккаунта
             if (!isEditing) {
@@ -1398,7 +1411,9 @@ fun SetupScreen(
             
             Spacer(modifier = Modifier.height(16.dp))
             } // Закрываем внутренний Column
-        } // Закрываем внешний Column
+        } // Закрываем внешний Column (scrollable)
+        ScrollColumnScrollbar(scrollState)
+        } // Закрываем Box
     }
     
     // Полноэкранный экран справки
@@ -1449,11 +1464,16 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
             onClick = onClose
         )
     ) { padding ->
-        Column(
+        val helpScrollState = rememberScrollState()
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
+        ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(helpScrollState)
                 .padding(16.dp)
                 .clickable(
                     interactionSource = contentInteractionSource,
@@ -1619,6 +1639,8 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
             
             Spacer(modifier = Modifier.height(32.dp))
         }
+        ScrollColumnScrollbar(helpScrollState)
+        } // Box
     }
 }
 

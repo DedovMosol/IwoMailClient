@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -56,13 +57,13 @@ fun SyncCleanupScreen(
     }
     
     // Диалоги
-    var showSyncModeDialog by remember { mutableStateOf(false) }
-    var showSyncIntervalDialog by remember { mutableStateOf(false) }
-    var showAutoCleanupDialog by remember { mutableStateOf(false) }
-    var showContactsSyncDialog by remember { mutableStateOf(false) }
-    var showNotesSyncDialog by remember { mutableStateOf(false) }
-    var showCalendarSyncDialog by remember { mutableStateOf(false) }
-    var showTasksSyncDialog by remember { mutableStateOf(false) }
+    var showSyncModeDialog by rememberSaveable { mutableStateOf(false) }
+    var showSyncIntervalDialog by rememberSaveable { mutableStateOf(false) }
+    var showAutoCleanupDialog by rememberSaveable { mutableStateOf(false) }
+    var showContactsSyncDialog by rememberSaveable { mutableStateOf(false) }
+    var showNotesSyncDialog by rememberSaveable { mutableStateOf(false) }
+    var showCalendarSyncDialog by rememberSaveable { mutableStateOf(false) }
+    var showTasksSyncDialog by rememberSaveable { mutableStateOf(false) }
 
     // Диалог режима синхронизации
     if (showSyncModeDialog) {
@@ -99,9 +100,10 @@ fun SyncCleanupScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSyncModeDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showSyncModeDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -137,9 +139,10 @@ fun SyncCleanupScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSyncIntervalDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showSyncIntervalDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }

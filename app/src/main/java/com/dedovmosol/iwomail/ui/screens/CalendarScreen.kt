@@ -29,7 +29,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
 import com.dedovmosol.iwomail.data.repository.CalendarRepository
+import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.Strings
@@ -53,13 +56,60 @@ import kotlinx.coroutines.delay
 private val HTML_TAG_REGEX = Regex("<[^>]*>")
 private val EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
 
-// Кэшированные SimpleDateFormat для утилитных функций (не thread-safe, но используются в suspend/Composable)
-private val PARSE_DATE_TIME_FORMAT = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
-private val PARSE_DATE_FORMAT = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
-private val PARSE_TIME_FORMAT = SimpleDateFormat("HH:mm", Locale.getDefault())
+// Модель вложения события календаря (вне composable для стабильности типа)
+private data class CalendarAttachmentInfo(val name: String, val fileReference: String, val size: Long, val isInline: Boolean)
+
+// ThreadLocal гарантирует thread-safety для SimpleDateFormat (каждый поток — свой экземпляр)
+private val PARSE_DATE_TIME_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+private val PARSE_DATE_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+private val PARSE_TIME_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 
 enum class CalendarDateFilter {
-    ALL, TODAY, WEEK, MONTH
+    ALL, TODAY, WEEK, MONTH, DELETED
+}
+
+/**
+ * Разворачивает повторяющиеся события в виртуальные экземпляры (occurrences)
+ * для заданного диапазона дат. Не-повторяющиеся события фильтруются по диапазону.
+ */
+private fun expandRecurringForRange(
+    events: List<CalendarEventEntity>,
+    rangeStart: Long,
+    rangeEnd: Long
+): List<CalendarEventEntity> {
+    val result = mutableListOf<CalendarEventEntity>()
+    
+    for (event in events) {
+        if (event.isRecurring && event.recurrenceRule.isNotBlank()) {
+            // Генерируем экземпляры серии в диапазоне
+            val occurrences = RecurrenceHelper.generateOccurrences(event, rangeStart, rangeEnd)
+            if (occurrences.isNotEmpty()) {
+                for (occ in occurrences) {
+                    result.add(event.copy(
+                        id = "${event.id}_occ_${occ.startTime}",
+                        startTime = occ.startTime,
+                        endTime = occ.endTime,
+                        subject = occ.subject,
+                        location = occ.location
+                    ))
+                }
+            } else {
+                // Fallback: если не удалось сгенерировать — показываем оригинал (если в диапазоне)
+                if ((event.startTime in rangeStart until rangeEnd) ||
+                    (event.startTime < rangeEnd && event.endTime > rangeStart)) {
+                    result.add(event)
+                }
+            }
+        } else {
+            // Не-повторяющееся: стандартная проверка попадания в диапазон
+            if ((event.startTime in rangeStart until rangeEnd) ||
+                (event.startTime < rangeEnd && event.endTime > rangeStart)) {
+                result.add(event)
+            }
+        }
+    }
+    
+    return result.sortedBy { it.startTime }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +132,7 @@ fun CalendarScreen(
     val accountId = activeAccount?.id ?: 0L
 
     val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsState(initial = emptyList())
+    val deletedEvents by remember(accountId) { calendarRepo.getDeletedEvents(accountId) }.collectAsState(initial = emptyList())
     
     // Флаг: данные из Room загружены (Flow эмитнул хотя бы раз)
     // КРИТИЧНО: rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация.
@@ -102,7 +153,7 @@ fun CalendarScreen(
         delay(300)
         debouncedSearchQuery = searchQuery
     }
-    var isSyncing by rememberSaveable { mutableStateOf(false) }
+    var isSyncing by remember { mutableStateOf(false) }
     
     // Автоматическая синхронизация при первом открытии если нет данных
     // Ждём загрузку из Room перед тем как решить что данных нет
@@ -130,12 +181,30 @@ fun CalendarScreen(
     var isCreating by remember { mutableStateOf(false) }
     
     // Множественный выбор
+    val haptic = LocalHapticFeedback.current
     var selectedEventIds by rememberSaveable { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedEventIds.isNotEmpty()
+    
+    // Определяем, есть ли среди выделенных удалённые события (для корректного TopBar/диалога)
+    val deletedEventIdSet = remember(deletedEvents) { deletedEvents.map { it.id }.toSet() }
+    val resolvedSelectedIds = remember(selectedEventIds) {
+        selectedEventIds.map { id -> if (id.contains("_occ_")) id.substringBefore("_occ_") else id }.toSet()
+    }
+    val selectedDeletedResolvedIds = remember(resolvedSelectedIds, deletedEventIdSet) {
+        resolvedSelectedIds.filter { it in deletedEventIdSet }.toSet()
+    }
+    val selectedActiveResolvedIds = remember(resolvedSelectedIds, deletedEventIdSet) {
+        resolvedSelectedIds.filter { it !in deletedEventIdSet }.toSet()
+    }
+    val hasDeletedSelected = selectedDeletedResolvedIds.isNotEmpty()
+    val hasActiveSelected = selectedActiveResolvedIds.isNotEmpty()
     
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
+    var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
+    var deleteConfirmTargetIds by remember { mutableStateOf(setOf<String>()) }
+    var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
     
     // Состояние списка для автоскролла
     val listState = rememberLazyListState()
@@ -148,11 +217,12 @@ fun CalendarScreen(
         selectedEventIds = emptySet()
     }
     
-    // Фильтрация по поиску и по дате
-    val filteredEvents = remember(events, debouncedSearchQuery, dateFilter) {
+    // Фильтрация по поиску и по дате (с разворачиванием повторяющихся событий)
+    val filteredEvents = remember(events, deletedEvents, debouncedSearchQuery, dateFilter) {
         // Сначала фильтруем по дате
         val dateFiltered = when (dateFilter) {
-            CalendarDateFilter.ALL -> events
+            CalendarDateFilter.DELETED -> deletedEvents
+            CalendarDateFilter.ALL -> events + deletedEvents
             CalendarDateFilter.TODAY -> {
                 val cal = Calendar.getInstance()
                 cal.set(Calendar.HOUR_OF_DAY, 0)
@@ -162,12 +232,7 @@ fun CalendarScreen(
                 val todayStart = cal.timeInMillis
                 cal.add(Calendar.DAY_OF_YEAR, 1)
                 val tomorrowStart = cal.timeInMillis
-                events.filter { event ->
-                    // Событие попадает в сегодня: начинается сегодня, или
-                    // длится через сегодня (startTime < tomorrowStart && endTime > todayStart)
-                    (event.startTime in todayStart until tomorrowStart) ||
-                    (event.startTime < tomorrowStart && event.endTime > todayStart)
-                }
+                expandRecurringForRange(events, todayStart, tomorrowStart)
             }
             CalendarDateFilter.WEEK -> {
                 val cal = Calendar.getInstance()
@@ -178,10 +243,7 @@ fun CalendarScreen(
                 val todayStart = cal.timeInMillis
                 cal.add(Calendar.DAY_OF_YEAR, 7)
                 val weekEnd = cal.timeInMillis
-                events.filter { event ->
-                    (event.startTime in todayStart until weekEnd) ||
-                    (event.startTime < weekEnd && event.endTime > todayStart)
-                }
+                expandRecurringForRange(events, todayStart, weekEnd)
             }
             CalendarDateFilter.MONTH -> {
                 val cal = Calendar.getInstance()
@@ -192,10 +254,7 @@ fun CalendarScreen(
                 val todayStart = cal.timeInMillis
                 cal.add(Calendar.MONTH, 1)
                 val monthEnd = cal.timeInMillis
-                events.filter { event ->
-                    (event.startTime in todayStart until monthEnd) ||
-                    (event.startTime < monthEnd && event.endTime > todayStart)
-                }
+                expandRecurringForRange(events, todayStart, monthEnd)
             }
         }
         // Затем фильтруем по поиску
@@ -214,104 +273,186 @@ fun CalendarScreen(
     selectedEvent?.let { event ->
         val eventDeletedText = Strings.eventDeleted
         val deletingOneEventText = Strings.deletingEvents(1)
+        val restoringOneEventText = Strings.restoringEvents(1)
         val undoText = Strings.undo
         val eventsRestoredText = Strings.eventsRestored
-        EventDetailDialog(
-            event = event,
-            calendarRepo = calendarRepo,
-            currentUserEmail = activeAccount?.email ?: "",
-            onDismiss = { selectedEvent = null },
-            onComposeClick = onComposeClick,
-            onEditClick = { 
-                editingEvent = event
-                selectedEvent = null
-                showCreateDialog = true
-            },
-            onDeleteClick = {
-                selectedEvent = null  // Закрываем диалог СРАЗУ
-                com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                
-                deletionController.startDeletion(
-                    emailIds = listOf(event.id),
-                    message = deletingOneEventText,
-                    scope = scope,
-                    isRestore = false
-                ) { _, onProgress ->
-                    val result = withContext(Dispatchers.IO) {
-                        calendarRepo.deleteEvent(event)
+        val eventRestoredText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие восстановлено" else "Event restored"
+        val eventDeletedPermanentlyText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие удалено навсегда" else "Event permanently deleted"
+        
+        if (event.isDeleted) {
+            // Диалог для удалённого события — восстановить или удалить навсегда
+            DeletedEventDetailDialog(
+                event = event,
+                onDismiss = { selectedEvent = null },
+                onRestoreClick = {
+                    selectedEvent = null  // Закрываем диалог СРАЗУ
+                    
+                    deletionController.startDeletion(
+                        emailIds = listOf(event.id),
+                        message = restoringOneEventText,
+                        scope = scope,
+                        isRestore = true
+                    ) { _, onProgress ->
+                        val result = withContext(Dispatchers.IO) {
+                            calendarRepo.restoreEvent(event)
+                        }
+                        onProgress(1, 1)
+                        when (result) {
+                            is EasResult.Error -> {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            else -> {}
+                        }
                     }
-                    onProgress(1, 1)
-                    when (result) {
-                        is EasResult.Success -> {
-                            withContext(Dispatchers.Main) {
+                },
+                onDeletePermanentlyClick = {
+                    selectedEvent = null
+                    com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                    
+                    deletionController.startDeletion(
+                        emailIds = listOf(event.id),
+                        message = deletingOneEventText,
+                        scope = scope,
+                        isRestore = false
+                    ) { _, onProgress ->
+                        val result = withContext(Dispatchers.IO) {
+                            calendarRepo.deleteEventPermanently(event)
+                        }
+                        onProgress(1, 1)
+                        when (result) {
+                            is EasResult.Error -> {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+            )
+        } else {
+            // Для виртуальных occurrence — находим оригинальное событие в БД
+            val originalEvent = if (event.id.contains("_occ_")) {
+                val originalId = event.id.substringBefore("_occ_")
+                events.find { it.id == originalId } ?: event
+            } else {
+                event
+            }
+            
+            // Обычный диалог для активного события (показываем данные occurrence, но операции — над оригиналом)
+            EventDetailDialog(
+                event = event,
+                calendarRepo = calendarRepo,
+                currentUserEmail = activeAccount?.email ?: "",
+                onDismiss = { selectedEvent = null },
+                onComposeClick = onComposeClick,
+                onEditClick = { 
+                    editingEvent = originalEvent
+                    selectedEvent = null
+                    showCreateDialog = true
+                },
+                onDeleteClick = {
+                    selectedEvent = null  // Закрываем диалог СРАЗУ
+                    com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                    
+                    // Soft-delete (в корзину) — без прогрессбара, просто удаляем
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            calendarRepo.deleteEvent(originalEvent)
+                        }
+                        when (result) {
+                            is EasResult.Success -> {
                                 Toast.makeText(context, eventDeletedText, Toast.LENGTH_SHORT).show()
                             }
-                        }
-                        is EasResult.Error -> {
-                            withContext(Dispatchers.Main) {
+                            is EasResult.Error -> {
                                 Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                             }
                         }
                     }
                 }
-            }
-        )
+            )
+        }
     }
     
     // Диалог подтверждения удаления событий
     if (showDeleteConfirmDialog) {
         val eventsDeletedText = Strings.eventDeleted
+        val eventsDeletedPermanentlyText = Strings.eventsDeletedPermanently
         val undoText = Strings.undo
         val eventsRestoredText = Strings.eventsRestored
         
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
-            icon = { Icon(AppIcons.Delete, null) },
+            icon = { Icon(if (deleteConfirmIsPermanent) AppIcons.DeleteForever else AppIcons.Delete, null) },
             title = { 
-                Text(Strings.deleteEvents) 
+                Text(
+                    if (deleteConfirmIsPermanent) 
+                        Strings.deleteEventsPermanently 
+                    else 
+                        Strings.deleteEvents
+                ) 
             },
             text = { 
                 Text(
                     if (deleteConfirmCount == 1)
-                        Strings.deleteEventConfirm
+                        if (deleteConfirmIsPermanent) Strings.deleteEventPermanentlyConfirm else Strings.deleteEventConfirm
                     else
-                        Strings.deleteEventsConfirm(deleteConfirmCount)
+                        if (deleteConfirmIsPermanent) Strings.deleteEventsPermanentlyConfirm(deleteConfirmCount) else Strings.deleteEventsConfirm(deleteConfirmCount)
                 ) 
             },
             confirmButton = {
                 val deletingEventsMessage = Strings.deletingEvents(deleteConfirmCount)
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeleteConfirmDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                         
-                        // Получаем события для удаления из всех событий (не только отфильтрованных)
-                        val eventsToDelete = events.filter { it.id in selectedEventIds }
+                        // Ищем выбранные события в обоих списках
+                        // Для виртуальных occurrence ID (содержат _occ_) берём оригинальный ID серии
+                        val eventsToDelete = (events + deletedEvents).filter { it.id in deleteConfirmTargetIds }
                         val eventIds = eventsToDelete.map { it.id }
-                        selectedEventIds = emptySet()
+                        selectedEventIds = selectedEventIds.filterNot { id ->
+                            val resolvedId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
+                            resolvedId in deleteConfirmTargetIds
+                        }.toSet()
                         
                         if (eventIds.isNotEmpty()) {
-                            deletionController.startDeletion(
-                                emailIds = eventIds,
-                                message = deletingEventsMessage,
-                                scope = scope,
-                                isRestore = false
-                            ) { _, onProgress ->
-                                var deleted = 0
-                                for (event in eventsToDelete) {
-                                    val result = withContext(Dispatchers.IO) {
-                                        calendarRepo.deleteEvent(event)
+                            if (deleteConfirmIsPermanent) {
+                                // Окончательное удаление из корзины — с прогрессбаром
+                                deletionController.startDeletion(
+                                    emailIds = eventIds,
+                                    message = deletingEventsMessage,
+                                    scope = scope,
+                                    isRestore = false
+                                ) { _, onProgress ->
+                                    var deleted = 0
+                                    for (event in eventsToDelete) {
+                                        val result = withContext(Dispatchers.IO) {
+                                            calendarRepo.deleteEventPermanently(event)
+                                        }
+                                        if (result is EasResult.Success) deleted++
+                                        onProgress(deleted, eventsToDelete.size)
                                     }
-                                    if (result is EasResult.Success) deleted++
-                                    onProgress(deleted, eventsToDelete.size)
+                                    if (deleted > 0) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, "$eventsDeletedPermanentlyText: $deleted", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 }
-                                if (deleted > 0) {
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(
-                                            context,
-                                            "$eventsDeletedText: $deleted",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                            } else {
+                                // Soft-delete (в корзину) — без прогрессбара
+                                scope.launch {
+                                    var deleted = 0
+                                    for (event in eventsToDelete) {
+                                        val result = withContext(Dispatchers.IO) {
+                                            calendarRepo.deleteEvent(event)
+                                        }
+                                        if (result is EasResult.Success) deleted++
+                                    }
+                                    if (deleted > 0) {
+                                        Toast.makeText(context, "$eventsDeletedText: $deleted", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
@@ -321,9 +462,56 @@ fun CalendarScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirmDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteConfirmDialog = false },
+                    text = Strings.cancel
+                )
+            }
+        )
+    }
+    
+    // Диалог очистки корзины календаря
+    if (showEmptyTrashDialog) {
+        val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+        val trashEmptiedText = if (isRussian) "Корзина очищена" else "Trash emptied"
+        
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { showEmptyTrashDialog = false },
+            icon = { Icon(AppIcons.DeleteForever, null) },
+            title = { Text(if (isRussian) "Очистить корзину?" else "Empty trash?") },
+            text = { 
+                Text(
+                    if (isRussian) "Удалить навсегда ${deletedEvents.size} событий из корзины?"
+                    else "Permanently delete ${deletedEvents.size} events from trash?"
+                ) 
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
+                    onClick = {
+                        showEmptyTrashDialog = false
+                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                calendarRepo.emptyCalendarTrash(accountId)
+                            }
+                            when (result) {
+                                is EasResult.Success -> {
+                                    Toast.makeText(context, trashEmptiedText, Toast.LENGTH_SHORT).show()
+                                }
+                                is EasResult.Error -> {
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    },
+                    text = Strings.delete
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showEmptyTrashDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -344,76 +532,81 @@ fun CalendarScreen(
                 showCreateDialog = false
                 editingEvent = null
             },
-            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees ->
+            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType ->
                 // Защита от double-tap: если уже создаём — игнорируем
                 if (isCreating) return@CreateEventDialog
                 isCreating = true
                 scope.launch {
-                    // Парсим список участников
-                    val attendeeList = attendees.split(",", ";")
-                        .map { it.trim() }
-                        .filter { it.contains("@") }
-                    
-                    // Захватываем editingEvent в локальную переменную для безопасного доступа
-                    val eventToEdit = editingEvent
-                    val result = if (eventToEdit != null) {
-                        withContext(Dispatchers.IO) {
-                            calendarRepo.updateEvent(
-                                event = eventToEdit,
-                                subject = subject,
-                                startTime = startTime,
-                                endTime = endTime,
-                                location = location,
-                                body = body,
-                                allDayEvent = allDayEvent,
-                                reminder = reminder,
-                                busyStatus = busyStatus
-                            )
+                    try {
+                        // Парсим список участников
+                        val attendeeList = attendees.split(",", ";")
+                            .map { it.trim() }
+                            .filter { it.contains("@") }
+                        
+                        // Захватываем editingEvent в локальную переменную для безопасного доступа
+                        val eventToEdit = editingEvent
+                        val result = if (eventToEdit != null) {
+                            withContext(Dispatchers.IO) {
+                                calendarRepo.updateEvent(
+                                    event = eventToEdit,
+                                    subject = subject,
+                                    startTime = startTime,
+                                    endTime = endTime,
+                                    location = location,
+                                    body = body,
+                                    allDayEvent = allDayEvent,
+                                    reminder = reminder,
+                                    busyStatus = busyStatus,
+                                    recurrenceType = recurrenceType
+                                )
+                            }
+                        } else {
+                            withContext(Dispatchers.IO) {
+                                // Создаём событие с участниками - Exchange сам отправит приглашения
+                                calendarRepo.createEvent(
+                                    accountId = accountId,
+                                    subject = subject,
+                                    startTime = startTime,
+                                    endTime = endTime,
+                                    location = location,
+                                    body = body,
+                                    allDayEvent = allDayEvent,
+                                    reminder = reminder,
+                                    busyStatus = busyStatus,
+                                    attendees = attendeeList,
+                                    recurrenceType = recurrenceType
+                                )
+                            }
                         }
-                    } else {
-                        withContext(Dispatchers.IO) {
-                            // Создаём событие с участниками - Exchange сам отправит приглашения
-                            calendarRepo.createEvent(
-                                accountId = accountId,
-                                subject = subject,
-                                startTime = startTime,
-                                endTime = endTime,
-                                location = location,
-                                body = body,
-                                allDayEvent = allDayEvent,
-                                reminder = reminder,
-                                busyStatus = busyStatus,
-                                attendees = attendeeList
-                            )
-                        }
-                    }
-                    
-                    isCreating = false
-                    when (result) {
-                        is EasResult.Success -> {
-                            if (!isEditing) {
-                                // Принудительная синхронизация после создания
-                                withContext(Dispatchers.IO) {
-                                    calendarRepo.syncCalendar(accountId)
+                        
+                        when (result) {
+                            is EasResult.Success -> {
+                                if (!isEditing) {
+                                    // Принудительная синхронизация после создания
+                                    withContext(Dispatchers.IO) {
+                                        calendarRepo.syncCalendar(accountId)
+                                    }
+                                }
+                                val message = if (attendeeList.isNotEmpty()) {
+                                    "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
+                                } else {
+                                    if (isEditing) eventUpdatedText else eventCreatedText
+                                }
+                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                showCreateDialog = false
+                                editingEvent = null
+                                // Автоскролл вверх после создания (с задержкой для обновления списка)
+                                if (!isEditing) {
+                                    kotlinx.coroutines.delay(100)
+                                    listState.animateScrollToItem(0)
                                 }
                             }
-                            val message = if (attendeeList.isNotEmpty()) {
-                                "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
-                            } else {
-                                if (isEditing) eventUpdatedText else eventCreatedText
-                            }
-                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                            showCreateDialog = false
-                            editingEvent = null
-                            // Автоскролл вверх после создания (с задержкой для обновления списка)
-                            if (!isEditing) {
-                                kotlinx.coroutines.delay(100)
-                                listState.animateScrollToItem(0)
+                            is EasResult.Error -> {
+                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                             }
                         }
-                        is EasResult.Error -> {
-                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                        }
+                    } finally {
+                        isCreating = false
                     }
                 }
             }
@@ -424,12 +617,54 @@ fun CalendarScreen(
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
             if (isSelectionMode) {
-                val eventsDeletedText = Strings.eventDeleted
+                val eventsRestoredText = Strings.eventsRestored
+                val restoringEventsMessage = Strings.restoringEvents(selectedDeletedResolvedIds.size)
+                val deletePermanently = hasDeletedSelected && !hasActiveSelected
                 CalendarSelectionTopBar(
-                    selectedCount = selectedEventIds.size,
+                    selectedCount = resolvedSelectedIds.size,
+                    showRestore = hasDeletedSelected,
+                    deleteIsPermanent = deletePermanently,
                     onClearSelection = { selectedEventIds = emptySet() },
+                    onRestore = {
+                        if (hasDeletedSelected) {
+                            val eventsToRestore = deletedEvents.filter { it.id in selectedDeletedResolvedIds }
+                            val eventIds = eventsToRestore.map { it.id }
+                            selectedEventIds = selectedEventIds.filterNot { id ->
+                                val resolvedId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
+                                resolvedId in selectedDeletedResolvedIds
+                            }.toSet()
+                            
+                            if (eventIds.isNotEmpty()) {
+                                deletionController.startDeletion(
+                                    emailIds = eventIds,
+                                    message = restoringEventsMessage,
+                                    scope = scope,
+                                    isRestore = true
+                                ) { _, onProgress ->
+                                    var restored = 0
+                                    for (event in eventsToRestore) {
+                                        val result = withContext(Dispatchers.IO) {
+                                            calendarRepo.restoreEvent(event)
+                                        }
+                                        if (result is EasResult.Success) restored++
+                                        onProgress(restored, eventsToRestore.size)
+                                    }
+                                    if (restored > 0) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, "$eventsRestoredText: $restored", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
                     onDelete = {
-                        deleteConfirmCount = selectedEventIds.size
+                        val deleteTargetIds = if (deletePermanently) selectedDeletedResolvedIds else selectedActiveResolvedIds
+                        if (deleteTargetIds.isEmpty()) return@CalendarSelectionTopBar
+                        deleteConfirmCount = deleteTargetIds.size
+                        // КРИТИЧНО: окончательное удаление только если выбраны ТОЛЬКО удалённые события
+                        deleteConfirmIsPermanent = deletePermanently
+                        deleteConfirmTargetIds = deleteTargetIds
                         showDeleteConfirmDialog = true
                     }
                 )
@@ -510,14 +745,16 @@ fun CalendarScreen(
             }
         },
         floatingActionButton = {
-            com.dedovmosol.iwomail.ui.theme.AnimatedFab(
-                onClick = { 
-                    editingEvent = null
-                    showCreateDialog = true 
-                },
-                containerColor = LocalColorTheme.current.gradientStart
-            ) {
-                Icon(AppIcons.Add, Strings.newEvent, tint = Color.White)
+            if (dateFilter != CalendarDateFilter.DELETED) {
+                com.dedovmosol.iwomail.ui.theme.AnimatedFab(
+                    onClick = { 
+                        editingEvent = null
+                        showCreateDialog = true 
+                    },
+                    containerColor = LocalColorTheme.current.gradientStart
+                ) {
+                    Icon(AppIcons.Add, Strings.newEvent, tint = Color.White)
+                }
             }
         }
     ) { padding ->
@@ -540,6 +777,7 @@ fun CalendarScreen(
                         listState = listState,
                         selectedEventIds = selectedEventIds,
                         onEventSelectionChange = { eventId, selected ->
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             selectedEventIds = if (selected) {
                                 selectedEventIds + eventId
                             } else {
@@ -547,18 +785,24 @@ fun CalendarScreen(
                             }
                         },
                         onEventLongClick = { eventId ->
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             selectedEventIds = selectedEventIds + eventId
                         },
+                        onDragSelect = { newIds -> selectedEventIds = newIds },
                         isLoading = !dataLoaded || isSyncing,
                         dateFilter = dateFilter,
-                        onDateFilterChange = { dateFilter = it }
+                        onDateFilterChange = { selectedEventIds = emptySet(); dateFilter = it },
+                        deletedCount = deletedEvents.size,
+                        onEmptyTrash = { showEmptyTrashDialog = true }
                     )
                 }
                 CalendarViewMode.MONTH -> {
                     // Фильтры по дате для MonthView
                     CalendarFilterChips(
                         currentFilter = dateFilter,
-                        onFilterChange = { dateFilter = it }
+                        onFilterChange = { selectedEventIds = emptySet(); dateFilter = it },
+                        deletedCount = deletedEvents.size,
+                        onEmptyTrash = { showEmptyTrashDialog = true }
                     )
                     MonthView(
                         events = filteredEvents,
@@ -569,10 +813,9 @@ fun CalendarScreen(
                                 selectedEvent = event
                             }
                         },
-                        calendarRepo = calendarRepo,
-                        accountId = accountId,
                         selectedEventIds = selectedEventIds,
                         onEventSelectionChange = { eventId, selected ->
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             selectedEventIds = if (selected) {
                                 selectedEventIds + eventId
                             } else {
@@ -580,8 +823,10 @@ fun CalendarScreen(
                             }
                         },
                         onEventLongClick = { eventId ->
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             selectedEventIds = selectedEventIds + eventId
-                        }
+                        },
+                        onDragSelect = { newIds -> selectedEventIds = newIds }
                     )
                 }
             }
@@ -595,8 +840,11 @@ fun CalendarScreen(
 @Composable
 private fun CalendarFilterChips(
     currentFilter: CalendarDateFilter,
-    onFilterChange: (CalendarDateFilter) -> Unit
+    onFilterChange: (CalendarDateFilter) -> Unit,
+    deletedCount: Int = 0,
+    onEmptyTrash: () -> Unit = {}
 ) {
+    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -627,6 +875,26 @@ private fun CalendarFilterChips(
             onClick = { onFilterChange(CalendarDateFilter.MONTH) },
             label = { Text(Strings.month) }
         )
+        FilterChip(
+            selected = currentFilter == CalendarDateFilter.DELETED,
+            onClick = { onFilterChange(CalendarDateFilter.DELETED) },
+            label = { 
+                val label = if (isRussian) "Корзина" else "Trash"
+                Text(if (deletedCount > 0) "$label ($deletedCount)" else label) 
+            },
+            leadingIcon = if (currentFilter == CalendarDateFilter.DELETED) {
+                { Icon(AppIcons.Delete, null, Modifier.size(16.dp)) }
+            } else null
+        )
+        // Кнопка очистки корзины (видна только в режиме корзины)
+        if (currentFilter == CalendarDateFilter.DELETED && deletedCount > 0) {
+            FilterChip(
+                selected = false,
+                onClick = onEmptyTrash,
+                label = { Text(if (isRussian) "Очистить" else "Empty") },
+                leadingIcon = { Icon(AppIcons.DeleteForever, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error) }
+            )
+        }
     }
 }
 
@@ -645,9 +913,12 @@ private fun AgendaView(
     selectedEventIds: Set<String> = emptySet(),
     onEventSelectionChange: (String, Boolean) -> Unit = { _, _ -> },
     onEventLongClick: (String) -> Unit = {},
+    onDragSelect: (Set<String>) -> Unit = {},
     isLoading: Boolean = false,
     dateFilter: CalendarDateFilter = CalendarDateFilter.ALL,
-    onDateFilterChange: (CalendarDateFilter) -> Unit = {}
+    onDateFilterChange: (CalendarDateFilter) -> Unit = {},
+    deletedCount: Int = 0,
+    onEmptyTrash: () -> Unit = {}
 ) {
     val isSelectionMode = selectedEventIds.isNotEmpty()
     Column {
@@ -674,7 +945,9 @@ private fun AgendaView(
         // Фильтры по дате (под полем поиска)
         CalendarFilterChips(
             currentFilter = dateFilter,
-            onFilterChange = onDateFilterChange
+            onFilterChange = onDateFilterChange,
+            deletedCount = deletedCount,
+            onEmptyTrash = onEmptyTrash
         )
         
         // Счётчик
@@ -725,10 +998,28 @@ private fun AgendaView(
                 }.toSortedMap(compareByDescending { it })
             }
             
-            Box(modifier = Modifier.fillMaxSize()) {
+            // Drag selection — ключи в том же порядке что items в LazyColumn (по группам дат)
+            val eventKeys = remember(groupedEvents) { groupedEvents.values.flatten().map { it.id } }
+            val dragModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
+                listState = listState,
+                itemKeys = eventKeys,
+                selectedIds = selectedEventIds,
+                onSelectionChange = onDragSelect
+            )
+            
+            Box(modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (isSelectionMode) Modifier.clickable(
+                        indication = null,
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    ) { onDragSelect(emptySet()) }
+                    else Modifier
+                )
+            ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = dragModifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -770,11 +1061,10 @@ private fun MonthView(
     selectedDate: Date,
     onDateSelected: (Date) -> Unit,
     onEventClick: (CalendarEventEntity) -> Unit,
-    calendarRepo: CalendarRepository,
-    accountId: Long,
     selectedEventIds: Set<String> = emptySet(),
     onEventSelectionChange: (String, Boolean) -> Unit = { _, _ -> },
-    onEventLongClick: (String) -> Unit = {}
+    onEventLongClick: (String) -> Unit = {},
+    onDragSelect: (Set<String>) -> Unit = {}
 ) {
     val isSelectionMode = selectedEventIds.isNotEmpty()
     val calendar = Calendar.getInstance()
@@ -782,10 +1072,24 @@ private fun MonthView(
     
     var currentMonth by remember(selectedDate) { mutableStateOf(calendar.get(Calendar.MONTH)) }
     var currentYear by remember(selectedDate) { mutableStateOf(calendar.get(Calendar.YEAR)) }
-    var showYearView by remember { mutableStateOf(false) }
+    var showYearView by rememberSaveable { mutableStateOf(false) }
     
-    // События для выбранного дня
-    val dayEvents by calendarRepo.getEventsForDay(accountId, selectedDate).collectAsState(initial = emptyList())
+    // События для выбранного дня — фильтруем из уже развёрнутых events (включая occurrences)
+    val dayEvents = remember(events, selectedDate) {
+        val cal = Calendar.getInstance()
+        cal.time = selectedDate
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val dayStart = cal.timeInMillis
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+        val dayEnd = cal.timeInMillis
+        events.filter { event ->
+            (event.startTime in dayStart until dayEnd) ||
+            (event.startTime < dayEnd && event.endTime > dayStart)
+        }.sortedBy { it.startTime }
+    }
     
     if (showYearView) {
         YearView(
@@ -837,8 +1141,28 @@ private fun MonthView(
                     modifier = Modifier.padding(16.dp, 16.dp, 16.dp, 8.dp)
                 )
                 
+                val dayListState = rememberLazyListState()
+                val dayEventKeys = remember(dayEvents) { dayEvents.map { it.id } }
+                val dayDragModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
+                    listState = dayListState,
+                    itemKeys = dayEventKeys,
+                    selectedIds = selectedEventIds,
+                    onSelectionChange = onDragSelect
+                )
+                
+                Box(modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (isSelectionMode) Modifier.clickable(
+                            indication = null,
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        ) { onDragSelect(emptySet()) }
+                        else Modifier
+                    )
+                ) {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    state = dayListState,
+                    modifier = dayDragModifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -862,6 +1186,7 @@ private fun MonthView(
                         )
                 }
             }
+                }
         } else {
             Box(
                 modifier = Modifier
@@ -921,7 +1246,10 @@ private fun EventCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .then(
+                if (isSelectionMode) Modifier.clickable(onClick = onClick)
+                else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = backgroundColor)
     ) {
@@ -969,7 +1297,10 @@ private fun EventCard(
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        color = if (isPastEvent) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface,
+                        color = if (event.isDeleted) MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                               else if (isPastEvent) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f) 
+                               else MaterialTheme.colorScheme.onSurface,
+                        textDecoration = if (event.isDeleted) androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
                         modifier = Modifier.weight(1f)
                     )
                     if (isPastEvent) {
@@ -978,7 +1309,7 @@ private fun EventCard(
                             AppIcons.CheckCircle,
                             contentDescription = Strings.completed,
                             modifier = Modifier.size(18.dp),
-                            tint = Color(0xFF4CAF50)
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.calendar
                         )
                     }
                 }
@@ -1283,7 +1614,7 @@ private fun EventDetailDialog(
     }
     
     // Проверяем есть ли что показывать в расширенном виде
-    val hasMoreContent = cleanBody.isNotBlank() || event.organizer.isNotBlank() || attendees.isNotEmpty()
+    val hasMoreContent = cleanBody.isNotBlank() || event.organizer.isNotBlank() || event.organizerName.isNotBlank() || attendees.isNotEmpty() || event.hasAttachments || event.onlineMeetingLink.isNotBlank()
     
     // Диалог подтверждения удаления
     if (showDeleteConfirm) {
@@ -1293,7 +1624,7 @@ private fun EventDetailDialog(
             title = { Text(Strings.deleteEvent) },
             text = { Text(Strings.deleteEventConfirm) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeleteConfirm = false
                         onDeleteClick()
@@ -1302,9 +1633,10 @@ private fun EventDetailDialog(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteConfirm = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -1340,6 +1672,31 @@ private fun EventDetailDialog(
                         },
                         style = MaterialTheme.typography.bodyMedium
                     )
+                }
+                
+                // Правило повторения
+                if (event.isRecurring && event.recurrenceRule.isNotBlank()) {
+                    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+                    val ruleDescription = RecurrenceHelper.describeRule(event.recurrenceRule, isRussian)
+                    if (ruleDescription.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        ) {
+                            Icon(
+                                AppIcons.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = ruleDescription,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
                 
                 // Место
@@ -1413,7 +1770,7 @@ private fun EventDetailDialog(
                     }
                     
                     // Организатор
-                    if (event.organizer.isNotBlank()) {
+                    if (event.organizer.isNotBlank() || event.organizerName.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1432,8 +1789,13 @@ private fun EventDetailDialog(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                val displayOrganizer = if (event.organizerName.isNotBlank()) {
+                                    event.organizerName
+                                } else {
+                                    event.organizer.replace(HTML_TAG_REGEX, "")
+                                }
                                 Text(
-                                    text = event.organizer.replace(HTML_TAG_REGEX, ""),
+                                    text = displayOrganizer,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = if (organizerEmail.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                     modifier = if (organizerEmail.isNotBlank()) {
@@ -1442,7 +1804,41 @@ private fun EventDetailDialog(
                                 )
                             }
                         }
-                        
+                    }
+                    
+                    // Ссылка на онлайн-встречу
+                    if (event.onlineMeetingLink.isNotBlank()) {
+                        val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(bottom = 4.dp)
+                                .clickable { uriHandler.openUri(event.onlineMeetingLink) }
+                        ) {
+                            Icon(
+                                AppIcons.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Онлайн-встреча" else "Online meeting",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    
+                    // Вложения
+                    if (event.hasAttachments && event.attachments.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        CalendarAttachmentsList(
+                            attachmentsJson = event.attachments,
+                            accountId = event.accountId,
+                            calendarRepo = calendarRepo
+                        )
                     }
                     
                     // Участники
@@ -1510,15 +1906,15 @@ private fun EventDetailDialog(
             OutlinedButton(
                 onClick = { showDeleteConfirm = true },
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = Color(0xFFF44336)
+                    contentColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                 ),
-                border = BorderStroke(1.dp, Color(0xFFF44336))
+                border = BorderStroke(1.dp, com.dedovmosol.iwomail.ui.theme.AppColors.delete)
             ) {
                 Icon(
                     AppIcons.Delete,
                     contentDescription = Strings.delete,
                     modifier = Modifier.size(20.dp),
-                    tint = Color(0xFFF44336)
+                    tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                 )
             }
         },
@@ -1906,7 +2302,8 @@ private fun CreateEventDialog(
         allDayEvent: Boolean,
         reminder: Int,
         busyStatus: Int,
-        attendees: String
+        attendees: String,
+        recurrenceType: Int
     ) -> Unit
 ) {
     val context = LocalContext.current
@@ -1924,7 +2321,14 @@ private fun CreateEventDialog(
     var reminder by rememberSaveable { mutableStateOf(event?.reminder ?: 15) }
     var busyStatus by rememberSaveable { mutableStateOf(event?.busyStatus ?: 2) }
     var attendees by rememberSaveable { mutableStateOf("") }
-    
+    // Тип повторения: -1=Нет, 0=Daily, 1=Weekly, 2=Monthly, 5=Yearly
+    var recurrenceType by rememberSaveable {
+        mutableStateOf(
+            if (event?.isRecurring == true && event.recurrenceRule.isNotBlank()) {
+                RecurrenceHelper.parseRule(event.recurrenceRule)?.type ?: -1
+            } else -1
+        )
+    }
     // Диалог выбора контактов
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
     
@@ -1949,10 +2353,10 @@ private fun CreateEventDialog(
         // БД хранит UTC, но отображаем в LOCAL
         
         if (event != null) {
-            startDateText = PARSE_DATE_FORMAT.format(Date(event.startTime))
-            startTimeText = PARSE_TIME_FORMAT.format(Date(event.startTime))
-            endDateText = PARSE_DATE_FORMAT.format(Date(event.endTime))
-            endTimeText = PARSE_TIME_FORMAT.format(Date(event.endTime))
+            startDateText = PARSE_DATE_FORMAT.get().format(Date(event.startTime))
+            startTimeText = PARSE_TIME_FORMAT.get().format(Date(event.startTime))
+            endDateText = PARSE_DATE_FORMAT.get().format(Date(event.endTime))
+            endTimeText = PARSE_TIME_FORMAT.get().format(Date(event.endTime))
         } else {
             // Используем текущее время, округлённое до следующего часа
             val calendar = Calendar.getInstance()
@@ -1961,12 +2365,12 @@ private fun CreateEventDialog(
             calendar.set(Calendar.MILLISECOND, 0)
             calendar.add(Calendar.HOUR_OF_DAY, 1)
             
-            startDateText = PARSE_DATE_FORMAT.format(calendar.time)
-            startTimeText = PARSE_TIME_FORMAT.format(calendar.time)
+            startDateText = PARSE_DATE_FORMAT.get().format(calendar.time)
+            startTimeText = PARSE_TIME_FORMAT.get().format(calendar.time)
             
             calendar.add(Calendar.HOUR_OF_DAY, 1)
-            endDateText = PARSE_DATE_FORMAT.format(calendar.time)
-            endTimeText = PARSE_TIME_FORMAT.format(calendar.time)
+            endDateText = PARSE_DATE_FORMAT.get().format(calendar.time)
+            endTimeText = PARSE_TIME_FORMAT.get().format(calendar.time)
         }
     }
     
@@ -2294,6 +2698,44 @@ private fun CreateEventDialog(
                 }
                 
                 item {
+                    // Повторение — радиокнопки
+                    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = if (isRussian) "Повторение" else "Repeat",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        listOf(
+                            -1 to (if (isRussian) "Не повторять" else "No repeat"),
+                            0 to (if (isRussian) "Каждый день" else "Daily"),
+                            1 to (if (isRussian) "Каждую неделю" else "Weekly"),
+                            2 to (if (isRussian) "Каждый месяц" else "Monthly"),
+                            5 to (if (isRussian) "Каждый год" else "Yearly")
+                        ).forEach { (value, label) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { recurrenceType = value }
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = recurrenceType == value,
+                                    onClick = { recurrenceType = value }
+                                )
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                item {
                     // Описание
                     OutlinedTextField(
                         value = body,
@@ -2311,7 +2753,7 @@ private fun CreateEventDialog(
             }
         },
         confirmButton = {
-            Button(
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = {
                     if (isValid) {
                         // Парсинг дат и времени
@@ -2329,33 +2771,28 @@ private fun CreateEventDialog(
                         
                         if (startTime <= 0 || endTime <= 0) {
                             Toast.makeText(context, invalidDateTimeText, Toast.LENGTH_SHORT).show()
-                            return@Button
+                            return@ThemeOutlinedButton
                         }
                         
                         if (endTime <= startTime) {
                             Toast.makeText(context, endBeforeStartText, Toast.LENGTH_SHORT).show()
-                            return@Button
+                            return@ThemeOutlinedButton
                         }
                         
-                        onSave(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees)
+                        onSave(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType)
                     }
                 },
-                enabled = isValid && !isCreating
-            ) {
-                if (isCreating) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(Strings.save)
-                }
-            }
+                text = Strings.save,
+                enabled = isValid,
+                isLoading = isCreating
+            )
         },
         dismissButton = {
-            TextButton(
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = onDismiss,
+                text = Strings.cancel,
                 enabled = !isCreating
-            ) {
-                Text(Strings.cancel)
-            }
+            )
         }
     )
     
@@ -2482,7 +2919,7 @@ private fun parseDateTime(dateText: String, timeText: String): Long {
     return try {
         // НЕ устанавливаем UTC - SimpleDateFormat.parse() автоматически возвращает UTC timestamp
         val dateTimeString = "$dateText $timeText"
-        PARSE_DATE_TIME_FORMAT.parse(dateTimeString)?.time ?: 0L
+        PARSE_DATE_TIME_FORMAT.get().parse(dateTimeString)?.time ?: 0L
     } catch (e: Exception) {
         0L
     }
@@ -2492,7 +2929,10 @@ private fun parseDateTime(dateText: String, timeText: String): Long {
 @Composable
 private fun CalendarSelectionTopBar(
     selectedCount: Int,
+    showRestore: Boolean,
+    deleteIsPermanent: Boolean,
     onClearSelection: () -> Unit,
+    onRestore: () -> Unit,
     onDelete: () -> Unit
 ) {
     TopAppBar(
@@ -2503,8 +2943,22 @@ private fun CalendarSelectionTopBar(
             }
         },
         actions = {
-            IconButton(onClick = onDelete) {
-                Icon(AppIcons.Delete, Strings.delete, tint = Color.White)
+            if (showRestore) {
+                TextButton(onClick = onRestore) {
+                    Icon(AppIcons.Restore, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(Strings.restore, color = Color.White)
+                }
+            }
+            TextButton(onClick = onDelete) {
+                Icon(
+                    if (deleteIsPermanent) AppIcons.DeleteForever else AppIcons.Delete,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(Strings.delete, color = Color.White)
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -2517,4 +2971,361 @@ private fun CalendarSelectionTopBar(
             )
         )
     )
+}
+
+/**
+ * Диалог для удалённого события — восстановить или удалить навсегда
+ */
+@Composable
+private fun DeletedEventDetailDialog(
+    event: CalendarEventEntity,
+    onDismiss: () -> Unit,
+    onRestoreClick: () -> Unit,
+    onDeletePermanentlyClick: () -> Unit
+) {
+    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+    val dateTimeFormat = remember { SimpleDateFormat("d MMMM yyyy, HH:mm", Locale.getDefault()) }
+    
+    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    AppIcons.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = event.subject.ifBlank { if (isRussian) "Без названия" else "No title" },
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+                )
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    text = if (isRussian) "Событие в корзине" else "Event in trash",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Время начала — окончания
+                Text(
+                    text = "${dateTimeFormat.format(Date(event.startTime))} — ${dateTimeFormat.format(Date(event.endTime))}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                // Место
+                if (event.location.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = event.location,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                // Описание
+                if (event.body.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = event.body.replace(HTML_TAG_REGEX, "").trim(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 10,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Кнопки: Восстановить / Удалить навсегда
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = onRestoreClick,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = LocalColorTheme.current.gradientStart
+                        )
+                    ) {
+                        Icon(
+                            AppIcons.Restore,
+                            contentDescription = if (isRussian) "Восстановить" else "Restore",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    
+                    OutlinedButton(
+                        onClick = onDeletePermanentlyClick,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
+                        ),
+                        border = BorderStroke(1.dp, com.dedovmosol.iwomail.ui.theme.AppColors.delete)
+                    ) {
+                        Icon(
+                            AppIcons.DeleteForever,
+                            contentDescription = if (isRussian) "Удалить навсегда" else "Delete permanently",
+                            modifier = Modifier.size(20.dp),
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {}
+    )
+}
+
+/**
+ * Список вложений события календаря с возможностью скачивания.
+ * Поведение аналогично вложениям писем (EmailDetailScreen):
+ * - Tap: скачать и открыть
+ * - Long press: меню "Сохранить" / "Сохранить как"
+ * - Дефолтный путь: Downloads/IwoMail/Calendar/
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun CalendarAttachmentsList(
+    attachmentsJson: String,
+    accountId: Long,
+    calendarRepo: CalendarRepository
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+    
+    val attachments = remember(attachmentsJson) {
+        try {
+            val jsonArray = org.json.JSONArray(attachmentsJson)
+            (0 until jsonArray.length()).map { i ->
+                val obj = jsonArray.getJSONObject(i)
+                CalendarAttachmentInfo(
+                    name = obj.optString("name", "attachment"),
+                    fileReference = obj.optString("fileReference", ""),
+                    size = obj.optLong("size", 0),
+                    isInline = obj.optBoolean("isInline", false)
+                )
+            }.filter { it.fileReference.isNotBlank() && !it.isInline }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+    
+    if (attachments.isEmpty()) return
+    
+    // Save As: системный файл-пикер
+    var pendingSaveAsAtt by remember { mutableStateOf<CalendarAttachmentInfo?>(null) }
+    var downloadingRef by remember { mutableStateOf<String?>(null) }
+    val saveAsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        val att = pendingSaveAsAtt ?: return@rememberLauncherForActivityResult
+        pendingSaveAsAtt = null
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            downloadingRef = att.fileReference
+            try {
+                when (val result = calendarRepo.downloadCalendarAttachment(accountId, att.fileReference)) {
+                    is EasResult.Success -> {
+                        withContext(Dispatchers.IO) {
+                            context.contentResolver.openOutputStream(uri)?.use { out -> out.write(result.data) }
+                        }
+                        Toast.makeText(context, if (isRussian) "Файл сохранён" else "File saved", Toast.LENGTH_SHORT).show()
+                    }
+                    is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+            } finally {
+                downloadingRef = null
+            }
+        }
+    }
+    
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                AppIcons.Attachment,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isRussian) "Вложения (${attachments.size})" else "Attachments (${attachments.size})",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        
+        attachments.forEach { att ->
+            val isDownloading = downloadingRef == att.fileReference
+            var showSaveMenu by remember { mutableStateOf(false) }
+            
+            Box {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                        .combinedClickable(
+                            enabled = !isDownloading,
+                            onClick = {
+                                // Tap: скачать и открыть файл
+                                downloadingRef = att.fileReference
+                                scope.launch {
+                                    try {
+                                        when (val result = calendarRepo.downloadCalendarAttachment(accountId, att.fileReference)) {
+                                            is EasResult.Success -> {
+                                                val safeFileName = att.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                                                val uri = withContext(Dispatchers.IO) {
+                                                    val contentValues = android.content.ContentValues().apply {
+                                                        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
+                                                        put(android.provider.MediaStore.Downloads.MIME_TYPE,
+                                                            android.webkit.MimeTypeMap.getSingleton()
+                                                                .getMimeTypeFromExtension(java.io.File(safeFileName).extension) ?: "application/octet-stream")
+                                                        put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/IwoMail/Calendar")
+                                                    }
+                                                    val fileUri = context.contentResolver.insert(
+                                                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
+                                                    )
+                                                    fileUri?.let { u ->
+                                                        context.contentResolver.openOutputStream(u)?.use { out -> out.write(result.data) }
+                                                    }
+                                                    fileUri
+                                                }
+                                                // Открываем файл
+                                                if (uri != null) {
+                                                    try {
+                                                        val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                                                            .getMimeTypeFromExtension(java.io.File(att.name).extension) ?: "application/octet-stream"
+                                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                                            setDataAndType(uri, mimeType)
+                                                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                        }
+                                                        context.startActivity(intent)
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, if (isRussian) "Сохранено в Downloads/IwoMail/Calendar/" else "Saved to Downloads/IwoMail/Calendar/", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                            is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, if (isRussian) "Ошибка скачивания" else "Download error", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        downloadingRef = null
+                                    }
+                                }
+                            },
+                            onLongClick = { showSaveMenu = true }
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            AppIcons.fileIconFor(att.name),
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = Color.Unspecified
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = att.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (att.size > 0) {
+                                val sizeStr = when {
+                                    att.size < 1024 -> "${att.size} B"
+                                    att.size < 1024 * 1024 -> "${att.size / 1024} KB"
+                                    else -> String.format("%.1f MB", att.size / (1024.0 * 1024.0))
+                                }
+                                Text(
+                                    text = sizeStr,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (isDownloading) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                AppIcons.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                
+                DropdownMenu(
+                    expanded = showSaveMenu,
+                    onDismissRequest = { showSaveMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(com.dedovmosol.iwomail.ui.Strings.save) },
+                        onClick = {
+                            showSaveMenu = false
+                            downloadingRef = att.fileReference
+                            scope.launch {
+                                try {
+                                    when (val result = calendarRepo.downloadCalendarAttachment(accountId, att.fileReference)) {
+                                        is EasResult.Success -> {
+                                            val safeFileName = att.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                                            withContext(Dispatchers.IO) {
+                                                val contentValues = android.content.ContentValues().apply {
+                                                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
+                                                    put(android.provider.MediaStore.Downloads.MIME_TYPE,
+                                                        android.webkit.MimeTypeMap.getSingleton()
+                                                            .getMimeTypeFromExtension(java.io.File(safeFileName).extension) ?: "application/octet-stream")
+                                                    put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/IwoMail/Calendar")
+                                                }
+                                                val uri = context.contentResolver.insert(
+                                                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
+                                                )
+                                                uri?.let { context.contentResolver.openOutputStream(it)?.use { out -> out.write(result.data) } }
+                                            }
+                                            Toast.makeText(context, if (isRussian) "Сохранено в Downloads/IwoMail/Calendar/" else "Saved to Downloads/IwoMail/Calendar/", Toast.LENGTH_SHORT).show()
+                                        }
+                                        is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                                } finally {
+                                    downloadingRef = null
+                                }
+                            }
+                        },
+                        leadingIcon = { Icon(AppIcons.Download, contentDescription = null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(com.dedovmosol.iwomail.ui.Strings.saveAs) },
+                        onClick = {
+                            showSaveMenu = false
+                            pendingSaveAsAtt = att
+                            saveAsLauncher.launch(att.name)
+                        },
+                        leadingIcon = { Icon(AppIcons.Folder, contentDescription = null) }
+                    )
+                }
+            }
+        }
+    }
 }

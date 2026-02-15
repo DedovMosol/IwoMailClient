@@ -7,11 +7,11 @@
     android:minResizeWidth="110dp"
     android:minResizeHeight="100dp"
     android:maxResizeWidth="530dp"
-    android:maxResizeHeight="400dp"
+    android:maxResizeHeight="600dp"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/widget_loading"
     android:previewLayout="@layout/widget_preview"
     android:description="@string/widget_description"
-    android:widgetFeatures="reconfigurable|configuration_optional" />
+    android:configure="com.dedovmosol.iwomail.widget.WidgetConfigActivity" />

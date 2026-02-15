@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 31,
+    version = 34,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -116,6 +116,38 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
         
+        private val MIGRATION_31_32 = object : Migration(31, 32) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Добавляем поле isDeleted для событий календаря (корзина)
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN isDeleted INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_isDeleted ON calendar_events(isDeleted)")
+            }
+        }
+        
+        private val MIGRATION_33_34 = object : Migration(33, 34) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Режим черновиков per-account: SERVER (по умолчанию) или LOCAL
+                db.execSQL("ALTER TABLE accounts ADD COLUMN draftMode TEXT NOT NULL DEFAULT 'SERVER'")
+            }
+        }
+        
+        private val MIGRATION_32_33 = object : Migration(32, 33) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Недостающие поля MS-ASCAL для полной совместимости с Exchange
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN organizerName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN uid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN timezone TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN exceptions TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN meetingStatus INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN responseRequested INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN appointmentReplyTime INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN disallowNewTimeProposal INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN onlineMeetingLink TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN hasAttachments INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN attachments TEXT NOT NULL DEFAULT ''")
+            }
+        }
+        
         private val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -124,7 +156,10 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_27_28,
             MIGRATION_28_29,
             MIGRATION_29_30,
-            MIGRATION_30_31
+            MIGRATION_30_31,
+            MIGRATION_31_32,
+            MIGRATION_32_33,
+            MIGRATION_33_34
         )
         
         fun getInstance(context: Context): MailDatabase {
@@ -245,8 +280,15 @@ data class AccountEntity(
     val pinnedCertificateValidFrom: Long? = null,  // Дата выдачи
     val pinnedCertificateValidTo: Long? = null,  // Дата истечения
     val certificatePinningEnabled: Boolean = true,  // Можно отключить через UI
-    val certificatePinningFailCount: Int = 0  // Счётчик ошибок подряд
+    val certificatePinningFailCount: Int = 0,  // Счётчик ошибок подряд
+    // Режим черновиков: SERVER (на сервере Exchange) или LOCAL (только в локальной БД)
+    val draftMode: String = DraftMode.SERVER.name
 )
+
+enum class DraftMode {
+    SERVER, // Черновики сохраняются на сервере Exchange (EWS/EAS)
+    LOCAL   // Черновики сохраняются только локально в БД
+}
 
 @Entity(
     tableName = "folders",

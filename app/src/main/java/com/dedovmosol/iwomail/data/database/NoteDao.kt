@@ -37,6 +37,9 @@ interface NoteDao {
     
     @Query("SELECT COUNT(*) FROM notes WHERE accountId = :accountId AND isDeleted = 0")
     suspend fun getNotesCountSync(accountId: Long): Int
+
+    @Query("SELECT COUNT(*) FROM notes WHERE isDeleted = 0")
+    suspend fun getNotesCountGlobal(): Int
     
     @Query("""
         SELECT * FROM notes 

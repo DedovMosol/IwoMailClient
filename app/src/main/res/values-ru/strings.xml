@@ -25,4 +25,13 @@
     <string name="widget_add_account">Добавьте аккаунт</string>
     <string name="widget_search_mail">Поиск в почте</string>
     <string name="widget_calendar">Календарь</string>
+    <string name="widget_tasks">Задачи</string>
+    <string name="widget_no_new_mail">Нет новых писем</string>
+    <string name="widget_notes">Заметки</string>
+    <string name="widget_unread">непрочитанных</string>
+    <string name="widget_synced_ago">Обновлено %s назад</string>
+    <string name="widget_synced_just_now">Только что</string>
+    <string name="widget_no_events_today">Нет событий на сегодня</string>
+    <string name="widget_no_tasks">Нет задач на сегодня</string>
+    <string name="widget_no_notes">Нет заметок</string>
 </resources>

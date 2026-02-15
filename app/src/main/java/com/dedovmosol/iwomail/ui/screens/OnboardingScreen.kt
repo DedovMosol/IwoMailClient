@@ -80,6 +80,8 @@ fun OnboardingScreen(
     var selectedLanguage by remember { mutableStateOf(settingsRepo.getLanguageSync()) }
     var selectedAnimations by remember { mutableStateOf(settingsRepo.getAnimationsEnabledSync()) }
     var selectedTheme by remember { mutableStateOf(settingsRepo.getColorThemeSync()) }
+    var selectedScrollbarColor by remember { mutableStateOf(settingsRepo.getScrollbarColorSync()) }
+    var selectedDraftMode by remember { mutableStateOf(settingsRepo.getDefaultDraftModeSync()) }
     
     // Определяем русский ли язык
     val isRussian = selectedLanguage == AppLanguage.RUSSIAN.code
@@ -106,8 +108,8 @@ fun OnboardingScreen(
         )
     )
     
-    // Добавляем слайды выбора языка, анимаций и темы в начало для первого запуска
-    val totalPages = if (isFirstLaunch) pages.size + 3 else pages.size
+    // Добавляем слайды выбора языка, анимаций, темы и режима черновиков в начало для первого запуска
+    val totalPages = if (isFirstLaunch) pages.size + 4 else pages.size
     val pagerState = rememberPagerState(pageCount = { totalPages })
     
     Box(
@@ -171,13 +173,33 @@ fun OnboardingScreen(
                                     selectedTheme = theme
                                     scope.launch {
                                         settingsRepo.setColorTheme(theme)
+                                        com.dedovmosol.iwomail.widget.updateMailWidget(context)
+                                    }
+                                },
+                                selectedScrollbarColor = selectedScrollbarColor,
+                                onScrollbarColorSelected = { color ->
+                                    selectedScrollbarColor = color
+                                    scope.launch {
+                                        settingsRepo.setScrollbarColor(color)
                                     }
                                 },
                                 isRussian = isRussian,
                                 animationsEnabled = selectedAnimations
                             )
+                            3 -> DraftModeSelectionPage(
+                                selectedDraftMode = selectedDraftMode,
+                                onDraftModeSelected = { mode ->
+                                    selectedDraftMode = mode
+                                    scope.launch {
+                                        settingsRepo.setDefaultDraftMode(mode)
+                                    }
+                                },
+                                colorTheme = colorTheme,
+                                isRussian = isRussian,
+                                animationsEnabled = selectedAnimations
+                            )
                             else -> {
-                                val pageData = pages[page - 3]
+                                val pageData = pages[page - 4]
                                 FeaturePage(
                                     page = pageData,
                                     isRussian = isRussian,
@@ -564,6 +586,8 @@ private fun AnimationsSelectionPage(
 private fun ThemeSelectionPage(
     selectedTheme: String,
     onThemeSelected: (String) -> Unit,
+    selectedScrollbarColor: String = "blue",
+    onScrollbarColorSelected: (String) -> Unit = {},
     isRussian: Boolean,
     animationsEnabled: Boolean
 ) {
@@ -701,6 +725,230 @@ private fun ThemeSelectionPage(
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 20.dp))
+        
+        // Выбор цвета скроллбара
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(500, delayMillis = 500)) + slideInVertically(
+                initialOffsetY = { 50 },
+                animationSpec = tween(500, delayMillis = 500)
+            )
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = if (isRussian) "Цвет скроллбара" else "Scrollbar color",
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                androidx.compose.foundation.lazy.LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp)
+                ) {
+                    items(com.dedovmosol.iwomail.ui.components.ScrollbarColor.entries.size) { index ->
+                        val sbColor = com.dedovmosol.iwomail.ui.components.ScrollbarColor.entries[index]
+                        val isSelected = sbColor.code == selectedScrollbarColor
+                        val circleSize = if (isSelected) 40.dp else 32.dp
+                        Box(
+                            modifier = Modifier
+                                .size(circleSize)
+                                .clip(CircleShape)
+                                .background(sbColor.color)
+                                .clickable { onScrollbarColorSelected(sbColor.code) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = AppIcons.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Страница выбора режима черновиков
+ */
+@Composable
+private fun DraftModeSelectionPage(
+    selectedDraftMode: String,
+    onDraftModeSelected: (String) -> Unit,
+    colorTheme: AppColorTheme,
+    isRussian: Boolean,
+    animationsEnabled: Boolean
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        visible = true
+    }
+    
+    val configuration = LocalConfiguration.current
+    val isCompactHeight = configuration.screenHeightDp < 500 ||
+        (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+            configuration.smallestScreenWidthDp < 600)
+    val isSmallScreen = configuration.screenHeightDp < 600
+    val iconSize = if (isCompactHeight) 72.dp else if (isSmallScreen) 80.dp else 120.dp
+    val iconInnerSize = if (isCompactHeight) 36.dp else if (isSmallScreen) 40.dp else 60.dp
+    val spacerHeight = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(
+                horizontal = 32.dp,
+                vertical = if (isCompactHeight) 12.dp else if (isSmallScreen) 16.dp else 32.dp
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = if (isCompactHeight) Arrangement.Top else Arrangement.Center
+    ) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(500)) + scaleIn(
+                initialScale = 0.5f,
+                animationSpec = tween(500)
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(iconSize)
+                    .graphicsLayer {
+                        clip = true
+                        shape = CircleShape
+                    }
+                    .background(
+                        brush = Brush.linearGradient(
+                            colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = AppIcons.Drafts,
+                    contentDescription = null,
+                    modifier = Modifier.size(iconInnerSize),
+                    tint = Color.White
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(spacerHeight))
+        
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(500, delayMillis = 200)) + slideInVertically(
+                initialOffsetY = { 50 },
+                animationSpec = tween(500, delayMillis = 200)
+            )
+        ) {
+            Text(
+                text = OnboardingStrings.draftModeTitle(isRussian),
+                style = if (isSmallScreen) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(if (isCompactHeight) 8.dp else 16.dp))
+        
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(500, delayMillis = 300)) + slideInVertically(
+                initialOffsetY = { 50 },
+                animationSpec = tween(500, delayMillis = 300)
+            )
+        ) {
+            Text(
+                text = OnboardingStrings.draftModeDescription(isRussian),
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(spacerHeight))
+        
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(500, delayMillis = 400)) + slideInVertically(
+                initialOffsetY = { 50 },
+                animationSpec = tween(500, delayMillis = 400)
+            )
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                val isServer = selectedDraftMode == "SERVER"
+                OutlinedButton(
+                    onClick = { onDraftModeSelected("SERVER") },
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (isServer) colorTheme.gradientStart.copy(alpha = 0.1f) else Color.Transparent
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = 2.dp,
+                        color = if (isServer) colorTheme.gradientStart else MaterialTheme.colorScheme.outline
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = OnboardingStrings.draftModeServer(isRussian),
+                            fontSize = 16.sp,
+                            fontWeight = if (isServer) FontWeight.Bold else FontWeight.Normal
+                        )
+                        Text(
+                            text = OnboardingStrings.draftModeServerDesc(isRussian),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+                OutlinedButton(
+                    onClick = { onDraftModeSelected("LOCAL") },
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (!isServer) colorTheme.gradientStart.copy(alpha = 0.1f) else Color.Transparent
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = 2.dp,
+                        color = if (!isServer) colorTheme.gradientStart else MaterialTheme.colorScheme.outline
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = OnboardingStrings.draftModeLocal(isRussian),
+                            fontSize = 16.sp,
+                            fontWeight = if (!isServer) FontWeight.Bold else FontWeight.Normal
+                        )
+                        Text(
+                            text = OnboardingStrings.draftModeLocalDesc(isRussian),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }

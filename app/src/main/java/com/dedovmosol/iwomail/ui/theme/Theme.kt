@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.dedovmosol.iwomail.ui.LocalFontScale
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import com.dedovmosol.iwomail.ui.utils.rememberWobble
 
@@ -38,52 +39,31 @@ enum class AppColorTheme(
 ) {
     PURPLE(
         code = "purple",
-        primaryLight = Color(0xFF7C4DFF),
-        primaryDark = Color(0xFFB388FF),
-        gradientStart = Color(0xFF7C4DFF),
-        gradientEnd = Color(0xFF448AFF)
+        primaryLight = Color(0xFF6200EE),
+        primaryDark = Color(0xFFBB86FC),
+        gradientStart = Color(0xFF5C00D4),
+        gradientEnd = Color(0xFF3700B3)
     ),
     BLUE(
         code = "blue",
-        primaryLight = Color(0xFF1976D2),
+        primaryLight = Color(0xFF1565C0),
         primaryDark = Color(0xFF90CAF9),
-        gradientStart = Color(0xFF1976D2),
-        gradientEnd = Color(0xFF42A5F5)
-    ),
-    RED(
-        code = "red",
-        primaryLight = Color(0xFFD32F2F),
-        primaryDark = Color(0xFFEF9A9A),
-        gradientStart = Color(0xFFD32F2F),
-        gradientEnd = Color(0xFFFF5252)
+        gradientStart = Color(0xFF1565C0),
+        gradientEnd = Color(0xFF0D47A1)
     ),
     YELLOW(
         code = "yellow",
-        primaryLight = Color(0xFFF9A825),
-        primaryDark = Color(0xFFFFF59D),
-        gradientStart = Color(0xFFF9A825),
-        gradientEnd = Color(0xFFFFD54F)
-    ),
-    ORANGE(
-        code = "orange",
-        primaryLight = Color(0xFFFF6D00),
-        primaryDark = Color(0xFFFFAB91),
-        gradientStart = Color(0xFFFF6D00),
-        gradientEnd = Color(0xFFFFAB40)
+        primaryLight = Color(0xFFC77700),
+        primaryDark = Color(0xFFFFCC80),
+        gradientStart = Color(0xFFC77700),
+        gradientEnd = Color(0xFFA85E00)
     ),
     GREEN(
         code = "green",
-        primaryLight = Color(0xFF388E3C),
+        primaryLight = Color(0xFF2E7D32),
         primaryDark = Color(0xFFA5D6A7),
-        gradientStart = Color(0xFF388E3C),
-        gradientEnd = Color(0xFF66BB6A)
-    ),
-    PINK(
-        code = "pink",
-        primaryLight = Color(0xFFE91E63),
-        primaryDark = Color(0xFFF48FB1),
-        gradientStart = Color(0xFFE91E63),
-        gradientEnd = Color(0xFFFF4081)
+        gradientStart = Color(0xFF2E7D32),
+        gradientEnd = Color(0xFF1B5E20)
     );
     
     companion object {
@@ -142,6 +122,7 @@ fun ExchangeMailTheme(
     fontScale: Float = 1.0f,
     colorTheme: AppColorTheme = AppColorTheme.PURPLE,
     animationsEnabled: Boolean = true,
+    scrollbarColor: com.dedovmosol.iwomail.ui.components.ScrollbarColor = com.dedovmosol.iwomail.ui.components.ScrollbarColor.BLUE,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -183,7 +164,8 @@ fun ExchangeMailTheme(
         LocalDensity provides scaledDensity,
         LocalFontScale provides fontScale,
         LocalColorTheme provides colorTheme,
-        LocalAnimationsEnabled provides animationsEnabled
+        LocalAnimationsEnabled provides animationsEnabled,
+        com.dedovmosol.iwomail.ui.components.LocalScrollbarColor provides scrollbarColor
     ) {
         MaterialTheme(
             colorScheme = colorScheme,
@@ -258,79 +240,127 @@ fun ScaledAlertDialog(
                 color = containerColor,
                 tonalElevation = tonalElevation
             ) {
-                val contentModifier = if (scrollable) {
-                    androidx.compose.ui.Modifier
-                        .padding(24.dp)
-                        .verticalScroll(rememberScrollState())
+                if (scrollable) {
+                    // Скроллируемый режим: контент в Box со скроллбаром, кнопки фиксированы внизу
+                    val dialogScrollState = rememberScrollState()
+                    Column(modifier = androidx.compose.ui.Modifier.padding(24.dp)) {
+                        // Иконка (вне скролла)
+                        icon?.let {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CompositionLocalProvider(LocalContentColor provides iconContentColor) {
+                                    it()
+                                }
+                            }
+                        }
+                        
+                        // Заголовок (вне скролла)
+                        title?.let {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp),
+                                contentAlignment = if (icon != null) Alignment.Center else Alignment.CenterStart
+                            ) {
+                                CompositionLocalProvider(LocalContentColor provides titleContentColor) {
+                                    ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
+                                        it()
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Скроллируемый текст с видимым скроллбаром
+                        text?.let {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f, fill = false)
+                                    .padding(bottom = 24.dp)
+                            ) {
+                                Column(
+                                    modifier = androidx.compose.ui.Modifier
+                                        .fillMaxWidth()
+                                        .padding(end = 12.dp)
+                                        .verticalScroll(dialogScrollState)
+                                ) {
+                                    CompositionLocalProvider(LocalContentColor provides textContentColor) {
+                                        ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
+                                            it()
+                                        }
+                                    }
+                                }
+                                ScrollColumnScrollbar(dialogScrollState)
+                            }
+                        }
+                        
+                        // Кнопки по разным сторонам (фиксированы внизу)
+                        Row(
+                            modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                            horizontalArrangement = if (dismissButton != null) Arrangement.SpaceBetween else Arrangement.Center
+                        ) {
+                            if (dismissButton != null) {
+                                dismissButton()
+                            }
+                            confirmButton()
+                        }
+                    }
                 } else {
-                    androidx.compose.ui.Modifier.padding(24.dp)
-                }
-                Column(
-                    modifier = contentModifier
-                ) {
-                    // Иконка
-                    icon?.let {
-                        Box(
-                            modifier = androidx.compose.ui.Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CompositionLocalProvider(LocalContentColor provides iconContentColor) {
-                                it()
-                            }
-                        }
-                    }
-                    
-                    // Заголовок
-                    title?.let {
-                        Box(
-                            modifier = androidx.compose.ui.Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 16.dp),
-                            contentAlignment = if (icon != null) Alignment.Center else Alignment.CenterStart
-                        ) {
-                            CompositionLocalProvider(LocalContentColor provides titleContentColor) {
-                                ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
+                    // Нескроллируемый режим
+                    Column(modifier = androidx.compose.ui.Modifier.padding(24.dp)) {
+                        icon?.let {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CompositionLocalProvider(LocalContentColor provides iconContentColor) {
                                     it()
                                 }
                             }
                         }
-                    }
-                    
-                    // Текст: weight(1f, false) только в нескроллируемом режиме,
-                    // в скроллируемом Column weight не работает (бесконечная высота)
-                    text?.let {
-                        val textBoxModifier = if (scrollable) {
-                            androidx.compose.ui.Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 24.dp)
-                        } else {
-                            androidx.compose.ui.Modifier
-                                .fillMaxWidth()
-                                .weight(1f, fill = false)
-                                .padding(bottom = 24.dp)
-                        }
-                        Box(modifier = textBoxModifier) {
-                            CompositionLocalProvider(LocalContentColor provides textContentColor) {
-                                ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
-                                    it()
+                        title?.let {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp),
+                                contentAlignment = if (icon != null) Alignment.Center else Alignment.CenterStart
+                            ) {
+                                CompositionLocalProvider(LocalContentColor provides titleContentColor) {
+                                    ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
+                                        it()
+                                    }
                                 }
                             }
                         }
-                    }
-                    
-                    // Кнопки по разным сторонам
-                    Row(
-                        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        if (dismissButton != null) {
-                            dismissButton()
-                        } else {
-                            Spacer(modifier = androidx.compose.ui.Modifier.width(1.dp))
+                        text?.let {
+                            Box(
+                                modifier = androidx.compose.ui.Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f, fill = false)
+                                    .padding(bottom = 24.dp)
+                            ) {
+                                CompositionLocalProvider(LocalContentColor provides textContentColor) {
+                                    ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
+                                        it()
+                                    }
+                                }
+                            }
                         }
-                        confirmButton()
+                        Row(
+                            modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                            horizontalArrangement = if (dismissButton != null) Arrangement.SpaceBetween else Arrangement.Center
+                        ) {
+                            if (dismissButton != null) {
+                                dismissButton()
+                            }
+                            confirmButton()
+                        }
                     }
                 }
             }
@@ -372,7 +402,7 @@ fun StyledAlertDialog(
     androidx.compose.runtime.LaunchedEffect(Unit) { visible = true }
     
     val scale by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (visible && animationsEnabled) 1f else 0.8f,
+        targetValue = if (animationsEnabled) { if (visible) 1f else 0.8f } else 1f,
         animationSpec = androidx.compose.animation.core.spring(
             dampingRatio = 0.6f,
             stiffness = 400f
@@ -380,7 +410,7 @@ fun StyledAlertDialog(
         label = "scale"
     )
     val alpha by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
+        targetValue = if (animationsEnabled) { if (visible) 1f else 0f } else 1f,
         animationSpec = androidx.compose.animation.core.tween(200),
         label = "alpha"
     )
@@ -471,16 +501,11 @@ fun StyledAlertDialog(
                         // Кнопки по разным углам
                         Row(
                             modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                            horizontalArrangement = if (dismissButton != null) androidx.compose.foundation.layout.Arrangement.SpaceBetween else androidx.compose.foundation.layout.Arrangement.Center
                         ) {
-                            // Dismiss кнопка слева
                             if (dismissButton != null) {
                                 dismissButton()
-                            } else {
-                                Spacer(modifier = androidx.compose.ui.Modifier.width(1.dp))
                             }
-                            
-                            // Confirm кнопка справа
                             confirmButton()
                         }
                     }
@@ -585,9 +610,9 @@ Box(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(onClick = onDismiss) { Text(dismissText) }
+                        ThemeOutlinedButton(onClick = onDismiss, text = dismissText)
                         Spacer(modifier = androidx.compose.ui.Modifier.width(8.dp))
-                        TextButton(onClick = onConfirm) { Text(confirmText) }
+                        ThemeOutlinedButton(onClick = onConfirm, text = confirmText)
                     }
 
                     Spacer(modifier = androidx.compose.ui.Modifier.height(buttonTopSpacing))
@@ -631,32 +656,76 @@ fun SimpleTimeInputDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(timeState.hour, timeState.minute) }) {
-                Text(confirmText)
-            }
+            ThemeOutlinedButton(
+                onClick = { onConfirm(timeState.hour, timeState.minute) },
+                text = confirmText
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(dismissText) }
+            ThemeOutlinedButton(onClick = onDismiss, text = dismissText)
         }
     )
 }
 
 /**
- * Градиентная кнопка для диалогов
+ * Единые цвета иконок и действий приложения (DRY — один источник правды)
+ */
+object AppColors {
+    // Папки
+    val folder = Color(0xFFE6A800)          // Папки — жёлтый/янтарный
+    val inbox = Color(0xFF1565C0)           // Входящие — синий
+    val drafts = Color(0xFFE6A800)          // Черновики — янтарный
+    val trash = Color(0xFFE53935)           // Удалённые — красный
+    val sent = Color(0xFF5E35B1)            // Отправленные — фиолетовый
+    val outbox = Color(0xFF00897B)          // Исходящие — бирюзовый
+    val spam = Color(0xFFE53935)            // Спам — красный
+    
+    // Специальные разделы
+    val contacts = Color(0xFF1565C0)        // Контакты — синий
+    val notes = Color(0xFFFF9800)           // Заметки — оранжевый
+    val calendar = Color(0xFF4CAF50)        // Календарь — зелёный
+    val tasks = Color(0xFF9C27B0)           // Задачи — фиолетовый
+    val favorites = Color(0xFFFFB300)       // Избранные — золотой
+    
+    // Утилиты
+    val settings = Color(0xFF757575)        // Настройки — серый
+    val createFolder = Color(0xFF00897B)    // Создать папку — бирюзовый
+    
+    // Действия
+    val delete = Color(0xFFF44336)          // Удаление — красный
+
+    /**
+     * Цвет иконки папки по типу (FolderEntity.type)
+     */
+    fun folderTint(type: Int): Color = when (type) {
+        2 -> inbox
+        3 -> drafts
+        4 -> trash
+        5 -> sent
+        6 -> outbox
+        11 -> spam
+        else -> folder
+    }
+}
+
+/**
+ * Кнопка с градиентной заливкой по цвету темы (для Сохранить/Закрыть/Отмена и т.д.)
+ * Единый компонент — все тематические кнопки управляются из одного места.
  */
 @Composable
-fun GradientDialogButton(
+fun ThemeOutlinedButton(
     onClick: () -> Unit,
     text: String,
     modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    isLoading: Boolean = false
 ) {
     val colorTheme = LocalColorTheme.current
-    
+    val isActive = enabled && !isLoading
     androidx.compose.material3.Button(
         onClick = onClick,
         modifier = modifier,
-        enabled = enabled,
+        enabled = isActive,
         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
             containerColor = Color.Transparent,
             disabledContainerColor = Color.Transparent
@@ -666,13 +735,16 @@ fun GradientDialogButton(
         Box(
             modifier = androidx.compose.ui.Modifier
                 .background(
-                    brush = if (enabled) {
+                    brush = if (isActive) {
                         androidx.compose.ui.graphics.Brush.horizontalGradient(
                             colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
                         )
                     } else {
                         androidx.compose.ui.graphics.Brush.horizontalGradient(
-                            colors = listOf(Color.Gray, Color.Gray)
+                            colors = listOf(
+                                colorTheme.gradientStart.copy(alpha = 0.38f),
+                                colorTheme.gradientEnd.copy(alpha = 0.38f)
+                            )
                         )
                     },
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
@@ -680,11 +752,45 @@ fun GradientDialogButton(
                 .padding(horizontal = 20.dp, vertical = 10.dp),
             contentAlignment = androidx.compose.ui.Alignment.Center
         ) {
-            Text(
-                text = text,
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge
-            )
+            if (isLoading) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = androidx.compose.ui.Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White
+                )
+            } else {
+                Text(
+                    text = text,
+                    color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
         }
     }
 }
+
+/**
+ * Кнопка удаления — белый текст на красном фоне
+ */
+@Composable
+fun DeleteButton(
+    onClick: () -> Unit,
+    text: String,
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    enabled: Boolean = true
+) {
+    androidx.compose.material3.Button(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+            containerColor = AppColors.delete,
+            contentColor = Color.White,
+            disabledContainerColor = AppColors.delete.copy(alpha = 0.38f),
+            disabledContentColor = Color.White.copy(alpha = 0.38f)
+        )
+    ) {
+        Text(text, style = MaterialTheme.typography.labelLarge)
+    }
+}
+

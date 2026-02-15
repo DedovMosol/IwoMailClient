@@ -107,8 +107,9 @@ class ContactRepository(context: Context) {
                     is EasResult.Success -> {
                         val serverContacts = result.data
                         
-                        // Получаем существующие Exchange контакты
+                        // Получаем существующие Exchange контакты (только с _exchange_ prefix, не GAL)
                         val existingContacts = contactDao.getExchangeContactsList(accountId)
+                            .filter { it.id.startsWith("${accountId}_exchange_") }
                         val existingEmails = existingContacts.map { it.email.lowercase() }.toSet()
                         
                         // Определяем какие контакты удалены на сервере
@@ -210,8 +211,9 @@ class ContactRepository(context: Context) {
                     return@withContext EasResult.Success(0)
                 }
                 
-                // Получаем существующие Exchange контакты
+                // Получаем существующие GAL контакты (только с _gal_ prefix, не _exchange_)
                 val existingContacts = contactDao.getExchangeContactsList(accountId)
+                    .filter { it.id.startsWith("${accountId}_gal_") }
                 val existingEmails = existingContacts.map { it.email.lowercase() }.toSet()
                 
                 // Определяем какие контакты удалены на сервере
@@ -224,9 +226,20 @@ class ContactRepository(context: Context) {
                     contactDao.deleteById(contactId)
                 }
                 
-                // Добавляем/обновляем контакты с сервера
+                // Удаляем себя из БД если уже был сохранён ранее
+                if (ownEmail.isNotBlank()) {
+                    val selfContactId = "${accountId}_gal_${stableHash(ownEmail)}"
+                    contactDao.deleteById(selfContactId)
+                }
+                
+                // Добавляем/обновляем контакты с сервера (исключая себя)
+                val ownDisplayName = account?.displayName?.lowercase() ?: ""
                 val contactEntities = allContacts.mapNotNull { galContact ->
                     if (galContact.email.isBlank()) return@mapNotNull null
+                    // Фильтруем себя по email ИЛИ по displayName
+                    val emailLower = galContact.email.lowercase()
+                    if (ownEmail.isNotBlank() && emailLower == ownEmail) return@mapNotNull null
+                    if (ownDisplayName.isNotBlank() && galContact.displayName.lowercase() == ownDisplayName) return@mapNotNull null
                     ContactEntity(
                         id = "${accountId}_gal_${stableHash(galContact.email)}",
                         accountId = accountId,
@@ -262,6 +275,15 @@ class ContactRepository(context: Context) {
             } catch (e: Exception) {
                 EasResult.Error(e.message ?: RepositoryErrors.GAL_SYNC_ERROR)
             }
+        }
+    }
+    
+    // === Проверка дубликатов ===
+    
+    suspend fun findLocalDuplicate(accountId: Long, email: String): ContactEntity? {
+        if (email.isBlank()) return null
+        return withContext(Dispatchers.IO) {
+            contactDao.findLocalByEmail(accountId, email)
         }
     }
     

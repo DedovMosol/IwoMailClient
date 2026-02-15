@@ -194,8 +194,9 @@ class OutboxWorker(
             saveOutboxLocked(applicationContext, failedEmails)
         }
         
-        // Показываем уведомление если что-то отправилось
+        // Показываем уведомление и воспроизводим звук если что-то отправилось
         if (successCount > 0) {
+            com.dedovmosol.iwomail.util.SoundPlayer.playSendSound(applicationContext)
             showNotification(successCount)
             
             // Синхронизируем папку "Отправленные" для каждого аккаунта,

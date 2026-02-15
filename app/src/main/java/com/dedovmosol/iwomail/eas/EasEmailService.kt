@@ -402,6 +402,62 @@ class EasEmailService internal constructor(
     }
     
     /**
+     * Парсит вложения из XML (Sync или ItemOperations ответ)
+     * Поддерживает оба варианта: с namespace prefix (airsyncbase:) и без
+     */
+    private fun parseAttachmentsFromXml(xml: String): List<EasAttachment> {
+        val attachments = mutableListOf<EasAttachment>()
+        val attachmentPattern = "<(?:airsyncbase:)?Attachment>(.*?)</(?:airsyncbase:)?Attachment>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        attachmentPattern.findAll(xml).forEach { match ->
+            val attXml = match.groupValues[1]
+            val fileRef = deps.extractValue(attXml, "FileReference") ?: ""
+            val displayName = deps.extractValue(attXml, "DisplayName")
+            val contentId = deps.extractValue(attXml, "ContentId")
+            val isInline = deps.extractValue(attXml, "IsInline") == "1"
+            // КРИТИЧНО: Добавляем вложение даже без FileReference (для inline изображений в Sent Items)
+            // FileReference может быть пустым, но contentId важен для inline
+            if (displayName != null) {
+                attachments.add(EasAttachment(
+                    fileReference = fileRef,
+                    displayName = displayName,
+                    contentType = deps.extractValue(attXml, "ContentType") ?: "application/octet-stream",
+                    estimatedSize = deps.extractValue(attXml, "EstimatedDataSize")?.toLongOrNull() ?: 0,
+                    isInline = isInline,
+                    contentId = contentId
+                ))
+            }
+        }
+        return attachments
+    }
+
+    /**
+     * Получает свежие метаданные вложений конкретного письма через ItemOperations
+     * Используется при forceReload чтобы обновить FileReference без полной синхронизации папки
+     */
+    suspend fun fetchAttachmentMetadata(collectionId: String, serverId: String): EasResult<List<EasAttachment>> {
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+<ItemOperations xmlns="ItemOperations">
+    <Fetch>
+        <Store>Mailbox</Store>
+        <CollectionId xmlns="AirSync">$collectionId</CollectionId>
+        <ServerId xmlns="AirSync">$serverId</ServerId>
+        <Options>
+            <BodyPreference xmlns="AirSyncBase">
+                <Type>1</Type>
+                <TruncationSize>0</TruncationSize>
+            </BodyPreference>
+        </Options>
+    </Fetch>
+</ItemOperations>""".trimIndent()
+
+        return deps.executeEasCommand("ItemOperations", xml) { responseXml ->
+            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
+            if (status == 8) return@executeEasCommand emptyList()
+            parseAttachmentsFromXml(responseXml)
+        }
+    }
+
+    /**
      * Парсит заголовок Disposition-Notification-To из MIME данных
      */
     private fun parseMdnHeader(mimeData: String): String? {
@@ -605,7 +661,7 @@ class EasEmailService internal constructor(
 </Sync>""".trimIndent()
         
         val easResult = deps.executeEasCommand("Sync", xml) { responseXml ->
-            android.util.Log.d("EasEmailService", "markAsRead response: ${responseXml.take(500)}")
+            android.util.Log.d("EasEmailService", "markAsRead response len=${responseXml.length}")
             
             // Проверяем статус коллекции
             val collectionStatus = deps.extractValue(responseXml, "Status")
@@ -641,6 +697,55 @@ class EasEmailService internal constructor(
         }
         
         return easResult
+    }
+    
+    /**
+     * Батч-пометка нескольких писем как прочитанных/непрочитанных в одном Sync-запросе.
+     * Все письма должны быть из одной папки (одинаковый collectionId + syncKey).
+     * MS-ASCMD: "one or more Change elements can appear as a child element of Commands"
+     * Exchange 2007 SP1 (EAS 12.1) поддерживает.
+     */
+    suspend fun markAsReadBatch(
+        collectionId: String,
+        serverIds: List<String>,
+        syncKey: String,
+        read: Boolean = true
+    ): EasResult<String> {
+        if (serverIds.isEmpty()) return EasResult.Success(syncKey)
+        
+        val readValue = if (read) "1" else "0"
+        val changesXml = serverIds.joinToString("\n") { sid ->
+            """                <Change>
+                    <ServerId>$sid</ServerId>
+                    <ApplicationData>
+                        <Read xmlns="Email">$readValue</Read>
+                    </ApplicationData>
+                </Change>"""
+        }
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Sync xmlns="AirSync">
+    <Collections>
+        <Collection>
+            <SyncKey>$syncKey</SyncKey>
+            <CollectionId>$collectionId</CollectionId>
+            <GetChanges>0</GetChanges>
+            <Commands>
+$changesXml
+            </Commands>
+        </Collection>
+    </Collections>
+</Sync>""".trimIndent()
+        
+        return deps.executeEasCommand("Sync", xml) { responseXml ->
+            android.util.Log.d("EasEmailService", "markAsReadBatch(${serverIds.size}) response len=${responseXml.length}")
+            
+            val collectionStatus = deps.extractValue(responseXml, "Status")
+            if (collectionStatus != null && collectionStatus != "1") {
+                throw Exception("markAsReadBatch failed: Collection Status=$collectionStatus")
+            }
+            
+            deps.extractValue(responseXml, "SyncKey") ?: syncKey
+        }
     }
     
     /**
@@ -1360,28 +1465,8 @@ $deleteCommands
     private fun parseEmailFromXml(xml: String): EasEmail? {
         val serverId = deps.extractValue(xml, "ServerId") ?: return null
         
-        // Парсим вложения
-        val attachments = mutableListOf<EasAttachment>()
-        val attachmentPattern = "<Attachment>(.*?)</Attachment>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        attachmentPattern.findAll(xml).forEach { match ->
-            val attXml = match.groupValues[1]
-            val fileRef = deps.extractValue(attXml, "FileReference") ?: ""
-            val displayName = deps.extractValue(attXml, "DisplayName")
-            val contentId = deps.extractValue(attXml, "ContentId")
-            val isInline = deps.extractValue(attXml, "IsInline") == "1"
-            // КРИТИЧНО: Добавляем вложение даже без FileReference (для inline изображений в Sent Items)
-            // FileReference может быть пустым, но contentId важен для inline
-            if (displayName != null) {
-                attachments.add(EasAttachment(
-                    fileReference = fileRef,
-                    displayName = displayName,
-                    contentType = deps.extractValue(attXml, "ContentType") ?: "application/octet-stream",
-                    estimatedSize = deps.extractValue(attXml, "EstimatedDataSize")?.toLongOrNull() ?: 0,
-                    isInline = isInline,
-                    contentId = contentId
-                ))
-            }
-        }
+        // Парсим вложения (DRY: используем общий helper)
+        val attachments = parseAttachmentsFromXml(xml)
         
         // Извлекаем <Type> из секции <Body>, а не из полного XML,
         // т.к. тег "Type" существует в нескольких code page WBXML

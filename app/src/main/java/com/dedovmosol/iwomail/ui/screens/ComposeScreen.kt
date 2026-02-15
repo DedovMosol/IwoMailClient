@@ -114,7 +114,9 @@ private val SIMPLE_EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA
 // Предкомпилированные regex для normalizeRecipients и обработки вложений
 private val NORMALIZE_EMAIL_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
 private val NORMALIZE_BRACKET_REGEX = Regex("<([^>]+)>")
-private val SAFE_FILENAME_COMPOSE_REGEX = Regex("[^a-zA-Z0-9._-]")
+private val SAFE_FILENAME_COMPOSE_REGEX = Regex("[\\\\/:*?\"<>|]")
+private val SIGNATURE_DIV_REGEX = Regex("<div class=\"signature\">.*</div>", RegexOption.DOT_MATCHES_ALL)
+private val HTML_STRIP_REGEX = Regex("<[^>]*>")
 
 /**
  * Проверяет, содержит ли строка HTML теги
@@ -140,13 +142,17 @@ private fun extractEmailFromString(raw: String, queryHint: String? = null): Stri
 data class EmailSuggestion(
     val email: String,
     val name: String,
-    val source: SuggestionSource
+    val source: SuggestionSource,
+    val groupEmails: List<String> = emptyList(), // Для GROUP: все email участников
+    val groupName: String = "",   // Для GROUP: имя группы (для токена [name])
+    val groupColor: Int = 0        // Для GROUP: цвет группы
 )
 
 enum class SuggestionSource {
     CONTACT,    // Из локальных контактов
     HISTORY,    // Из истории писем
-    GAL         // Из корпоративной книги
+    GAL,        // Из корпоративной книги
+    GROUP       // Группа контактов (подставляет все email группы)
 }
 
 /**
@@ -211,7 +217,7 @@ fun ComposeScreen(
     // Аккаунт отправителя
     var activeAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var allAccounts by remember { mutableStateOf<List<AccountEntity>>(emptyList()) }
-    var showAccountPicker by remember { mutableStateOf(false) }
+    var showAccountPicker by rememberSaveable { mutableStateOf(false) }
     // Сохраняем ID активного аккаунта для восстановления после фона
     var savedActiveAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
     
@@ -219,6 +225,11 @@ fun ComposeScreen(
     var cc by rememberSaveable { mutableStateOf("") }
     var bcc by rememberSaveable { mutableStateOf("") }
     var subject by rememberSaveable { mutableStateOf("") }
+    
+    val isToValid = to.isBlank() || isValidRecipientList(to)
+    val isCcValid = isValidRecipientList(cc)
+    val isBccValid = isValidRecipientList(bcc)
+    val areRecipientsValid = to.isNotBlank() && isToValid && isCcValid && isBccValid
     var body by rememberSaveable { mutableStateOf("") }
     var isSending by rememberSaveable { mutableStateOf(false) }
     var showCcBcc by rememberSaveable { mutableStateOf(false) }
@@ -237,6 +248,41 @@ fun ComposeScreen(
     var requestReadReceipt by rememberSaveable { mutableStateOf(false) }
     var requestDeliveryReceipt by rememberSaveable { mutableStateOf(false) }
     var highPriority by rememberSaveable { mutableStateOf(false) }
+    
+    // Маппинг групп контактов: имя группы → список email
+    // rememberSaveable чтобы не потерять при повороте (токены [GroupName] в полях переживают поворот)
+    var groupMappingsJson by rememberSaveable { mutableStateOf("{}") }
+    var groupMappings by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
+    // Цвета групп контактов: имя группы → цвет (Int)
+    var groupColorsJson by rememberSaveable { mutableStateOf("{}") }
+    var groupColors by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    // Восстанавливаем из JSON при повороте
+    LaunchedEffect(groupMappingsJson, groupColorsJson) {
+        if (groupMappingsJson != "{}") {
+            try {
+                val json = org.json.JSONObject(groupMappingsJson)
+                val restored = mutableMapOf<String, List<String>>()
+                json.keys().forEach { key ->
+                    val arr = json.getJSONArray(key)
+                    restored[key] = (0 until arr.length()).map { arr.getString(it) }
+                }
+                groupMappings = restored
+            } catch (_: Exception) { /* ignore parse errors */ }
+        }
+        if (groupColorsJson != "{}") {
+            try {
+                val json = org.json.JSONObject(groupColorsJson)
+                val restored = mutableMapOf<String, Int>()
+                json.keys().forEach { key ->
+                    restored[key] = json.getInt(key)
+                }
+                groupColors = restored
+            } catch (_: Exception) { /* ignore parse errors */ }
+        }
+    }
+
+    // VisualTransformation для подкраски [GroupName] цветом группы
+    val groupColorTransformation = remember(groupColors) { GroupColorVisualTransformation(groupColors) }
 
     fun normalizeRecipients(value: String): String {
         val emailRegex = NORMALIZE_EMAIL_REGEX
@@ -245,6 +291,8 @@ fun ComposeScreen(
         val result = tokens.mapNotNull { token ->
             val trimmed = token.trim()
             if (trimmed.isBlank()) return@mapNotNull null
+            // Сохраняем [GroupName] токены как есть
+            if (isGroupToken(trimmed)) return@mapNotNull trimmed
             val bracket = bracketRegex.find(trimmed)?.groupValues?.get(1)
             val cleaned = (bracket ?: trimmed).replace("\"", "").trim()
             val emailMatch = emailRegex.find(cleaned)?.value
@@ -308,7 +356,7 @@ fun ComposeScreen(
     // Подписи
     var signatures by remember { mutableStateOf<List<SignatureEntity>>(emptyList()) }
     var selectedSignature by remember { mutableStateOf<SignatureEntity?>(null) }
-    var showSignaturePicker by remember { mutableStateOf(false) }
+    var showSignaturePicker by rememberSaveable { mutableStateOf(false) }
     
     // FocusRequester для полей ввода
     val toFocusRequester = remember { FocusRequester() }
@@ -336,19 +384,30 @@ fun ComposeScreen(
     
     // Меню и диалоги
     var showMenu by remember { mutableStateOf(false) }
-    var showScheduleDialog by remember { mutableStateOf(false) }
+    var showScheduleDialog by rememberSaveable { mutableStateOf(false) }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
     var isSavingDraft by remember { mutableStateOf(false) }
     
     // Диалог выбора контактов
-    var showContactPicker by remember { mutableStateOf(false) }
-    var contactPickerTarget by remember { mutableStateOf("to") } // "to", "cc", "bcc"
+    var showContactPicker by rememberSaveable { mutableStateOf(false) }
+    var contactPickerTarget by rememberSaveable { mutableStateOf("to") } // "to", "cc", "bcc"
     
     // Автодополнение email
     val contactRepo = remember { ContactRepository(context) }
     var toSuggestions by remember { mutableStateOf<List<EmailSuggestion>>(emptyList()) }
     var showToSuggestions by remember { mutableStateOf(false) }
     var toFieldFocused by remember { mutableStateOf(false) }
+    var ccFieldFocused by remember { mutableStateOf(false) }
+    var bccFieldFocused by remember { mutableStateOf(false) }
+    var subjectFieldFocused by remember { mutableStateOf(false) }
+    val isHeaderFieldFocused = toFieldFocused || ccFieldFocused || bccFieldFocused || subjectFieldFocused
+    // Сброс фокуса Cc/Bcc при скрытии полей (иначе тулбар останется скрытым навсегда)
+    LaunchedEffect(showCcBcc) {
+        if (!showCcBcc) {
+            ccFieldFocused = false
+            bccFieldFocused = false
+        }
+    }
     var suggestionSearchJob by remember { mutableStateOf<Job?>(null) }
     var suggestionJustSelected by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
@@ -413,6 +472,25 @@ fun ComposeScreen(
             }
             
             val ownEmailNormalized = normalizeEmail(ownEmail)
+            
+            // 0. Поиск по группам контактов (по имени группы)
+            withContext(Dispatchers.IO) {
+                val groups = database.contactGroupDao().getGroupsByAccountList(accountId)
+                groups.filter { it.name.lowercase().contains(queryToken) }.take(3).forEach { group ->
+                    val members = database.contactDao().getContactsByGroupList(accountId, group.id)
+                    val emails = members.mapNotNull { c -> c.email.takeIf { it.isNotBlank() } }
+                    if (emails.isNotEmpty()) {
+                        suggestions.add(EmailSuggestion(
+                            email = emails.joinToString(", "),
+                            name = "${group.name} (${emails.size})",
+                            source = SuggestionSource.GROUP,
+                            groupEmails = emails,
+                            groupName = group.name,
+                            groupColor = group.color
+                        ))
+                    }
+                }
+            }
             
             // 1. Поиск по локальным контактам (мгновенно)
             withContext(Dispatchers.IO) {
@@ -973,6 +1051,12 @@ fun ComposeScreen(
     // изменениях (поворот), который иначе обнуляет все поля и перезагружает из БД,
     // уничтожая несохранённые правки пользователя.
     var draftLoaded by rememberSaveable { mutableStateOf(false) }
+    // Начальное состояние черновика — для определения были ли изменения
+    var initialDraftTo by rememberSaveable { mutableStateOf("") }
+    var initialDraftCc by rememberSaveable { mutableStateOf("") }
+    var initialDraftSubject by rememberSaveable { mutableStateOf("") }
+    var initialDraftBody by rememberSaveable { mutableStateOf("") }
+    var initialDraftAttachments by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     
     // Загружаем данные черновика для редактирования
     LaunchedEffect(editDraftId) {
@@ -1138,6 +1222,12 @@ fun ComposeScreen(
                         } catch (_: Exception) {}
                     }
                 }
+                // Сохраняем начальное состояние для сравнения при выходе
+                initialDraftTo = to
+                initialDraftCc = cc
+                initialDraftSubject = subject
+                initialDraftBody = body
+                initialDraftAttachments = attachmentStrings
             }
         }
     }
@@ -1393,7 +1483,7 @@ fun ComposeScreen(
             if (scheduledTime != null) {
                 val delay = scheduledTime - System.currentTimeMillis()
                 if (delay > 0) {
-                    scheduleEmail(context, account.id, to, cc, bcc, subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
+                    scheduleEmail(context, account.id, expandGroupTokens(to, groupMappings), expandGroupTokens(cc, groupMappings), expandGroupTokens(bcc, groupMappings), subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
                     Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
                     onSent()
                     return
@@ -1417,12 +1507,17 @@ fun ComposeScreen(
                 .replace(Regex("(<br\\s*/?>\\s*)+$", RegexOption.IGNORE_CASE), "")
                 .trimEnd()
             
+            // Раскрываем группы контактов [GroupName] → индивидуальные email
+            val expandedTo = expandGroupTokens(to, groupMappings)
+            val expandedCc = expandGroupTokens(cc, groupMappings)
+            val expandedBcc = expandGroupTokens(bcc, groupMappings)
+            
             // Создаём PendingEmail
             val pendingEmail = com.dedovmosol.iwomail.ui.components.PendingEmail(
                 account = account,
-                to = to,
-                cc = cc,
-                bcc = bcc,
+                to = expandedTo,
+                cc = expandedCc,
+                bcc = expandedBcc,
                 subject = subject,
                 body = cleanBody,
                 attachments = attachmentDataList,
@@ -1478,10 +1573,10 @@ fun ComposeScreen(
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDiscardDialog = false },
             icon = { Icon(AppIcons.Edit, null) },
-            title = { Text(Strings.discardDraftQuestion) },
-            text = { Text(Strings.draftWillBeDeleted) },
+            title = { Text(if (editDraftId != null) (if (currentLanguage == AppLanguage.RUSSIAN) "Сохранить изменения?" else "Save changes?") else Strings.discardDraftQuestion) },
+            text = { Text(if (editDraftId != null) (if (currentLanguage == AppLanguage.RUSSIAN) "Черновик был изменён" else "Draft has been modified") else Strings.draftWillBeDeleted) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { 
                         showDiscardDialog = false
                         saveDraft()
@@ -1491,15 +1586,14 @@ fun ComposeScreen(
                 )
             },
             dismissButton = {
-                TextButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { 
                         showDiscardDialog = false
                         handleBackNavigation()
                     },
+                    text = Strings.doNotSave,
                     enabled = !isSavingDraft
-                ) {
-                    Text(Strings.doNotSave)
-                }
+                )
             }
         )
     }
@@ -1569,9 +1663,10 @@ fun ComposeScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSignaturePicker = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showSignaturePicker = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -1640,9 +1735,10 @@ fun ComposeScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showAccountPicker = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showAccountPicker = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -1670,6 +1766,36 @@ fun ComposeScreen(
                         "bcc" -> {
                             bcc = if (bcc.isBlank()) newEmails 
                                    else "${bcc.trimEnd(',', ' ')}, $newEmails"
+                        }
+                    }
+                },
+                onGroupsSelected = { groups ->
+                    // Сохраняем маппинг группа → emails/цвета и добавляем [GroupName] в поле
+                    val newMappings = groupMappings.toMutableMap()
+                    val newColors = groupColors.toMutableMap()
+                    val groupTokens = groups.map { (name, emails, color) ->
+                        newMappings[name] = emails
+                        newColors[name] = color
+                        "[$name]"
+                    }
+                    groupMappings = newMappings
+                    groupColors = newColors
+                    // Сериализуем для переживания поворота экрана
+                    groupMappingsJson = org.json.JSONObject(newMappings.mapValues { (_, v) -> org.json.JSONArray(v) }).toString()
+                    groupColorsJson = org.json.JSONObject(newColors.mapValues { (_, v) -> v }).toString()
+                    val groupsStr = groupTokens.joinToString(", ")
+                    when (contactPickerTarget) {
+                        "to" -> {
+                            to = if (to.isBlank()) groupsStr
+                                  else "${to.trimEnd(',', ' ')}, $groupsStr"
+                        }
+                        "cc" -> {
+                            cc = if (cc.isBlank()) groupsStr
+                                  else "${cc.trimEnd(',', ' ')}, $groupsStr"
+                        }
+                        "bcc" -> {
+                            bcc = if (bcc.isBlank()) groupsStr
+                                   else "${bcc.trimEnd(',', ' ')}, $groupsStr"
                         }
                     }
                 }
@@ -1716,40 +1842,43 @@ fun ComposeScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { 
-                    showImageQualityDialog = false
-                    pendingImageUriString = null
-                }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { 
+                        showImageQualityDialog = false
+                        pendingImageUriString = null
+                    },
+                    text = Strings.cancel
+                )
             }
         )
     }
     
-    // Перехват системного жеста "назад" (свайп)
-    BackHandler {
-        val hasContent = to.isNotBlank() || subject.isNotBlank() || body.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
-        if (hasContent) {
-            showDiscardDialog = true
+    // Единая логика проверки при выходе (DRY)
+    fun handleBackPress() {
+        if (editDraftId != null) {
+            val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || subject != initialDraftSubject || body != initialDraftBody || attachmentStrings != initialDraftAttachments
+            if (hasDraftChanges) showDiscardDialog = true else handleBackNavigation()
         } else {
-            handleBackNavigation()
+            // Проверяем есть ли реальный контент (body может содержать пустой HTML и подпись)
+            val bodyPlainText = body
+                .replace(SIGNATURE_DIV_REGEX, "")
+                .replace(HTML_STRIP_REGEX, "")
+                .replace("&nbsp;", " ")
+                .trim()
+            val hasContent = to.isNotBlank() || subject.isNotBlank() || bodyPlainText.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
+            if (hasContent) showDiscardDialog = true else handleBackNavigation()
         }
     }
+    
+    // Перехват системного жеста "назад" (свайп)
+    BackHandler { handleBackPress() }
     
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        // Если есть контент — показываем диалог
-                        val hasContent = to.isNotBlank() || subject.isNotBlank() || body.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
-                        if (hasContent) {
-                            showDiscardDialog = true
-                        } else {
-                            handleBackNavigation()
-                        }
-                    }) {
+                    IconButton(onClick = { handleBackPress() }) {
                         Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
                     }
                 },
@@ -1765,7 +1894,7 @@ fun ComposeScreen(
                     }
                     IconButton(
                         onClick = { sendEmail() },
-                        enabled = !isSending && to.isNotBlank()
+                        enabled = !isSending && areRecipientsValid
                     ) {
                         if (isSending) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
@@ -1838,8 +1967,8 @@ fun ComposeScreen(
             )
         },
         bottomBar = {
-            // Панель форматирования внизу (над клавиатурой) - скрываем вместе с WebView
-            if (!hideWebView) {
+            // Панель форматирования внизу (над клавиатурой) — только когда фокус в body
+            if (!hideWebView && !isHeaderFieldFocused) {
                 Column(
                     modifier = Modifier
                         .windowInsetsPadding(WindowInsets.navigationBars)
@@ -1909,7 +2038,7 @@ fun ComposeScreen(
                 ) {
                     Text(
                         Strings.to, 
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, 
+                        color = if (!isToValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, 
                         modifier = Modifier.widthIn(min = 80.dp, max = 120.dp), 
                         maxLines = 1, 
                         softWrap = false
@@ -1942,6 +2071,7 @@ fun ComposeScreen(
                                     }
                                 }
                             },
+                        visualTransformation = groupColorTransformation,
                         colors = TextFieldDefaults.colors(
                             unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                             focusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -2001,7 +2131,21 @@ fun ComposeScreen(
                                 // иначе он может завершиться и снова показать подсказки
                                 suggestionSearchJob?.cancel()
                                 suggestionJustSelected = true
-                                to = replaceLastRecipient(to, suggestion.email)
+                                // GROUP: вставляем токен [groupName] и сохраняем маппинг
+                                if (suggestion.source == SuggestionSource.GROUP && suggestion.groupEmails.isNotEmpty()) {
+                                    val gName = suggestion.groupName
+                                    val newMappings = groupMappings.toMutableMap()
+                                    newMappings[gName] = suggestion.groupEmails
+                                    groupMappings = newMappings
+                                    val newColors = groupColors.toMutableMap()
+                                    newColors[gName] = suggestion.groupColor
+                                    groupColors = newColors
+                                    groupMappingsJson = org.json.JSONObject(newMappings.mapValues { (_, v) -> org.json.JSONArray(v) }).toString()
+                                    groupColorsJson = org.json.JSONObject(newColors.mapValues { (_, v) -> v }).toString()
+                                    to = replaceLastRecipient(to, "[$gName]")
+                                } else {
+                                    to = replaceLastRecipient(to, suggestion.email)
+                                }
                                 showToSuggestions = false
                                 toSuggestions = emptyList()
                                 // Увеличиваем счётчик использования контакта
@@ -2019,8 +2163,9 @@ fun ComposeScreen(
                                 Icon(
                                     when (suggestion.source) {
                                         SuggestionSource.CONTACT -> AppIcons.Person
-                                        SuggestionSource.HISTORY -> AppIcons.History
+                                        SuggestionSource.HISTORY -> AppIcons.Person
                                         SuggestionSource.GAL -> AppIcons.Business
+                                        SuggestionSource.GROUP -> AppIcons.People
                                     },
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -2043,7 +2188,7 @@ fun ComposeScreen(
                 ) {
                     Text(
                         Strings.cc, 
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, 
+                        color = if (!isCcValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, 
                         modifier = Modifier.widthIn(min = 80.dp, max = 120.dp), 
                         maxLines = 1, 
                         softWrap = false
@@ -2054,7 +2199,8 @@ fun ComposeScreen(
                         modifier = Modifier
                             .weight(1f)
                             .focusRequester(ccFocusRequester)
-                            .onFocusChanged { if (it.isFocused) focusedFieldIndex = 1 },
+                            .onFocusChanged { ccFieldFocused = it.isFocused; if (it.isFocused) focusedFieldIndex = 1 },
+                        visualTransformation = groupColorTransformation,
                         colors = TextFieldDefaults.colors(
                             unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                             focusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -2086,7 +2232,7 @@ fun ComposeScreen(
                 ) {
                     Text(
                         Strings.hiddenCopy, 
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, 
+                        color = if (!isBccValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, 
                         modifier = Modifier.widthIn(min = 80.dp, max = 120.dp), 
                         maxLines = 1, 
                         softWrap = false
@@ -2097,7 +2243,8 @@ fun ComposeScreen(
                         modifier = Modifier
                             .weight(1f)
                             .focusRequester(bccFocusRequester)
-                            .onFocusChanged { if (it.isFocused) focusedFieldIndex = 2 },
+                            .onFocusChanged { bccFieldFocused = it.isFocused; if (it.isFocused) focusedFieldIndex = 2 },
+                        visualTransformation = groupColorTransformation,
                         colors = TextFieldDefaults.colors(
                             unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                             focusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -2130,7 +2277,7 @@ fun ComposeScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
                     .focusRequester(subjectFocusRequester)
-                    .onFocusChanged { if (it.isFocused) focusedFieldIndex = 3 },
+                    .onFocusChanged { subjectFieldFocused = it.isFocused; if (it.isFocused) focusedFieldIndex = 3 },
                 colors = TextFieldDefaults.colors(
                     unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                     focusedContainerColor = MaterialTheme.colorScheme.surface,

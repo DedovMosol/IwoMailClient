@@ -29,6 +29,7 @@ import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Сервис для Exchange Direct Push
@@ -59,6 +60,11 @@ class PushService : Service() {
     
     // Сохранённые heartbeat для каждого аккаунта (восстанавливаются между перезапусками)
     private val accountHeartbeats = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
+    
+    // Per-account debounce: предотвращает блокировку sync аккаунта B из-за аккаунта A
+    private val lastAccountSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    // Per-account notification checkpoint: предотвращает пропуск писем аккаунта B
+    private val lastAccountNotifCheckTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
         
     // NetworkCallback для отслеживания состояния сети
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -66,6 +72,10 @@ class PushService : Service() {
     
     companion object {
         private const val TAG = "PushService"
+        
+        // Shared Mutex: атомарный check+show+mark уведомлений
+        // Используется из PushService И SyncWorker для предотвращения потери shown_notifications
+        internal val notificationMutex = kotlinx.coroutines.sync.Mutex()
         
         // Адаптивный heartbeat: начинаем с большого значения, уменьшаем при ошибках
         private const val MIN_HEARTBEAT = 120      // Минимум 2 минуты
@@ -252,8 +262,10 @@ class PushService : Service() {
                 if (activeNetwork == null) {
                     isNetworkAvailable = false
                     // Сеть пропала — останавливаем все Ping
-                    accountPingJobs.values.forEach { it.cancel() }
-                    accountPingJobs.clear()
+                    synchronized(accountPingJobs) {
+                        accountPingJobs.values.forEach { it.cancel() }
+                        accountPingJobs.clear()
+                    }
                 }
             }
         }
@@ -337,8 +349,10 @@ class PushService : Service() {
         unregisterNetworkCallback()
         heartbeatJob?.cancel()
         pushJob?.cancel()
-        accountPingJobs.values.forEach { it.cancel() }
-        accountPingJobs.clear()
+        synchronized(accountPingJobs) {
+            accountPingJobs.values.forEach { it.cancel() }
+            accountPingJobs.clear()
+        }
         easClientCache.clear()
         serviceScope.cancel()
         
@@ -475,8 +489,10 @@ class PushService : Service() {
     private fun startPushForAllAccounts() {
         // Отменяем предыдущий job чтобы не дублировать ping-циклы
         pushJob?.cancel()
-        accountPingJobs.values.forEach { it.cancel() }
-        accountPingJobs.clear()
+        synchronized(accountPingJobs) {
+            accountPingJobs.values.forEach { it.cancel() }
+            accountPingJobs.clear()
+        }
         
         pushJob = serviceScope.launch {
             val accounts = database.accountDao().getAllAccountsList()
@@ -723,13 +739,16 @@ class PushService : Service() {
     )
     
     private suspend fun syncAccount(account: AccountEntity) {
-        // КРИТИЧНО: Debounce - пропускаем если синхронизация была менее 30 сек назад
-        val lastSync = settingsRepo.getLastSyncTimeSync()
+        // Per-account debounce: не блокируем аккаунт B из-за недавнего sync аккаунта A
+        val lastSync = lastAccountSyncTimes[account.id] ?: 0L
         if (System.currentTimeMillis() - lastSync < 30_000) {
             return
         }
         
-        var lastNotificationCheck = settingsRepo.getLastNotificationCheckTimeSync()
+        // Per-account notification checkpoint: не пропускаем письма аккаунта B
+        // из-за обновления checkpoint аккаунтом A
+        var lastNotificationCheck = lastAccountNotifCheckTimes[account.id]
+            ?: settingsRepo.getLastNotificationCheckTimeSync()
         // При первом запуске не показываем уведомления для старых писем
         if (lastNotificationCheck == 0L) {
             lastNotificationCheck = System.currentTimeMillis() - 60_000
@@ -759,48 +778,52 @@ class PushService : Service() {
             }
         }
         
+        lastAccountSyncTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
-        // КРИТИЧНО: Используем getNewEmailsForNotification вместо getNewUnreadEmails
-        // Это позволяет показывать уведомления даже если письмо прочитано на другом устройстве
-        val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
+        // Уведомления только для НЕПРОЧИТАННЫХ писем (read = 0)
+        val newEmailEntities = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
         
-        // КРИТИЧНО: Фильтруем письма, для которых УЖЕ показывались уведомления на этом устройстве
-        // Решает проблему повторных уведомлений на смартфоне после показа на планшете
-        val shownNotifications = getShownNotifications()
-        val filteredEmails = newEmailEntities.filter { email ->
-            val notifKey = "${account.id}_${email.id}"
-            !shownNotifications.contains(notifKey)
-        }
-        
-        val newEmails = filteredEmails.map { email ->
-            NewEmailInfo(email.id, email.fromName, email.from, email.subject)
-        }
-        
-        if (newEmails.isNotEmpty()) {
-            // КРИТИЧНО: Предзагружаем тело письма ДО показа уведомления
-            // Это позволяет пользователю сразу видеть текст при переходе по уведомлению
-            for (emailInfo in newEmails) {
-                try {
-                    // Загружаем тело только если оно пустое
-                    val email = database.emailDao().getEmail(emailInfo.id)
-                    if (email != null && email.body.isEmpty()) {
-                        mailRepo.loadEmailBody(emailInfo.id)
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.w(TAG, "Failed to preload body for ${emailInfo.id}", e)
-                    // Продолжаем с другими письмами
+        // Предзагружаем тела ДО блокировки mutex (IO-тяжёлая операция)
+        for (entity in newEmailEntities) {
+            try {
+                val email = database.emailDao().getEmail(entity.id)
+                if (email != null && email.body.isEmpty()) {
+                    mailRepo.loadEmailBody(entity.id)
                 }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Failed to preload body for ${entity.id}", e)
+            }
+        }
+        
+        // Mutex: атомарный check+show+mark предотвращает потерю shown_notifications
+        // при одновременном sync нескольких аккаунтов
+        notificationMutex.withLock {
+            val shownNotifications = getShownNotifications()
+            val filteredEmails = newEmailEntities.filter { email ->
+                val notifKey = "${account.id}_${email.id}"
+                !shownNotifications.contains(notifKey)
+            }
+            // Повторная проверка read-статуса под mutex:
+            // письмо могло стать прочитанным между первичным выбором и показом уведомления.
+            val unreadNow = filteredEmails.filter { email ->
+                database.emailDao().getEmail(email.id)?.read == false
             }
             
-            val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-            if (notificationsEnabled) {
-                showNewMailNotification(newEmails, account.id, account.email)
-                // Сохраняем что показали уведомления
-                markNotificationsAsShown(newEmails.map { "${account.id}_${it.id}" })
+            val newEmails = unreadNow.map { email ->
+                NewEmailInfo(email.id, email.fromName, email.from, email.subject)
+            }
+            
+            if (newEmails.isNotEmpty()) {
+                val notificationsEnabled = settingsRepo.notificationsEnabled.first()
+                if (notificationsEnabled && !MailApplication.isInForeground) {
+                    showNewMailNotification(newEmails, account.id, account.email)
+                    markNotificationsAsShown(newEmails.map { "${account.id}_${it.id}" })
+                }
             }
         }
         
+        lastAccountNotifCheckTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
     }
     

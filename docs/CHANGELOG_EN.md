@@ -1,5 +1,73 @@
 ﻿# Changelog
 
+## v1.6.2 (February 2026) — Optimization, themes, UI, sync
+
+### Sync and stability
+- Fixed bugs, memory leaks, and race conditions
+- Sync is faster: twice as many emails downloaded per request
+- Increased timeouts for large mailboxes (3000+ emails)
+- Each folder syncs with its own timeout — one slow folder won't hold up the rest
+- Refresh now fetches only new emails
+- Manual sync reduces server load: no more than two folders are processed at the same time
+- Fixed cancellation handling during sync
+- Mark multiple emails as read in a single server request
+
+### UI and theming
+- Scrollbar is brighter and more visible
+- "Refresh" button in email menu — reloads content from server
+- Redesigned payment details dialog: icons, "Copy account number" button, scrollable and adapts to screen rotation
+- Send email to a contact group — "Groups" tab in recipient picker, group expands to member addresses on send
+- Color themes reduced from 7 to 4 with improved contrast
+- Updated main screen color palette
+- Main screen cards modernized: Material 3 elevation (2dp), softer gradients, bigger icons, compact text
+- Draft labels in email list: [Local] or [Server]
+- Redesigned PDF attachment icon with "PDF" text overlay
+- "About" moved from settings to navigation drawer
+- Widget scales text and icons proportionally to height
+- Scrollbar color picker (7 options)
+- Drag-to-select across email lists
+- Haptic feedback on selection (Outlook-style)
+- Redesigned daily themes dialog — themes and scrollbar colors in separate sections
+
+### Widget and sounds
+- Completely redesigned home screen widget: themed background, date, unread count, next event, tasks, notes, recent emails, account avatars, Compose and Sync buttons, last sync time
+- Sound when sending an email
+
+### Calendar and tasks
+- Local trash for calendar events
+- Recurring calendar events support
+- More task info in local trash
+
+### Drafts and contacts
+- If the server doesn't support server-side drafts, they are saved locally (mode selectable in settings)
+- Improved email address validation before sending
+- Contact group selection in the recipient field
+- Duplicate check when exporting GAL contacts to local storage, with confirmation
+
+### Attachments
+- Long press on attachment: "Save" (to default folder) or "Save as"
+
+### Calendar (extended)
+- Added all missing MS-ASCAL fields: organizer, UID, timezone, recurrence exceptions, meeting status, online meeting link, attachments
+- Calendar event attachments: view and download to Downloads folder
+- Online meeting link — clickable in event details
+
+### Security and stability
+- Passwords no longer passed via navigation route (Base64) — in-memory carrier with clear-after-use
+- Atomic EasClient creation via per-account Mutex — prevents duplicate client instances on parallel requests
+- HTTP Response body in EWS client now closed via `use {}` — prevents connection leaks
+- Periodic EAS version re-negotiation every 24 hours (TTL) — correct handling of Exchange server upgrades
+- Removed logging of SOAP responses and personal data (subject, note body, XML responses) in release builds
+- Fixed potential race condition (ConcurrentModificationException) when stopping Push connections in PushService
+- Removed unstructured background coroutine on account creation — calendar/tasks sync now handled by SyncWorker
+- Fixed state loss on screen rotation — open screens and dialogs no longer close (personalization, account settings, folder delete, etc.)
+- Fixed widget compilation error (Intent.data name conflict)
+
+### Other
+- Security, memory leak, race condition and network audit — results in `docs/SECURITY_MEMORY_RACE_NETWORK_AUDIT.md`
+- Preparation for new XML parser: migration scope defined (251 regex), EasXmlParser introduced, phased service-by-service rollout set, replacement rules and cleanup plan documented
+- All changes compatible with Exchange 2007 SP1 and newer
+
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 
 ### New

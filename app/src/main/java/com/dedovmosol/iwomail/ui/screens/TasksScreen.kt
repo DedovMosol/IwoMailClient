@@ -24,7 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,9 +48,9 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.delay
 
-// Кэшированные SimpleDateFormat для утилитных функций
-private val TASK_PARSE_DATE_FORMAT = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
-private val TASK_PARSE_TIME_FORMAT = SimpleDateFormat("HH:mm", Locale.getDefault())
+// ThreadLocal гарантирует thread-safety для SimpleDateFormat (каждый поток — свой экземпляр)
+private val TASK_PARSE_DATE_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
+private val TASK_PARSE_TIME_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 
 enum class TaskFilter {
     ALL, TODAY, ACTIVE, COMPLETED, HIGH_PRIORITY, OVERDUE, DELETED
@@ -69,6 +71,7 @@ fun TasksScreen(
     // Отдельный scope для синхронизации, чтобы не отменялась при навигации
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
     
+    val haptic = LocalHapticFeedback.current
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
     
@@ -90,7 +93,7 @@ fun TasksScreen(
         delay(300)
         debouncedSearchQuery = searchQuery
     }
-    var isSyncing by rememberSaveable { mutableStateOf(false) }
+    var isSyncing by remember { mutableStateOf(false) }
     
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
     
@@ -106,13 +109,14 @@ fun TasksScreen(
     // Множественный выбор для удалённых задач
     var selectedDeletedIds by remember { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedTaskIds.isNotEmpty() || selectedDeletedIds.isNotEmpty()
-    val isDeletedSelectionMode = currentFilter == TaskFilter.DELETED && selectedDeletedIds.isNotEmpty()
-    val isActiveSelectionMode = currentFilter != TaskFilter.DELETED && selectedTaskIds.isNotEmpty()
+    val hasDeletedSelected = selectedDeletedIds.isNotEmpty()
+    val hasActiveSelected = selectedTaskIds.isNotEmpty()
     
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
+    var deleteConfirmTargetIds by remember { mutableStateOf(setOf<String>()) }
     
     // Автоматическая синхронизация при первом открытии если нет данных
     // Ждём загрузку из Room (небольшая задержка) перед тем как решить что данных нет
@@ -209,6 +213,7 @@ fun TasksScreen(
     // Строки для диалогов (вынесены из @Composable контекста)
     val taskDeletedText = Strings.taskDeleted
     val taskRestoredText = Strings.taskRestored
+    val restoringOneTaskText = Strings.restoringTasks(1)
     val taskDeletedPermanentlyText = Strings.taskDeletedPermanently
     val taskCompletedText = Strings.taskCompleted
     val taskNotCompletedText = Strings.taskNotCompleted
@@ -223,19 +228,26 @@ fun TasksScreen(
                 task = task,
                 onDismiss = { selectedTask = null },
                 onRestoreClick = {
-                    scope.launch {
+                    selectedTask = null
+                    
+                    deletionController.startDeletion(
+                        emailIds = listOf(task.id),
+                        message = restoringOneTaskText,
+                        scope = scope,
+                        isRestore = true
+                    ) { _, onProgress ->
                         val result = withContext(Dispatchers.IO) {
                             taskRepo.restoreTask(task)
                         }
+                        onProgress(1, 1)
                         when (result) {
-                            is EasResult.Success -> {
-                                Toast.makeText(context, taskRestoredText, Toast.LENGTH_SHORT).show()
-                            }
                             is EasResult.Error -> {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
                             }
+                            else -> {}
                         }
-                        selectedTask = null
                     }
                 },
                 onDeletePermanentlyClick = {
@@ -395,7 +407,7 @@ fun TasksScreen(
             title = { Text(Strings.emptyTasksTrash) },
             text = { Text(Strings.emptyTasksTrashConfirm(deletedTasks.size)) },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showEmptyTrashDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
@@ -435,9 +447,10 @@ fun TasksScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showEmptyTrashDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showEmptyTrashDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -449,9 +462,9 @@ fun TasksScreen(
         val deletingTasksText = Strings.deletingTasks(deleteConfirmCount)
         // Вычисляем список задач для удаления заранее
         val tasksToDeleteList = if (deleteConfirmIsPermanent) {
-            deletedTasks.filter { it.id in selectedDeletedIds }
+            deletedTasks.filter { it.id in deleteConfirmTargetIds }
         } else {
-            emptyList()
+            allTasks.filter { it.id in deleteConfirmTargetIds }
         }
         val deletingTasksMessage = if (tasksToDeleteList.isNotEmpty()) {
             Strings.deletingTasks(tasksToDeleteList.size)
@@ -479,14 +492,14 @@ fun TasksScreen(
                 ) 
             },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeleteConfirmDialog = false
                         if (deleteConfirmIsPermanent) {
                             // Permanent delete - используем deletionController
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                             val taskIds = tasksToDeleteList.map { it.id }
-                            selectedDeletedIds = emptySet()
+                            selectedDeletedIds = selectedDeletedIds - taskIds.toSet()
                             
                             if (taskIds.isNotEmpty()) {
                                 deletionController.startDeletion(
@@ -507,19 +520,19 @@ fun TasksScreen(
                             }
                         } else {
                             // Regular delete to trash - без прогресса
+                            val tasksToSoftDelete = tasksToDeleteList
+                            selectedTaskIds = selectedTaskIds - tasksToSoftDelete.map { it.id }.toSet()
                             scope.launch {
                                 var deleted = 0
-                                for (id in selectedTaskIds) {
-                                    val task = allTasks.find { it.id == id }
-                                    if (task != null) {
-                                        val result = withContext(Dispatchers.IO) {
-                                            taskRepo.deleteTask(task)
-                                        }
-                                        if (result is EasResult.Success) deleted++
+                                for (task in tasksToSoftDelete) {
+                                    val result = withContext(Dispatchers.IO) {
+                                        taskRepo.deleteTask(task)
                                     }
+                                    if (result is EasResult.Success) deleted++
                                 }
-                                selectedTaskIds = emptySet()
-                                Toast.makeText(context, "$taskDeletedText: $deleted", Toast.LENGTH_SHORT).show()
+                                if (deleted > 0) {
+                                    Toast.makeText(context, "$taskDeletedText: $deleted", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         }
                     },
@@ -527,9 +540,10 @@ fun TasksScreen(
                 )
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirmDialog = false }) {
-                    Text(Strings.cancel)
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showDeleteConfirmDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -540,38 +554,51 @@ fun TasksScreen(
         topBar = {
             if (isSelectionMode) {
                 val tasksRestoredText = Strings.tasksRestored
+                val restoringTasksMessage = Strings.restoringTasks(selectedDeletedIds.size)
                 val selectedCount = selectedTaskIds.size + selectedDeletedIds.size
+                val deletePermanently = hasDeletedSelected && !hasActiveSelected
+                val deleteTargetIds = if (deletePermanently) selectedDeletedIds else selectedTaskIds
                 TasksSelectionTopBar(
                     selectedCount = selectedCount,
-                    isDeletedTab = isDeletedSelectionMode,
+                    showRestore = hasDeletedSelected,
+                    deleteIsPermanent = deletePermanently,
                     onClearSelection = {
                         selectedTaskIds = emptySet()
                         selectedDeletedIds = emptySet()
                     },
                     onRestore = {
-                        if (isDeletedSelectionMode) {
-                            // Восстановление задач
-                            scope.launch {
-                                var restored = 0
-                                for (id in selectedDeletedIds) {
-                                    val task = deletedTasks.find { it.id == id }
-                                    if (task != null) {
+                        if (hasDeletedSelected) {
+                            val tasksToRestore = deletedTasks.filter { it.id in selectedDeletedIds }
+                            val taskIds = tasksToRestore.map { it.id }
+                            selectedDeletedIds = selectedDeletedIds - taskIds.toSet()
+                            
+                            if (taskIds.isNotEmpty()) {
+                                deletionController.startDeletion(
+                                    emailIds = taskIds,
+                                    message = restoringTasksMessage,
+                                    scope = scope,
+                                    isRestore = true
+                                ) { _, onProgress ->
+                                    var restored = 0
+                                    for (task in tasksToRestore) {
                                         val result = withContext(Dispatchers.IO) {
                                             taskRepo.restoreTask(task)
                                         }
                                         if (result is EasResult.Success) restored++
+                                        onProgress(restored, tasksToRestore.size)
                                     }
                                 }
-                                selectedDeletedIds = emptySet()
-                                Toast.makeText(context, "$tasksRestoredText: $restored", Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
                     onDelete = {
-                        deleteConfirmCount = selectedCount
-                        // КРИТИЧНО: Если выбраны ТОЛЬКО удалённые задачи - удаляем окончательно
-                        deleteConfirmIsPermanent = selectedDeletedIds.isNotEmpty() && selectedTaskIds.isEmpty()
-                        showDeleteConfirmDialog = true
+                        if (deleteTargetIds.isNotEmpty()) {
+                            deleteConfirmCount = deleteTargetIds.size
+                            // КРИТИЧНО: Если выбраны ТОЛЬКО удалённые задачи - удаляем окончательно
+                            deleteConfirmIsPermanent = deletePermanently
+                            deleteConfirmTargetIds = deleteTargetIds
+                            showDeleteConfirmDialog = true
+                        }
                     }
                 )
             } else {
@@ -717,10 +744,42 @@ fun TasksScreen(
                 val taskNotCompletedTextList = Strings.taskNotCompleted
                 val isDeletedFilter = currentFilter == TaskFilter.DELETED
                 
-                Box(modifier = Modifier.fillMaxSize()) {
+                // Drag selection
+                val taskKeys = remember(filteredTasks) { filteredTasks.map { it.id } }
+                // Набор ID удалённых задач для разделения при drag-select в ALL фильтре
+                val deletedTaskIdSet = remember(deletedTasks) { deletedTasks.map { it.id }.toSet() }
+                val dragModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
+                    listState = listState,
+                    itemKeys = taskKeys,
+                    selectedIds = selectedTaskIds + selectedDeletedIds,
+                    onSelectionChange = { newIds ->
+                        if (isDeletedFilter) {
+                            selectedDeletedIds = newIds
+                        } else if (currentFilter == TaskFilter.ALL) {
+                            // В ALL фильтре разделяем ID по типу задачи
+                            selectedTaskIds = newIds.filter { it !in deletedTaskIdSet }.toSet()
+                            selectedDeletedIds = newIds.filter { it in deletedTaskIdSet }.toSet()
+                        } else {
+                            selectedTaskIds = newIds
+                        }
+                    }
+                )
+                
+                Box(modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (isSelectionMode) Modifier.clickable(
+                            indication = null,
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        ) {
+                            selectedTaskIds = emptySet()
+                            selectedDeletedIds = emptySet()
+                        } else Modifier
+                    )
+                ) {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = dragModifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -728,19 +787,14 @@ fun TasksScreen(
                         // Проверяем task.isDeleted, а не фильтр!
                         // Это позволяет показывать удалённые задачи в фильтре ALL с правильной карточкой
                         if (task.isDeleted) {
-                            // Для удалённых — с чекбоксом выбора
+                            // Для удалённых — с иконкой выделения
                             DeletedTaskCard(
                                 task = task,
                                 isSelected = task.id in selectedDeletedIds,
-                                onSelectionChange = { selected ->
-                                    selectedDeletedIds = if (selected) {
-                                        selectedDeletedIds + task.id
-                                    } else {
-                                        selectedDeletedIds - task.id
-                                    }
-                                },
+                                isSelectionMode = isSelectionMode,
                                 onClick = {
-                                    if (isDeletedSelectionMode) {
+                                    if (isSelectionMode) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         selectedDeletedIds = if (task.id in selectedDeletedIds) {
                                             selectedDeletedIds - task.id
                                         } else {
@@ -751,9 +805,8 @@ fun TasksScreen(
                                     }
                                 },
                                 onLongClick = {
-                                    if (!isDeletedSelectionMode) {
-                                        selectedDeletedIds = selectedDeletedIds + task.id
-                                    }
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    selectedDeletedIds = selectedDeletedIds + task.id
                                 }
                             )
                         } else {
@@ -761,9 +814,10 @@ fun TasksScreen(
                             TaskCard(
                                 task = task,
                                 isSelected = task.id in selectedTaskIds,
-                                isSelectionMode = isActiveSelectionMode,
+                                isSelectionMode = isSelectionMode,
                                 onClick = {
-                                    if (isActiveSelectionMode) {
+                                    if (isSelectionMode) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         selectedTaskIds = if (task.id in selectedTaskIds) {
                                             selectedTaskIds - task.id
                                         } else {
@@ -774,9 +828,8 @@ fun TasksScreen(
                                     }
                                 },
                                 onLongClick = {
-                                    if (!isActiveSelectionMode) {
-                                        selectedTaskIds = selectedTaskIds + task.id
-                                    }
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    selectedTaskIds = selectedTaskIds + task.id
                                 },
                                 onToggleComplete = {
                                     scope.launch {
@@ -809,7 +862,8 @@ fun TasksScreen(
 @Composable
 private fun TasksSelectionTopBar(
     selectedCount: Int,
-    isDeletedTab: Boolean,
+    showRestore: Boolean,
+    deleteIsPermanent: Boolean,
     onClearSelection: () -> Unit,
     onRestore: () -> Unit,
     onDelete: () -> Unit
@@ -822,17 +876,22 @@ private fun TasksSelectionTopBar(
             }
         },
         actions = {
-            if (isDeletedTab) {
-                IconButton(onClick = onRestore) {
-                    Icon(AppIcons.Restore, Strings.restore, tint = Color.White)
+            if (showRestore) {
+                TextButton(onClick = onRestore) {
+                    Icon(AppIcons.Restore, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(Strings.restore, color = Color.White)
                 }
-                IconButton(onClick = onDelete) {
-                    Icon(AppIcons.DeleteForever, Strings.deletePermanently, tint = Color.White)
-                }
-            } else {
-                IconButton(onClick = onDelete) {
-                    Icon(AppIcons.Delete, Strings.delete, tint = Color.White)
-                }
+            }
+            TextButton(onClick = onDelete) {
+                Icon(
+                    if (deleteIsPermanent) AppIcons.DeleteForever else AppIcons.Delete,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(Strings.delete, color = Color.White)
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -848,13 +907,13 @@ private fun TasksSelectionTopBar(
 }
 
 /**
- * Карточка удалённой задачи с чекбоксом выбора
+ * Карточка удалённой задачи с иконкой выделения (как в письмах)
  */
 @Composable
 private fun DeletedTaskCard(
     task: TaskEntity,
     isSelected: Boolean,
-    onSelectionChange: (Boolean) -> Unit,
+    isSelectionMode: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -863,7 +922,10 @@ private fun DeletedTaskCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .then(
+                if (isSelectionMode) Modifier.clickable(onClick = onClick)
+                else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
@@ -877,13 +939,17 @@ private fun DeletedTaskCard(
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Чекбокс выбора
-            Checkbox(
-                checked = isSelected,
-                onCheckedChange = onSelectionChange
-            )
-            
-            Spacer(modifier = Modifier.width(8.dp))
+            // Слева: иконка выделения (как в письмах — без чекбокса)
+            if (isSelectionMode) {
+                Icon(
+                    imageVector = if (isSelected) AppIcons.CheckCircle else AppIcons.RadioButtonUnchecked,
+                    contentDescription = null,
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary 
+                           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+            }
             
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -901,7 +967,7 @@ private fun DeletedTaskCard(
                             AppIcons.Star,
                             contentDescription = Strings.priorityHigh,
                             modifier = Modifier.size(16.dp),
-                            tint = Color(0xFFF44336)
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                     }
@@ -980,7 +1046,7 @@ private fun TaskFilterChips(
             onClick = { onFilterChange(TaskFilter.OVERDUE) },
             label = { Text(Strings.overdueTasks) },
             colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = Color(0xFFF44336).copy(alpha = 0.2f)
+                selectedContainerColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete.copy(alpha = 0.2f)
             )
         )
         FilterChip(
@@ -1003,7 +1069,7 @@ private fun TaskFilterChips(
             Button(
                 onClick = onEmptyTrash,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFF44336)
+                    containerColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                 )
             ) {
                 Icon(AppIcons.DeleteForever, null, Modifier.size(18.dp), tint = Color.White)
@@ -1034,7 +1100,13 @@ private fun TaskCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .then(
+                if (isSelectionMode) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                }
+            ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (task.complete) {
@@ -1046,25 +1118,19 @@ private fun TaskCard(
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.Top
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            // Слева: иконка выделения (как в письмах — без чекбокса)
             if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() }
+                Icon(
+                    imageVector = if (isSelected) AppIcons.CheckCircle else AppIcons.RadioButtonUnchecked,
+                    contentDescription = null,
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary 
+                           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.size(24.dp)
                 )
-            } else {
-                // Чекбокс выполнения
-                Checkbox(
-                    checked = task.complete,
-                    onCheckedChange = { onToggleComplete() },
-                    colors = CheckboxDefaults.colors(
-                        checkedColor = Color(0xFF4CAF50)
-                    )
-                )
+                Spacer(modifier = Modifier.width(12.dp))
             }
-            
-            Spacer(modifier = Modifier.width(8.dp))
             
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1074,7 +1140,7 @@ private fun TaskCard(
                             AppIcons.Star,
                             contentDescription = Strings.priorityHigh,
                             modifier = Modifier.size(16.dp),
-                            tint = Color(0xFFF44336)
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                     }
@@ -1113,17 +1179,28 @@ private fun TaskCard(
                             AppIcons.Schedule,
                             contentDescription = null,
                             modifier = Modifier.size(14.dp),
-                            tint = if (isOverdue) Color(0xFFF44336) else MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = if (isOverdue) com.dedovmosol.iwomail.ui.theme.AppColors.delete else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = dateFormat.format(Date(task.dueDate)),
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (isOverdue) Color(0xFFF44336) else MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (isOverdue) com.dedovmosol.iwomail.ui.theme.AppColors.delete else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
+            
+            // Справа: чекбокс выполнения (всегда видим)
+            Spacer(modifier = Modifier.width(8.dp))
+            Checkbox(
+                checked = task.complete,
+                onCheckedChange = { if (!isSelectionMode) onToggleComplete() },
+                colors = CheckboxDefaults.colors(
+                    checkedColor = Color(0xFF4CAF50)
+                ),
+                enabled = !isSelectionMode
+            )
         }
     }
 }
@@ -1148,7 +1225,7 @@ private fun TaskDetailDialog(
                         AppIcons.Star,
                         contentDescription = Strings.priorityHigh,
                         modifier = Modifier.size(20.dp),
-                        tint = Color(0xFFF44336)
+                        tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
@@ -1216,7 +1293,7 @@ private fun TaskDetailDialog(
                     Text(
                         text = "${Strings.dueDate}: ${dateTimeFormat.format(Date(task.dueDate))}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (isOverdue) Color(0xFFF44336) else MaterialTheme.colorScheme.onSurface
+                        color = if (isOverdue) com.dedovmosol.iwomail.ui.theme.AppColors.delete else MaterialTheme.colorScheme.onSurface
                     )
                 }
                 
@@ -1260,15 +1337,15 @@ private fun TaskDetailDialog(
             OutlinedButton(
                 onClick = onDeleteClick,
                 colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = Color(0xFFF44336)
+                    contentColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                 ),
-                border = BorderStroke(1.dp, Color(0xFFF44336))
+                border = BorderStroke(1.dp, com.dedovmosol.iwomail.ui.theme.AppColors.delete)
             ) {
                 Icon(
                     imageVector = AppIcons.Delete,
                     contentDescription = Strings.delete,
                     modifier = Modifier.size(20.dp),
-                    tint = Color(0xFFF44336)
+                    tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                 )
             }
         },
@@ -1343,11 +1420,42 @@ private fun DeletedTaskDetailDialog(
                 )
                 
                 // Даты
+                if (task.startDate > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${Strings.startDate}: ${dateTimeFormat.format(Date(task.startDate))}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 if (task.dueDate > 0) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "${Strings.dueDate}: ${dateTimeFormat.format(Date(task.dueDate))}",
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (task.dateCompleted > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${Strings.completedDate}: ${dateTimeFormat.format(Date(task.dateCompleted))}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (task.reminderSet && task.reminderTime > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${Strings.reminder}: ${dateTimeFormat.format(Date(task.reminderTime))}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                
+                // Категории
+                if (task.categories.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${Strings.categories}: ${task.categories}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 
@@ -1391,15 +1499,15 @@ private fun DeletedTaskDetailDialog(
                     OutlinedButton(
                         onClick = onDeletePermanentlyClick,
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color(0xFFF44336)
+                            contentColor = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                         ),
-                        border = BorderStroke(1.dp, Color(0xFFF44336))
+                        border = BorderStroke(1.dp, com.dedovmosol.iwomail.ui.theme.AppColors.delete)
                     ) {
                         Icon(
                             AppIcons.DeleteForever,
                             contentDescription = Strings.deletePermanently,
                             modifier = Modifier.size(20.dp),
-                            tint = Color(0xFFF44336)
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                         )
                     }
                 }
@@ -1459,16 +1567,16 @@ private fun CreateTaskDialog(
         
         if (task != null) {
             if (task.startDate > 0) {
-                startDateText = TASK_PARSE_DATE_FORMAT.format(Date(task.startDate))
-                startTimeText = TASK_PARSE_TIME_FORMAT.format(Date(task.startDate))
+                startDateText = TASK_PARSE_DATE_FORMAT.get().format(Date(task.startDate))
+                startTimeText = TASK_PARSE_TIME_FORMAT.get().format(Date(task.startDate))
             }
             if (task.dueDate > 0) {
-                dueDateText = TASK_PARSE_DATE_FORMAT.format(Date(task.dueDate))
-                dueTimeText = TASK_PARSE_TIME_FORMAT.format(Date(task.dueDate))
+                dueDateText = TASK_PARSE_DATE_FORMAT.get().format(Date(task.dueDate))
+                dueTimeText = TASK_PARSE_TIME_FORMAT.get().format(Date(task.dueDate))
             }
             if (task.reminderTime > 0) {
-                reminderDateText = TASK_PARSE_DATE_FORMAT.format(Date(task.reminderTime))
-                reminderTimeText = TASK_PARSE_TIME_FORMAT.format(Date(task.reminderTime))
+                reminderDateText = TASK_PARSE_DATE_FORMAT.get().format(Date(task.reminderTime))
+                reminderTimeText = TASK_PARSE_TIME_FORMAT.get().format(Date(task.reminderTime))
             }
         } else {
             // Умолчания для новой задачи:
@@ -1476,21 +1584,21 @@ private fun CreateTaskDialog(
             val now = System.currentTimeMillis()
             val nowDate = Date(now)
             startDate = now
-            startDateText = TASK_PARSE_DATE_FORMAT.format(nowDate)
-            startTimeText = TASK_PARSE_TIME_FORMAT.format(nowDate)
+            startDateText = TASK_PARSE_DATE_FORMAT.get().format(nowDate)
+            startTimeText = TASK_PARSE_TIME_FORMAT.get().format(nowDate)
             // Срок — через сутки
             val dueDateMs = now + 24 * 60 * 60 * 1000L
             val dueDateObj = Date(dueDateMs)
             dueDate = dueDateMs
-            dueDateText = TASK_PARSE_DATE_FORMAT.format(dueDateObj)
-            dueTimeText = TASK_PARSE_TIME_FORMAT.format(dueDateObj)
+            dueDateText = TASK_PARSE_DATE_FORMAT.get().format(dueDateObj)
+            dueTimeText = TASK_PARSE_TIME_FORMAT.get().format(dueDateObj)
             // Напоминание — через 12 часов
             val reminderMs = now + 12 * 60 * 60 * 1000L
             val reminderObj = Date(reminderMs)
             reminderTime = reminderMs
             reminderSet = true
-            reminderDateText = TASK_PARSE_DATE_FORMAT.format(reminderObj)
-            reminderTimeText = TASK_PARSE_TIME_FORMAT.format(reminderObj)
+            reminderDateText = TASK_PARSE_DATE_FORMAT.get().format(reminderObj)
+            reminderTimeText = TASK_PARSE_TIME_FORMAT.get().format(reminderObj)
         }
     }
     
@@ -1811,7 +1919,7 @@ private fun CreateTaskDialog(
             }
         },
         confirmButton = {
-            Button(
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = {
                     if (subject.isNotBlank()) {
                         // Парсинг даты начала
@@ -1832,22 +1940,16 @@ private fun CreateTaskDialog(
                         onSave(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo.trim().ifBlank { null })
                     }
                 },
-                enabled = subject.isNotBlank() && !isCreating
-            ) {
-                if (isCreating) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Text(Strings.save)
-                }
-            }
+                text = Strings.save,
+                enabled = subject.isNotBlank(),
+                isLoading = isCreating
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(Strings.cancel)
-            }
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onDismiss,
+                text = Strings.cancel
+            )
         }
     )
     
@@ -1988,7 +2090,7 @@ private fun parseDateTime(dateText: String, timeText: String): Long {
     if (dateText.isBlank()) return 0L
     
     try {
-        val parsedDate = TASK_PARSE_DATE_FORMAT.parse(dateText) ?: return 0L
+        val parsedDate = TASK_PARSE_DATE_FORMAT.get().parse(dateText) ?: return 0L
         
         val calendar = Calendar.getInstance().apply {
             time = parsedDate

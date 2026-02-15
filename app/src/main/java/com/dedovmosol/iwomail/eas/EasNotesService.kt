@@ -633,7 +633,7 @@ class EasNotesService internal constructor(
             
             // === 3. Вывод всех заметок ===
             activeWithBodies.forEach { note ->
-                android.util.Log.d("NOT", "syncNotesEws: Note: subject='${note.subject}', body='${note.body.take(50)}', serverId=${note.serverId.take(20)}..., isDeleted=${note.isDeleted}")
+                android.util.Log.d("NOT", "syncNotesEws: Note serverId=${note.serverId.take(20)}..., bodyLen=${note.body.length}, isDeleted=${note.isDeleted}")
             }
             
             android.util.Log.d("NOT", "syncNotesEws: TOTAL ${activeWithBodies.size} notes (active + deleted)")
@@ -645,7 +645,7 @@ class EasNotesService internal constructor(
     }
     
     private suspend fun createNoteEws(subject: String, body: String): EasResult<String> = withContext(Dispatchers.IO) {
-        android.util.Log.d("NOT", "createNoteEws: START subject='$subject'")
+        android.util.Log.d("NOT", "createNoteEws: START subjectLen=${subject.length}")
         try {
             val ewsUrl = deps.getEwsUrl()
             android.util.Log.d("NOT", "createNoteEws: ewsUrl=$ewsUrl")
@@ -1046,7 +1046,7 @@ class EasNotesService internal constructor(
                 ?: ""
             val itemClass = XmlValueExtractor.extractEws(itemXml, "ItemClass") ?: ""
             
-            android.util.Log.d("NOT", "parseEwsNotesResponse: Found item: itemId=${itemId.take(20)}..., subject='$subject', bodyLen=${bodyRaw.length}, itemClass='$itemClass'")
+            android.util.Log.d("NOT", "parseEwsNotesResponse: Found item: itemId=${itemId.take(20)}..., bodyLen=${bodyRaw.length}, itemClass='$itemClass'")
             
             // Фильтруем только StickyNote (или пустой ItemClass для заметок без класса)
             if (itemClass.contains("StickyNote", ignoreCase = true) || itemClass.isBlank()) {

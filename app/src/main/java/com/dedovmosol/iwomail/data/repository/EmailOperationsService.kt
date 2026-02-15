@@ -60,6 +60,11 @@ class EmailOperationsService(
             updateFolderCounts(email.folderId)
             updateMailWidget(context)
             
+            // Убираем текущее account-уведомление, чтобы не висело уже прочитанное письмо
+            if (read) {
+                cancelNotificationForAccount(email.accountId)
+            }
+            
             val result = client.markAsRead(folder.serverId, email.serverId, currentSyncKey, read)
             return when (result) {
                 is EasResult.Success -> {
@@ -118,8 +123,101 @@ class EmailOperationsService(
             emailDao.updateReadStatus(emailId, read)
             updateFolderCounts(email.folderId)
             updateMailWidget(context)
+            if (read) {
+                cancelNotificationForAccount(email.accountId)
+            }
             return EasResult.Success(true)
         }
+    }
+    
+    /**
+     * Батч-пометка нескольких писем как прочитанных/непрочитанных.
+     * Группирует по папкам и отправляет один Sync-запрос на папку.
+     * Exchange 2007 SP1: один Sync с N <Change> элементов.
+     */
+    suspend fun markAsReadBatch(emailIds: List<String>, read: Boolean): EasResult<Boolean> {
+        if (emailIds.isEmpty()) return EasResult.Success(true)
+        
+        val emails = emailIds.mapNotNull { emailDao.getEmail(it) }
+        if (emails.isEmpty()) return EasResult.Error("Письма не найдены")
+        
+        // Оптимистичное обновление — UI реагирует сразу
+        emails.forEach { emailDao.updateReadStatus(it.id, read) }
+        val affectedFolders = emails.map { it.folderId }.distinct()
+        affectedFolders.forEach { updateFolderCounts(it) }
+        updateMailWidget(context)
+        
+        // Группируем по аккаунту → по папке
+        val byAccount = emails.groupBy { it.accountId }
+        var lastError: String? = null
+        
+        for ((accountId, accountEmails) in byAccount) {
+            val account = accountRepo.getAccount(accountId) ?: continue
+            
+            if (account.accountType != AccountType.EXCHANGE.name) {
+                // Не Exchange — уже помечено локально
+                continue
+            }
+            
+            val client = accountRepo.createEasClient(accountId) ?: continue
+            
+            val byFolder = accountEmails.groupBy { it.folderId }
+            
+            for ((folderId, folderEmails) in byFolder) {
+                val folder = folderDao.getFolder(folderId) ?: continue
+                var currentSyncKey = folder.syncKey
+                
+                // Инициализация syncKey если нужно
+                if (currentSyncKey == "0") {
+                    val initResult = client.sync(folder.serverId, "0", windowSize = 0)
+                    if (initResult is EasResult.Success) {
+                        currentSyncKey = initResult.data.syncKey
+                        folderDao.updateSyncKey(folderId, currentSyncKey)
+                    } else continue
+                }
+                
+                val serverIds = folderEmails.map { it.serverId }
+                val result = client.markAsReadBatch(folder.serverId, serverIds, currentSyncKey, read)
+                
+                when (result) {
+                    is EasResult.Success -> {
+                        folderDao.updateSyncKey(folderId, result.data)
+                    }
+                    is EasResult.Error -> {
+                        android.util.Log.w("EmailOps", "markAsReadBatch failed for folder $folderId: ${result.message}")
+                        // Retry с обновлённым syncKey
+                        var freshSyncKey: String? = null
+                        val refreshResult = client.sync(folder.serverId, currentSyncKey, windowSize = 0)
+                        if (refreshResult is EasResult.Success) {
+                            freshSyncKey = refreshResult.data.syncKey
+                        } else {
+                            val resetResult = client.sync(folder.serverId, "0", windowSize = 0)
+                            if (resetResult is EasResult.Success) freshSyncKey = resetResult.data.syncKey
+                        }
+                        if (freshSyncKey != null) {
+                            folderDao.updateSyncKey(folderId, freshSyncKey)
+                            val retry = client.markAsReadBatch(folder.serverId, serverIds, freshSyncKey, read)
+                            when (retry) {
+                                is EasResult.Success -> folderDao.updateSyncKey(folderId, retry.data)
+                                is EasResult.Error -> {
+                                    lastError = retry.message
+                                    // Откатываем только эту папку
+                                    folderEmails.forEach { emailDao.updateReadStatus(it.id, !read) }
+                                    updateFolderCounts(folderId)
+                                }
+                            }
+                        } else {
+                            lastError = result.message
+                            folderEmails.forEach { emailDao.updateReadStatus(it.id, !read) }
+                            updateFolderCounts(folderId)
+                        }
+                    }
+                }
+            } // for byFolder
+        } // for byAccount
+        
+        updateMailWidget(context)
+        return if (lastError != null) EasResult.Error(lastError) else EasResult.Success(true)
     }
     
     /**
@@ -162,14 +260,22 @@ class EmailOperationsService(
                             else -> "inbox"
                         }
                         
-                        val ewsResult = client.fetchEmailBodyViaEws(email.subject, folderTypeStr)
+                        val ewsResult = client.fetchEmailBodyViaEws(email.subject, folderTypeStr, email.dateReceived)
                         if (ewsResult is EasResult.Success && ewsResult.data.isNotEmpty()) {
                             android.util.Log.d("BDY", "loadEmailBody: EWS fallback SUCCESS, bodyLength=${ewsResult.data.length}")
                             bodyContent = ewsResult.data
                         }
                     }
                     
-                    emailDao.updateBody(emailId, bodyContent)
+                    // КРИТИЧНО: Не перезаписываем существующее тело пустым ответом!
+                    // Сервер может вернуть пустое тело из-за временной ошибки,
+                    // race condition с другими EAS командами, или ограничений ItemOperations.
+                    if (bodyContent.isNotEmpty() || email.body.isEmpty()) {
+                        emailDao.updateBody(emailId, bodyContent)
+                    } else {
+                        android.util.Log.w("BDY", "loadEmailBody: Server returned empty body, keeping existing (${email.body.length} chars)")
+                        bodyContent = email.body
+                    }
                     
                     // КРИТИЧНО: Если bodyType=4 (MIME), но мы сохранили уже извлечённый HTML,
                     // обновляем bodyType на 2. Иначе при повторном открытии EmailDetailScreen
@@ -209,6 +315,31 @@ class EmailOperationsService(
         }
         
         return EasResult.Error("Загрузка тела не поддерживается для этого типа аккаунта")
+    }
+    
+    /**
+     * Обновляет FileReference вложений конкретного письма через ItemOperations
+     * Вызывается при открытии письма — предотвращает ошибки скачивания из-за устаревших FileReference
+     */
+    suspend fun refreshAttachmentMetadata(emailId: String) {
+        try {
+            val email = emailDao.getEmail(emailId) ?: return
+            val account = accountRepo.getAccount(email.accountId) ?: return
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) return
+            val client = accountRepo.createEasClient(email.accountId) ?: return
+            val folderServerId = email.folderId.substringAfter("_")
+            
+            val attResult = client.fetchAttachmentMetadata(folderServerId, email.serverId)
+            if (attResult is EasResult.Success && attResult.data.isNotEmpty()) {
+                for (att in attResult.data) {
+                    if (att.fileReference.isNotEmpty()) {
+                        attachmentDao.updateFileReference(emailId, att.displayName, att.fileReference)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("EmailOps", "refreshAttachmentMetadata failed: ${e.message}")
+        }
     }
     
     /**
@@ -989,6 +1120,21 @@ class EmailOperationsService(
     }
     
     // === Вспомогательные методы ===
+    
+    /**
+     * Отменяет account-уведомление о почте.
+     * Нужен для кейса: пользователь открыл письмо из уведомления и прочитал его,
+     * но notification со старым заголовком не должен оставаться в шторке.
+     */
+    private fun cancelNotificationForAccount(accountId: Long) {
+        try {
+            val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
+            val notificationId = 3000 + accountId.toInt()
+            notificationManager?.cancel(notificationId)
+        } catch (e: Exception) {
+            android.util.Log.w("EmailOps", "cancelNotificationForAccount failed", e)
+        }
+    }
     
     /**
      * Обновляет счётчики папки с транзакцией для консистентности

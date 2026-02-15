@@ -85,6 +85,9 @@ class EasClient(
     @Volatile private var serverSupportedVersions: List<String> = emptyList()
     // Флаг что версия уже определена
     @Volatile private var versionDetected = false
+    // Время последнего определения версии (для TTL — периодическая перепроверка)
+    @Volatile private var versionDetectedAt: Long = 0
+    private val VERSION_TTL_MS = 24 * 60 * 60 * 1000L // 24 часа
     
     /**
      * Проверяет, является ли сервер Exchange 2007
@@ -314,7 +317,9 @@ class EasClient(
      * Возвращает список поддерживаемых версий и выбирает лучшую
      */
     suspend fun detectEasVersion(): EasResult<String> {
-        if (versionDetected && serverSupportedVersions.isNotEmpty()) {
+        val now = System.currentTimeMillis()
+        if (versionDetected && serverSupportedVersions.isNotEmpty()
+            && (now - versionDetectedAt) < VERSION_TTL_MS) {
             return EasResult.Success(easVersion)
         }
         
@@ -342,25 +347,30 @@ class EasClient(
                             if (bestVersion != null) {
                                 easVersion = bestVersion
                                 versionDetected = true
+                                versionDetectedAt = System.currentTimeMillis()
                                 EasResult.Success(easVersion)
                             } else {
                                 easVersion = "12.1"
                                 versionDetected = true
+                                versionDetectedAt = System.currentTimeMillis()
                                 EasResult.Success(easVersion)
                             }
                         } else {
                             versionDetected = true
+                            versionDetectedAt = System.currentTimeMillis()
                             EasResult.Success(easVersion)
                         }
                     } else if (resp.code == 401) {
                         EasResult.Error("Ошибка авторизации (401)")
                     } else {
                         versionDetected = true
+                        versionDetectedAt = System.currentTimeMillis()
                         EasResult.Success(easVersion)
                     }
                 }
             } catch (_: Exception) {
                 versionDetected = true
+                versionDetectedAt = System.currentTimeMillis()
                 EasResult.Success(easVersion)
             }
         }
@@ -1005,13 +1015,20 @@ class EasClient(
         emailService.fetchEmailBodyWithMdn(collectionId, serverId)
     
     /**
+     * Получает свежие метаданные вложений конкретного письма через ItemOperations
+     */
+    suspend fun fetchAttachmentMetadata(collectionId: String, serverId: String): EasResult<List<EasAttachment>> =
+        emailService.fetchAttachmentMetadata(collectionId, serverId)
+    
+    /**
      * Загрузка тела письма через EWS (fallback для Exchange 2007 SP1)
-     * Ищет письмо по Subject используя EWS FindItem, затем получает тело через GetItem
+     * Ищет письмо по Subject + дате используя EWS FindItem, затем получает тело через GetItem
      * @param subject Тема письма для поиска
      * @param folderType Тип папки EWS (inbox, sentitems, deleteditems, drafts)
+     * @param dateReceived Дата получения письма (ms) для фильтрации — предотвращает подмену тела при одинаковых subject
      * @return Тело письма в HTML формате или пустая строка
      */
-    suspend fun fetchEmailBodyViaEws(subject: String, folderType: String): EasResult<String> {
+    suspend fun fetchEmailBodyViaEws(subject: String, folderType: String, dateReceived: Long = 0L): EasResult<String> {
         return withContext(Dispatchers.IO) {
             try {
                 // Определяем EWS DistinguishedFolderId на основе типа папки
@@ -1027,7 +1044,35 @@ class EasClient(
                 // Экранируем subject для XML
                 val escapedSubject = escapeXml(subject)
                 
-                // Шаг 1: FindItem для поиска письма по Subject
+                // Формируем restriction: Subject + дата (±2 мин) для точного поиска
+                // Без даты при одинаковых subject возвращалось тело ДРУГОГО письма
+                val restriction = if (dateReceived > 0L) {
+                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+                    sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    val dateFrom = sdf.format(java.util.Date(dateReceived - 120_000L))
+                    val dateTo = sdf.format(java.util.Date(dateReceived + 120_000L))
+                    """<t:And>
+                    <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
+                        <t:FieldURI FieldURI="item:Subject"/>
+                        <t:Constant Value="$escapedSubject"/>
+                    </t:Contains>
+                    <t:IsGreaterThanOrEqualTo>
+                        <t:FieldURI FieldURI="item:DateTimeReceived"/>
+                        <t:FieldURIOrConstant><t:Constant Value="$dateFrom"/></t:FieldURIOrConstant>
+                    </t:IsGreaterThanOrEqualTo>
+                    <t:IsLessThanOrEqualTo>
+                        <t:FieldURI FieldURI="item:DateTimeReceived"/>
+                        <t:FieldURIOrConstant><t:Constant Value="$dateTo"/></t:FieldURIOrConstant>
+                    </t:IsLessThanOrEqualTo>
+                </t:And>"""
+                } else {
+                    """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:Constant Value="$escapedSubject"/>
+                </t:Contains>"""
+                }
+                
+                // Шаг 1: FindItem для поиска письма по Subject + дате
                 val findRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -1040,12 +1085,9 @@ class EasClient(
             <m:ItemShape>
                 <t:BaseShape>IdOnly</t:BaseShape>
             </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="10" Offset="0" BasePoint="Beginning"/>
+            <m:IndexedPageItemView MaxEntriesReturned="1" Offset="0" BasePoint="Beginning"/>
             <m:Restriction>
-                <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
-                    <t:FieldURI FieldURI="item:Subject"/>
-                    <t:Constant Value="$escapedSubject"/>
-                </t:Contains>
+                $restriction
             </m:Restriction>
             <m:ParentFolderIds>
                 <t:DistinguishedFolderId Id="$distinguishedFolderId"/>
@@ -1391,6 +1433,17 @@ $foldersXml
         syncKey: String,
         read: Boolean = true
     ): EasResult<String> = emailService.markAsRead(collectionId, serverId, syncKey, read)
+    
+    /**
+     * Батч-пометка нескольких писем как прочитанных одним Sync-запросом
+     * @see EasEmailService.markAsReadBatch
+     */
+    suspend fun markAsReadBatch(
+        collectionId: String,
+        serverIds: List<String>,
+        syncKey: String,
+        read: Boolean = true
+    ): EasResult<String> = emailService.markAsReadBatch(collectionId, serverIds, syncKey, read)
     
     /**
      * Переключить флаг письма (избранное)
@@ -1855,9 +1908,10 @@ $SOAP_ENVELOPE_END"""
         reminder: Int = 15,
         busyStatus: Int = 2,
         sensitivity: Int = 0,
-        attendees: List<String> = emptyList()
+        attendees: List<String> = emptyList(),
+        recurrenceType: Int = -1
     ): EasResult<String> = calendarService.createCalendarEvent(
-        subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees
+        subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType
     )
     
     /**
@@ -1882,9 +1936,10 @@ $SOAP_ENVELOPE_END"""
         reminder: Int = 15,
         busyStatus: Int = 2,
         sensitivity: Int = 0,
-        oldSubject: String? = null
+        oldSubject: String? = null,
+        recurrenceType: Int = -1
     ): EasResult<Boolean> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, emptyList(), oldSubject
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, emptyList(), oldSubject, recurrenceType
     )
     
     /**
@@ -3072,13 +3127,24 @@ data class EasCalendarEvent(
     val busyStatus: Int = 2,
     val sensitivity: Int = 0,
     val organizer: String = "",
+    val organizerName: String = "",
     val attendees: List<EasAttendee> = emptyList(),
     val isRecurring: Boolean = false,
     val recurrenceRule: String = "",
+    val uid: String = "",
+    val timezone: String = "",
+    val exceptions: String = "", // JSON массив исключений
     val categories: List<String> = emptyList(),
     val lastModified: Long = System.currentTimeMillis(),
     val responseStatus: Int = 0, // 0=None, 1=NotResponded, 2=Accepted, 3=Tentative, 4=Declined
-    val isMeeting: Boolean = false // Это встреча с участниками
+    val isMeeting: Boolean = false,
+    val meetingStatus: Int = 0,
+    val responseRequested: Boolean = false,
+    val appointmentReplyTime: Long = 0,
+    val disallowNewTimeProposal: Boolean = false,
+    val onlineMeetingLink: String = "",
+    val hasAttachments: Boolean = false,
+    val attachments: String = "" // JSON массив [{name, fileReference, size, isInline, contentId}]
 )
 
 /**

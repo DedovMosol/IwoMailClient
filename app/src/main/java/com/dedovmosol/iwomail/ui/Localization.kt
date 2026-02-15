@@ -25,6 +25,7 @@ object Strings {
     val cancel: String @Composable get() = if (isRussian()) "Отмена" else "Cancel"
     val ok: String @Composable get() = if (isRussian()) "ОК" else "OK"
     val save: String @Composable get() = if (isRussian()) "Сохранить" else "Save"
+    val saveAs: String @Composable get() = if (isRussian()) "Сохранить как..." else "Save as..."
     val delete: String @Composable get() = if (isRussian()) "Удалить" else "Delete"
     val edit: String @Composable get() = if (isRussian()) "Редактировать" else "Edit"
     val close: String @Composable get() = if (isRussian()) "Закрыть" else "Close"
@@ -100,6 +101,10 @@ object Strings {
     fun deletingEvents(count: Int): String = if (isRussian()) "Удаление $count событий..." else "Deleting $count events..."
     @Composable
     fun restoringNotes(count: Int): String = if (isRussian()) "Восстановление $count заметок..." else "Restoring $count notes..."
+    @Composable
+    fun restoringEvents(count: Int): String = if (isRussian()) "Восстановление $count событий..." else "Restoring $count events..."
+    @Composable
+    fun restoringTasks(count: Int): String = if (isRussian()) "Восстановление $count задач..." else "Restoring $count tasks..."
     
     // Автоочистка корзины
     val autoEmptyTrash: String @Composable get() = if (isRussian()) "Автоочистка корзины" else "Auto-empty trash"
@@ -445,7 +450,7 @@ object Strings {
     // EmailListScreen - фильтры
     val allMail: String @Composable get() = if (isRussian()) "Вся почта" else "All mail"
     val starred: String @Composable get() = if (isRussian()) "Помеченные" else "Starred"
-    val allDates: String @Composable get() = if (isRussian()) "Все даты" else "All dates"
+    val allDates: String @Composable get() = if (isRussian()) "Все" else "All"
     val week: String @Composable get() = if (isRussian()) "Неделя" else "Week"
     val month: String @Composable get() = if (isRussian()) "Месяц" else "Month"
     val year: String @Composable get() = if (isRussian()) "Год" else "Year"
@@ -527,6 +532,8 @@ object Strings {
     val attachmentsCount: String @Composable get() = if (isRussian()) "Вложения" else "Attachments"
     val selectAccount: String @Composable get() = if (isRussian()) "Выбрать аккаунт" else "Select account"
     val sendScheduled: String @Composable get() = if (isRussian()) "Отправка запланирована" else "Send scheduled"
+    val localDraft: String @Composable get() = if (isRussian()) "Локальный" else "Local"
+    val serverDraft: String @Composable get() = if (isRussian()) "Серверный" else "Server"
     val localDraftsNotice: String @Composable get() = if (isRussian()) 
         "Черновики сохраняются локально и удаляются сразу" 
         else "Drafts are saved locally and deleted immediately"
@@ -561,11 +568,8 @@ object Strings {
     // Названия цветовых тем
     val themePurple: String @Composable get() = if (isRussian()) "Фиолетовая" else "Purple"
     val themeBlue: String @Composable get() = if (isRussian()) "Синяя" else "Blue"
-    val themeRed: String @Composable get() = if (isRussian()) "Красная" else "Red"
     val themeYellow: String @Composable get() = if (isRussian()) "Жёлтая" else "Yellow"
-    val themeOrange: String @Composable get() = if (isRussian()) "Оранжевая" else "Orange"
     val themeGreen: String @Composable get() = if (isRussian()) "Зелёная" else "Green"
-    val themePink: String @Composable get() = if (isRussian()) "Розовая" else "Pink"
     
     // Контакты
     val personalContacts: String @Composable get() = if (isRussian()) "Личные" else "Personal"
@@ -625,6 +629,8 @@ object Strings {
     val taskDescription: String @Composable get() = if (isRussian()) "Описание" else "Description"
     val startDate: String @Composable get() = if (isRussian()) "Дата начала" else "Start date"
     val dueDate: String @Composable get() = if (isRussian()) "Срок выполнения" else "Due date"
+    val completedDate: String @Composable get() = if (isRussian()) "Дата выполнения" else "Completed"
+    val categories: String @Composable get() = if (isRussian()) "Категории" else "Categories"
     val priority: String @Composable get() = if (isRussian()) "Приоритет" else "Priority"
     val priorityLow: String @Composable get() = if (isRussian()) "Низ." else "Low"
     val priorityNormal: String @Composable get() = if (isRussian()) "Обычн." else "Normal"
@@ -833,16 +839,23 @@ object Strings {
     val endBeforeStart: String @Composable get() = if (isRussian()) "Время окончания должно быть позже времени начала" else "End time must be after start time"
     val eventCreated: String @Composable get() = if (isRussian()) "Событие создано" else "Event created"
     val eventUpdated: String @Composable get() = if (isRussian()) "Событие обновлено" else "Event updated"
-    val eventDeleted: String @Composable get() = if (isRussian()) "Событие удалено" else "Event deleted"
+    val eventDeleted: String @Composable get() = if (isRussian()) "Событие перемещено в корзину" else "Event moved to trash"
+    val eventsDeletedPermanently: String @Composable get() = if (isRussian()) "Событий удалено навсегда" else "Events permanently deleted"
     val eventsRestored: String @Composable get() = if (isRussian()) "События восстановлены" else "Events restored"
     val undo: String @Composable get() = if (isRussian()) "Отменить" else "Undo"
     val deleteEvent: String @Composable get() = if (isRussian()) "Удалить событие?" else "Delete event?"
-    val deleteEventConfirm: String @Composable get() = if (isRussian()) "Событие будет удалено с сервера" else "Event will be deleted from server"
+    val deleteEventConfirm: String @Composable get() = if (isRussian()) "Событие будет перемещено в корзину" else "Event will be moved to trash"
     val deleteEvents: String @Composable get() = if (isRussian()) "Удалить события?" else "Delete events?"
+    val deleteEventsPermanently: String @Composable get() = if (isRussian()) "Удалить события навсегда?" else "Delete events permanently?"
+    val deleteEventPermanentlyConfirm: String @Composable get() = if (isRussian()) "Событие будет удалено безвозвратно." else "Event will be permanently deleted."
     @Composable
     fun deleteEventsConfirm(count: Int): String = if (isRussian()) 
-        "Выбранные события ($count) будут удалены с сервера." 
-        else "Selected events ($count) will be deleted from server."
+        "Выбранные события ($count) будут перемещены в корзину." 
+        else "Selected events ($count) will be moved to trash."
+    @Composable
+    fun deleteEventsPermanentlyConfirm(count: Int): String = if (isRussian()) 
+        "Выбранные события ($count) будут удалены безвозвратно." 
+        else "Selected events ($count) will be permanently deleted."
     val addToCalendar: String @Composable get() = if (isRussian()) "Добавить в календарь" else "Add to calendar"
     val addToTasks: String @Composable get() = if (isRussian()) "Добавить в задачи" else "Add to tasks"
     val taskAddedToCalendar: String @Composable get() = if (isRussian()) "Задача добавлена в календарь" else "Task added to calendar"
@@ -871,22 +884,41 @@ object Strings {
     val noteBody: String @Composable get() = if (isRussian()) "Текст заметки" else "Note text"
     val noteCreated: String @Composable get() = if (isRussian()) "Заметка создана" else "Note created"
     val noteUpdated: String @Composable get() = if (isRussian()) "Заметка обновлена" else "Note updated"
-    val noteDeleted: String @Composable get() = if (isRussian()) "Заметка удалена" else "Note deleted"
-    val notesDeleted: String @Composable get() = if (isRussian()) "Заметки удалены" else "Notes deleted"
+    val noteMovedToTrash: String @Composable get() = if (isRussian()) "Заметка перемещена в корзину" else "Note moved to trash"
+    @Composable
+    fun notesMovedToTrash(count: Int): String = if (isRussian()) {
+        when {
+            count == 1 -> "Заметка перемещена в корзину"
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "$count заметки перемещены в корзину"
+            else -> "$count заметок перемещено в корзину"
+        }
+    } else {
+        if (count == 1) "Note moved to trash" else "$count notes moved to trash"
+    }
+    @Composable
+    fun noteDeletedPermanently(count: Int): String = if (isRussian()) {
+        when {
+            count == 1 -> "Заметка удалена"
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "$count заметки удалены"
+            else -> "$count заметок удалено"
+        }
+    } else {
+        if (count == 1) "Note deleted" else "$count notes deleted"
+    }
     val noteRestored: String @Composable get() = if (isRussian()) "Заметка восстановлена" else "Note restored"
     val notesRestored: String @Composable get() = if (isRussian()) "Заметки восстановлены" else "Notes restored"
     val deleted: String @Composable get() = if (isRussian()) "Удалённые" else "Deleted"
     val deleteNote: String @Composable get() = if (isRussian()) "Удалить заметку?" else "Delete note?"
-    val deleteNoteConfirm: String @Composable get() = if (isRussian()) "Заметка будет удалена" else "Note will be deleted"
+    val deleteNoteConfirm: String @Composable get() = if (isRussian()) "Заметка будет перемещена в корзину" else "Note will be moved to trash"
     @Composable
     fun deleteNotesConfirm(count: Int): String = if (isRussian()) {
         when {
-            count % 10 == 1 && count % 100 != 11 -> "$count заметка будет удалена"
-            count % 10 in 2..4 && count % 100 !in 12..14 -> "$count заметки будут удалены"
-            else -> "$count заметок будут удалены"
+            count % 10 == 1 && count % 100 != 11 -> "$count заметка будет перемещена в корзину"
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "$count заметки будут перемещены в корзину"
+            else -> "$count заметок будет перемещено в корзину"
         }
     } else {
-        if (count == 1) "Note will be deleted" else "$count notes will be deleted"
+        if (count == 1) "Note will be moved to trash" else "$count notes will be moved to trash"
     }
     val deleteNotePermanently: String @Composable get() = if (isRussian()) "Удалить заметку окончательно?" else "Delete note permanently?"
     val deleteNotePermanentlyConfirm: String @Composable get() = if (isRussian())
@@ -1129,11 +1161,27 @@ object OnboardingStrings {
     else
         "Server synchronization"
     
+    fun draftModeTitle(isRussian: Boolean): String = if (isRussian) "Режим черновиков (бета)" else "Draft mode (beta)"
+    fun draftModeDescription(isRussian: Boolean): String = if (isRussian)
+        "Выберите где хранить черновики писем"
+    else
+        "Choose where to store email drafts"
+    fun draftModeServer(isRussian: Boolean): String = if (isRussian) "На сервере" else "On server"
+    fun draftModeLocal(isRussian: Boolean): String = if (isRussian) "Локально" else "Locally"
+    fun draftModeServerDesc(isRussian: Boolean): String = if (isRussian)
+        "Доступны с любого устройства через Outlook и OWA"
+    else
+        "Available from any device via Outlook and OWA"
+    fun draftModeLocalDesc(isRussian: Boolean): String = if (isRussian)
+        "Быстрое сохранение без сетевых запросов"
+    else
+        "Fast saving without network requests"
+    
     fun personalizationTitle(isRussian: Boolean): String = if (isRussian) "Персонализация" else "Personalization"
     fun personalizationDescription(isRussian: Boolean): String = if (isRussian)
-        "7 тем, мультиаккаунт, индивидуальные подписи"
+        "Темы, мультиаккаунт, подписи"
     else
-        "7 themes, multi-account, individual signatures"
+        "Themes, multi-account, signatures"
     fun updatesTitle(isRussian: Boolean): String = if (isRussian) "Обновления" else "Updates"
     fun updatesDescription(isRussian: Boolean): String = if (isRussian)
         "OTA-обновления с возможностью отката к предыдущей версии"

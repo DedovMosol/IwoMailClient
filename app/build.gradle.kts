@@ -12,8 +12,8 @@ android {
         applicationId = "com.dedovmosol.iwomail"
         minSdk = 26  // Android 8.0
         targetSdk = 36  // Android 16
-        versionCode = 24
-        versionName = "1.6.1"
+        versionCode = 25
+        versionName = "1.6.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

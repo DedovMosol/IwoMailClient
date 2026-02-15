@@ -87,6 +87,7 @@ object AppIcons {
     val PhoneAndroid: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_phone_android)
     val Policy: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_policy)
     val PriorityHigh: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_priority_high)
+    val RadioButtonUnchecked: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_radio_button_unchecked)
     val Refresh: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_refresh)
     val Reply: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_reply)
     val Report: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_report)

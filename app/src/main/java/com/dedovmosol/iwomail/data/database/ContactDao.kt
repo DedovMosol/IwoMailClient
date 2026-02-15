@@ -67,6 +67,9 @@ interface ContactDao {
     @Query("SELECT * FROM contacts WHERE accountId = :accountId AND email = :email LIMIT 1")
     suspend fun findByEmail(accountId: Long, email: String): ContactEntity?
     
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND source = 'LOCAL' AND LOWER(email) = LOWER(:email) LIMIT 1")
+    suspend fun findLocalByEmail(accountId: Long, email: String): ContactEntity?
+    
     @Query("SELECT displayName FROM contacts WHERE LOWER(email) = LOWER(:email) AND displayName IS NOT NULL AND displayName != '' LIMIT 1")
     suspend fun getNameByEmail(email: String): String?
     
@@ -114,6 +117,9 @@ interface ContactDao {
     
     @Query("SELECT * FROM contacts WHERE accountId = :accountId AND groupId = :groupId ORDER BY displayName COLLATE NOCASE")
     fun getContactsByGroup(accountId: Long, groupId: String): Flow<List<ContactEntity>>
+    
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND groupId = :groupId ORDER BY displayName COLLATE NOCASE")
+    suspend fun getContactsByGroupList(accountId: Long, groupId: String): List<ContactEntity>
     
     @Query("SELECT * FROM contacts WHERE accountId = :accountId AND groupId IS NULL ORDER BY displayName COLLATE NOCASE")
     fun getContactsWithoutGroup(accountId: Long): Flow<List<ContactEntity>>

@@ -10,6 +10,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.ui.Strings
 import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Состояние удаления
@@ -38,7 +39,7 @@ class DeletionController {
         private set
     
     private var deletionJob: Job? = null
-    private var isCancelled = false
+    private val isCancelled = AtomicBoolean(false)
     
     // Собственный scope для удаления (не зависит от UI)
     private val deletionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -59,7 +60,7 @@ class DeletionController {
     ) {
         // Отменяем предыдущее удаление если было
         cancel()
-        isCancelled = false
+        isCancelled.set(false)
         
         state = DeletionState(
             isActive = true,
@@ -81,12 +82,12 @@ class DeletionController {
             try {
                 // Фаза 1: Обратный отсчёт
                 for (i in 1..steps) {
-                    if (isCancelled) return@launch
+                    if (isCancelled.get()) return@launch
                     delay(stepMs)
                     state = state.copy(progress = i.toFloat() / steps)
                 }
                 
-                if (isCancelled) return@launch
+                if (isCancelled.get()) return@launch
                 
                 // Фаза 2: Реальное удаление
                 state = state.copy(
@@ -97,7 +98,7 @@ class DeletionController {
                 
                 // Выполняем удаление с callback прогресса
                 onDelete(emailIds) { deleted, total ->
-                    if (!isCancelled) {
+                    if (!isCancelled.get()) {
                         state = state.copy(
                             deletedCount = deleted,
                             progress = if (total > 0) deleted.toFloat() / total else 1f
@@ -118,7 +119,7 @@ class DeletionController {
      */
     fun cancel() {
         if (state.isActive && state.phase == DeletionPhase.COUNTDOWN) {
-            isCancelled = true
+            isCancelled.set(true)
             deletionJob?.cancel()
             deletionJob = null
             state = DeletionState()

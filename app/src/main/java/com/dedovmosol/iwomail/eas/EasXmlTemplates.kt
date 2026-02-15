@@ -419,6 +419,7 @@ $SOAP_ENVELOPE_END"""
     fun ewsFindCalendarItems(): String {
         return """
             ${SOAP_ENVELOPE_START}
+            ${SOAP_HEADER_2007}
             <soap:Body>
                 <FindItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages"
                           xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -454,6 +455,7 @@ $SOAP_ENVELOPE_END"""
         
         return """
             ${SOAP_ENVELOPE_START}
+            ${SOAP_HEADER_2007}
             <soap:Body>
                 <CreateItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages"
                             xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"

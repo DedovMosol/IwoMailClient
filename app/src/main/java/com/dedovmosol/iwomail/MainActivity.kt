@@ -155,7 +155,7 @@ private fun PermissionDialog(
                         TextButton(onClick = onDismiss) {
                             Text(dismissText)
                         }
-                        com.dedovmosol.iwomail.ui.theme.GradientDialogButton(
+                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                             onClick = onConfirm,
                             text = confirmText
                         )
@@ -216,6 +216,7 @@ class MainActivity : ComponentActivity() {
     private var shortcutSearch = mutableStateOf(false)
     private var shortcutCalendar = mutableStateOf(false)
     private var shortcutTasks = mutableStateOf(false)
+    private var shortcutNotes = mutableStateOf(false)
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -268,6 +269,15 @@ class MainActivity : ComponentActivity() {
                 AppColorTheme.fromCode(effectiveThemeCode)
             }
             
+            // Цвет скроллбара с учётом расписания по дням
+            val initialScrollbarColor = remember { settingsRepo.getCurrentScrollbarColorSync() }
+            val scrollbarColorCode by settingsRepo.scrollbarColor.collectAsState(initial = initialScrollbarColor)
+            val dayScrollbarCode by settingsRepo.getDayScrollbarColor(currentDayOfWeek).collectAsState(initial = "blue")
+            val effectiveScrollbarCode = if (dailyThemesEnabled) dayScrollbarCode else scrollbarColorCode
+            val scrollbarColor = remember(effectiveScrollbarCode) {
+                com.dedovmosol.iwomail.ui.components.ScrollbarColor.fromCode(effectiveScrollbarCode)
+            }
+            
             // Анимации
             val animationsEnabled by settingsRepo.animationsEnabled.collectAsState(initial = true)
             
@@ -305,7 +315,7 @@ class MainActivity : ComponentActivity() {
                 com.dedovmosol.iwomail.ui.components.LocalSendController provides sendController,
                 androidx.compose.ui.platform.LocalTextToolbar provides customTextToolbar
             ) {
-                ExchangeMailTheme(fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled) {
+                ExchangeMailTheme(fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled, scrollbarColor = scrollbarColor) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         Surface(
                             modifier = Modifier.fillMaxSize(),
@@ -333,12 +343,14 @@ class MainActivity : ComponentActivity() {
                                 shortcutSearch = shouldShortcutSearch,
                                 shortcutCalendar = shortcutCalendar.value,
                                 shortcutTasks = shortcutTasks.value,
+                                shortcutNotes = shortcutNotes.value,
                                 onShortcutHandled = {
                                     shortcutCompose.value = false
                                     shortcutInbox.value = false
                                     shortcutSearch.value = false
                                     shortcutCalendar.value = false
                                     shortcutTasks.value = false
+                                    shortcutNotes.value = false
                                 },
                                 openUpdates = shouldOpenUpdates,
                                 onUpdatesHandled = { openUpdates.value = false },
@@ -479,6 +491,11 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra("tasks", false)) {
             shortcutTasks.value = true
             intent.removeExtra("tasks")
+            return
+        }
+        if (intent.getBooleanExtra("notes", false)) {
+            shortcutNotes.value = true
+            intent.removeExtra("notes")
             return
         }
         

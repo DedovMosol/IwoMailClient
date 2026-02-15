@@ -122,6 +122,9 @@ interface AccountDao {
     @Query("UPDATE accounts SET certificatePinningEnabled = :enabled WHERE id = :accountId")
     suspend fun updateCertificatePinningEnabled(accountId: Long, enabled: Boolean)
     
+    @Query("UPDATE accounts SET draftMode = :mode WHERE id = :accountId")
+    suspend fun updateDraftMode(accountId: Long, mode: String)
+    
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(account: AccountEntity): Long
     
@@ -324,8 +327,23 @@ interface EmailDao {
     @Query("SELECT COUNT(*) FROM emails WHERE accountId = :accountId AND read = 0")
     suspend fun getUnreadCountByAccount(accountId: Long): Int
 
-    @Query("SELECT accountId, COUNT(*) AS unreadCount FROM emails WHERE read = 0 GROUP BY accountId")
+    @Query("""
+        SELECT e.accountId, COUNT(*) AS unreadCount 
+        FROM emails e 
+        INNER JOIN folders f ON e.folderId = f.id 
+        WHERE e.read = 0 AND f.type = 2 
+        GROUP BY e.accountId
+    """)
     suspend fun getUnreadCountsByAccount(): List<AccountUnreadCount>
+
+    @Query("""
+        SELECT e.* FROM emails e 
+        INNER JOIN folders f ON e.folderId = f.id 
+        WHERE f.type = 2 
+        ORDER BY e.dateReceived DESC 
+        LIMIT :limit
+    """)
+    suspend fun getRecentUnreadInboxGlobal(limit: Int = 3): List<EmailEntity>
     
     @Query("""
         SELECT folderId, 
@@ -599,6 +617,9 @@ interface AttachmentDao {
     
     @Query("UPDATE attachments SET localPath = :localPath, downloaded = 1 WHERE id = :id")
     suspend fun updateLocalPath(id: Long, localPath: String)
+    
+    @Query("UPDATE attachments SET fileReference = :fileReference WHERE emailId = :emailId AND displayName = :displayName")
+    suspend fun updateFileReference(emailId: String, displayName: String, fileReference: String)
     
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(attachments: List<AttachmentEntity>)

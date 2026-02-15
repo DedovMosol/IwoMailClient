@@ -143,8 +143,14 @@ class MailRepository(private val context: Context) {
     suspend fun markAsRead(emailId: String, read: Boolean): EasResult<Boolean> = 
         emailOperationsService.markAsRead(emailId, read)
     
-    suspend fun loadEmailBody(emailId: String): EasResult<String> = 
-        emailOperationsService.loadEmailBody(emailId)
+    suspend fun markAsReadBatch(emailIds: List<String>, read: Boolean): EasResult<Boolean> =
+        emailOperationsService.markAsReadBatch(emailIds, read)
+    
+    suspend fun loadEmailBody(emailId: String, forceReload: Boolean = false): EasResult<String> = 
+        emailOperationsService.loadEmailBody(emailId, forceReload)
+    
+    suspend fun refreshAttachmentMetadata(emailId: String) = 
+        emailOperationsService.refreshAttachmentMetadata(emailId)
     
     suspend fun prefetchEmailBodies(accountId: Long, count: Int = 7) = 
         emailOperationsService.prefetchEmailBodies(accountId, count)
@@ -322,22 +328,34 @@ class MailRepository(private val context: Context) {
             ?: return null
         
         if (AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
-            val easClient = accountRepo.createEasClient(accountId)
-                ?: return null
+            // Режим черновиков: LOCAL — сохраняем только в БД, SERVER — на сервер Exchange
+            val draftMode = try {
+                DraftMode.valueOf(account.draftMode)
+            } catch (_: Exception) {
+                DraftMode.SERVER
+            }
             
-          // На сервер отправляем serverBody (с cid: ссылками на inline-картинки).
-          // Inline-картинки загружаются через CreateAttachment с ContentId.
-          // Outlook десктопный рендерит HTML через Word — data: URL не работает,
-          // только cid: + ContentId. Это стандарт, работает на Exchange 2007 SP1.
-          val result = easClient.createDraft(
-    to = to,
-    cc = cc,
-    bcc = "",
-    subject = subject,
-    body = serverBody,
-    draftsFolderId = draftsFolder.serverId,
-    attachments = attachmentFiles
-)
+            val result: EasResult<String> = if (draftMode == DraftMode.LOCAL) {
+                // Локальный режим — сразу генерируем local_draft_ ID без обращения к серверу
+                EasResult.Success("local_draft_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}")
+            } else {
+                val easClient = accountRepo.createEasClient(accountId)
+                    ?: return null
+                
+                // На сервер отправляем serverBody (с cid: ссылками на inline-картинки).
+                // Inline-картинки загружаются через CreateAttachment с ContentId.
+                // Outlook десктопный рендерит HTML через Word — data: URL не работает,
+                // только cid: + ContentId. Это стандарт, работает на Exchange 2007 SP1.
+                easClient.createDraft(
+                    to = to,
+                    cc = cc,
+                    bcc = "",
+                    subject = subject,
+                    body = serverBody,
+                    draftsFolderId = draftsFolder.serverId,
+                    attachments = attachmentFiles
+                )
+            }
 if (result is EasResult.Success) {
     val ewsItemId = result.data
     
@@ -497,10 +515,6 @@ if (result is EasResult.Success) {
         var draftsFolder = folderDao.getFolderByType(accountId, FolderType.DRAFTS)
             ?: return EasResult.Error("Папка черновиков не найдена")
         
-        val easClient = accountRepo.getEasClientOrError<String>(accountId) { return it }
-        
-        easClient.detectEasVersion()
-        
         val oldEmailId = "${accountId}_${serverId}"
         
         if (serverId.startsWith("local_draft_")) {
@@ -521,6 +535,9 @@ if (result is EasResult.Success) {
             
             return EasResult.Success(serverId)
         }
+        
+        val easClient = accountRepo.getEasClientOrError<String>(accountId) { return it }
+        easClient.detectEasVersion()
         
         // КРИТИЧНО: ActiveSync возвращает КОРОТКИЙ serverId (22:2), а EWS требует ПОЛНЫЙ ItemId!
         // Если serverId короткий - получаем ПОЛНЫЙ ItemId через поиск по СТАРОМУ Subject из БД

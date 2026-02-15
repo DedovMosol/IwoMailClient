@@ -20,6 +20,7 @@ import androidx.glance.unit.ColorProvider
 import com.dedovmosol.iwomail.MainActivity
 import com.dedovmosol.iwomail.R
 import com.dedovmosol.iwomail.data.database.MailDatabase
+import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.sync.SyncAlarmReceiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,14 +31,9 @@ import java.util.*
  */
 class MailWidget : GlanceAppWidget() {
 
-    // Используем Responsive вместо Exact для корректной перерисовки
-    override val sizeMode = SizeMode.Responsive(
-        setOf(
-            DpSize(180.dp, 140.dp),  // Минимальный размер
-            DpSize(300.dp, 180.dp),  // Средний
-            DpSize(400.dp, 200.dp)   // Большой
-        )
-    )
+    // Exact — LocalSize.current возвращает реальный размер виджета,
+    // позволяя корректно масштабировать шрифты при растягивании
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         try {
@@ -69,38 +65,135 @@ class MailWidget : GlanceAppWidget() {
             
             val eventInfo = nextEvent?.let {
                 val timeFormat = DateFormat.getTimeFormat(context)
-                EventInfo(it.subject, timeFormat.format(Date(it.startTime)))
+                val startStr = timeFormat.format(Date(it.startTime))
+                val endStr = if (it.endTime > it.startTime) timeFormat.format(Date(it.endTime)) else ""
+                EventInfo(it.subject, startStr, endStr, it.location)
             }
             
-            WidgetData(accountsWithUnread, eventInfo, accounts.isNotEmpty())
+            // Дата и день недели
+            val dateStr = formatTodayDate(context)
+            
+            // Задачи на сегодня
+            val cal = Calendar.getInstance()
+            cal.set(Calendar.HOUR_OF_DAY, 23)
+            cal.set(Calendar.MINUTE, 59)
+            cal.set(Calendar.SECOND, 59)
+            cal.set(Calendar.MILLISECOND, 999)
+            val endOfDay = cal.timeInMillis
+            val todayTasksCount = db.taskDao().getTodayTasksCountGlobal(endOfDay)
+            val activeTasksCount = db.taskDao().getActiveTasksCountGlobal()
+            val nextTask = db.taskDao().getNextTaskGlobalSync()
+            val nextTaskTitle = nextTask?.subject?.take(30) ?: ""
+            
+            // Последние письма из Inbox
+            val recentEmails = db.emailDao().getRecentUnreadInboxGlobal(3).map { email ->
+                RecentEmail(
+                    id = email.id,
+                    sender = email.fromName.ifBlank { email.from },
+                    preview = email.preview.ifBlank { email.subject.ifBlank { "(no subject)" } },
+                    folderId = email.folderId,
+                    dateReceived = email.dateReceived
+                )
+            }
+            
+            // Общее число непрочитанных
+            val totalUnread = unreadCounts.sumOf { it.unreadCount }
+            
+            // Заметки
+            val notesCount = db.noteDao().getNotesCountGlobal()
+            val calendarEventsCount = db.calendarEventDao().getEventsCountGlobal()
+            
+            // Текущая тема → градиент
+            val settingsRepo = SettingsRepository.getInstance(context)
+            val themeCode = settingsRepo.getCurrentThemeSync()
+            val gradientRes = themeToGradient(themeCode)
+            
+            // Время последней синхронизации
+            val lastSyncTime = settingsRepo.getLastSyncTimeSync()
+            val lastSyncStr = formatSyncAgo(context, lastSyncTime)
+            
+            val themeColor = themeToColor(themeCode)
+            
+            WidgetData(accountsWithUnread, eventInfo, accounts.isNotEmpty(), dateStr, todayTasksCount, activeTasksCount, recentEmails, gradientRes, totalUnread, notesCount, lastSyncStr, calendarEventsCount, nextTaskTitle, themeColor)
         } catch (e: Exception) {
-            WidgetData(emptyList(), null, false)
+            WidgetData(emptyList(), null, false, "", 0, 0, emptyList())
         }
+    }
+    
+    private fun themeToGradient(themeCode: String): Int = when (themeCode) {
+        "blue" -> R.drawable.widget_gradient_blue
+        "yellow" -> R.drawable.widget_gradient_yellow
+        "green" -> R.drawable.widget_gradient_green
+        else -> R.drawable.widget_gradient_purple
+    }
+    
+    private fun themeToColor(themeCode: String): Int = when (themeCode) {
+        "blue" -> 0xFF1565C0.toInt()
+        "yellow" -> 0xFFC77700.toInt()
+        "green" -> 0xFF2E7D32.toInt()
+        else -> 0xFF5C00D4.toInt()
+    }
+    
+    private fun formatSyncAgo(context: Context, lastSyncMillis: Long): String {
+        if (lastSyncMillis == 0L) return ""
+        val diff = System.currentTimeMillis() - lastSyncMillis
+        if (diff < 0 || diff < 60_000) return context.getString(R.string.widget_synced_just_now)
+        // Для всех остальных случаев — точное время синхронизации
+        val timeFormat = DateFormat.getTimeFormat(context)
+        val timeStr = timeFormat.format(Date(lastSyncMillis))
+        val locale = context.resources.configuration.locales[0]
+        val isRu = locale.language == "ru"
+        return if (isRu) "в $timeStr" else "at $timeStr"
+    }
+    
+    private fun formatTodayDate(context: Context): String {
+        val locale = context.resources.configuration.locales[0]
+        val cal = Calendar.getInstance()
+        val dayOfWeek = java.text.SimpleDateFormat("EE", locale).format(cal.time)
+            .replaceFirstChar { it.uppercase() }
+        val dayMonth = java.text.SimpleDateFormat("d MMMM", locale).format(cal.time)
+        return "$dayOfWeek, $dayMonth"
     }
 }
 
 data class AccountUnread(val id: Long, val name: String, val color: Int, val unreadCount: Int)
-data class EventInfo(val title: String, val time: String)
+data class EventInfo(val title: String, val time: String, val endTime: String = "", val location: String = "")
+data class RecentEmail(val id: String, val sender: String, val preview: String, val folderId: String = "", val dateReceived: Long = 0L)
 data class WidgetData(
     val accounts: List<AccountUnread>,
     val nextEvent: EventInfo?,
-    val hasAccount: Boolean
+    val hasAccount: Boolean,
+    val todayDate: String = "",
+    val todayTasksCount: Int = 0,
+    val activeTasksCount: Int = 0,
+    val recentEmails: List<RecentEmail> = emptyList(),
+    val gradientRes: Int = R.drawable.widget_gradient_purple,
+    val totalUnread: Int = 0,
+    val notesCount: Int = 0,
+    val lastSyncStr: String = "",
+    val calendarEventsCount: Int = 0,
+    val nextTaskTitle: String = "",
+    val themeColor: Int = 0xFF5C00D4.toInt()
 )
 
-private val widgetBg = Color(0xFFE8F4FC)
 private val searchBg = Color.White
-private val textDark = Color(0xFF212121)
-private val textGray = Color(0xFF757575)
-private val accentBlue = Color(0xFF2196F3)
+private val searchHint = Color(0xFF757575)
+private val textWhite = Color.White
+private val textWhiteAlpha = Color(0xCCFFFFFF)
+private val darkBg = Color(0xE6181828)
+private val textLight = Color(0xFFEEEEEE)
+private val textLightAlpha = Color(0xB3EEEEEE)
+private val textDimmed = Color(0x80EEEEEE)
+private val accentBlue = Color(0xFF448AFF)
 
 @Composable
 private fun MailWidgetContent(data: WidgetData, context: Context) {
+    // Внешний Box — скруглённые углы, фон-градиент
     Box(
         modifier = GlanceModifier
             .fillMaxSize()
             .cornerRadius(24.dp)
-            .background(ColorProvider(widgetBg))
-            .padding(16.dp)
+            .background(ImageProvider(data.gradientRes))
     ) {
         if (!data.hasAccount) {
             NoAccountView(context)
@@ -115,6 +208,7 @@ private fun NoAccountView(context: Context) {
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
+            .padding(16.dp)
             .clickable(actionStartActivity(
                 Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -125,23 +219,43 @@ private fun NoAccountView(context: Context) {
     ) {
         Text(
             text = context.getString(R.string.widget_add_account),
-            style = TextStyle(color = ColorProvider(textDark), fontSize = 14.sp)
+            style = TextStyle(color = ColorProvider(textWhite), fontSize = 14.sp, fontWeight = FontWeight.Medium)
         )
     }
 }
 
 @Composable
 private fun FullWidgetView(data: WidgetData, context: Context) {
-    Column(modifier = GlanceModifier.fillMaxSize()) {
-        // Строка поиска + кнопка синхронизации
-        Row(
-            modifier = GlanceModifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+    val size = LocalSize.current
+    val isLarge = size.height >= 200.dp
+    // Масштабирование текста: адаптивное — маленький по умолчанию, растёт при растягивании
+    val baseHeight = 300f
+    val scale = (size.height.value / baseHeight).coerceIn(0.8f, 1.35f)
+    val dateFontSize = (12 * scale).sp
+    val primaryFontSize = (11 * scale).sp
+    val secondaryFontSize = (10 * scale).sp
+    val iconSize = (16 * scale).dp
+    val iconGap = (4 * scale).dp
+    val btnColor = Color(data.themeColor)
+    
+    Column(modifier = GlanceModifier.fillMaxSize().clickable(actionStartActivity(
+        Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+    ))) {
+        // ═══════════════════════════════════════════════
+        // ВЕРХНЯЯ ЧАСТЬ — градиентный фон (растягивается при ресайзе)
+        // ═══════════════════════════════════════════════
+        Column(
+            modifier = GlanceModifier
+                .fillMaxWidth()
+                .defaultWeight()
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp)
         ) {
-            // Поиск
+            // Строка поиска (белая pill)
             Box(
                 modifier = GlanceModifier
-                    .defaultWeight()
+                    .fillMaxWidth()
                     .height(44.dp)
                     .cornerRadius(22.dp)
                     .background(ColorProvider(searchBg))
@@ -159,111 +273,302 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                         provider = ImageProvider(R.drawable.ic_search),
                         contentDescription = null,
                         modifier = GlanceModifier.size(18.dp),
-                        colorFilter = ColorFilter.tint(ColorProvider(textGray))
+                        colorFilter = ColorFilter.tint(ColorProvider(searchHint))
                     )
                     Spacer(modifier = GlanceModifier.width(10.dp))
                     Text(
                         text = context.getString(R.string.widget_search_mail),
-                        style = TextStyle(color = ColorProvider(textGray), fontSize = 14.sp)
+                        style = TextStyle(color = ColorProvider(searchHint), fontSize = 14.sp)
                     )
                 }
             }
             
-            Spacer(modifier = GlanceModifier.width(10.dp))
+            Spacer(modifier = GlanceModifier.defaultWeight())
             
-            // Кнопка "Написать"
-            Box(
+            // Дата + непрочитанные
+            if (data.todayDate.isNotBlank()) {
+                Row(
+                    modifier = GlanceModifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = data.todayDate,
+                        style = TextStyle(
+                            color = ColorProvider(textWhite),
+                            fontSize = dateFontSize,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    if (data.totalUnread > 0) {
+                        Spacer(modifier = GlanceModifier.defaultWeight())
+                        Text(
+                            text = "${data.totalUnread} ${context.getString(R.string.widget_unread)}",
+                            style = TextStyle(
+                                color = ColorProvider(textWhiteAlpha),
+                                fontSize = primaryFontSize,
+                                fontWeight = FontWeight.Medium
+                            )
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = GlanceModifier.defaultWeight())
+            
+            // Календарь
+            Row(
                 modifier = GlanceModifier
-                    .size(44.dp)
-                    .cornerRadius(22.dp)
-                    .background(ColorProvider(searchBg))
+                    .fillMaxWidth()
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            putExtra("compose", true)
+                            putExtra("calendar", true)
                         }
                     )),
-                contentAlignment = Alignment.Center
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
-                    provider = ImageProvider(R.drawable.ic_edit),
+                    provider = ImageProvider(R.drawable.ic_calendar_month),
                     contentDescription = null,
-                    modifier = GlanceModifier.size(22.dp),
-                    colorFilter = ColorFilter.tint(ColorProvider(textDark))
+                    modifier = GlanceModifier.size(iconSize),
+                    colorFilter = ColorFilter.tint(ColorProvider(textWhiteAlpha))
                 )
+                Spacer(modifier = GlanceModifier.width(iconGap))
+                if (data.nextEvent != null) {
+                    Text(
+                        text = "${context.getString(R.string.widget_calendar)}: ${data.calendarEventsCount}",
+                        style = TextStyle(color = ColorProvider(textWhiteAlpha), fontSize = primaryFontSize)
+                    )
+                    Spacer(modifier = GlanceModifier.width(8.dp))
+                    Text(
+                        text = "• ${data.nextEvent.time} ${data.nextEvent.title}",
+                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = secondaryFontSize),
+                        maxLines = 1
+                    )
+                } else {
+                    Text(
+                        text = context.getString(R.string.widget_no_events_today),
+                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = primaryFontSize)
+                    )
+                }
             }
             
-            Spacer(modifier = GlanceModifier.width(10.dp))
+            Spacer(modifier = GlanceModifier.defaultWeight())
             
-            // Кнопка синхронизации
-            Box(
+            // Задачи
+            val taskCount = if (data.todayTasksCount > 0) data.todayTasksCount else data.activeTasksCount
+            Row(
                 modifier = GlanceModifier
-                    .size(44.dp)
-                    .cornerRadius(22.dp)
-                    .background(ColorProvider(searchBg))
-                    .clickable(actionSendBroadcast(
-                        Intent(SyncAlarmReceiver.ACTION_SYNC_NOW).apply {
-                            setClass(context, SyncAlarmReceiver::class.java)
+                    .fillMaxWidth()
+                    .clickable(actionStartActivity(
+                        Intent(context, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            putExtra("tasks", true)
                         }
                     )),
-                contentAlignment = Alignment.Center
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
-                    provider = ImageProvider(R.drawable.ic_sync),
+                    provider = ImageProvider(R.drawable.ic_task),
                     contentDescription = null,
-                    modifier = GlanceModifier.size(22.dp),
-                    colorFilter = ColorFilter.tint(ColorProvider(textDark))
+                    modifier = GlanceModifier.size(iconSize),
+                    colorFilter = ColorFilter.tint(ColorProvider(textWhiteAlpha))
                 )
+                Spacer(modifier = GlanceModifier.width(iconGap))
+                if (taskCount > 0) {
+                    Text(
+                        text = "${context.getString(R.string.widget_tasks)}: $taskCount",
+                        style = TextStyle(color = ColorProvider(textWhiteAlpha), fontSize = primaryFontSize)
+                    )
+                    if (data.nextTaskTitle.isNotBlank()) {
+                        Spacer(modifier = GlanceModifier.width(8.dp))
+                        Text(
+                            text = "• ${data.nextTaskTitle}",
+                            style = TextStyle(color = ColorProvider(textDimmed), fontSize = secondaryFontSize),
+                            maxLines = 1
+                        )
+                    }
+                } else {
+                    Text(
+                        text = context.getString(R.string.widget_no_tasks),
+                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = primaryFontSize)
+                    )
+                }
+            }
+            
+            Spacer(modifier = GlanceModifier.defaultWeight())
+            
+            // Заметки
+            Row(
+                modifier = GlanceModifier
+                    .fillMaxWidth()
+                    .clickable(actionStartActivity(
+                        Intent(context, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            putExtra("notes", true)
+                        }
+                    )),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Image(
+                    provider = ImageProvider(R.drawable.ic_sticky_note),
+                    contentDescription = null,
+                    modifier = GlanceModifier.size(iconSize),
+                    colorFilter = ColorFilter.tint(ColorProvider(textWhiteAlpha))
+                )
+                Spacer(modifier = GlanceModifier.width(iconGap))
+                if (data.notesCount > 0) {
+                    Text(
+                        text = "${context.getString(R.string.widget_notes)}: ${data.notesCount}",
+                        style = TextStyle(color = ColorProvider(textWhiteAlpha), fontSize = primaryFontSize)
+                    )
+                } else {
+                    Text(
+                        text = context.getString(R.string.widget_no_notes),
+                        style = TextStyle(color = ColorProvider(textDimmed), fontSize = primaryFontSize)
+                    )
+                }
             }
         }
         
-        Spacer(modifier = GlanceModifier.height(12.dp))
-        
-        // Событие календаря
-        Row(
+        // ═══════════════════════════════════════════════
+        // НИЖНЯЯ ЧАСТЬ — тёмный полупрозрачный блок (компактный, внизу)
+        // ═══════════════════════════════════════════════
+        Column(
             modifier = GlanceModifier
                 .fillMaxWidth()
-                .clickable(actionStartActivity(
-                    Intent(context, MainActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        putExtra("calendar", true)
-                    }
-                )),
-            verticalAlignment = Alignment.CenterVertically
+                .background(ColorProvider(darkBg))
+                .cornerRadius(24.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
         ) {
-            Image(
-                provider = ImageProvider(R.drawable.ic_calendar_month),
-                contentDescription = null,
-                modifier = GlanceModifier.size(22.dp),
-                colorFilter = ColorFilter.tint(ColorProvider(accentBlue))
-            )
-            Spacer(modifier = GlanceModifier.width(10.dp))
-            if (data.nextEvent != null) {
+            // Последние письма (при большом виджете)
+            val emailSenderSize = (12 * scale).sp
+            val emailPreviewSize = (11 * scale).sp
+            if (isLarge && data.recentEmails.isNotEmpty()) {
+                Column(
+                    modifier = GlanceModifier
+                        .fillMaxWidth()
+                        .background(ColorProvider(Color(0x0AFFFFFF)))
+                        .cornerRadius(12.dp)
+                ) {
+                    val evenRowBg = Color(0x30FFFFFF)
+                    val oddRowBg = Color(0x1AFFFFFF)
+                    data.recentEmails.forEachIndexed { index, email ->
+                        val rowBg = if (index % 2 == 0) evenRowBg else oddRowBg
+                        val emailDateStr = if (email.dateReceived > 0) {
+                            java.text.SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date(email.dateReceived))
+                        } else ""
+                        Row(
+                            modifier = GlanceModifier
+                                .fillMaxWidth()
+                                .background(ColorProvider(rowBg))
+                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                                .clickable(actionStartActivity(
+                                    Intent(context, MainActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                        this.data = android.net.Uri.parse("iwomail://email/${email.id}")
+                                        putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, email.id)
+                                    }
+                                )),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (emailDateStr.isNotBlank()) "${email.sender} ($emailDateStr)" else email.sender,
+                                style = TextStyle(
+                                    color = ColorProvider(textLight),
+                                    fontSize = (10 * scale).sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                maxLines = 1
+                            )
+                            Spacer(modifier = GlanceModifier.width(6.dp))
+                            Text(
+                                text = email.preview,
+                                style = TextStyle(color = ColorProvider(textLightAlpha), fontSize = emailPreviewSize),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = GlanceModifier.height(6.dp))
+            } else if (isLarge) {
                 Text(
-                    text = data.nextEvent.time,
-                    style = TextStyle(color = ColorProvider(textDark), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    text = context.getString(R.string.widget_no_new_mail),
+                    style = TextStyle(color = ColorProvider(textLightAlpha), fontSize = secondaryFontSize)
                 )
-                Spacer(modifier = GlanceModifier.width(10.dp))
-                Text(
-                    text = data.nextEvent.title,
-                    style = TextStyle(color = ColorProvider(textGray), fontSize = 14.sp),
-                    maxLines = 1
-                )
-            } else {
-                Text(
-                    text = context.getString(R.string.widget_calendar),
-                    style = TextStyle(color = ColorProvider(textGray), fontSize = 14.sp)
-                )
+                Spacer(modifier = GlanceModifier.height(6.dp))
             }
-        }
-        
-        Spacer(modifier = GlanceModifier.height(14.dp))
-        
-        // Аккаунты
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            data.accounts.take(4).forEach { acc ->
-                AccountAvatar(acc, context)
-                Spacer(modifier = GlanceModifier.width(4.dp))
+            
+            // Аккаунты + время синхронизации + кнопки-иконки
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Аватары аккаунтов (слева)
+                data.accounts.take(4).forEach { acc ->
+                    AccountAvatar(acc, context)
+                    Spacer(modifier = GlanceModifier.width(4.dp))
+                }
+                
+                // Время последней синхронизации
+                if (data.lastSyncStr.isNotBlank()) {
+                    Spacer(modifier = GlanceModifier.width(4.dp))
+                    Text(
+                        text = data.lastSyncStr,
+                        style = TextStyle(
+                            color = ColorProvider(textDimmed),
+                            fontSize = secondaryFontSize
+                        )
+                    )
+                }
+                
+                Spacer(modifier = GlanceModifier.defaultWeight())
+                
+                // Кнопка "Написать письмо" (иконка)
+                val iconBtnSize = (32 * scale).dp
+                Box(
+                    modifier = GlanceModifier
+                        .size(iconBtnSize)
+                        .background(ColorProvider(btnColor))
+                        .cornerRadius(iconBtnSize / 2)
+                        .clickable(actionStartActivity(
+                            Intent(context, MainActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                putExtra("compose", true)
+                            }
+                        )),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        provider = ImageProvider(R.drawable.ic_edit),
+                        contentDescription = null,
+                        modifier = GlanceModifier.size(iconSize),
+                        colorFilter = ColorFilter.tint(ColorProvider(Color.White))
+                    )
+                }
+                
+                Spacer(modifier = GlanceModifier.width(8.dp))
+                
+                // Кнопка синхронизации (иконка)
+                Box(
+                    modifier = GlanceModifier
+                        .size(iconBtnSize)
+                        .background(ColorProvider(btnColor))
+                        .cornerRadius(iconBtnSize / 2)
+                        .clickable(actionSendBroadcast(
+                            Intent(SyncAlarmReceiver.ACTION_SYNC_NOW).apply {
+                                setClass(context, SyncAlarmReceiver::class.java)
+                            }
+                        )),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        provider = ImageProvider(R.drawable.ic_sync),
+                        contentDescription = null,
+                        modifier = GlanceModifier.size(iconSize),
+                        colorFilter = ColorFilter.tint(ColorProvider(Color.White))
+                    )
+                }
             }
         }
     }
@@ -277,23 +582,27 @@ private fun AccountAvatar(account: AccountUnread, context: Context) {
         Color(0xFF6200EE)
     }
     
-    // Контейнер 56x56 чтобы badge не обрезался
     Box(
         modifier = GlanceModifier
-            .size(56.dp)
+            .size(48.dp)
             .clickable(actionStartActivity(
                 Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    this.data = android.net.Uri.parse("iwomail://account/${account.id}")
                     putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, account.id)
+                    // Если есть непрочитанные → фильтр непрочитанных, иначе → просто входящие
+                    if (account.unreadCount > 0) {
+                        putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
+                    }
                 }
             )),
         contentAlignment = Alignment.TopStart
     ) {
-        // Аватар (круг) 48x48 с отступом сверху-слева
+        // Аватар (круг) 40x40
         Box(
             modifier = GlanceModifier
-                .size(48.dp)
-                .cornerRadius(24.dp)
+                .size(40.dp)
+                .cornerRadius(20.dp)
                 .background(ColorProvider(accountColor)),
             contentAlignment = Alignment.Center
         ) {
@@ -301,13 +610,13 @@ private fun AccountAvatar(account: AccountUnread, context: Context) {
                 text = account.name.firstOrNull()?.uppercase() ?: "?",
                 style = TextStyle(
                     color = ColorProvider(Color.White),
-                    fontSize = 20.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold
                 )
             )
         }
         
-        // Счётчик справа внизу от аватара (внутри большего контейнера)
+        // Бейдж непрочитанных (справа внизу)
         if (account.unreadCount > 0) {
             Box(
                 modifier = GlanceModifier.fillMaxSize(),
@@ -317,7 +626,7 @@ private fun AccountAvatar(account: AccountUnread, context: Context) {
                     modifier = GlanceModifier
                         .background(ColorProvider(accentBlue))
                         .cornerRadius(8.dp)
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
                 ) {
                     Text(
                         text = if (account.unreadCount > 99) "99+" else account.unreadCount.toString(),
