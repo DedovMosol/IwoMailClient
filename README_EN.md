@@ -121,7 +121,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 **Other:**
 - WorkManager — background sync
-- Hilt — dependency injection
+- Manual DI (RepositoryProvider) — dependency injection
 - Coil — image loading
 
 ## 🔧 Build
@@ -165,7 +165,7 @@ This project is open for improvements! Here's how you can help:
 
 ```
 UI Layer
-  Jetpack Compose — 23 screens, 7 components
+  Jetpack Compose — 22 screens, 8 components
   Navigation, Theme, Localization
     ↓
 Repository Layer
@@ -178,12 +178,13 @@ Protocol Layer
   IMAP — ImapClient  |  POP3 — Pop3Client  |  SMTP — SmtpClient
     ↓
 Database Layer                    Network Layer
-  Room — 7 DAOs, 6 Entities        HttpClientProvider, NetworkMonitor
-  MailDatabase                      RetryUtils, NtlmAuthenticator
+  Room — 8 DAOs, 7 Entities        HttpClientProvider, NetworkMonitor
+  MailDatabase (v33)                RetryUtils, NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker
   BootReceiver, SyncAlarmReceiver, PushRestartWorker
+  ServiceWatchdogReceiver, ScheduledEmailWorker
   CalendarReminderReceiver, TaskReminderReceiver
 ```
 

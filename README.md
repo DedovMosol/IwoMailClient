@@ -121,7 +121,7 @@
 
 **Другое:**
 - WorkManager — фоновая синхронизация
-- Hilt — dependency injection
+- Manual DI (RepositoryProvider) — dependency injection
 - Coil — загрузка изображений
 
 ## 🔧 Сборка
@@ -165,7 +165,7 @@
 
 ```
 UI Layer
-  Jetpack Compose — 23 экрана, 7 компонентов
+  Jetpack Compose — 22 экрана, 8 компонентов
   Navigation, Theme, Localization
     ↓
 Repository Layer
@@ -178,12 +178,13 @@ Protocol Layer
   IMAP — ImapClient  |  POP3 — Pop3Client  |  SMTP — SmtpClient
     ↓
 Database Layer                    Network Layer
-  Room — 7 DAO, 6 Entity           HttpClientProvider, NetworkMonitor
-  MailDatabase                      RetryUtils, NtlmAuthenticator
+  Room — 8 DAO, 7 Entity           HttpClientProvider, NetworkMonitor
+  MailDatabase (v33)                RetryUtils, NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker
   BootReceiver, SyncAlarmReceiver, PushRestartWorker
+  ServiceWatchdogReceiver, ScheduledEmailWorker
   CalendarReminderReceiver, TaskReminderReceiver
 ```
 
