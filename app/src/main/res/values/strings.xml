@@ -5,6 +5,8 @@
     <string name="all_day">All day</string>
     <string name="task">Task</string>
     <string name="task_reminder">Task reminder</string>
+    <string name="notification_mark_read">Mark read</string>
+    <string name="notification_remind_in_5_min">Remind in 5 min</string>
     <string name="due_date_label">Due</string>
     <string name="high_priority">High priority</string>
     

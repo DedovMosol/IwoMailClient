@@ -154,6 +154,8 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.dedovmosol.iwomail.CALENDAR_REMINDER" />
+                <action android:name="com.dedovmosol.iwomail.CALENDAR_MARK_READ" />
+                <action android:name="com.dedovmosol.iwomail.CALENDAR_SNOOZE_5_MIN" />
             </intent-filter>
         </receiver>
         
@@ -164,6 +166,17 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.dedovmosol.iwomail.TASK_REMINDER" />
+                <action android:name="com.dedovmosol.iwomail.TASK_MARK_READ" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- Receiver для действий из уведомлений о новых письмах -->
+        <receiver
+            android:name=".sync.MailNotificationActionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.dedovmosol.iwomail.MAIL_MARK_READ" />
             </intent-filter>
         </receiver>
         

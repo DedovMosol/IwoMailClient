@@ -964,7 +964,22 @@ class PushService : Service() {
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(subject))
         }
         
+        // Кнопка «Прочитано» — помечает письма как прочитанные на сервере
         val notificationId = 3000 + accountId.toInt()
+        val markReadIntent = Intent(this, MailNotificationActionReceiver::class.java).apply {
+            action = MailNotificationActionReceiver.ACTION_MARK_READ
+            putExtra(MailNotificationActionReceiver.EXTRA_ACCOUNT_ID, accountId)
+            putExtra(MailNotificationActionReceiver.EXTRA_EMAIL_IDS, newEmails.map { it.id }.toTypedArray())
+            putExtra(MailNotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val markReadPendingIntent = PendingIntent.getBroadcast(
+            this,
+            MailNotificationActionReceiver.requestCodeForAccount(accountId),
+            markReadIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        builder.addAction(com.dedovmosol.iwomail.R.drawable.ic_check, getString(com.dedovmosol.iwomail.R.string.notification_mark_read), markReadPendingIntent)
+        
         notificationManager.notify(notificationId, builder.build())
         
         // Воспроизводим звук получения письма

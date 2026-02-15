@@ -70,6 +70,43 @@ fun expandGroupTokens(recipients: String, groupMappings: Map<String, List<String
 }
 
 /**
+ * Извлекает все email-адреса из поля получателей (включая раскрытие групп).
+ * Используется для проверки дубликатов при добавлении новых получателей.
+ */
+fun extractAllEmails(field: String, groupMappings: Map<String, List<String>>): Set<String> {
+    if (field.isBlank()) return emptySet()
+    val tokens = field.split(",", ";").map { it.trim() }.filter { it.isNotBlank() }
+    return tokens.flatMap { token ->
+        if (isGroupToken(token)) {
+            val groupName = token.removePrefix("[").removeSuffix("]")
+            groupMappings[groupName] ?: emptyList()
+        } else if (EMAIL_VALIDATION_REGEX.matches(token)) {
+            listOf(token)
+        } else {
+            emptyList()
+        }
+    }.map { it.lowercase() }.toSet()
+}
+
+/**
+ * Проверяет, есть ли email-адрес уже в каком-либо из полей получателей (to/cc/bcc).
+ * Возвращает название поля, где найден дубликат, или null если дубликатов нет.
+ */
+fun findDuplicateField(
+    email: String,
+    to: String,
+    cc: String,
+    bcc: String,
+    groupMappings: Map<String, List<String>>
+): String? {
+    val emailLower = email.lowercase()
+    if (emailLower in extractAllEmails(to, groupMappings)) return "To"
+    if (emailLower in extractAllEmails(cc, groupMappings)) return "Cc"
+    if (emailLower in extractAllEmails(bcc, groupMappings)) return "Bcc"
+    return null
+}
+
+/**
  * VisualTransformation для подкраски токенов [GroupName] цветом группы контактов.
  * Текст не меняется, только добавляется SpanStyle с цветом и жирным шрифтом.
  */

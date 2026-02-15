@@ -35,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dedovmosol.iwomail.data.database.AttachmentEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
-import com.dedovmosol.iwomail.eas.AttachmentManager
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.Strings

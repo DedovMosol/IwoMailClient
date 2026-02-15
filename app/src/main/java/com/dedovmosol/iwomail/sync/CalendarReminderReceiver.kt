@@ -30,22 +30,47 @@ import java.util.*
 class CalendarReminderReceiver : BroadcastReceiver() {
     
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_CALENDAR_REMINDER) return
-        
+        val action = intent.action ?: return
+        if (action != ACTION_CALENDAR_REMINDER &&
+            action != ACTION_CALENDAR_MARK_READ &&
+            action != ACTION_CALENDAR_SNOOZE_5_MIN
+        ) return
+
         val eventId = intent.getStringExtra(EXTRA_EVENT_ID) ?: return
         val pendingResult = goAsync()
         val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         
         localScope.launch {
             try {
-                val database = MailDatabase.getInstance(context)
-                val event = database.calendarEventDao().getEvent(eventId)
-                
-                if (event != null && event.startTime > System.currentTimeMillis()) {
-                    // Событие ещё не началось - показываем уведомление
-                    showNotification(context, event)
+                val notificationManager = context.getSystemService(NotificationManager::class.java)
+                when (action) {
+                    ACTION_CALENDAR_REMINDER -> {
+                        val database = MailDatabase.getInstance(context)
+                        val event = database.calendarEventDao().getEvent(eventId)
+                        if (event != null && event.startTime > System.currentTimeMillis()) {
+                            // Событие ещё не началось - показываем уведомление
+                            showNotification(context, event)
+                        }
+                        // Если событие уже прошло - не показываем уведомление
+                    }
+
+                    ACTION_CALENDAR_MARK_READ -> {
+                        notificationManager.cancel(notificationIdForEvent(eventId))
+                    }
+
+                    ACTION_CALENDAR_SNOOZE_5_MIN -> {
+                        notificationManager.cancel(notificationIdForEvent(eventId))
+                        val database = MailDatabase.getInstance(context)
+                        val event = database.calendarEventDao().getEvent(eventId)
+                        if (event != null) {
+                            val now = System.currentTimeMillis()
+                            val snoozeAt = now + SNOOZE_5_MIN_MS
+                            if (event.startTime > snoozeAt) {
+                                scheduleReminderAt(context, event.id, snoozeAt)
+                            }
+                        }
+                    }
                 }
-                // Если событие уже прошло - не показываем уведомление
             } finally {
                 localScope.cancel()
                 pendingResult.finish()
@@ -64,8 +89,30 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         }
         val contentPendingIntent = PendingIntent.getActivity(
             context,
-            event.id.hashCode(),
+            event.id.hashCode() + REQUEST_CODE_CONTENT,
             contentIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val markReadIntent = Intent(context, CalendarReminderReceiver::class.java).apply {
+            action = ACTION_CALENDAR_MARK_READ
+            putExtra(EXTRA_EVENT_ID, event.id)
+        }
+        val markReadPendingIntent = PendingIntent.getBroadcast(
+            context,
+            event.id.hashCode() + REQUEST_CODE_MARK_READ,
+            markReadIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val snoozeIntent = Intent(context, CalendarReminderReceiver::class.java).apply {
+            action = ACTION_CALENDAR_SNOOZE_5_MIN
+            putExtra(EXTRA_EVENT_ID, event.id)
+        }
+        val snoozePendingIntent = PendingIntent.getBroadcast(
+            context,
+            event.id.hashCode() + REQUEST_CODE_SNOOZE,
+            snoozeIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
@@ -100,18 +147,60 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .setContentIntent(contentPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
+            .addAction(R.drawable.ic_schedule, context.getString(R.string.notification_remind_in_5_min), snoozePendingIntent)
             .build()
         
         // Уникальный ID уведомления на основе события
-        val notificationId = NOTIFICATION_ID_BASE + event.id.hashCode()
+        val notificationId = notificationIdForEvent(event.id)
         notificationManager.notify(notificationId, notification)
     }
     
     companion object {
         const val ACTION_CALENDAR_REMINDER = "com.dedovmosol.iwomail.CALENDAR_REMINDER"
+        const val ACTION_CALENDAR_MARK_READ = "com.dedovmosol.iwomail.CALENDAR_MARK_READ"
+        const val ACTION_CALENDAR_SNOOZE_5_MIN = "com.dedovmosol.iwomail.CALENDAR_SNOOZE_5_MIN"
         const val EXTRA_EVENT_ID = "event_id"
         // Уникальный диапазон ID: 5000+ (SyncWorker использует 3000+, SyncAlarmReceiver 4000+)
         private const val NOTIFICATION_ID_BASE = 5000
+        private const val REQUEST_CODE_CONTENT = 10_000
+        private const val REQUEST_CODE_MARK_READ = 20_000
+        private const val REQUEST_CODE_SNOOZE = 30_000
+        private const val SNOOZE_5_MIN_MS = 5 * 60 * 1000L
+
+        private fun notificationIdForEvent(eventId: String): Int = NOTIFICATION_ID_BASE + eventId.hashCode()
+
+        private fun scheduleReminderAt(context: Context, eventId: String, triggerAtMillis: Long) {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(context, CalendarReminderReceiver::class.java).apply {
+                action = ACTION_CALENDAR_REMINDER
+                putExtra(EXTRA_EVENT_ID, eventId)
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                eventId.hashCode(),
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setExact(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                }
+            } catch (_: SecurityException) {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            }
+        }
         
         /**
          * Планирует напоминание для события.

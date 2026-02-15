@@ -17,6 +17,7 @@ import com.dedovmosol.iwomail.data.database.TaskImportance
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -27,22 +28,36 @@ import java.util.*
 class TaskReminderReceiver : BroadcastReceiver() {
     
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_TASK_REMINDER) return
+        val action = intent.action ?: return
+        if (action != ACTION_TASK_REMINDER && action != ACTION_TASK_MARK_READ) return
         
         val taskId = intent.getStringExtra(EXTRA_TASK_ID) ?: return
-        val pendingResult = goAsync()
         
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            try {
-                val database = MailDatabase.getInstance(context)
-                val task = database.taskDao().getTask(taskId)
+        when (action) {
+            ACTION_TASK_MARK_READ -> {
+                // Закрываем уведомление мгновенно (UI-операция, не требует goAsync)
+                val notificationManager = context.getSystemService(NotificationManager::class.java)
+                notificationManager.cancel(NOTIFICATION_ID_BASE + taskId.hashCode())
                 
-                if (task != null && !task.complete) {
-                    // Задача не выполнена - показываем уведомление
-                    showNotification(context, task)
+                // Серверную работу делегируем WorkManager — надёжно на MIUI/HyperOS/EMUI
+                MarkTaskCompleteWorker.enqueue(context, taskId)
+            }
+            ACTION_TASK_REMINDER -> {
+                // Чтение из БД + показ уведомления — лёгкая операция, goAsync достаточно
+                val pendingResult = goAsync()
+                val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                localScope.launch {
+                    try {
+                        val database = MailDatabase.getInstance(context)
+                        val task = database.taskDao().getTask(taskId)
+                        if (task != null && !task.complete) {
+                            showNotification(context, task)
+                        }
+                    } finally {
+                        localScope.cancel()
+                        pendingResult.finish()
+                    }
                 }
-            } finally {
-                pendingResult.finish()
             }
         }
     }
@@ -57,8 +72,19 @@ class TaskReminderReceiver : BroadcastReceiver() {
         }
         val contentPendingIntent = PendingIntent.getActivity(
             context,
-            task.id.hashCode(),
+            task.id.hashCode() + REQUEST_CODE_CONTENT,
             contentIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val markReadIntent = Intent(context, TaskReminderReceiver::class.java).apply {
+            this.action = ACTION_TASK_MARK_READ
+            putExtra(EXTRA_TASK_ID, task.id)
+        }
+        val markReadPendingIntent = PendingIntent.getBroadcast(
+            context,
+            task.id.hashCode() + REQUEST_CODE_MARK_READ,
+            markReadIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
@@ -95,6 +121,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .setContentIntent(contentPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
             .build()
         
         val notificationId = NOTIFICATION_ID_BASE + task.id.hashCode()
@@ -103,8 +130,11 @@ class TaskReminderReceiver : BroadcastReceiver() {
     
     companion object {
         const val ACTION_TASK_REMINDER = "com.dedovmosol.iwomail.TASK_REMINDER"
+        const val ACTION_TASK_MARK_READ = "com.dedovmosol.iwomail.TASK_MARK_READ"
         const val EXTRA_TASK_ID = "task_id"
         private const val NOTIFICATION_ID_BASE = 4000
+        private const val REQUEST_CODE_CONTENT = 40_000
+        private const val REQUEST_CODE_MARK_READ = 50_000
         
         /**
          * Планирует напоминание для задачи.

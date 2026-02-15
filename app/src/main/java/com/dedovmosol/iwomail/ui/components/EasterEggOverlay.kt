@@ -45,6 +45,7 @@ private const val KEY_FOUND = "easter_found"
 object EasterEggPlayer {
     private var mediaPlayer: MediaPlayer? = null
     private var onComplete: (() -> Unit)? = null
+    private var lastConfigChangeAt: Long = 0L
 
     val isPlaying: Boolean get() = mediaPlayer?.isPlaying == true
 
@@ -72,6 +73,14 @@ object EasterEggPlayer {
         } catch (_: Exception) {}
         mediaPlayer = null
         onComplete = null
+    }
+
+    fun markConfigChanged() {
+        lastConfigChangeAt = System.currentTimeMillis()
+    }
+
+    fun isRecentConfigChange(windowMs: Long = 2000L): Boolean {
+        return System.currentTimeMillis() - lastConfigChangeAt <= windowMs
     }
 }
 
@@ -111,6 +120,14 @@ fun EasterEggOverlay(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+
+    LaunchedEffect(configuration.orientation, visible) {
+        if (visible) {
+            EasterEggPlayer.markConfigChanged()
+        }
+    }
+
     // Запуск звука и вибрации при появлении.
     // MediaPlayer живёт в EasterEggPlayer-синглтоне и переживает поворот экрана.
     DisposableEffect(visible) {
@@ -153,7 +170,6 @@ fun EasterEggOverlay(
         enter = fadeIn(tween(500)),
         exit = fadeOut(tween(400))
     ) {
-        val configuration = LocalConfiguration.current
         val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val bgImage = if (isLandscape) R.drawable.pashalka_albom else R.drawable.pashalka_portret
 

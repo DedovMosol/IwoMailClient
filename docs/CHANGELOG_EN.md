@@ -1,13 +1,34 @@
 ﻿# Changelog
 
-## v1.6.2 (February 2026) — Short summary
+## v1.6.2 (February 2026)
 
-- Stability and sync: improved behavior on large mailboxes, fewer duplicates, stronger protection from races/leaks, and more reliable Push/Sync/notifications.
-- Mail and contacts: improved reply/forward and mark-as-read flows, better drafts/folder handling, stronger contact validation/export checks.
-- Calendar, tasks, and widget: expanded support for recurring events/attachments/online links, plus fresher widget data and scaling.
-- Interface: consolidated themes and visual components, improved dialogs, scrollbar behavior, and UX interactions.
-- Security and reliability: stronger handling of sensitive data and added audit `docs/SECURITY_MEMORY_RACE_NETWORK_AUDIT.md`.
-- Compatibility: Exchange 2007 SP1+ retained.
+### New
+- Parsing migration prep: added `EasXmlParser.kt` (drop-in API + DSL + namespaces) and migration plan `docs/XMLPULLPARSER_MIGRATION_PLAN.md`.
+- Added a search Easter egg (overlay with animation/sound/vibration).
+
+### Improvements
+- Sync/Push/reliability: windowSize 100→200, per-folder timeouts, limited parallelism (up to 2 folders), incremental pull-to-refresh.
+- Mail and contacts: background body/FileReference loading, batch mark-as-read, group sending, email validation, duplicate-free GAL export.
+- Calendar and drafts: calendar trash/recurrence improvements, draft mode selection, and “Save” / “Save as” for attachments.
+- UI and themes: 4 themes (WCAG AA) with auto-migration, drag selection + haptics, and improvements for message toolbar, scrollbars, and widget UX.
+- Notifications: added action buttons for calendar (“Mark read”, “Remind in 5 minutes”), tasks (“Mark read”), and mail (“Mark read”).
+- OEM reliability (MIUI/HyperOS/EMUI): moved notification-triggered server-side actions from BroadcastReceiver into WorkManager (mark read / mark complete).
+
+### Fixes
+- EWS: fixed SOAP envelope, SendMeetingCancellations, RequestServerVersion, and element order.
+- Sync data protection: added multi-layer calendar loss protection and email-body protection from empty server responses.
+- UI state: rotation fixes (navigation/dialog state, saveable IDs), PendingIntent dedup fix, and fixed double-tap in widget empty area.
+- Auto-cleanup: fixed successful-run tracking — `lastTrashCleanupTime` is now updated only after fully successful cleanup; partial failures now trigger WorkManager retry path.
+- Auto-cleanup (Trash/Drafts/Spam): changed “every N days” semantics to interval-based full folder cleanup instead of deleting only messages older than N days.
+- Alerts on Contacts/Calendar/Tasks/Notes/Drafts screens: standardized confirmation button texts to “Yes/No”.
+
+### Performance
+- Fewer duplicates/race conditions in Sync/Push; more stable foreground notification behavior.
+- Better large-mailbox resilience via timeout tuning and limited parallelism.
+
+### Compatibility and Security
+- Re-verified EAS/EWS behavior for Exchange 2007 SP1+.
+- Strengthened sensitive data handling.
 
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 

@@ -71,6 +71,9 @@ class SettingsRepository private constructor(private val context: Context) {
     private val cachedNotesSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     private val cachedCalendarSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     private val cachedTasksSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    private val cachedAutoCleanupTrashTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    private val cachedAutoCleanupDraftsTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    private val cachedAutoCleanupSpamTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     
     // Кэшированные темы по дням недели (7 дней)
     private val cachedDayThemes = java.util.concurrent.ConcurrentHashMap<Int, String>()
@@ -533,6 +536,66 @@ class SettingsRepository private constructor(private val context: Context) {
     
     fun getLastTrashCleanupTimeSync(): Long {
         return cachedLastTrashCleanupTime.get() ?: 0L
+    }
+
+    // Время последней автоочистки корзины (для каждого аккаунта отдельно)
+    private fun getAutoCleanupTrashKey(accountId: Long) = longPreferencesKey("last_auto_cleanup_trash_$accountId")
+
+    suspend fun setLastAutoCleanupTrashTime(accountId: Long, timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[getAutoCleanupTrashKey(accountId)] = timeMillis
+        }
+        cachedAutoCleanupTrashTimes[accountId] = timeMillis
+    }
+
+    fun getLastAutoCleanupTrashTimeSync(accountId: Long): Long {
+        return cachedAutoCleanupTrashTimes.computeIfAbsent(accountId) { 0L }
+    }
+
+    suspend fun getLastAutoCleanupTrashTime(accountId: Long): Long {
+        val value = context.dataStore.data.first()[getAutoCleanupTrashKey(accountId)] ?: 0L
+        cachedAutoCleanupTrashTimes[accountId] = value
+        return value
+    }
+
+    // Время последней автоочистки локальных черновиков (для каждого аккаунта отдельно)
+    private fun getAutoCleanupDraftsKey(accountId: Long) = longPreferencesKey("last_auto_cleanup_drafts_$accountId")
+
+    suspend fun setLastAutoCleanupDraftsTime(accountId: Long, timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[getAutoCleanupDraftsKey(accountId)] = timeMillis
+        }
+        cachedAutoCleanupDraftsTimes[accountId] = timeMillis
+    }
+
+    fun getLastAutoCleanupDraftsTimeSync(accountId: Long): Long {
+        return cachedAutoCleanupDraftsTimes.computeIfAbsent(accountId) { 0L }
+    }
+
+    suspend fun getLastAutoCleanupDraftsTime(accountId: Long): Long {
+        val value = context.dataStore.data.first()[getAutoCleanupDraftsKey(accountId)] ?: 0L
+        cachedAutoCleanupDraftsTimes[accountId] = value
+        return value
+    }
+
+    // Время последней автоочистки спама (для каждого аккаунта отдельно)
+    private fun getAutoCleanupSpamKey(accountId: Long) = longPreferencesKey("last_auto_cleanup_spam_$accountId")
+
+    suspend fun setLastAutoCleanupSpamTime(accountId: Long, timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[getAutoCleanupSpamKey(accountId)] = timeMillis
+        }
+        cachedAutoCleanupSpamTimes[accountId] = timeMillis
+    }
+
+    fun getLastAutoCleanupSpamTimeSync(accountId: Long): Long {
+        return cachedAutoCleanupSpamTimes.computeIfAbsent(accountId) { 0L }
+    }
+
+    suspend fun getLastAutoCleanupSpamTime(accountId: Long): Long {
+        val value = context.dataStore.data.first()[getAutoCleanupSpamKey(accountId)] ?: 0L
+        cachedAutoCleanupSpamTimes[accountId] = value
+        return value
     }
     
     // Время последней синхронизации контактов (для каждого аккаунта отдельно)

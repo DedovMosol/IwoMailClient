@@ -188,8 +188,10 @@ fun AboutScreen(
     DisposableEffect(Unit) {
         onDispose {
             val activity = (context as? ContextWrapper)?.findActivity()
-            // If Activity is unavailable during dispose, avoid false stop on config transitions.
-            val isRotation = activity?.isChangingConfigurations != false
+            val isChanging = activity?.isChangingConfigurations == true
+            // Если activity недоступен — безопаснее считать это поворотом, чем ложно остановить музыку
+            val isRotation = isChanging || activity == null || EasterEggPlayer.isRecentConfigChange()
+            if (isChanging) EasterEggPlayer.markConfigChanged()
             if (!isRotation && EasterEggPlayer.isPlaying) {
                 EasterEggPlayer.stop()
             }

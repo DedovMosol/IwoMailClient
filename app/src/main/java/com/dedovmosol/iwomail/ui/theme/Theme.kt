@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -264,11 +265,16 @@ fun ScaledAlertDialog(
                                 modifier = androidx.compose.ui.Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = 16.dp),
-                                contentAlignment = if (icon != null) Alignment.Center else Alignment.CenterStart
+                                contentAlignment = Alignment.Center
                             ) {
                                 CompositionLocalProvider(LocalContentColor provides titleContentColor) {
-                                    ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
-                                        it()
+                                    ProvideTextStyle(MaterialTheme.typography.headlineSmall.copy(textAlign = TextAlign.Center)) {
+                                        Box(
+                                            modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            it()
+                                        }
                                     }
                                 }
                             }
@@ -290,7 +296,12 @@ fun ScaledAlertDialog(
                                 ) {
                                     CompositionLocalProvider(LocalContentColor provides textContentColor) {
                                         ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
-                                            it()
+                                            Box(
+                                                modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                it()
+                                            }
                                         }
                                     }
                                 }
@@ -329,11 +340,16 @@ fun ScaledAlertDialog(
                                 modifier = androidx.compose.ui.Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = 16.dp),
-                                contentAlignment = if (icon != null) Alignment.Center else Alignment.CenterStart
+                                contentAlignment = Alignment.Center
                             ) {
                                 CompositionLocalProvider(LocalContentColor provides titleContentColor) {
-                                    ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
-                                        it()
+                                    ProvideTextStyle(MaterialTheme.typography.headlineSmall.copy(textAlign = TextAlign.Center)) {
+                                        Box(
+                                            modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            it()
+                                        }
                                     }
                                 }
                             }
@@ -347,7 +363,12 @@ fun ScaledAlertDialog(
                             ) {
                                 CompositionLocalProvider(LocalContentColor provides textContentColor) {
                                     ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
-                                        it()
+                                        Box(
+                                            modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            it()
+                                        }
                                     }
                                 }
                             }
@@ -478,8 +499,13 @@ fun StyledAlertDialog(
                             CompositionLocalProvider(
                                 androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface
                             ) {
-                                ProvideTextStyle(MaterialTheme.typography.headlineSmall) {
-                                    it()
+                                ProvideTextStyle(MaterialTheme.typography.headlineSmall.copy(textAlign = TextAlign.Center)) {
+                                    Box(
+                                        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        it()
+                                    }
                                 }
                             }
                             Spacer(modifier = androidx.compose.ui.Modifier.height(16.dp))
@@ -491,7 +517,12 @@ fun StyledAlertDialog(
                                 androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant
                             ) {
                                 ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
-                                    it()
+                                    Box(
+                                        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        it()
+                                    }
                                 }
                             }
                         }
@@ -646,7 +677,13 @@ fun SimpleTimeInputDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text(title) },
+        title = {
+            Text(
+                text = title,
+                modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center
+            )
+        },
         text = {
             Box(
                 modifier = androidx.compose.ui.Modifier.fillMaxWidth(),

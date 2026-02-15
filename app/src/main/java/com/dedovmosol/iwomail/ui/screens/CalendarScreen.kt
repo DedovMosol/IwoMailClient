@@ -458,13 +458,13 @@ fun CalendarScreen(
                             }
                         }
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showDeleteConfirmDialog = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -504,13 +504,13 @@ fun CalendarScreen(
                             }
                         }
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showEmptyTrashDialog = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -1629,13 +1629,13 @@ private fun EventDetailDialog(
                         showDeleteConfirm = false
                         onDeleteClick()
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showDeleteConfirm = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -2957,21 +2957,16 @@ private fun CalendarSelectionTopBar(
         },
         actions = {
             if (showRestore) {
-                TextButton(onClick = onRestore) {
-                    Icon(AppIcons.Restore, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(Strings.restore, color = Color.White)
+                IconButton(onClick = onRestore) {
+                    Icon(AppIcons.Restore, Strings.restore, tint = Color.White)
                 }
             }
-            TextButton(onClick = onDelete) {
+            IconButton(onClick = onDelete) {
                 Icon(
                     if (deleteIsPermanent) AppIcons.DeleteForever else AppIcons.Delete,
-                    null,
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    Strings.delete,
+                    tint = Color.White
                 )
-                Spacer(Modifier.width(4.dp))
-                Text(Strings.delete, color = Color.White)
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),

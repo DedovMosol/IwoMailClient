@@ -609,13 +609,13 @@ fun EmailListScreen(
                         showDeletePermanentlyDialog = false
                         deleteSelectedPermanently()
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showDeletePermanentlyDialog = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -666,13 +666,13 @@ fun EmailListScreen(
                             }
                         }
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showEmptyTrashDialog = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )

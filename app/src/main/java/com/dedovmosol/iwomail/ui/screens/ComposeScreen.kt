@@ -388,6 +388,17 @@ fun ComposeScreen(
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
     var isSavingDraft by remember { mutableStateOf(false) }
     
+    // Предупреждение о дубликате email
+    var duplicateEmail by rememberSaveable { mutableStateOf<String?>(null) }
+    var duplicateField by rememberSaveable { mutableStateOf<String?>(null) }
+    var duplicateTargetField by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingEmails by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    // Для сохранения группы при дубликате из подсказки
+    var pendingGroupName by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingGroupEmails by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    var pendingGroupColor by rememberSaveable { mutableStateOf(0) }
+    var pendingGroupSelections by remember { mutableStateOf<List<Triple<String, List<String>, Int>>>(emptyList()) }
+    
     // Диалог выбора контактов
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
     var contactPickerTarget by rememberSaveable { mutableStateOf("to") } // "to", "cc", "bcc"
@@ -438,6 +449,26 @@ fun ComposeScreen(
         val prefix = text.substring(0, lastSeparatorIndex + 1)
         val normalizedPrefix = if (prefix.endsWith(" ") || prefix.isEmpty()) prefix else "$prefix "
         return normalizedPrefix + newEmail
+    }
+
+    fun applyGroupsSelection(groups: List<Triple<String, List<String>, Int>>, target: String) {
+        val newMappings = groupMappings.toMutableMap()
+        val newColors = groupColors.toMutableMap()
+        val groupTokens = groups.map { (name, emails, color) ->
+            newMappings[name] = emails
+            newColors[name] = color
+            "[$name]"
+        }
+        groupMappings = newMappings
+        groupColors = newColors
+        groupMappingsJson = org.json.JSONObject(newMappings.mapValues { (_, v) -> org.json.JSONArray(v) }).toString()
+        groupColorsJson = org.json.JSONObject(newColors.mapValues { (_, v) -> v }).toString()
+        val groupsStr = groupTokens.joinToString(", ")
+        when (target) {
+            "to" -> to = if (to.isBlank()) groupsStr else "${to.trimEnd(',', ' ')}, $groupsStr"
+            "cc" -> cc = if (cc.isBlank()) groupsStr else "${cc.trimEnd(',', ' ')}, $groupsStr"
+            "bcc" -> bcc = if (bcc.isBlank()) groupsStr else "${bcc.trimEnd(',', ' ')}, $groupsStr"
+        }
     }
     
     // Функция поиска подсказок
@@ -1743,6 +1774,111 @@ fun ComposeScreen(
         )
     }
     
+    // Диалог предупреждения о дубликате email
+    if (duplicateEmail != null) {
+        val isRu = currentLanguage == AppLanguage.RUSSIAN
+        val dupeCount = pendingEmails.size
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = {
+                duplicateEmail = null
+                duplicateField = null
+                duplicateTargetField = null
+                pendingEmails = emptyList()
+                pendingGroupName = null
+                pendingGroupEmails = emptyList()
+                pendingGroupSelections = emptyList()
+            },
+            icon = { Icon(AppIcons.Warning, null) },
+            title = {
+                Text(if (isRu) "Дубликат адреса" else "Duplicate address")
+            },
+            text = {
+                Column {
+                    if (dupeCount == 1) {
+                        Text(
+                            if (isRu)
+                                "Адрес ${duplicateEmail} уже добавлен в поле ${duplicateField}."
+                            else
+                                "Address ${duplicateEmail} is already in the ${duplicateField} field."
+                        )
+                    } else {
+                        Text(
+                            if (isRu)
+                                "$dupeCount адресов уже добавлены в другие поля получателей."
+                            else
+                                "$dupeCount addresses are already in other recipient fields."
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        if (isRu) "Добавить всё равно?" else "Add anyway?",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        if (pendingGroupSelections.isNotEmpty() && duplicateTargetField != null) {
+                            // Группы из контакт-пикера: добавляем только после подтверждения
+                            applyGroupsSelection(pendingGroupSelections, duplicateTargetField!!)
+                        } else {
+                            // Если это группа из подсказки — добавляем токен [GroupName] и сохраняем маппинг
+                            val gName = pendingGroupName
+                            if (gName != null && pendingGroupEmails.isNotEmpty()) {
+                                val newMappings = groupMappings.toMutableMap()
+                                newMappings[gName] = pendingGroupEmails
+                                groupMappings = newMappings
+                                val newColors = groupColors.toMutableMap()
+                                newColors[gName] = pendingGroupColor
+                                groupColors = newColors
+                                groupMappingsJson = org.json.JSONObject(newMappings.mapValues { (_, v) -> org.json.JSONArray(v) }).toString()
+                                groupColorsJson = org.json.JSONObject(newColors.mapValues { (_, v) -> v }).toString()
+                                val token = "[$gName]"
+                                // Из подсказки — заменяем частичный ввод
+                                when (duplicateTargetField) {
+                                    "to" -> to = replaceLastRecipient(to, token)
+                                    "cc" -> cc = if (cc.isBlank()) token else "${cc.trimEnd(',', ' ')}, $token"
+                                    "bcc" -> bcc = if (bcc.isBlank()) token else "${bcc.trimEnd(',', ' ')}, $token"
+                                }
+                            } else {
+                                // Обычные email'ы
+                                val emailsStr = pendingEmails.joinToString(", ")
+                                when (duplicateTargetField) {
+                                    "to" -> to = if (to.isBlank()) emailsStr else "${to.trimEnd(',', ' ')}, $emailsStr"
+                                    "cc" -> cc = if (cc.isBlank()) emailsStr else "${cc.trimEnd(',', ' ')}, $emailsStr"
+                                    "bcc" -> bcc = if (bcc.isBlank()) emailsStr else "${bcc.trimEnd(',', ' ')}, $emailsStr"
+                                }
+                            }
+                        }
+                        duplicateEmail = null
+                        duplicateField = null
+                        duplicateTargetField = null
+                        pendingEmails = emptyList()
+                        pendingGroupName = null
+                        pendingGroupEmails = emptyList()
+                        pendingGroupSelections = emptyList()
+                    },
+                    text = if (isRu) "Добавить" else "Add"
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        duplicateEmail = null
+                        duplicateField = null
+                        duplicateTargetField = null
+                        pendingEmails = emptyList()
+                        pendingGroupName = null
+                        pendingGroupEmails = emptyList()
+                        pendingGroupSelections = emptyList()
+                    },
+                    text = Strings.cancel
+                )
+            }
+        )
+    }
+    
     // Диалог выбора контактов
     if (showContactPicker) {
         activeAccount?.id?.let { accountId ->
@@ -1752,51 +1888,61 @@ fun ComposeScreen(
                 ownEmail = activeAccount?.email ?: "",
                 onDismiss = { showContactPicker = false },
                 onContactsSelected = { emails ->
-                    // Добавляем выбранные email к соответствующему полю
-                    val newEmails = emails.joinToString(", ")
-                    when (contactPickerTarget) {
-                        "to" -> {
-                            to = if (to.isBlank()) newEmails 
-                                  else "${to.trimEnd(',', ' ')}, $newEmails"
+                    // Проверяем дубликаты перед добавлением
+                    val allExisting = extractAllEmails(to, groupMappings) +
+                        extractAllEmails(cc, groupMappings) +
+                        extractAllEmails(bcc, groupMappings)
+                    val dupes = emails.filter { it.lowercase() in allExisting }
+                    val unique = emails.filter { it.lowercase() !in allExisting }
+                    
+                    if (dupes.isNotEmpty() && unique.isEmpty()) {
+                        // Все адреса — дубликаты, показываем предупреждение
+                        duplicateEmail = dupes.first()
+                        duplicateField = findDuplicateField(dupes.first(), to, cc, bcc, groupMappings)
+                        duplicateTargetField = contactPickerTarget
+                        pendingEmails = emails
+                        pendingGroupName = null
+                        pendingGroupEmails = emptyList()
+                        pendingGroupSelections = emptyList()
+                    } else {
+                        // Добавляем уникальные email к соответствующему полю
+                        if (unique.isNotEmpty()) {
+                            val newEmails = unique.joinToString(", ")
+                            when (contactPickerTarget) {
+                                "to" -> to = if (to.isBlank()) newEmails else "${to.trimEnd(',', ' ')}, $newEmails"
+                                "cc" -> cc = if (cc.isBlank()) newEmails else "${cc.trimEnd(',', ' ')}, $newEmails"
+                                "bcc" -> bcc = if (bcc.isBlank()) newEmails else "${bcc.trimEnd(',', ' ')}, $newEmails"
+                            }
                         }
-                        "cc" -> {
-                            cc = if (cc.isBlank()) newEmails 
-                                  else "${cc.trimEnd(',', ' ')}, $newEmails"
-                        }
-                        "bcc" -> {
-                            bcc = if (bcc.isBlank()) newEmails 
-                                   else "${bcc.trimEnd(',', ' ')}, $newEmails"
+                        // Если есть и дубликаты и уникальные — показываем предупреждение для дубликатов
+                        if (dupes.isNotEmpty()) {
+                            duplicateEmail = dupes.first()
+                            duplicateField = findDuplicateField(dupes.first(), to, cc, bcc, groupMappings)
+                            duplicateTargetField = contactPickerTarget
+                            pendingEmails = dupes
+                            pendingGroupName = null
+                            pendingGroupEmails = emptyList()
+                            pendingGroupSelections = emptyList()
                         }
                     }
                 },
                 onGroupsSelected = { groups ->
-                    // Сохраняем маппинг группа → emails/цвета и добавляем [GroupName] в поле
-                    val newMappings = groupMappings.toMutableMap()
-                    val newColors = groupColors.toMutableMap()
-                    val groupTokens = groups.map { (name, emails, color) ->
-                        newMappings[name] = emails
-                        newColors[name] = color
-                        "[$name]"
-                    }
-                    groupMappings = newMappings
-                    groupColors = newColors
-                    // Сериализуем для переживания поворота экрана
-                    groupMappingsJson = org.json.JSONObject(newMappings.mapValues { (_, v) -> org.json.JSONArray(v) }).toString()
-                    groupColorsJson = org.json.JSONObject(newColors.mapValues { (_, v) -> v }).toString()
-                    val groupsStr = groupTokens.joinToString(", ")
-                    when (contactPickerTarget) {
-                        "to" -> {
-                            to = if (to.isBlank()) groupsStr
-                                  else "${to.trimEnd(',', ' ')}, $groupsStr"
-                        }
-                        "cc" -> {
-                            cc = if (cc.isBlank()) groupsStr
-                                  else "${cc.trimEnd(',', ' ')}, $groupsStr"
-                        }
-                        "bcc" -> {
-                            bcc = if (bcc.isBlank()) groupsStr
-                                   else "${bcc.trimEnd(',', ' ')}, $groupsStr"
-                        }
+                    // Проверяем дубликаты email из групп
+                    val allExisting = extractAllEmails(to, groupMappings) +
+                        extractAllEmails(cc, groupMappings) +
+                        extractAllEmails(bcc, groupMappings)
+                    val allGroupEmails = groups.flatMap { (_, emails, _) -> emails }
+                    val dupes = allGroupEmails.filter { it.lowercase() in allExisting }
+                    if (dupes.isNotEmpty()) {
+                        duplicateEmail = dupes.first()
+                        duplicateField = findDuplicateField(dupes.first(), to, cc, bcc, groupMappings)
+                        duplicateTargetField = contactPickerTarget
+                        pendingEmails = dupes
+                        pendingGroupName = null
+                        pendingGroupEmails = emptyList()
+                        pendingGroupSelections = groups
+                    } else {
+                        applyGroupsSelection(groups, contactPickerTarget)
                     }
                 }
             )
@@ -2131,29 +2277,70 @@ fun ComposeScreen(
                                 // иначе он может завершиться и снова показать подсказки
                                 suggestionSearchJob?.cancel()
                                 suggestionJustSelected = true
-                                // GROUP: вставляем токен [groupName] и сохраняем маппинг
-                                if (suggestion.source == SuggestionSource.GROUP && suggestion.groupEmails.isNotEmpty()) {
-                                    val gName = suggestion.groupName
-                                    val newMappings = groupMappings.toMutableMap()
-                                    newMappings[gName] = suggestion.groupEmails
-                                    groupMappings = newMappings
-                                    val newColors = groupColors.toMutableMap()
-                                    newColors[gName] = suggestion.groupColor
-                                    groupColors = newColors
-                                    groupMappingsJson = org.json.JSONObject(newMappings.mapValues { (_, v) -> org.json.JSONArray(v) }).toString()
-                                    groupColorsJson = org.json.JSONObject(newColors.mapValues { (_, v) -> v }).toString()
-                                    to = replaceLastRecipient(to, "[$gName]")
+                                
+                                // Проверка дубликатов: извлекаем подтверждённую часть to (без текущего ввода)
+                                val separators = charArrayOf(',', ';', '\n')
+                                val lastSepIdx = to.lastIndexOfAny(separators)
+                                val toConfirmed = if (lastSepIdx >= 0) to.substring(0, lastSepIdx) else ""
+                                val emailsToCheck = if (suggestion.source == SuggestionSource.GROUP && suggestion.groupEmails.isNotEmpty()) {
+                                    suggestion.groupEmails
                                 } else {
-                                    to = replaceLastRecipient(to, suggestion.email)
+                                    listOf(suggestion.email)
                                 }
-                                showToSuggestions = false
-                                toSuggestions = emptyList()
-                                // Увеличиваем счётчик использования контакта
-                                if (suggestion.source == SuggestionSource.CONTACT) {
-                                    scope.launch {
-                                        activeAccount?.id?.let { accountId ->
-                                            withContext(Dispatchers.IO) {
-                                                database.contactDao().incrementUseCountByEmail(accountId, suggestion.email)
+                                val allExisting = extractAllEmails(toConfirmed, groupMappings) +
+                                    extractAllEmails(cc, groupMappings) +
+                                    extractAllEmails(bcc, groupMappings)
+                                val dupes = emailsToCheck.filter { it.lowercase() in allExisting }
+                                
+                                if (dupes.isNotEmpty()) {
+                                    // Показываем предупреждение о дубликате
+                                    duplicateEmail = dupes.first()
+                                    duplicateField = when {
+                                        dupes.first().lowercase() in extractAllEmails(toConfirmed, groupMappings) -> "To"
+                                        dupes.first().lowercase() in extractAllEmails(cc, groupMappings) -> "Cc"
+                                        else -> "Bcc"
+                                    }
+                                    duplicateTargetField = "to"
+                                    pendingEmails = dupes
+                                    // Сохраняем информацию о группе для подтверждения
+                                    if (suggestion.source == SuggestionSource.GROUP && suggestion.groupEmails.isNotEmpty()) {
+                                        pendingGroupName = suggestion.groupName
+                                        pendingGroupEmails = suggestion.groupEmails
+                                        pendingGroupColor = suggestion.groupColor
+                                        pendingGroupSelections = emptyList()
+                                    } else {
+                                        pendingGroupName = null
+                                        pendingGroupEmails = emptyList()
+                                        pendingGroupSelections = emptyList()
+                                    }
+                                    showToSuggestions = false
+                                    toSuggestions = emptyList()
+                                } else {
+                                    // GROUP: вставляем токен [groupName] и сохраняем маппинг
+                                    if (suggestion.source == SuggestionSource.GROUP && suggestion.groupEmails.isNotEmpty()) {
+                                        val gName = suggestion.groupName
+                                        val newMappings = groupMappings.toMutableMap()
+                                        newMappings[gName] = suggestion.groupEmails
+                                        groupMappings = newMappings
+                                        val newColors = groupColors.toMutableMap()
+                                        newColors[gName] = suggestion.groupColor
+                                        groupColors = newColors
+                                        groupMappingsJson = org.json.JSONObject(newMappings.mapValues { (_, v) -> org.json.JSONArray(v) }).toString()
+                                        groupColorsJson = org.json.JSONObject(newColors.mapValues { (_, v) -> v }).toString()
+                                        to = replaceLastRecipient(to, "[$gName]")
+                                    } else {
+                                        to = replaceLastRecipient(to, suggestion.email)
+                                    }
+                                    pendingGroupSelections = emptyList()
+                                    showToSuggestions = false
+                                    toSuggestions = emptyList()
+                                    // Увеличиваем счётчик использования контакта
+                                    if (suggestion.source == SuggestionSource.CONTACT) {
+                                        scope.launch {
+                                            activeAccount?.id?.let { accountId ->
+                                                withContext(Dispatchers.IO) {
+                                                    database.contactDao().incrementUseCountByEmail(accountId, suggestion.email)
+                                                }
                                             }
                                         }
                                     }

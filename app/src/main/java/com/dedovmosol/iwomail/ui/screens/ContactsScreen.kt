@@ -171,8 +171,10 @@ fun ContactsScreen(
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showExportDialog by rememberSaveable { mutableStateOf(false) }
+    var addToContactsConfirmId by rememberSaveable { mutableStateOf<String?>(null) }
+    val addToContactsConfirmContact = addToContactsConfirmId?.let { id -> exchangeContacts.find { it.id == id } }
     var duplicateCheckContactId by rememberSaveable { mutableStateOf<String?>(null) }
-    val duplicateCheckContact = duplicateCheckContactId?.let { id -> localContacts.find { it.id == id } }
+    val duplicateCheckContact = duplicateCheckContactId?.let { id -> localContacts.find { it.id == id } ?: exchangeContacts.find { it.id == id } }
     var duplicateExistingContactId by rememberSaveable { mutableStateOf<String?>(null) }
     val duplicateExistingContact = duplicateExistingContactId?.let { id -> localContacts.find { it.id == id } }
     
@@ -337,13 +339,13 @@ fun ContactsScreen(
                         }
                         showDeleteDialogId = null
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showDeleteDialogId = null },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -381,7 +383,8 @@ fun ContactsScreen(
                 showDeleteDialogId = contact.id
             },
             onAddToContacts = {
-                // Для Exchange контактов — добавляем как локальный контакт с проверкой дубликата
+                // Для Exchange/GAL контактов — сначала проверяем дубликат, потом спрашиваем
+                showContactDetailsId = null
                 scope.launch {
                     try {
                         val existing = contactRepo.findLocalDuplicate(accountId, contact.email)
@@ -389,26 +392,12 @@ fun ContactsScreen(
                             duplicateCheckContactId = contact.id
                             duplicateExistingContactId = existing.id
                         } else {
-                            contactRepo.addContact(
-                                accountId = accountId,
-                                displayName = contact.displayName,
-                                email = contact.email,
-                                firstName = contact.firstName,
-                                lastName = contact.lastName,
-                                phone = contact.phone,
-                                mobilePhone = contact.mobilePhone,
-                                workPhone = contact.workPhone,
-                                company = contact.company,
-                                department = contact.department,
-                                jobTitle = contact.jobTitle
-                            )
-                            Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
+                            addToContactsConfirmId = contact.id
                         }
                     } catch (_: Exception) {
-                        Toast.makeText(context, if (isRussian) "Ошибка сохранения контакта" else "Failed to save contact", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, if (isRussian) "Ошибка проверки контакта" else "Failed to check contact", Toast.LENGTH_SHORT).show()
                     }
                 }
-                showContactDetailsId = null
             }
         )
     }
@@ -512,7 +501,7 @@ fun ContactsScreen(
                         duplicateCheckContactId = null
                         duplicateExistingContactId = null
                     },
-                    text = if (isRussian) "Заменить" else "Replace"
+                    text = Strings.yes
                 )
             },
             dismissButton = {
@@ -521,7 +510,76 @@ fun ContactsScreen(
                         duplicateCheckContactId = null
                         duplicateExistingContactId = null
                     },
-                    text = Strings.cancel
+                    text = Strings.no
+                )
+            }
+        )
+    }
+    
+    // Диалог подтверждения добавления GAL-контакта в личные контакты
+    addToContactsConfirmContact?.let { galContact ->
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { addToContactsConfirmId = null },
+            icon = { Icon(AppIcons.PersonAdd, null) },
+            title = {
+                Text(if (isRussian) "Добавить в контакты?" else "Add to contacts?")
+            },
+            text = {
+                Column {
+                    Text(
+                        text = galContact.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (galContact.email.isNotBlank()) {
+                        Text(
+                            text = galContact.email,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (galContact.company.isNotBlank()) {
+                        Text(
+                            text = galContact.company,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        val contactToAdd = galContact
+                        addToContactsConfirmId = null
+                        scope.launch {
+                            try {
+                                contactRepo.addContact(
+                                    accountId = accountId,
+                                    displayName = contactToAdd.displayName,
+                                    email = contactToAdd.email,
+                                    firstName = contactToAdd.firstName,
+                                    lastName = contactToAdd.lastName,
+                                    phone = contactToAdd.phone,
+                                    mobilePhone = contactToAdd.mobilePhone,
+                                    workPhone = contactToAdd.workPhone,
+                                    company = contactToAdd.company,
+                                    department = contactToAdd.department,
+                                    jobTitle = contactToAdd.jobTitle
+                                )
+                                Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
+                            } catch (_: Exception) {
+                                Toast.makeText(context, if (isRussian) "Ошибка сохранения контакта" else "Failed to save contact", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    text = Strings.yes
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { addToContactsConfirmId = null },
+                    text = Strings.no
                 )
             }
         )
@@ -857,13 +915,13 @@ fun ContactsScreen(
                         }
                         groupToDeleteId = null
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { groupToDeleteId = null },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -1088,13 +1146,13 @@ fun ContactsScreen(
                                                     selectedContactIds = emptySet()
                                                 }
                                             },
-                                            text = Strings.delete
+                                            text = Strings.yes
                                         )
                                     },
                                     dismissButton = {
                                         com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                                             onClick = { showDeleteConfirm = false },
-                                            text = Strings.cancel
+                                            text = Strings.no
                                         )
                                     }
                                 )

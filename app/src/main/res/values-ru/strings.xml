@@ -5,6 +5,8 @@
     <string name="all_day">Весь день</string>
     <string name="task">Задача</string>
     <string name="task_reminder">Напоминание о задаче</string>
+    <string name="notification_mark_read">Прочитано</string>
+    <string name="notification_remind_in_5_min">Напомнить через 5 минут</string>
     <string name="due_date_label">Срок</string>
     <string name="high_priority">Высокий приоритет</string>
     

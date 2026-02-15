@@ -312,13 +312,13 @@ fun NotesScreen(
                             }
                         }
                     },
-                    text = Strings.emptyTrash
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showEmptyTrashConfirm = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -358,13 +358,13 @@ fun NotesScreen(
                         }
                         selectedIds = emptySet()
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showDeleteSelectedDialog = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
@@ -414,13 +414,13 @@ fun NotesScreen(
                             }
                         }
                     },
-                    text = Strings.delete
+                    text = Strings.yes
                 )
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showDeletePermanentlyDialog = false },
-                    text = Strings.cancel
+                    text = Strings.no
                 )
             }
         )
