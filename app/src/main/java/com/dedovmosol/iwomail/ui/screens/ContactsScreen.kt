@@ -171,6 +171,7 @@ fun ContactsScreen(
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showExportDialog by rememberSaveable { mutableStateOf(false) }
+    var bulkDuplicateAlertCount by rememberSaveable { mutableStateOf(0) }
     var addToContactsConfirmId by rememberSaveable { mutableStateOf<String?>(null) }
     val addToContactsConfirmContact = addToContactsConfirmId?.let { id -> exchangeContacts.find { it.id == id } }
     var duplicateCheckContactId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -320,6 +321,31 @@ fun ContactsScreen(
                 showAddDialog = false
                 editingContactId = null
             }
+        )
+    }
+
+    if (bulkDuplicateAlertCount > 0) {
+        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+            onDismissRequest = { bulkDuplicateAlertCount = 0 },
+            icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
+            title = {
+                Text(if (isRussian) "Найдены дубликаты" else "Duplicates found")
+            },
+            text = {
+                Text(
+                    if (isRussian)
+                        "Пропущено дубликатов: $bulkDuplicateAlertCount"
+                    else
+                        "Duplicates skipped: $bulkDuplicateAlertCount"
+                )
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { bulkDuplicateAlertCount = 0 },
+                    text = Strings.ok
+                )
+            },
+            dismissButton = {}
         )
     }
     
@@ -1062,11 +1088,10 @@ fun ContactsScreen(
                                             } catch (_: Exception) { /* skip failed contact */ }
                                         }
                                         val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
-                                        val skippedMsg = if (skipped > 0) {
-                                            val dupText = if (isRussian) ", пропущено дубликатов" else ", duplicates skipped"
-                                            "$dupText: $skipped"
-                                        } else ""
-                                        Toast.makeText(context, "$msg: $copied$skippedMsg", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "$msg: $copied", Toast.LENGTH_SHORT).show()
+                                        if (skipped > 0) {
+                                            bulkDuplicateAlertCount = skipped
+                                        }
                                         isSelectionMode = false
                                         selectedContactIds = emptySet()
                                     }

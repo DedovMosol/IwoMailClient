@@ -36,7 +36,7 @@ fun DrawerContent(
     tasksCount: Int = 0,
     showAccountPicker: Boolean,
     onToggleAccountPicker: () -> Unit,
-    onAccountSelected: (AccountEntity) -> Unit,
+    onAccountSettingsClick: (Long) -> Unit,
     onAddAccount: () -> Unit,
     onFolderSelected: (FolderEntity) -> Unit,
     onFavoritesClick: () -> Unit,
@@ -55,7 +55,10 @@ fun DrawerContent(
             DrawerHeader(
                 account = activeAccount,
                 showPicker = showAccountPicker,
-                onToggle = onToggleAccountPicker
+                onToggle = onToggleAccountPicker,
+                onAccountClick = {
+                    activeAccount?.let { onAccountSettingsClick(it.id) }
+                }
             )
         }
         
@@ -65,7 +68,7 @@ fun DrawerContent(
                 AccountItem(
                     account = account,
                     isActive = account.id == activeAccount?.id,
-                    onClick = { onAccountSelected(account) }
+                    onClick = { onAccountSettingsClick(account.id) }
                 )
             }
             
@@ -301,7 +304,8 @@ fun DrawerContent(
 fun DrawerHeader(
     account: AccountEntity?,
     showPicker: Boolean,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onAccountClick: () -> Unit
 ) {
     val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
     val accountColor = try {
@@ -331,7 +335,8 @@ fun DrawerHeader(
                 modifier = Modifier
                     .size(64.dp)
                     .clip(CircleShape)
-                    .background(accountColor),
+                    .background(accountColor)
+                    .clickable(onClick = onAccountClick),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -345,11 +350,14 @@ fun DrawerHeader(
             
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggle),
+                    .fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = onAccountClick)
+                ) {
                     Text(
                         text = account?.displayName ?: Strings.noAccount,
                         style = MaterialTheme.typography.titleMedium,
@@ -362,12 +370,14 @@ fun DrawerHeader(
                         color = Color.White.copy(alpha = 0.8f)
                     )
                 }
-                Icon(
-                    imageVector = if (showPicker) AppIcons.KeyboardArrowUp 
-                                  else AppIcons.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = Color.White
-                )
+                IconButton(onClick = onToggle) {
+                    Icon(
+                        imageVector = if (showPicker) AppIcons.KeyboardArrowUp
+                        else AppIcons.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = Color.White
+                    )
+                }
             }
         }
     }

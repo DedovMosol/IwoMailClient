@@ -637,6 +637,9 @@ fun AppNavigation(
                 onNavigateToSettings = {
                     navController.navigate(Screen.Settings.route)
                 },
+                onNavigateToAccountSettings = { accountId ->
+                    navController.navigate(Screen.AccountSettings.createRoute(accountId))
+                },
                 onNavigateToOnboarding = {
                     navController.navigate(Screen.Onboarding.createRoute(isFirstLaunch = false))
                 },

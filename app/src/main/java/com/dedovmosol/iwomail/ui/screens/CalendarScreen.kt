@@ -2857,6 +2857,71 @@ private fun CreateEventDialog(
                     // Вложения
                     val isRussianAtt = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
                     Column(modifier = Modifier.fillMaxWidth()) {
+                        // Существующие вложения с сервера (при редактировании)
+                        if (isEditing && event != null && event.hasAttachments && event.attachments.isNotBlank()) {
+                            val existingAttachments = remember(event.attachments) {
+                                try {
+                                    val jsonArray = org.json.JSONArray(event.attachments)
+                                    (0 until jsonArray.length()).map { i ->
+                                        val obj = jsonArray.getJSONObject(i)
+                                        Triple(
+                                            obj.optString("name", "attachment"),
+                                            obj.optLong("size", 0),
+                                            obj.optBoolean("isInline", false)
+                                        )
+                                    }.filter { !it.third }
+                                } catch (_: Exception) { emptyList() }
+                            }
+                            if (existingAttachments.isNotEmpty()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        AppIcons.Attachment,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isRussianAtt) "Вложения (${existingAttachments.size})" else "Attachments (${existingAttachments.size})",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                existingAttachments.forEach { (name, size, _) ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = AppIcons.fileIconFor(name),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = Color.Unspecified
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = name,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (size > 0) {
+                                            Text(
+                                                text = Strings.formatFileSize(size),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+
                         OutlinedButton(
                             onClick = {
                                 filePickerLauncher.launch(arrayOf("*/*"))
@@ -3430,12 +3495,17 @@ private fun CalendarAttachmentsList(
                         if (isDownloading) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(
-                                AppIcons.Download,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            IconButton(
+                                onClick = { showSaveMenu = true },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    AppIcons.MoreVert,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }

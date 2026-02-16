@@ -58,6 +58,8 @@ fun AboutScreen(
     val clipboardManager = LocalClipboardManager.current
     val easterFound = remember { isEasterEggFound(context) }
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
+    var protocolTapCount by rememberSaveable { mutableStateOf(0) }
+    var base64Revealed by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -114,7 +116,23 @@ fun AboutScreen(
                 ListItem(
                     headlineContent = { Text(Strings.supportedProtocols) },
                     supportingContent = { Text("Exchange (EAS), IMAP, POP3") },
-                    leadingContent = { Icon(AppIcons.Business, null) }
+                    leadingContent = { Icon(AppIcons.Business, null) },
+                    modifier = Modifier.clickable {
+                        if (!easterFound && !base64Revealed) {
+                            protocolTapCount++
+                            val remaining = 7 - protocolTapCount
+                            if (remaining in 1..3) {
+                                Toast.makeText(
+                                    context,
+                                    if (isRu) "iwo — подсказка близко" else "iwo — hint is near",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            if (protocolTapCount >= 7) {
+                                base64Revealed = true
+                            }
+                        }
+                    }
                 )
                 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -169,8 +187,8 @@ fun AboutScreen(
                                 .rotate(guitarRotation)
                                 .clickable { showEasterEgg = true }
                         )
-                    } else {
-                        // Base64 подсказка — копируемая
+                    } else if (base64Revealed) {
+                        // Base64 подсказка — копируемая (появляется после 7 тапов)
                         val base64Text = "SSB3YW50IG91dCwgdG8gbGl2ZSBteSBsaWZlIGFuZCB0byBiZSBmcmVl"
                         Text(
                             text = base64Text,

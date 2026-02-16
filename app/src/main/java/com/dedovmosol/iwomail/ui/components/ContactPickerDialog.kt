@@ -162,7 +162,7 @@ fun ContactPickerDialog(
                         )
                     }
                     // Кнопка Готово
-                    Button(
+                    com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                         onClick = {
                             if (selectedEmails.isNotEmpty()) {
                                 onContactsSelected(selectedEmails.toList())
@@ -181,10 +181,9 @@ fun ContactPickerDialog(
                             }
                             onDismiss()
                         },
-                        enabled = hasSelection
-                    ) {
-                        Text(Strings.done)
-                    }
+                        enabled = hasSelection,
+                        text = Strings.done
+                    )
                 }
                 
                 // Поиск

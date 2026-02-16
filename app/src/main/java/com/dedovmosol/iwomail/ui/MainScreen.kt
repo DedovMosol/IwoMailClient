@@ -523,6 +523,7 @@ fun MainScreen(
     onNavigateToEmailList: (String) -> Unit,
     onNavigateToCompose: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToAccountSettings: (Long) -> Unit,
     onNavigateToOnboarding: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
     onNavigateToEmailDetail: (String) -> Unit = {},
@@ -1154,11 +1155,13 @@ fun MainScreen(
                     tasksCount = tasksCount,
                     showAccountPicker = showAccountPicker,
                     onToggleAccountPicker = { showAccountPicker = !showAccountPicker },
-                    onAccountSelected = { account ->
+                    onAccountSettingsClick = { accountId ->
                         scope.launch {
-                            accountRepo.setActiveAccount(account.id)
+                            accountRepo.setActiveAccount(accountId)
                             showAccountPicker = false
+                            drawerState.close()
                         }
+                        onNavigateToAccountSettings(accountId)
                     },
                     onAddAccount = {
                         scope.launch { drawerState.close() }
