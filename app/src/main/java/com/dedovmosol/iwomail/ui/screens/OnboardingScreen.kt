@@ -92,19 +92,19 @@ fun OnboardingScreen(
         OnboardingPage(
             type = OnboardingPageType.Mail,
             icon = AppIcons.Email,
-            color = Color(0xFF5C6BC0)
+            color = Color(0xFF1565C0)
         ),
         // Слайд 2: Органайзер
         OnboardingPage(
             type = OnboardingPageType.Organizer,
             icon = AppIcons.CalendarMonth,
-            color = Color(0xFF42A5F5)
+            color = Color(0xFF1565C0)
         ),
         // Слайд 3: Настройки и обновления
         OnboardingPage(
             type = OnboardingPageType.Settings,
             icon = AppIcons.Settings,
-            color = Color(0xFF78909C)
+            color = Color(0xFF455A64)
         )
     )
     
@@ -118,7 +118,7 @@ fun OnboardingScreen(
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        colorTheme.gradientStart.copy(alpha = 0.1f),
+                        colorTheme.gradientStart.copy(alpha = 0.15f),
                         MaterialTheme.colorScheme.background
                     )
                 )
@@ -1091,7 +1091,7 @@ private fun FeaturePage(
                     delay = 200,
                     icon = AppIcons.Email,
                     iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
-                    color = Color(0xFF5C6BC0),
+                    color = Color(0xFF1565C0),
                     title = OnboardingStrings.mailTitle(isRussian),
                     description = OnboardingStrings.mailDescription(isRussian)
                 )
@@ -1101,7 +1101,7 @@ private fun FeaturePage(
                     delay = 350,
                     icon = AppIcons.Notifications,
                     iconModifier = if (animationsEnabled) Modifier.graphicsLayer { rotationZ = shake } else Modifier,
-                    color = Color(0xFFEF5350),
+                    color = Color(0xFFD32F2F),
                     title = OnboardingStrings.notificationsTitle(isRussian),
                     description = OnboardingStrings.notificationsDescription(isRussian)
                 )
@@ -1111,7 +1111,7 @@ private fun FeaturePage(
                     delay = 500,
                     icon = AppIcons.Info,
                     iconModifier = Modifier,
-                    color = Color(0xFFFF9800),
+                    color = Color(0xFFE65100),
                     title = OnboardingStrings.exchangeTitle(isRussian),
                     description = OnboardingStrings.exchangeDescription(isRussian)
                 )
@@ -1122,7 +1122,7 @@ private fun FeaturePage(
                     delay = 200,
                     icon = AppIcons.Contacts,
                     iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
-                    color = Color(0xFF4FC3F7),
+                    color = Color(0xFF1565C0),
                     title = OnboardingStrings.contactsTitle(isRussian),
                     description = OnboardingStrings.contactsDescription(isRussian)
                 )
@@ -1132,7 +1132,7 @@ private fun FeaturePage(
                     delay = 300,
                     icon = AppIcons.CalendarMonth,
                     iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
-                    color = Color(0xFF42A5F5),
+                    color = Color(0xFF2E7D32),
                     title = OnboardingStrings.calendarTitle(isRussian),
                     description = OnboardingStrings.calendarDescription(isRussian)
                 )
@@ -1142,7 +1142,7 @@ private fun FeaturePage(
                     delay = 400,
                     icon = AppIcons.Task,
                     iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
-                    color = Color(0xFFAB47BC),
+                    color = Color(0xFF7B1FA2),
                     title = OnboardingStrings.tasksTitle(isRussian),
                     description = OnboardingStrings.tasksDescription(isRussian)
                 )
@@ -1152,7 +1152,7 @@ private fun FeaturePage(
                     delay = 500,
                     icon = AppIcons.StickyNote,
                     iconModifier = if (animationsEnabled) Modifier.scale(pulse) else Modifier,
-                    color = Color(0xFF81C784),
+                    color = Color(0xFFE65100),
                     title = OnboardingStrings.notesTitle(isRussian),
                     description = OnboardingStrings.notesDescription(isRussian)
                 )
@@ -1163,7 +1163,7 @@ private fun FeaturePage(
                     delay = 200,
                     icon = AppIcons.Settings,
                     iconModifier = if (animationsEnabled) Modifier.graphicsLayer { rotationZ = rotation } else Modifier,
-                    color = Color(0xFF78909C),
+                    color = Color(0xFF455A64),
                     title = OnboardingStrings.personalizationTitle(isRussian),
                     description = OnboardingStrings.personalizationDescription(isRussian)
                 )
@@ -1173,7 +1173,7 @@ private fun FeaturePage(
                     delay = 350,
                     icon = AppIcons.Update,
                     iconModifier = if (animationsEnabled) Modifier.graphicsLayer { rotationZ = rotation } else Modifier,
-                    color = Color(0xFF26A69A),
+                    color = Color(0xFF00796B),
                     title = OnboardingStrings.updatesTitle(isRussian),
                     description = OnboardingStrings.updatesDescription(isRussian)
                 )
@@ -1215,7 +1215,7 @@ private fun FeatureItem(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(color.copy(alpha = 0.2f)),
+                    .background(color.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(

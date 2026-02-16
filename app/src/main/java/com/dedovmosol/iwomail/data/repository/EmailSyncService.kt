@@ -230,7 +230,13 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             }
         }
         
-        if (trulyLocalDrafts.isNotEmpty()) {
+        // Проверяем draftMode: если LOCAL — НЕ загружаем на сервер
+        val account = accountRepo.getAccount(accountId)
+        val draftMode = try {
+            DraftMode.valueOf(account?.draftMode ?: DraftMode.SERVER.name)
+        } catch (_: Exception) { DraftMode.SERVER }
+        
+        if (trulyLocalDrafts.isNotEmpty() && draftMode != DraftMode.LOCAL) {
             val easClient = accountRepo.createEasClient(accountId)
             if (easClient != null) {
                 val draftsFolder = folderDao.getFolder(folderId)

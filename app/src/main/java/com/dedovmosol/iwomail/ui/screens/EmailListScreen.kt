@@ -803,7 +803,9 @@ fun EmailListScreen(
                     },
                     onMarkRead = { markSelectedAsRead(true) },
                     onStar = { starSelected() },
+                    onUnstar = { starSelected() },
                     onMarkUnread = { markSelectedAsRead(false) },
+                    isFavorites = isFavorites,
                     onSpam = {
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
@@ -1059,9 +1061,11 @@ private fun SelectionTopBar(
     onDelete: () -> Unit,
     onMarkRead: () -> Unit,
     onStar: () -> Unit,
+    onUnstar: () -> Unit = {},
     onMarkUnread: () -> Unit,
     onSpam: () -> Unit,
     onDeletePermanently: () -> Unit,
+    isFavorites: Boolean = false,
     isSpamFolder: Boolean,
     isTrashFolder: Boolean,
     isDraftsFolder: Boolean = false,
@@ -1077,6 +1081,10 @@ private fun SelectionTopBar(
             }
         },
         actions = {
+            // В избранном - кнопка "Убрать из избранного"
+            if (isFavorites) {
+                IconButton(onClick = onUnstar) { Icon(AppIcons.StarOutline, Strings.unstar, tint = Color.White) }
+            }
             // В корзине - кнопка Восстановить, иначе - Переместить
             if (isTrashFolder) {
                 IconButton(onClick = onRestore) { Icon(AppIcons.Restore, Strings.restore, tint = Color.White) }

@@ -347,6 +347,7 @@ private fun findItemIndexAtY(
     y: Float
 ): Int {
     val layoutInfo = listState.layoutInfo
+    // Прямое попадание на data item
     for (itemInfo in layoutInfo.visibleItemsInfo) {
         val key = itemInfo.key
         if (key is String) {
@@ -356,5 +357,17 @@ private fun findItemIndexAtY(
             if (y >= itemTop && y < itemBottom) return idx
         }
     }
-    return -1
+    // Палец на non-data item (header, "Select All" и т.д.) — ищем ближайший data item
+    var closestAbove = -1
+    var closestBelow = -1
+    for (itemInfo in layoutInfo.visibleItemsInfo) {
+        val key = itemInfo.key
+        if (key is String) {
+            val idx = indexMap[key] ?: continue
+            val itemMid = (itemInfo.offset - layoutInfo.viewportStartOffset).toFloat() + itemInfo.size / 2f
+            if (itemMid <= y) closestAbove = idx
+            if (itemMid > y && closestBelow == -1) closestBelow = idx
+        }
+    }
+    return if (closestBelow != -1) closestBelow else closestAbove
 }

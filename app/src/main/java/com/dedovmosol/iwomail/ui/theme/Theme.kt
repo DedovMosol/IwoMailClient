@@ -516,7 +516,7 @@ fun StyledAlertDialog(
                             CompositionLocalProvider(
                                 androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant
                             ) {
-                                ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
+                                ProvideTextStyle(MaterialTheme.typography.bodyMedium.copy(textAlign = TextAlign.Center)) {
                                     Box(
                                         modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
                                         contentAlignment = Alignment.Center

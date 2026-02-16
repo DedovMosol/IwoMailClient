@@ -471,6 +471,7 @@ object Strings {
     // Действия с письмами
     val restore: String @Composable get() = if (isRussian()) "Восстановить" else "Restore"
     val star: String @Composable get() = if (isRussian()) "Пометить" else "Star"
+    val unstar: String @Composable get() = if (isRussian()) "Убрать из избранного" else "Remove from favorites"
     val read: String @Composable get() = if (isRussian()) "Прочитано" else "Read"
     val unreadAction: String @Composable get() = if (isRussian()) "Непрочитанное" else "Unread"
     val toSpam: String @Composable get() = if (isRussian()) "В спам" else "To spam"
