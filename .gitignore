@@ -149,8 +149,8 @@ mapping.txt
 # AGP metadata
 .kotlin/
 
-# Update metadata (generated for GitHub)
-update.json
+# Update metadata (tracked in git for OTA)
+# update.json
 
 # Easter egg audio (copyrighted music)
 app/src/main/res/raw/pashalka_iwo.m4a
