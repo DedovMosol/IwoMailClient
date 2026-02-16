@@ -810,7 +810,11 @@ fun MainScreen(
         try {
             val updateChecker = com.dedovmosol.iwomail.update.UpdateChecker(context)
             val isRussian = settingsRepo.getLanguageSync() == "ru"
-            when (val result = updateChecker.checkForUpdate(isRussian)) {
+            val result = com.dedovmosol.iwomail.update.UpdateChecker.runAutoCheckSingleFlight {
+                updateChecker.checkForUpdate(isRussian)
+            } ?: return@LaunchedEffect
+
+            when (result) {
                 is com.dedovmosol.iwomail.update.UpdateResult.Available -> {
                     if (settingsRepo.shouldShowUpdateDialog(result.info.versionCode)) {
                         autoUpdateInfo = result.info

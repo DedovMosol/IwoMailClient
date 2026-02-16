@@ -8,6 +8,7 @@ import androidx.core.content.FileProvider
 import com.dedovmosol.iwomail.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
@@ -76,6 +77,22 @@ class UpdateChecker(private val context: Context) {
         private const val UPDATES_DIR = "updates"
         private const val APK_FILENAME = "update.apk"
         private const val MAX_RETRY_ATTEMPTS = 2
+
+        // Single-flight защита для автопроверки OTA (между параллельными MainScreen/Activity)
+        private val autoCheckMutex = Mutex()
+
+        /**
+         * Запускает блок автопроверки OTA в single-flight режиме.
+         * Если параллельная автопроверка уже идёт — вернёт null и пропустит дублирующий запуск.
+         */
+        suspend fun <T> runAutoCheckSingleFlight(block: suspend () -> T): T? {
+            if (!autoCheckMutex.tryLock()) return null
+            return try {
+                block()
+            } finally {
+                autoCheckMutex.unlock()
+            }
+        }
     }
     
     // Используем общий HttpClient для предотвращения утечек памяти
