@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.data.repository
 
 import android.content.Context
 import com.dedovmosol.iwomail.data.database.*
+import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.sync.CalendarReminderReceiver
@@ -75,10 +76,17 @@ class CalendarRepository(private val context: Context) {
         /**
          * Вызывается из syncCalendar() — убирает из защитного множества
          * те serverId, которых сервер уже НЕ возвращает (реально удалены).
+         * КРИТИЧНО: Убираем ТОЛЬКО те ID, которые:
+         *   1) были помечены как удалённые пользователем (в deletedServerIds)
+         *   2) сервер ПОДТВЕРДИЛ удаление (НЕ вернул в ответе)
+         * Если сервер ЕЩЁ возвращает событие — защиту НЕ снимаем!
          */
         private fun confirmServerDeletions(serverReturnedIds: Set<String>, context: Context? = null) {
-            deletedServerIds.removeAll { it !in serverReturnedIds }
-            context?.let { saveToPrefs(it) }
+            val confirmedDeleted = deletedServerIds.filter { it !in serverReturnedIds }
+            if (confirmedDeleted.isNotEmpty()) {
+                deletedServerIds.removeAll(confirmedDeleted.toSet())
+                context?.let { saveToPrefs(it) }
+            }
         }
     }
     
@@ -156,7 +164,8 @@ class CalendarRepository(private val context: Context) {
         busyStatus: Int = 2,
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        attachments: List<DraftAttachmentData> = emptyList()
     ): EasResult<CalendarEventEntity> {
         return withContext(Dispatchers.IO) {
             try {
@@ -192,7 +201,8 @@ class CalendarRepository(private val context: Context) {
                     busyStatus = busyStatus,
                     sensitivity = sensitivity,
                     attendees = attendees,
-                    recurrenceType = recurrenceType
+                    recurrenceType = recurrenceType,
+                    attachments = attachments
                 )
                 
                 // Формируем recurrenceRule JSON для локальной записи
@@ -203,7 +213,10 @@ class CalendarRepository(private val context: Context) {
                 
                 when (result) {
                     is EasResult.Success -> {
-                        val serverId = result.data
+                        // Формат ответа: "serverId\nattachmentsJson" или просто "serverId"
+                        val parts = result.data.split("\n", limit = 2)
+                        val serverId = parts[0]
+                        val attachmentsJson = if (parts.size > 1) parts[1] else ""
                         
                         // Если serverId похож на clientId (UUID без дефисов), 
                         // значит сервер не вернул реальный ID — нужна синхронизация
@@ -254,7 +267,9 @@ class CalendarRepository(private val context: Context) {
                             isRecurring = isRecurring,
                             recurrenceRule = recurrenceRule,
                             categories = "",
-                            lastModified = System.currentTimeMillis()
+                            lastModified = System.currentTimeMillis(),
+                            hasAttachments = attachmentsJson.isNotBlank(),
+                            attachments = attachmentsJson
                         )
                         calendarEventDao.insert(event)
                         CalendarReminderReceiver.scheduleReminder(context, event)
@@ -314,7 +329,8 @@ class CalendarRepository(private val context: Context) {
         reminder: Int = event.reminder,
         busyStatus: Int = event.busyStatus,
         sensitivity: Int = event.sensitivity,
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        attachments: List<DraftAttachmentData> = emptyList()
     ): EasResult<CalendarEventEntity> {
         return withContext(Dispatchers.IO) {
             try {
@@ -336,12 +352,26 @@ class CalendarRepository(private val context: Context) {
                         busyStatus = busyStatus,
                         sensitivity = sensitivity,
                         oldSubject = event.subject,
-                        recurrenceType = recurrenceType
+                        recurrenceType = recurrenceType,
+                        attachments = attachments
                     )
                 }
                 
                 when (result) {
                     is EasResult.Success -> {
+                        // result.data — attachments JSON (пустая строка если вложений нет)
+                        val newAttachmentsJson = result.data
+                        // Объединяем существующие вложения с новыми
+                        val finalAttachments = if (newAttachmentsJson.isNotBlank()) {
+                            if (event.attachments.isNotBlank()) {
+                                // Мержим старые + новые
+                                val oldArr = try { org.json.JSONArray(event.attachments) } catch (_: Exception) { org.json.JSONArray() }
+                                val newArr = try { org.json.JSONArray(newAttachmentsJson) } catch (_: Exception) { org.json.JSONArray() }
+                                for (i in 0 until newArr.length()) oldArr.put(newArr.getJSONObject(i))
+                                oldArr.toString()
+                            } else newAttachmentsJson
+                        } else event.attachments
+                        
                         val newLastModified = System.currentTimeMillis()
                         val isRecurringNew = recurrenceType >= 0
                         val recurrenceRuleNew = if (isRecurringNew) {
@@ -359,7 +389,9 @@ class CalendarRepository(private val context: Context) {
                             sensitivity = sensitivity,
                             isRecurring = isRecurringNew,
                             recurrenceRule = recurrenceRuleNew,
-                            lastModified = newLastModified
+                            lastModified = newLastModified,
+                            hasAttachments = finalAttachments.isNotBlank(),
+                            attachments = finalAttachments
                         )
                         
                         calendarEventDao.update(updatedEvent)
@@ -643,7 +675,14 @@ class CalendarRepository(private val context: Context) {
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
-                easClient.downloadAttachment(fileReference)
+                // EAS FileReference содержит ":" (формат "22:2:1")
+                // EWS AttachmentId — длинная base64 строка без ":"
+                // Для EWS (Exchange 2007) нужен EWS GetAttachment, а не EAS ItemOperations
+                if (fileReference.contains(":")) {
+                    easClient.downloadAttachment(fileReference)
+                } else {
+                    easClient.downloadDraftAttachment(fileReference)
+                }
             } catch (e: Exception) {
                 EasResult.Error(e.message ?: "Ошибка скачивания вложения")
             }

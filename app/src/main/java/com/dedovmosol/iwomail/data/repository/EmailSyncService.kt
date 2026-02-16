@@ -435,12 +435,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     }
                     
                     if (result.data.emails.isNotEmpty()) {
-                        val emailEntities = result.data.emails.map { email ->
+                        val emailEntities = result.data.emails.mapNotNull { email ->
                             val parsedDate = parseDate(email.dateReceived)
                             // Если сервер не вернул дату — ставим 1L вместо текущего времени,
                             // чтобы старые письма не всплывали как «только что отправленные»
                             // (insertAllIgnore не перезапишет существующие письма)
-                            val effectiveDate = if (parsedDate > 0L) parsedDate else 1L
+                            val effectiveDate = if (parsedDate > 0L) parsedDate else 0L
+                            // Фильтруем ghost-записи: нет даты и нет отправителя
+                            if (effectiveDate <= 0L && email.from.isBlank()) return@mapNotNull null
+                            val safeDate = if (effectiveDate > 0L) effectiveDate else 1L
                             EmailEntity(
                                 id = "${accountId}_${email.serverId}",
                                 accountId = accountId,
@@ -454,7 +457,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 preview = stripHtml(email.body).take(150).replace("\n", " ").trim(),
                                 body = "",
                                 bodyType = email.bodyType,
-                                dateReceived = effectiveDate,
+                                dateReceived = safeDate,
                                 read = email.read,
                                 flagged = email.flagged,
                                 importance = email.importance,
@@ -899,17 +902,20 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             emptyMap()
         }
         
-        val emailEntities = syncData.emails.map { email ->
+        val emailEntities = syncData.emails.mapNotNull { email ->
             val emailId = "${accountId}_${email.serverId}"
             val existingEmail = existingEmailsMap[emailId]
             val parsedDate = parseDate(email.dateReceived)
             // Если сервер не вернул DateReceived (parsedDate=0), сохраняем существующую дату.
-            // Если сервер не вернул дату — сохраняем существующую или ставим 1L.
-            // НЕ currentTimeMillis(), чтобы старые письма не появлялись как новые
-            // и не вызывали уведомления/непрочитанные маркеры.
+            // Если и существующей нет — это ghost-запись (Exchange 2007 SP1 может отдавать
+            // служебные записи без даты). Пропускаем такие, если нет ни даты, ни отправителя.
             val effectiveDate = if (parsedDate > 0L) parsedDate
                 else existingEmail?.dateReceived?.takeIf { it > 0L }
-                ?: 1L
+                ?: 0L
+            // Фильтруем ghost-записи: нет реальной даты и нет отправителя
+            if (effectiveDate <= 0L && email.from.isBlank()) return@mapNotNull null
+            // Для оставшихся без даты — ставим 1L чтобы не путать с новыми
+            val safeDate = if (effectiveDate > 0L) effectiveDate else 1L
             EmailEntity(
                 id = emailId,
                 accountId = accountId,
@@ -924,7 +930,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 body = existingEmail?.body?.takeIf { it.isNotBlank() }
                     ?: if (folder.type == FolderType.DRAFTS && email.body.isNotBlank()) email.body else "",
                 bodyType = email.bodyType,
-                dateReceived = effectiveDate,
+                dateReceived = safeDate,
                 read = email.read,
                 flagged = email.flagged,
                 importance = email.importance,

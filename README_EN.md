@@ -11,7 +11,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 ## 🌟 Features
 
-- 📧 **Exchange ActiveSync** — EAS 12.0-14.1 support (Exchange 2007+). Tested on Exchange 2007 SP1
+- 📧 **Exchange ActiveSync** — EAS 12.0-14.1 support (Exchange 2007+). Tested on Exchange 2007 SP1 (EAS 12.1)
 - 🔄 **EWS for Exchange 2007** — notes sync and creation via EWS with NTLMv2 (fallback for EAS 12.x)
 - 📬 **IMAP/POP3** — works with any mail server (beta)
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
@@ -26,10 +26,11 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 - ✅ **Mail** — sync, send with attachments, search, filters, favorites, folder management, drafts, scheduled send
 - ✅ **Contacts** — personal and GAL, groups, import/export (vCard, CSV)
-- ✅ **Calendar** — events with reminders, invite attendees
+- ✅ **Calendar** — support for recurring events, attachments, and online meeting links
 - ✅ **Notes** — create, edit, sync
 - ✅ **Tasks** — create, edit, sync
 - ✅ **Notifications** — Push (Direct Push), background sync, night mode
+- ✅ **Auto-cleanup** — configurable Trash/Drafts/Spam cleanup per account (interval-based or disabled via “Never”)
 - ✅ **Interface** — dark/light theme, 7 color schemes, personalization
 - ✅ **Multiple accounts** — with individual signatures and settings
 - ✅ **MDN/DSN** — read and delivery receipt requests
@@ -39,8 +40,9 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 - Stability and sync: improved behavior on large mailboxes, fewer duplicates, stronger protection from races/leaks, and more reliable Push/Sync/notifications.
 - Mail and contacts: improved reply/forward and mark-as-read flows, better drafts/folder handling, stronger contact validation/export checks.
 - Calendar, tasks, and widget: expanded support for recurring events/attachments/online links, plus fresher widget data and scaling.
+- Calendar: fixed "resurrection" of deleted events after sync (EAS/EWS — permanent server-side deletion, improved error handling and retry logic per MS-ASCMD).
 - Interface: consolidated themes and visual components, improved dialogs, scrollbar behavior, and UX interactions.
-- Security: client certificates (mTLS), Certificate Pinning, and stronger handling of sensitive data.
+- Security: stronger handling of sensitive data.
 
 📋 Full changelog: [CHANGELOG_EN.md](docs/CHANGELOG_EN.md)
 

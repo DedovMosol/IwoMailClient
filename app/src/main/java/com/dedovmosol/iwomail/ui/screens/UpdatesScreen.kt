@@ -3,7 +3,9 @@ package com.dedovmosol.iwomail.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
@@ -21,6 +23,7 @@ import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.update.DownloadProgress
 import com.dedovmosol.iwomail.update.PreviousVersionInfo
@@ -148,14 +151,20 @@ fun UpdatesScreen(
     ) { padding ->
         // Dropdown для автопроверки
         var showIntervalMenu by rememberSaveable { mutableStateOf(false) }
+        val scrollState = rememberScrollState()
         
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
             // Карточка текущей версии с кнопкой проверки
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -326,7 +335,7 @@ fun UpdatesScreen(
                 }
             }
             
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(24.dp))
             
             // Карточка предыдущей версии внизу
             Card(
@@ -443,6 +452,8 @@ fun UpdatesScreen(
             }
             
             Spacer(modifier = Modifier.height(8.dp))
+        }
+        ScrollColumnScrollbar(scrollState)
         }
     }
 }

@@ -1,8 +1,12 @@
 package com.dedovmosol.iwomail.data.repository
 
 /**
- * Константы сообщений об ошибках для репозиториев
- * Централизация для DRY и упрощения локализации в будущем
+ * Константы сообщений об ошибках для репозиториев.
+ * Централизация для DRY.
+ * 
+ * Константы используются как error codes в EasResult.Error(message).
+ * Локализация происходит на UI-уровне через NotificationStrings.localizeError(),
+ * который маппит русские строки на английские при isRussian=false.
  */
 object RepositoryErrors {
     const val ACCOUNT_NOT_FOUND = "Аккаунт не найден"

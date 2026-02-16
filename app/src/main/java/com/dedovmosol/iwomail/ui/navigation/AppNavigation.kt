@@ -319,6 +319,10 @@ fun AppNavigation(
     var hasCheckedAccounts by rememberSaveable { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
+        // После rotation hasCheckedAccounts уже true (rememberSaveable) —
+        // не пересчитываем startDestination, иначе при исключении
+        // onboarding закроется и пользователь попадёт на Setup
+        if (hasCheckedAccounts) return@LaunchedEffect
         try {
             // Таймаут на проверку аккаунтов чтобы избежать зависания
             val hasAccounts = withTimeoutOrNull(3000L) {

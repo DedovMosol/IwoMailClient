@@ -1,6 +1,10 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,6 +45,7 @@ import com.dedovmosol.iwomail.data.database.CalendarEventEntity
 import com.dedovmosol.iwomail.data.repository.CalendarRepository
 import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
@@ -532,7 +537,7 @@ fun CalendarScreen(
                 showCreateDialog = false
                 editingEvent = null
             },
-            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType ->
+            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, attachments ->
                 // Защита от double-tap: если уже создаём — игнорируем
                 if (isCreating) return@CreateEventDialog
                 isCreating = true
@@ -557,7 +562,8 @@ fun CalendarScreen(
                                     allDayEvent = allDayEvent,
                                     reminder = reminder,
                                     busyStatus = busyStatus,
-                                    recurrenceType = recurrenceType
+                                    recurrenceType = recurrenceType,
+                                    attachments = attachments
                                 )
                             }
                         } else {
@@ -574,18 +580,18 @@ fun CalendarScreen(
                                     reminder = reminder,
                                     busyStatus = busyStatus,
                                     attendees = attendeeList,
-                                    recurrenceType = recurrenceType
+                                    recurrenceType = recurrenceType,
+                                    attachments = attachments
                                 )
                             }
                         }
                         
                         when (result) {
                             is EasResult.Success -> {
-                                if (!isEditing) {
-                                    // Принудительная синхронизация после создания
-                                    withContext(Dispatchers.IO) {
-                                        calendarRepo.syncCalendar(accountId)
-                                    }
+                                // Принудительная синхронизация для получения актуальных данных с сервера
+                                // (в том числе корректных fileReference для вложений)
+                                withContext(Dispatchers.IO) {
+                                    calendarRepo.syncCalendar(accountId)
                                 }
                                 val message = if (attendeeList.isNotEmpty()) {
                                     "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
@@ -2303,7 +2309,8 @@ private fun CreateEventDialog(
         reminder: Int,
         busyStatus: Int,
         attendees: String,
-        recurrenceType: Int
+        recurrenceType: Int,
+        attachments: List<DraftAttachmentData>
     ) -> Unit
 ) {
     val context = LocalContext.current
@@ -2331,6 +2338,91 @@ private fun CreateEventDialog(
     }
     // Диалог выбора контактов
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
+    
+    // Вложения
+    var pickedAttachments by remember { mutableStateOf(listOf<DraftAttachmentData>()) }
+    val isRussianPicker = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        val maxSingleFile = 7L * 1024 * 1024 // 7 MB — лимит сервера
+        val maxTotal = 10L * 1024 * 1024 // 10 MB суммарно
+        var currentTotal = pickedAttachments.sumOf { it.data.size.toLong() }
+        uris.forEach { uri ->
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    val name = if (nameIndex >= 0) cursor.getString(nameIndex) else "file"
+                    val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
+                    if (size > maxSingleFile) {
+                        val sizeMB = size / 1024 / 1024
+                        Toast.makeText(context,
+                            if (isRussianPicker) "Файл '$name' слишком большой (${sizeMB} МБ, макс 7 МБ)"
+                            else "File '$name' too large (${sizeMB} MB, max 7 MB)",
+                            Toast.LENGTH_LONG).show()
+                        return@use
+                    }
+                    if (currentTotal + size > maxTotal) {
+                        Toast.makeText(context,
+                            if (isRussianPicker) "Превышен общий лимит вложений (10 МБ)"
+                            else "Total attachment limit exceeded (10 MB)",
+                            Toast.LENGTH_LONG).show()
+                        return@use
+                    }
+                    val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                    var streamExceededSingleLimit = false
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(8 * 1024)
+                        var totalRead = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            totalRead += read
+                            if (totalRead > maxSingleFile) {
+                                streamExceededSingleLimit = true
+                                return@use null
+                            }
+                            out.write(buffer, 0, read)
+                        }
+                        out.toByteArray()
+                    }
+                    if (bytes == null && streamExceededSingleLimit) {
+                        val sizeMB = maxSingleFile / 1024 / 1024
+                        Toast.makeText(context,
+                            if (isRussianPicker) "Файл '$name' слишком большой (${sizeMB} МБ, макс 7 МБ)"
+                            else "File '$name' too large (${sizeMB} MB, max 7 MB)",
+                            Toast.LENGTH_LONG).show()
+                        return@use
+                    }
+                    if (bytes != null) {
+                        if (bytes.size.toLong() > maxSingleFile) {
+                            val sizeMB = bytes.size / 1024 / 1024
+                            Toast.makeText(context,
+                                if (isRussianPicker) "Файл '$name' слишком большой (${sizeMB} МБ, макс 7 МБ)"
+                                else "File '$name' too large (${sizeMB} MB, max 7 MB)",
+                                Toast.LENGTH_LONG).show()
+                            return@use
+                        }
+                        if (currentTotal + bytes.size > maxTotal) {
+                            Toast.makeText(context,
+                                if (isRussianPicker) "Превышен общий лимит вложений (10 МБ)"
+                                else "Total attachment limit exceeded (10 MB)",
+                                Toast.LENGTH_LONG).show()
+                            return@use
+                        }
+                        currentTotal += bytes.size.toLong()
+                        pickedAttachments = pickedAttachments + DraftAttachmentData(
+                            name = name,
+                            mimeType = mimeType,
+                            data = bytes
+                        )
+                    }
+                }
+            }
+        }
+    }
     
     // Текстовые поля для дат и времени
     var startDateText by rememberSaveable { mutableStateOf("") }
@@ -2760,6 +2852,71 @@ private fun CreateEventDialog(
                         maxLines = 5
                     )
                 }
+                
+                item {
+                    // Вложения
+                    val isRussianAtt = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = {
+                                filePickerLauncher.launch(arrayOf("*/*"))
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.Attachment,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (isRussianAtt) "Прикрепить файл" else "Attach file")
+                        }
+                        
+                        if (pickedAttachments.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            pickedAttachments.forEachIndexed { index, att ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.fileIconFor(att.name),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = Color.Unspecified
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = att.name,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = Strings.formatFileSize(att.data.size.toLong()),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            pickedAttachments = pickedAttachments.toMutableList().also { it.removeAt(index) }
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = AppIcons.Close,
+                                            contentDescription = if (isRussianAtt) "Удалить" else "Remove",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             
             LazyColumnScrollbar(lazyListState)
@@ -2792,7 +2949,7 @@ private fun CreateEventDialog(
                             return@ThemeOutlinedButton
                         }
                         
-                        onSave(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType)
+                        onSave(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, pickedAttachments)
                     }
                 },
                 text = Strings.save,

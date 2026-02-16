@@ -16,6 +16,7 @@
 
 ### Fixes
 - EWS: fixed SOAP envelope, SendMeetingCancellations, RequestServerVersion, and element order.
+- Calendar (Exchange 2007 SP1+): fixed deleted-event "resurrection" after sync (clarified server-side delete semantics for EAS/EWS, improved Sync response parsing, and hardened retry/error handling).
 - Sync data protection: added multi-layer calendar loss protection and email-body protection from empty server responses.
 - UI state: rotation fixes (navigation/dialog state, saveable IDs), PendingIntent dedup fix, and fixed double-tap in widget empty area.
 - Auto-cleanup: fixed successful-run tracking — `lastTrashCleanupTime` is now updated only after fully successful cleanup; partial failures now trigger WorkManager retry path.

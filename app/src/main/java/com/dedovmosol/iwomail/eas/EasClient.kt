@@ -204,6 +204,7 @@ class EasClient(
             detectEasVersion = { detectEasVersion() },
             performNtlmHandshake = { url, request, action -> performNtlmHandshake(url, request, action) },
             executeNtlmRequest = { url, request, auth, action -> executeNtlmRequest(url, request, auth, action) },
+            tryBasicAuthEws = { url, request, action -> tryBasicAuthEws(url, request, action) },
             getEwsUrl = { ewsUrl },
             parseEasDate = { dateStr -> parseCalendarDate(dateStr) }
         ))
@@ -1909,9 +1910,10 @@ $SOAP_ENVELOPE_END"""
         busyStatus: Int = 2,
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        attachments: List<DraftAttachmentData> = emptyList()
     ): EasResult<String> = calendarService.createCalendarEvent(
-        subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType
+        subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType, attachments
     )
     
     /**
@@ -1937,9 +1939,10 @@ $SOAP_ENVELOPE_END"""
         busyStatus: Int = 2,
         sensitivity: Int = 0,
         oldSubject: String? = null,
-        recurrenceType: Int = -1
-    ): EasResult<Boolean> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, emptyList(), oldSubject, recurrenceType
+        recurrenceType: Int = -1,
+        attachments: List<DraftAttachmentData> = emptyList()
+    ): EasResult<String> = calendarService.updateCalendarEvent(
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, emptyList(), oldSubject, recurrenceType, attachments
     )
     
     /**

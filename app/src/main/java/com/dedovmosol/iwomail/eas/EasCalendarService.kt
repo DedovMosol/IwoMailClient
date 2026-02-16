@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.eas
 
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -36,6 +37,7 @@ class EasCalendarService internal constructor(
         val detectEasVersion: suspend () -> EasResult<String>,
         val performNtlmHandshake: suspend (String, String, String) -> String?,
         val executeNtlmRequest: suspend (String, String, String, String) -> String?,
+        val tryBasicAuthEws: suspend (String, String, String) -> String?,
         val getEwsUrl: () -> String,
         val parseEasDate: (String?) -> Long?
     )
@@ -98,7 +100,8 @@ class EasCalendarService internal constructor(
         busyStatus: Int = 2,
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        attachments: List<DraftAttachmentData> = emptyList()
     ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -106,11 +109,32 @@ class EasCalendarService internal constructor(
         
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         
-        return if (majorVersion >= 14) {
-            createCalendarEventEas(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
-        } else {
+        // При наличии вложений всегда используем EWS (EAS не поддерживает загрузку вложений в календарь)
+        val result = if (attachments.isNotEmpty() || majorVersion < 14) {
             createCalendarEventEws(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
+        } else {
+            createCalendarEventEas(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
         }
+        
+        // Загружаем вложения после успешного создания
+        if (attachments.isNotEmpty() && result is EasResult.Success) {
+            val rawId = result.data
+            if (!rawId.startsWith("pending_sync_")) {
+                val ewsUrl = deps.getEwsUrl()
+                val cleanItemId = if (rawId.contains("|")) rawId.substringBefore("|") else rawId
+                val changeKey = if (rawId.contains("|")) rawId.substringAfter("|") else null
+                val attachResult = attachFilesEws(ewsUrl, cleanItemId, changeKey, attachments, "Exchange2007_SP1")
+                if (attachResult is EasResult.Error) {
+                    android.util.Log.e("EasCalendarService", "Событие создано, но вложения не загружены: ${attachResult.message}")
+                    return EasResult.Error("Событие создано, но вложения не загружены: ${attachResult.message}")
+                }
+                // Возвращаем "cleanItemId\nattachmentsJson" — Repository разберёт
+                val attachJson = (attachResult as EasResult.Success).data
+                return EasResult.Success("$cleanItemId\n$attachJson")
+            }
+        }
+        
+        return result
     }
     
     /**
@@ -129,19 +153,50 @@ class EasCalendarService internal constructor(
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
         oldSubject: String? = null,
-        recurrenceType: Int = -1
-    ): EasResult<Boolean> {
+        recurrenceType: Int = -1,
+        attachments: List<DraftAttachmentData> = emptyList()
+    ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
         
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         
-        return if (majorVersion >= 14) {
+        val result = if (majorVersion >= 14) {
             updateCalendarEventEas(serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
         } else {
             updateCalendarEventEws(serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, oldSubject, recurrenceType)
         }
+        
+        if (result is EasResult.Error) return EasResult.Error(result.message)
+        
+        // Загружаем новые вложения после успешного обновления
+        if (attachments.isNotEmpty()) {
+            val ewsUrl = deps.getEwsUrl()
+            val isEasServerId = serverId.contains(":") && serverId.length < 20
+            val ewsItemIdResult = if (isEasServerId) {
+                findCalendarItemIdBySubject(subject)
+            } else {
+                EasResult.Success(serverId)
+            }
+            if (ewsItemIdResult is EasResult.Success) {
+                val rawId = ewsItemIdResult.data
+                val cleanItemId = if (rawId.contains("|")) rawId.substringBefore("|") else rawId
+                val changeKey = if (rawId.contains("|")) rawId.substringAfter("|") else null
+                val attachResult = attachFilesEws(ewsUrl, cleanItemId, changeKey, attachments, "Exchange2007_SP1")
+                if (attachResult is EasResult.Error) {
+                    android.util.Log.e("EasCalendarService", "Событие обновлено, но вложения не загружены: ${attachResult.message}")
+                    return EasResult.Error("Событие обновлено, но вложения не загружены: ${attachResult.message}")
+                }
+                return EasResult.Success((attachResult as EasResult.Success).data)
+            } else {
+                val errMsg = (ewsItemIdResult as EasResult.Error).message
+                android.util.Log.e("EasCalendarService", "Не удалось найти EWS ItemId для загрузки вложений: $errMsg")
+                return EasResult.Error("Не удалось загрузить вложения: $errMsg")
+            }
+        }
+        
+        return EasResult.Success("")
     }
     
     /**
@@ -684,9 +739,14 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
         // Удаление
         val deleteResult = executeEasDelete(serverId, syncKey, calendarFolderId)
         
-        // Retry при INVALID_SYNCKEY или неуспешном удалении: полный сброс SyncKey
-        val needsRetry = (deleteResult is EasResult.Success && !deleteResult.data) ||
-                         (deleteResult is EasResult.Error && deleteResult.message.contains("INVALID_SYNCKEY"))
+        // Retry при INVALID_SYNCKEY (Status=3) или retriable ошибках сервера (Status=5,16)
+        // MS-ASCMD §2.2.3.177.17:
+        // - Status=3  -> вернуться к SyncKey=0 и повторить
+        // - Status=5  -> transient server error, retry
+        // - Status=16 -> Retry, resend request
+        val needsRetry = deleteResult is EasResult.Error &&
+                         (deleteResult.message.contains("INVALID_SYNCKEY") ||
+                          deleteResult.message.contains("RETRY_TRANSIENT"))
         
         if (needsRetry) {
             android.util.Log.w("EasCalendarService", "Delete failed, retrying with full SyncKey reset for serverId=$serverId")
@@ -712,12 +772,17 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
         syncKey: String,
         calendarFolderId: String
     ): EasResult<Boolean> {
+        // КРИТИЧНО: <DeletesAsMoves>0</DeletesAsMoves> — перманентное удаление.
+        // Без этого элемента (или со значением 1) событие лишь перемещается
+        // в Deleted Items (MS-ASCMD §2.2.3.43), что вызывает "воскрешение"
+        // при последующей синхронизации.
         val deleteXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
             <SyncKey>$syncKey</SyncKey>
             <CollectionId>$calendarFolderId</CollectionId>
+            <DeletesAsMoves>0</DeletesAsMoves>
             <Commands>
                 <Delete>
                     <ServerId>$serverId</ServerId>
@@ -728,12 +793,27 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
 </Sync>""".trimIndent()
         
         return deps.executeEasCommand("Sync", deleteXml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
-            when (status) {
-                1 -> true  // Успех
+            val collectionStatus = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
+            when (collectionStatus) {
+                1 -> {
+                    // Collection-level OK, но проверяем item-level ошибку в Responses/Delete.
+                    // MS-ASCMD §2.2.3.154: <Responses><Delete> появляется ТОЛЬКО при failed deletion.
+                    // Если нет <Responses> — удаление успешно (клиент MUST assume success).
+                    // ServerId в Responses/Delete — optional (MS-ASCMD §2.2.3.166.8)
+                    val deleteStatusMatch = "<Responses>.*?<Delete>.*?<Status>(\\d+)</Status>.*?</Delete>.*?</Responses>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                        .find(responseXml)
+                    val itemStatus = deleteStatusMatch?.groupValues?.get(1)?.toIntOrNull()
+                    when (itemStatus) {
+                        null -> true // Нет Responses/Delete — успех
+                        8 -> true   // Object not found — уже удалено, считаем успехом
+                        else -> throw Exception("EAS Sync Delete item-level failed: Status=$itemStatus")
+                    }
+                }
                 8 -> true  // Object not found — уже удалено, считаем успехом
                 3 -> throw Exception("INVALID_SYNCKEY") // SyncKey устарел
-                else -> false
+                5 -> throw Exception("RETRY_TRANSIENT: Status=5") // Transient server error
+                16 -> throw Exception("RETRY_TRANSIENT: Status=16") // Server says retry
+                else -> throw Exception("EAS Sync Delete failed: Status=$collectionStatus")
             }
         }
     }
@@ -754,11 +834,14 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
     private suspend fun syncCalendarEwsNtlm(ewsUrl: String): EasResult<List<EasCalendarEvent>> {
         val findItemRequest = EasXmlTemplates.ewsFindCalendarItems()
         
-        val authHeader = deps.performNtlmHandshake(ewsUrl, findItemRequest, "FindItem")
-            ?: return EasResult.Error("NTLM handshake failed")
-        
-        val response = deps.executeNtlmRequest(ewsUrl, findItemRequest, authHeader, "FindItem")
-            ?: return EasResult.Error("Ошибка выполнения EWS запроса")
+        // Пробуем Basic Auth, затем NTLM
+        var response = deps.tryBasicAuthEws(ewsUrl, findItemRequest, "FindItem")
+        if (response == null) {
+            val authHeader = deps.performNtlmHandshake(ewsUrl, findItemRequest, "FindItem")
+                ?: return EasResult.Error("NTLM handshake failed")
+            response = deps.executeNtlmRequest(ewsUrl, findItemRequest, authHeader, "FindItem")
+                ?: return EasResult.Error("Ошибка выполнения EWS запроса")
+        }
         
         return try {
             val events = parseEwsCalendarEvents(response)
@@ -864,16 +947,13 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
                 
                 android.util.Log.d("EasCalendarService", "createCalendarEventEws: Request: $soapRequest")
                 
-                // Пробуем NTLM аутентификацию
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
-                if (ntlmAuth == null) {
-                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                }
-                
-                val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
-                
+                // Пробуем Basic Auth, затем NTLM
+                var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "CreateItem")
                 if (responseXml == null) {
-                    return@withContext EasResult.Error("Не удалось выполнить запрос")
+                    val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+                        ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                    responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                        ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
                 }
                 
                 // Проверяем на ошибки
@@ -881,15 +961,21 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
                     return@withContext EasResult.Error("Ошибка схемы EWS")
                 }
                 
-                // Извлекаем ItemId
-                val itemId = EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
+                // Извлекаем ItemId и ChangeKey
+                val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
+                val idMatch = itemIdPattern.find(responseXml)
+                val itemId = idMatch?.groupValues?.get(1)
+                    ?: EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
+                val changeKey = idMatch?.groupValues?.get(2)
                 
                 // КРИТИЧНО: Проверяем ОБА условия
                 val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
                 val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
                                 responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
                 if (itemId != null) {
-                    EasResult.Success(itemId)
+                    // Возвращаем ItemId|ChangeKey для последующей загрузки вложений
+                    val returnId = if (changeKey != null) "$itemId|$changeKey" else itemId
+                    EasResult.Success(returnId)
                 } else if (hasSuccess && hasNoError) {
                     EasResult.Success("pending_sync_${System.currentTimeMillis()}")
                 } else {
@@ -1067,12 +1153,14 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
                     append("</soap:Envelope>")
                 }
                 
-                // NTLM аутентификация
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "UpdateItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                
-                val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "UpdateItem")
-                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+                // Пробуем Basic Auth, затем NTLM
+                var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "UpdateItem")
+                if (responseXml == null) {
+                    val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "UpdateItem")
+                        ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                    responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "UpdateItem")
+                        ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+                }
                 
                 // Проверяем ResponseClass и ResponseCode
                 val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
@@ -1097,8 +1185,13 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
                 // КРИТИЧНО: Для календарных событий ОБЯЗАТЕЛЕН атрибут SendMeetingCancellations
                 // Без него Exchange 2007 SP1 возвращает ErrorSendMeetingCancellationsRequired
                 // Поэтому НЕ используем generic ewsDeleteItem, а строим calendar-specific запрос
+                // КРИТИЧНО: HardDelete — перманентное удаление из БД Exchange.
+                // MoveToDeletedItems лишь перемещает в корзину, что может вызвать
+                // "воскрешение" событий при определённых условиях синхронизации.
+                // SendMeetingCancellations="SendToNone" — не отправлять уведомления
+                // об отмене (событие удалено пользователем, а не организатором).
                 val deleteBody = """
-                    <m:DeleteItem DeleteType="MoveToDeletedItems" SendMeetingCancellations="SendToNone">
+                    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="SendToNone">
                         <m:ItemIds>
                             <t:ItemId Id="${deps.escapeXml(serverId)}"/>
                         </m:ItemIds>
@@ -1106,11 +1199,14 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
                 """.trimIndent()
                 val request = EasXmlTemplates.ewsSoapRequest(deleteBody)
                 
-                val authHeader = deps.performNtlmHandshake(ewsUrl, request, "DeleteItem")
-                    ?: return@withContext EasResult.Error("NTLM handshake failed")
-                
-                val response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "DeleteItem")
-                    ?: return@withContext EasResult.Error("Ошибка выполнения EWS запроса")
+                // Пробуем Basic Auth, затем NTLM
+                var response = deps.tryBasicAuthEws(ewsUrl, request, "DeleteItem")
+                if (response == null) {
+                    val authHeader = deps.performNtlmHandshake(ewsUrl, request, "DeleteItem")
+                        ?: return@withContext EasResult.Error("NTLM handshake failed")
+                    response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "DeleteItem")
+                        ?: return@withContext EasResult.Error("Ошибка выполнения EWS запроса")
+                }
                 
                 val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)
                 when (responseCode) {
@@ -1165,11 +1261,13 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
     </soap:Body>
 </soap:Envelope>""".trimIndent()
                 
-                val authHeader = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                    ?: return@withContext EasResult.Error("NTLM handshake failed")
-                
-                val response = deps.executeNtlmRequest(ewsUrl, findRequest, authHeader, "FindItem")
-                    ?: return@withContext EasResult.Error("Failed to execute FindItem")
+                var response = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
+                if (response == null) {
+                    val authHeader = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+                        ?: return@withContext EasResult.Error("NTLM handshake failed")
+                    response = deps.executeNtlmRequest(ewsUrl, findRequest, authHeader, "FindItem")
+                        ?: return@withContext EasResult.Error("Failed to execute FindItem")
+                }
                 
                 // Извлекаем ItemId И ChangeKey из ответа
                 // Формат: <t:ItemId Id="AAMk..." ChangeKey="EQAAAB..."/>
@@ -1950,5 +2048,113 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
         } catch (e: Exception) {
             null
         }
+    }
+
+    // === Загрузка вложений к событиям календаря через EWS CreateAttachment ===
+
+    internal suspend fun attachFilesEws(
+        ewsUrl: String,
+        itemId: String,
+        changeKey: String?,
+        attachments: List<DraftAttachmentData>,
+        exchangeVersion: String
+    ): EasResult<String> = withContext(Dispatchers.IO) {
+        if (attachments.isEmpty()) return@withContext EasResult.Success("")
+
+        var currentChangeKey = changeKey
+        val attachmentInfos = mutableListOf<String>()
+
+        for ((index, att) in attachments.withIndex()) {
+            val request = buildCreateAttachmentRequest(
+                itemId, currentChangeKey, att, exchangeVersion
+            )
+
+            var response = deps.tryBasicAuthEws(ewsUrl, request, "CreateAttachment")
+            if (response == null) {
+                val authHeader = deps.performNtlmHandshake(ewsUrl, request, "CreateAttachment")
+                    ?: return@withContext EasResult.Error(
+                        "NTLM handshake failed для вложения ${index + 1}/${attachments.size} (${att.name})"
+                    )
+                response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "CreateAttachment")
+                    ?: return@withContext EasResult.Error(
+                        "Ошибка EWS запроса для вложения ${index + 1}/${attachments.size} (${att.name})"
+                    )
+            }
+
+            if (response.contains("ResponseClass=\"Error\"")) {
+                val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(response)?.groupValues?.get(1)
+                val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)
+                val details = messageText ?: responseCode ?: "Unknown error"
+                android.util.Log.e("EasCalendarService",
+                    "CreateAttachment FAILED [${index + 1}/${attachments.size}] ${att.name}: $details")
+                return@withContext EasResult.Error(
+                    "Вложение '${att.name}' не загружено: $details"
+                )
+            }
+
+            if (!response.contains("ResponseClass=\"Success\"")) {
+                android.util.Log.e("EasCalendarService",
+                    "CreateAttachment NO SUCCESS [${index + 1}/${attachments.size}] ${att.name}")
+                return@withContext EasResult.Error(
+                    "Нет подтверждения загрузки вложения '${att.name}'"
+                )
+            }
+
+            // Извлекаем AttachmentId из ответа (для последующего скачивания)
+            val attachmentId = """<t:AttachmentId Id="([^"]+)"""".toRegex()
+                .find(response)?.groupValues?.get(1) ?: ""
+
+            val newChangeKey = """ChangeKey="([^"]+)"""".toRegex()
+                .find(response)?.groupValues?.get(1)
+            if (newChangeKey != null) {
+                currentChangeKey = newChangeKey
+            }
+
+            val escapedName = att.name.replace("\"", "\\\"")
+            val escapedRef = attachmentId.replace("\"", "\\\"")
+            attachmentInfos.add("""{"name":"$escapedName","fileReference":"$escapedRef","size":${att.data.size},"isInline":false}""")
+
+            android.util.Log.d("EasCalendarService",
+                "CreateAttachment OK [${index + 1}/${attachments.size}] ${att.name}, attId=${attachmentId.take(20)}...")
+        }
+
+        EasResult.Success("[${attachmentInfos.joinToString(",")}]")
+    }
+
+    private fun buildCreateAttachmentRequest(
+        itemId: String,
+        changeKey: String?,
+        att: DraftAttachmentData,
+        exchangeVersion: String
+    ): String {
+        val escapedItemId = deps.escapeXml(itemId)
+        val changeKeyAttr = changeKey?.let { " ChangeKey=\"${deps.escapeXml(it)}\"" } ?: ""
+        val name = deps.escapeXml(att.name)
+        val contentType = deps.escapeXml(att.mimeType)
+        val content = Base64.encodeToString(att.data, Base64.NO_WRAP)
+
+        val sb = StringBuilder()
+        sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
+        sb.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"")
+        sb.append(" xmlns:t=\"http://schemas.microsoft.com/exchange/services/2006/types\"")
+        sb.append(" xmlns:m=\"http://schemas.microsoft.com/exchange/services/2006/messages\">")
+        sb.append("<soap:Header>")
+        sb.append("<t:RequestServerVersion Version=\"$exchangeVersion\"/>")
+        sb.append("</soap:Header>")
+        sb.append("<soap:Body>")
+        sb.append("<m:CreateAttachment>")
+        sb.append("<m:ParentItemId Id=\"$escapedItemId\"$changeKeyAttr/>")
+        sb.append("<m:Attachments>")
+        sb.append("<t:FileAttachment>")
+        sb.append("<t:Name>$name</t:Name>")
+        sb.append("<t:ContentType>$contentType</t:ContentType>")
+        sb.append("<t:Content>$content</t:Content>")
+        sb.append("</t:FileAttachment>")
+        sb.append("</m:Attachments>")
+        sb.append("</m:CreateAttachment>")
+        sb.append("</soap:Body>")
+        sb.append("</soap:Envelope>")
+
+        return sb.toString()
     }
 }

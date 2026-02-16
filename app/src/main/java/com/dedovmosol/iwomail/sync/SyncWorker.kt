@@ -191,6 +191,7 @@ class SyncWorker(
                     accountEmails.add(NewEmailInfo(email.id, email.fromName, email.from, email.subject))
                 }
             }
+            
         }
         
         settingsRepo.setLastSyncTime(System.currentTimeMillis())

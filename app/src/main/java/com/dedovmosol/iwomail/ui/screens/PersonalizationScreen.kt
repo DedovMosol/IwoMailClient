@@ -4,9 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 
 import com.dedovmosol.iwomail.ui.theme.AppIcons
+import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -513,10 +515,15 @@ fun PersonalizationScreen(
             )
         }
     ) { padding ->
-        LazyColumn(
+        val listState = rememberLazyListState()
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+        ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize()
         ) {
             // Выбор языка
             item {
@@ -643,6 +650,8 @@ fun PersonalizationScreen(
                     }
                 )
             }
+        }
+        LazyColumnScrollbar(listState)
         }
     }
 }

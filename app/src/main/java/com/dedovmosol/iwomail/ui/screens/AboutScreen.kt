@@ -9,6 +9,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -31,6 +33,7 @@ import com.dedovmosol.iwomail.ui.components.EasterEggOverlay
 import com.dedovmosol.iwomail.ui.components.isEasterEggFound
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 
 private fun ContextWrapper.findActivity(): Activity? {
@@ -75,112 +78,119 @@ fun AboutScreen(
                     )
                 )
             )
-        }
+        },
     ) { padding ->
-        Column(
+        val scrollState = rememberScrollState()
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Обзор (онбординг)
-            ListItem(
-                headlineContent = { Text(if (isRu) "Обзор" else "Overview") },
-                supportingContent = { Text(if (isRu) "Краткий обзор приложения" else "Quick app overview") },
-                leadingContent = { Icon(AppIcons.Lightbulb, null) },
-                modifier = Modifier.clickable { onNavigateToOnboarding() }
-            )
-            
-            // Обновление ПО
-            ListItem(
-                headlineContent = { Text(if (isRu) "Обновление ПО" else "Software update") },
-                supportingContent = { Text("${Strings.version} ${BuildConfig.VERSION_NAME}") },
-                leadingContent = { Icon(AppIcons.Update, null) },
-                trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                modifier = Modifier.clickable { onNavigateToUpdates() }
-            )
-            
-            // Поддерживаемые протоколы
-            ListItem(
-                headlineContent = { Text(Strings.supportedProtocols) },
-                supportingContent = { Text("Exchange (EAS), IMAP, POP3") },
-                leadingContent = { Icon(AppIcons.Business, null) }
-            )
-            
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            
-            // Разработчик
-            ListItem(
-                headlineContent = { Text(Strings.developer) },
-                supportingContent = { Text("DedovMosol") },
-                leadingContent = { Icon(AppIcons.Person, null) },
-                trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
-                modifier = Modifier.clickable {
-                    uriHandler.openUri("https://github.com/DedovMosol/")
-                }
-            )
-            
-            // Политика конфиденциальности
-            ListItem(
-                headlineContent = { Text(Strings.privacyPolicy) },
-                leadingContent = { Icon(AppIcons.Policy, null) },
-                trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
-                modifier = Modifier.clickable {
-                    uriHandler.openUri("https://github.com/DedovMosol/IwoMailClient/blob/main/docs/PRIVACY_POLICY.md")
-                }
-            )
-            
-            // Spacer чтобы footer был прижат к низу
-            Spacer(modifier = Modifier.weight(1f))
-            
-            // Footer: гитара (если нашёл) или Base64 подсказка
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
             ) {
-                if (easterFound) {
-                    // Анимация покачивания гитары
-                    val infiniteTransition = rememberInfiniteTransition(label = "guitar_wobble")
-                    val guitarRotation by infiniteTransition.animateFloat(
-                        initialValue = -8f,
-                        targetValue = 8f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(600, easing = EaseInOutSine),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "guitar_rotation"
-                    )
-                    // Кликабельная гитара с анимацией покачивания
-                    Text(
-                        text = "\uD83C\uDFB8",
-                        fontSize = 36.sp,
-                        modifier = Modifier
-                            .rotate(guitarRotation)
-                            .clickable { showEasterEgg = true }
-                    )
-                } else {
-                    // Base64 подсказка — копируемая
-                    val base64Text = "SSB3YW50IG91dCwgdG8gbGl2ZSBteSBsaWZlIGFuZCB0byBiZSBmcmVl"
-                    Text(
-                        text = base64Text,
-                        fontSize = 8.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.combinedClickable(
-                            onClick = {},
-                            onLongClick = {
-                                clipboardManager.setText(AnnotatedString(base64Text))
-                                Toast.makeText(
-                                    context,
-                                    if (isRu) "Скопировано" else "Copied",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
+                // Обзор (онбординг)
+                ListItem(
+                    headlineContent = { Text(if (isRu) "Обзор" else "Overview") },
+                    supportingContent = { Text(if (isRu) "Краткий обзор приложения" else "Quick app overview") },
+                    leadingContent = { Icon(AppIcons.Lightbulb, null) },
+                    modifier = Modifier.clickable { onNavigateToOnboarding() }
+                )
+                
+                // Обновление ПО
+                ListItem(
+                    headlineContent = { Text(if (isRu) "Обновление ПО" else "Software update") },
+                    supportingContent = { Text("${Strings.version} ${BuildConfig.VERSION_NAME}") },
+                    leadingContent = { Icon(AppIcons.Update, null) },
+                    trailingContent = { Icon(AppIcons.ChevronRight, null) },
+                    modifier = Modifier.clickable { onNavigateToUpdates() }
+                )
+                
+                // Поддерживаемые протоколы
+                ListItem(
+                    headlineContent = { Text(Strings.supportedProtocols) },
+                    supportingContent = { Text("Exchange (EAS), IMAP, POP3") },
+                    leadingContent = { Icon(AppIcons.Business, null) }
+                )
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                
+                // Разработчик
+                ListItem(
+                    headlineContent = { Text(Strings.developer) },
+                    supportingContent = { Text("DedovMosol") },
+                    leadingContent = { Icon(AppIcons.Person, null) },
+                    trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.clickable {
+                        uriHandler.openUri("https://github.com/DedovMosol/")
+                    }
+                )
+                
+                // Политика конфиденциальности
+                ListItem(
+                    headlineContent = { Text(Strings.privacyPolicy) },
+                    leadingContent = { Icon(AppIcons.Policy, null) },
+                    trailingContent = { Icon(AppIcons.OpenInNew, null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.clickable {
+                        uriHandler.openUri("https://github.com/DedovMosol/IwoMailClient/blob/main/docs/PRIVACY_POLICY.md")
+                    }
+                )
+                
+                Spacer(modifier = Modifier.height(32.dp))
+                
+                // Footer: гитара (если нашёл) или Base64 подсказка
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (easterFound) {
+                        // Анимация покачивания гитары
+                        val infiniteTransition = rememberInfiniteTransition(label = "guitar_wobble")
+                        val guitarRotation by infiniteTransition.animateFloat(
+                            initialValue = -8f,
+                            targetValue = 8f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(600, easing = EaseInOutSine),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "guitar_rotation"
                         )
-                    )
+                        // Кликабельная гитара с анимацией покачивания
+                        Text(
+                            text = "\uD83C\uDFB8",
+                            fontSize = 36.sp,
+                            modifier = Modifier
+                                .rotate(guitarRotation)
+                                .clickable { showEasterEgg = true }
+                        )
+                    } else {
+                        // Base64 подсказка — копируемая
+                        val base64Text = "SSB3YW50IG91dCwgdG8gbGl2ZSBteSBsaWZlIGFuZCB0byBiZSBmcmVl"
+                        Text(
+                            text = base64Text,
+                            fontSize = 8.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.combinedClickable(
+                                onClick = {},
+                                onLongClick = {
+                                    clipboardManager.setText(AnnotatedString(base64Text))
+                                    Toast.makeText(
+                                        context,
+                                        if (isRu) "Скопировано" else "Copied",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            )
+                        )
+                    }
                 }
             }
+            ScrollColumnScrollbar(scrollState)
         }
     }
     
