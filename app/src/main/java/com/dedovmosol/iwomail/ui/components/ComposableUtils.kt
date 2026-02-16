@@ -91,7 +91,7 @@ enum class ScrollbarColor(val code: String, val color: Color, val displayNameRu:
     PURPLE("purple", Color(0xFF7B1FA2), "Фиолетовый", "Purple"),
     RED("red", Color(0xFFD32F2F), "Красный", "Red"),
     GREEN("green", Color(0xFF388E3C), "Зелёный", "Green"),
-    ORANGE("orange", Color(0xFFF57C00), "Оранжевый", "Orange"),
+    ORANGE("orange", Color(0xFFC77700), "Оранжевый", "Orange"),
     PINK("pink", Color(0xFFC2185B), "Розовый", "Pink"),
     GRAY("gray", Color(0xFF616161), "Серый", "Gray");
 

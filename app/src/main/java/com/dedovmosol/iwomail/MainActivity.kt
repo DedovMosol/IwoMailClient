@@ -192,6 +192,7 @@ class MainActivity : ComponentActivity() {
     
     private var openInboxUnread = mutableStateOf(false)
     private var openEmailId = mutableStateOf<String?>(null)
+    private var openEmailIntentId = mutableStateOf(0L)
     private var switchToAccountId = mutableStateOf<Long?>(null)
     private var showBatteryDialog = mutableStateOf(false)
     private var showAlarmDialog = mutableStateOf(false)
@@ -288,6 +289,7 @@ class MainActivity : ComponentActivity() {
             
             val shouldOpenInboxUnread by openInboxUnread
             val emailIdToOpen by openEmailId
+            val currentOpenEmailIntentId by openEmailIntentId
             val accountIdToSwitch by switchToAccountId
             val shouldOpenUpdates by openUpdates
             val emailToCompose by composeEmail
@@ -326,6 +328,7 @@ class MainActivity : ComponentActivity() {
                             AppNavigation(
                                 openInboxUnread = shouldOpenInboxUnread,
                                 openEmailId = emailIdToOpen,
+                                openEmailIntentId = currentOpenEmailIntentId,
                                 switchToAccountId = accountIdToSwitch,
                                 composeToEmail = emailToCompose,
                                 composeSubject = subjectToCompose,
@@ -454,6 +457,7 @@ class MainActivity : ComponentActivity() {
         val emailId = intent.getStringExtra(EXTRA_OPEN_EMAIL_ID)
         if (emailId != null) {
             openEmailId.value = emailId
+            openEmailIntentId.value++
             intent.removeExtra(EXTRA_OPEN_EMAIL_ID)
             return
         }

@@ -289,6 +289,7 @@ sealed class Screen(val route: String) {
 fun AppNavigation(
     openInboxUnread: Boolean = false, 
     openEmailId: String? = null,
+    openEmailIntentId: Long = 0L,
     switchToAccountId: Long? = null,
     composeToEmail: String? = null,
     composeSubject: String? = null,
@@ -411,13 +412,14 @@ fun AppNavigation(
     // Обработка перехода на конкретное письмо (из уведомления)
     // Храним ID последнего обработанного письма вместо boolean,
     // чтобы повторное уведомление (с другим emailId) тоже обрабатывалось
-    var lastHandledEmailId by rememberSaveable { mutableStateOf<String?>(null) }
+    // openEmailIntentId меняется при каждом клике на уведомление, гарантируя повторную обработку
+    var lastHandledEmailIntentId by rememberSaveable { mutableStateOf(0L) }
     
-    LaunchedEffect(openEmailId, hasCheckedAccounts, startDestination, accountSwitchCompleted) {
+    LaunchedEffect(openEmailIntentId, hasCheckedAccounts, startDestination, accountSwitchCompleted) {
         // Обрабатываем только когда всё готово (включая переключение аккаунта)
-        // и этот конкретный emailId ещё не обработан
-        if (openEmailId != null && openEmailId != lastHandledEmailId && hasCheckedAccounts && startDestination == Screen.Main.route && accountSwitchCompleted) {
-            lastHandledEmailId = openEmailId
+        // и этот конкретный intent ещё не обработан
+        if (openEmailIntentId > 0 && openEmailIntentId != lastHandledEmailIntentId && openEmailId != null && hasCheckedAccounts && startDestination == Screen.Main.route && accountSwitchCompleted) {
+            lastHandledEmailIntentId = openEmailIntentId
             // Задержка чтобы NavHost успел инициализироваться
             kotlinx.coroutines.delay(500)
             try {

@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -188,7 +189,7 @@ fun SettingsScreen(
             }
             
         }
-        com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar(
+        LazyColumnScrollbar(
             listState = listState,
             alwaysVisible = true
         )
