@@ -1099,11 +1099,14 @@ private fun SelectionTopBar(
                 DropdownMenu(expanded = showMoreMenu, onDismissRequest = { onToggleMoreMenu(false) }) {
                     // Пометить и Непрочитанное только если НЕ в корзине, НЕ в спаме и НЕ в черновиках
                     if (!isTrashFolder && !isSpamFolder && !isDraftsFolder) {
-                        DropdownMenuItem(
-                            text = { Text(Strings.star) },
-                            onClick = { onToggleMoreMenu(false); onStar() },
-                            leadingIcon = { Icon(AppIcons.Star, null) }
-                        )
+                        // В Избранных кнопка "Пометить" не нужна — письма и так помечены
+                        if (!isFavorites) {
+                            DropdownMenuItem(
+                                text = { Text(Strings.star) },
+                                onClick = { onToggleMoreMenu(false); onStar() },
+                                leadingIcon = { Icon(AppIcons.Star, null) }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text(Strings.read) },
                             onClick = { onToggleMoreMenu(false); onMarkRead() },

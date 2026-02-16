@@ -1,6 +1,6 @@
 ﻿# История изменений
 
-## v1.6.2 (февраль 2026)
+## v1.6.2 (16.02.2026)
 
 ### Новое
 - Подготовка к миграции парсинга: добавлен `EasXmlParser.kt` (drop-in API + DSL + namespaces) и план миграции `docs/XMLPULLPARSER_MIGRATION_PLAN.md`.
