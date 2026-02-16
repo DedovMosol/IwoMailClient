@@ -87,13 +87,13 @@ fun <T> rememberDebouncedState(
  * Предустановленные цвета скроллбара.
  */
 enum class ScrollbarColor(val code: String, val color: Color, val displayNameRu: String, val displayNameEn: String) {
-    BLUE("blue", Color(0xFF2196F3), "Синий", "Blue"),
-    PURPLE("purple", Color(0xFF9C27B0), "Фиолетовый", "Purple"),
-    RED("red", Color(0xFFF44336), "Красный", "Red"),
-    GREEN("green", Color(0xFF4CAF50), "Зелёный", "Green"),
-    ORANGE("orange", Color(0xFFFF9800), "Оранжевый", "Orange"),
-    PINK("pink", Color(0xFFFF4081), "Розовый", "Pink"),
-    GRAY("gray", Color(0xFF757575), "Серый", "Gray");
+    BLUE("blue", Color(0xFF1976D2), "Синий", "Blue"),
+    PURPLE("purple", Color(0xFF7B1FA2), "Фиолетовый", "Purple"),
+    RED("red", Color(0xFFD32F2F), "Красный", "Red"),
+    GREEN("green", Color(0xFF388E3C), "Зелёный", "Green"),
+    ORANGE("orange", Color(0xFFF57C00), "Оранжевый", "Orange"),
+    PINK("pink", Color(0xFFC2185B), "Розовый", "Pink"),
+    GRAY("gray", Color(0xFF616161), "Серый", "Gray");
 
     fun getDisplayName(isRussian: Boolean): String = if (isRussian) displayNameRu else displayNameEn
 

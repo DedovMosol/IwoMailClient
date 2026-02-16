@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -153,14 +154,16 @@ fun UpdatesScreen(
         var showIntervalMenu by rememberSaveable { mutableStateOf(false) }
         val scrollState = rememberScrollState()
         
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            val minH = maxHeight
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = minH)
                     .verticalScroll(scrollState)
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -335,7 +338,7 @@ fun UpdatesScreen(
                 }
             }
             
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.weight(1f))
             
             // Карточка предыдущей версии внизу
             Card(
@@ -501,6 +504,10 @@ private fun UpdateDownloadDialog(
 ) {
     val scope = rememberCoroutineScope()
     val colorTheme = LocalColorTheme.current
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val scrollContentMaxHeight = (configuration.screenHeightDp * if (isLandscape) 0.42f else 0.56f).dp.coerceAtLeast(220.dp)
+    val contentScrollState = rememberScrollState()
     var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
     var downloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -514,10 +521,18 @@ private fun UpdateDownloadDialog(
         icon = { Icon(AppIcons.Update, null, tint = MaterialTheme.colorScheme.primary) },
         title = { Text(Strings.updateAvailable) },
         text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = scrollContentMaxHeight)
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 12.dp)
+                        .verticalScroll(contentScrollState),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 // Версии
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -731,6 +746,8 @@ private fun UpdateDownloadDialog(
                         }
                     }
                 }
+                }
+                ScrollColumnScrollbar(contentScrollState)
             }
         },
         confirmButton = {}
@@ -748,6 +765,10 @@ private fun RollbackDialog(
 ) {
     val scope = rememberCoroutineScope()
     val colorTheme = LocalColorTheme.current
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val scrollContentMaxHeight = (configuration.screenHeightDp * if (isLandscape) 0.42f else 0.56f).dp.coerceAtLeast(220.dp)
+    val contentScrollState = rememberScrollState()
     var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
     var downloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -761,10 +782,18 @@ private fun RollbackDialog(
         icon = { Icon(AppIcons.Restore, null) },
         title = { Text("${Strings.rollbackTitle} v${previousInfo.versionName}") },
         text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = scrollContentMaxHeight)
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 12.dp)
+                        .verticalScroll(contentScrollState),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 // Чего не будет в старой версии
                 if (previousInfo.missingFeatures.isNotEmpty()) {
                     Text(
@@ -1013,6 +1042,8 @@ private fun RollbackDialog(
                         }
                     }
                 }
+                }
+                ScrollColumnScrollbar(contentScrollState)
             }
         },
         confirmButton = {}

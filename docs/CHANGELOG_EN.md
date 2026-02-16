@@ -28,7 +28,6 @@
 - Better large-mailbox resilience via timeout tuning and limited parallelism.
 
 ### Compatibility and Security
-- Re-verified EAS/EWS behavior for Exchange 2007 SP1+.
 - Strengthened sensitive data handling.
 
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required

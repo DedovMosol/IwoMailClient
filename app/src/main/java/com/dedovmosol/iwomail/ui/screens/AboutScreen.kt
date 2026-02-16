@@ -81,14 +81,16 @@ fun AboutScreen(
         },
     ) { padding ->
         val scrollState = rememberScrollState()
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            val minH = maxHeight
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = minH)
                     .verticalScroll(scrollState)
             ) {
                 // Обзор (онбординг)
@@ -138,7 +140,7 @@ fun AboutScreen(
                     }
                 )
                 
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.weight(1f))
                 
                 // Footer: гитара (если нашёл) или Base64 подсказка
                 Column(

@@ -9,7 +9,8 @@ import java.io.StringReader
  * Заменяет Regex-подход (EasPatterns, XmlValueExtractor, extractValue) потоковым парсером.
  * 
  * Поддерживает:
- * - EAS XML (WBXML→XML): namespace prefixes airsyncbase:, calendar:, tasks:, notes:, contacts:, gal:
+ * - EAS XML (WBXML→XML): namespace prefixes airsyncbase:, calendar:, tasks:, notes:,
+ *   contacts:, gal:, email:, email2:, composemail:, airsync:
  * - EWS SOAP XML (Exchange 2007 SP1+): namespace prefixes t:, m:, soap:
  * - Оба режима: namespace-aware и namespace-ignorant
  * 
@@ -41,9 +42,11 @@ import java.io.StringReader
  *    }
  * 
  * Миграция (v1.7.0):
- * Поэтапно заменяем regex-вызовы в сервисах, от простого к сложному:
- * EasContactsService → EasAttachmentService → EasNotesService → EasTasksService →
- * EasDraftsService → EasEmailService → EasCalendarService → EasClient
+ * Поэтапно заменяем regex-вызовы (EasPatterns/XmlValueExtractor) потоковым парсером:
+ * EasProvisioning → EasContactsService → EasAttachmentService → EasNotesService →
+ * EasTasksService → EasDraftsService → EasEmailService → EasCalendarService → EasClient
+ *
+ * После завершения миграции EasPatterns и XmlValueExtractor удаляются.
  */
 object EasXmlParser {
 
@@ -221,6 +224,18 @@ object EasXmlParser {
     /** EAS AirSyncBase: namespace airsyncbase: */
     fun airsync(xml: String, tag: String): String? = extractValue(xml, tag, listOf("airsyncbase"))
 
+    /** EAS Email: namespace email: */
+    fun email(xml: String, tag: String): String? = extractValue(xml, tag, listOf("email"))
+
+    /** EAS Email2: namespace email2: */
+    fun email2(xml: String, tag: String): String? = extractValue(xml, tag, listOf("email2"))
+
+    /** EAS ComposeMail: namespace composemail: */
+    fun composeMail(xml: String, tag: String): String? = extractValue(xml, tag, listOf("composemail"))
+
+    /** SOAP Envelope: namespace soap: */
+    fun soap(xml: String, tag: String): String? = extractValue(xml, tag, listOf("soap"))
+
     // ═══════════════════════════════════════════════════════════════
     // Внутренние методы
     // ═══════════════════════════════════════════════════════════════
@@ -334,6 +349,8 @@ object EasXmlParser {
         while (depth > 0) {
             when (parser.next()) {
                 XmlPullParser.TEXT -> if (depth == 1) sb.append(parser.text)
+                XmlPullParser.CDSECT -> if (depth == 1) sb.append(parser.text)
+                XmlPullParser.ENTITY_REF -> if (depth == 1) sb.append(parser.text)
                 XmlPullParser.START_TAG -> depth++
                 XmlPullParser.END_TAG -> depth--
                 XmlPullParser.END_DOCUMENT -> break
@@ -380,17 +397,20 @@ object EasXmlParser {
         while (depth > 0) {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> {
+                    val isEmpty = parser.isEmptyElementTag
                     sb.append("<${parser.name}")
                     for (i in 0 until parser.attributeCount) {
                         sb.append(" ${parser.getAttributeName(i)}=\"${escapeXmlAttr(parser.getAttributeValue(i))}\"")
                     }
-                    if (parser.isEmptyElementTag) {
+                    if (isEmpty) {
                         sb.append("/>")
-                        // Empty element tags don't generate END_TAG in some parsers
+                        // Android KXmlParser всё равно генерирует END_TAG для empty elements,
+                        // поэтому пропускаем его чтобы не дублировать: <foo/></foo>
+                        parser.next() // skip END_TAG
                     } else {
                         sb.append(">")
+                        depth++
                     }
-                    depth++
                 }
                 XmlPullParser.END_TAG -> {
                     depth--
@@ -400,6 +420,9 @@ object EasXmlParser {
                 }
                 XmlPullParser.TEXT -> {
                     sb.append(escapeXmlText(parser.text))
+                }
+                XmlPullParser.ENTITY_REF -> {
+                    sb.append("&${parser.name};")
                 }
                 XmlPullParser.CDSECT -> {
                     sb.append("<![CDATA[${parser.text}]]>")
@@ -460,6 +483,7 @@ object EasXmlParser {
             when (parser.next()) {
                 XmlPullParser.END_TAG -> depth--
                 XmlPullParser.START_TAG -> depth++
+                XmlPullParser.END_DOCUMENT -> return
             }
         }
     }

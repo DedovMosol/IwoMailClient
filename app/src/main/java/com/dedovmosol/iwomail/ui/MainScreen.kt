@@ -1471,7 +1471,7 @@ private fun HomeContent(
                                     )
                                 )
                             )
-                            .padding(24.dp)
+                            .padding(horizontal = 20.dp, vertical = 14.dp)
                     ) {
                         Column {
                             val safeAccountColor = try {
@@ -1486,23 +1486,23 @@ private fun HomeContent(
                                 // Аватар аккаунта
                                 Box(
                                     modifier = Modifier
-                                        .size(56.dp)
+                                        .size(40.dp)
                                         .clip(CircleShape)
                                         .background(safeAccountColor),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = activeAccount?.displayName?.firstOrNull()?.uppercase() ?: "?",
-                                        style = MaterialTheme.typography.headlineMedium,
+                                        style = MaterialTheme.typography.titleLarge,
                                         color = Color.White
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(16.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
                                 Column {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
                                             text = Strings.hello,
-                                            style = MaterialTheme.typography.headlineSmall,
+                                            style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Bold,
                                             color = Color.White
                                         )
@@ -1511,7 +1511,7 @@ private fun HomeContent(
                                         val handRotation = rememberWobble(animationsEnabled, amplitude = 15f, durationMs = 400)
                                         Text(
                                             text = Strings.waveEmoji,
-                                            style = MaterialTheme.typography.headlineSmall,
+                                            style = MaterialTheme.typography.titleMedium,
                                             modifier = Modifier.graphicsLayer {
                                                 rotationZ = handRotation
                                                 transformOrigin = TransformOrigin(0.7f, 0.9f) // Вращение от запястья
@@ -1520,7 +1520,7 @@ private fun HomeContent(
                                     }
                                     Text(
                                         text = activeAccount?.email ?: Strings.loading,
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        style = MaterialTheme.typography.bodySmall,
                                         color = Color.White.copy(alpha = 0.85f)
                                     )
                                 }
@@ -1528,14 +1528,14 @@ private fun HomeContent(
                             
                             // Время последней синхронизации — показываем после первой синхронизации
                             if (!isSyncing && !isLoading && lastSyncTime > 0) {
-                                Spacer(modifier = Modifier.height(16.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
                                 
                                 val formatter = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
                                 val syncTimeText = "${Strings.lastSync} ${formatter.format(java.util.Date(lastSyncTime))}"
                                 
                                 Text(
                                     text = syncTimeText,
-                                    style = MaterialTheme.typography.bodyLarge,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = Color.White.copy(alpha = 0.9f),
                                     fontWeight = FontWeight.Medium
                                 )
