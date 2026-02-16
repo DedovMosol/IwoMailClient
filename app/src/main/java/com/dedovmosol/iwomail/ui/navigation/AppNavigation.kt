@@ -294,6 +294,7 @@ fun AppNavigation(
     composeSubject: String? = null,
     composeBody: String? = null,
     composeAttachments: List<android.net.Uri> = emptyList(),
+    composeIntentId: Long = 0L,
     onComposeHandled: () -> Unit = {},
     onAccountSwitched: () -> Unit = {},
     // App Shortcuts
@@ -378,12 +379,14 @@ fun AppNavigation(
     }
     
     // Обработка mailto: и SEND intent'ов — открываем экран создания письма
-    var composeHandled by rememberSaveable { mutableStateOf(false) }
+    // composeIntentId меняется при каждом новом intent, гарантируя повторную обработку
+    var lastHandledComposeId by rememberSaveable { mutableStateOf(0L) }
     
-    LaunchedEffect(composeToEmail, composeSubject, composeBody, composeAttachments, hasCheckedAccounts, startDestination) {
-        if ((composeToEmail != null || composeSubject != null || composeBody != null || composeAttachments.isNotEmpty()) && 
-            !composeHandled && hasCheckedAccounts && startDestination == Screen.Main.route) {
-            composeHandled = true
+    LaunchedEffect(composeIntentId, hasCheckedAccounts, startDestination) {
+        if (composeIntentId > 0 && composeIntentId != lastHandledComposeId &&
+            (composeToEmail != null || composeSubject != null || composeBody != null || composeAttachments.isNotEmpty()) && 
+            hasCheckedAccounts && startDestination == Screen.Main.route) {
+            lastHandledComposeId = composeIntentId
             
             // Сохраняем вложения в глобальное хранилище
             if (composeAttachments.isNotEmpty()) {

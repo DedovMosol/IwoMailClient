@@ -206,6 +206,7 @@ class MainActivity : ComponentActivity() {
     private var composeSubject = mutableStateOf<String?>(null)
     private var composeBody = mutableStateOf<String?>(null)
     private var composeAttachments = mutableStateOf<List<android.net.Uri>>(emptyList())
+    private var composeIntentId = mutableStateOf(0L)
     
     // Открытие экрана обновлений из уведомления
     private var openUpdates = mutableStateOf(false)
@@ -293,6 +294,7 @@ class MainActivity : ComponentActivity() {
             val subjectToCompose by composeSubject
             val bodyToCompose by composeBody
             val attachmentsToCompose by composeAttachments
+            val currentComposeIntentId by composeIntentId
             
             // App Shortcuts
             val shouldShortcutCompose by shortcutCompose
@@ -329,6 +331,7 @@ class MainActivity : ComponentActivity() {
                                 composeSubject = subjectToCompose,
                                 composeBody = bodyToCompose,
                                 composeAttachments = attachmentsToCompose,
+                                composeIntentId = currentComposeIntentId,
                                 onComposeHandled = {
                                     composeEmail.value = null
                                     composeSubject.value = null
@@ -535,6 +538,7 @@ class MainActivity : ComponentActivity() {
                     intent.data?.let { uri ->
                         if (uri.scheme == "mailto") {
                             parseMailtoUri(uri)
+                            composeIntentId.value++
                             // Очищаем intent чтобы не обрабатывать повторно при повороте экрана
                             intent.data = null
                             intent.action = null
@@ -559,6 +563,7 @@ class MainActivity : ComponentActivity() {
                     composeSubject.value = subj
                     composeBody.value = bodyText
                     composeAttachments.value = if (streamUri != null) listOf(streamUri) else emptyList()
+                    composeIntentId.value++
                     
                     // Очищаем intent
                     intent.action = null
@@ -578,6 +583,7 @@ class MainActivity : ComponentActivity() {
                     composeSubject.value = subj
                     composeBody.value = bodyText
                     composeAttachments.value = streamUris ?: emptyList()
+                    composeIntentId.value++
                     
                     // Очищаем intent
                     intent.action = null

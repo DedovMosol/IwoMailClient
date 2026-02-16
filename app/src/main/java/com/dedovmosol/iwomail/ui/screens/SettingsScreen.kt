@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
@@ -109,10 +110,15 @@ fun SettingsScreen(
             )
         }
     ) { padding ->
-        LazyColumn(
+        val listState = rememberLazyListState()
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+        ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize()
         ) {
             item {
                 Text(
@@ -181,6 +187,11 @@ fun SettingsScreen(
                 )
             }
             
+        }
+        com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar(
+            listState = listState,
+            alwaysVisible = true
+        )
         }
     }
 }

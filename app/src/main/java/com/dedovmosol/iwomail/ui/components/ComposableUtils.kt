@@ -138,7 +138,10 @@ object ScrollbarDefaults {
  * ```
  */
 @Composable
-fun BoxScope.LazyColumnScrollbar(listState: LazyListState) {
+fun BoxScope.LazyColumnScrollbar(
+    listState: LazyListState,
+    alwaysVisible: Boolean = false
+) {
     val canScroll = listState.canScrollForward || listState.canScrollBackward
     val isScrolling = listState.isScrollInProgress
     
@@ -165,7 +168,7 @@ fun BoxScope.LazyColumnScrollbar(listState: LazyListState) {
     }
     
     val alpha by animateFloatAsState(
-        targetValue = if (showScrollbar && canScroll) ScrollbarDefaults.ALPHA else 0f,
+        targetValue = if (alwaysVisible && canScroll) 1f else if (showScrollbar && canScroll) ScrollbarDefaults.ALPHA else 0f,
         animationSpec = tween(
             durationMillis = if (showScrollbar) ScrollbarDefaults.FADE_IN_MS else ScrollbarDefaults.FADE_OUT_MS
         ),
