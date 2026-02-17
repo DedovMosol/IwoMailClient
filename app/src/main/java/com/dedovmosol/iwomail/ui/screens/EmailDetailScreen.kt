@@ -30,6 +30,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -51,7 +52,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 
 // Предкомпилированные regex для производительности
 private val CN_REGEX = Regex("CN=([^/><]+)", RegexOption.IGNORE_CASE)
@@ -126,6 +126,13 @@ fun EmailDetailScreen(
     
     // Save As: запоминаем вложение для сохранения через системный файл-пикер
     var pendingSaveAsAttachment by remember { mutableStateOf<AttachmentEntity?>(null) }
+    var pendingPreviewFile by remember { mutableStateOf<File?>(null) }
+    val previewLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        pendingPreviewFile?.delete()
+        pendingPreviewFile = null
+    }
     val saveAsLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
@@ -1586,54 +1593,82 @@ fun EmailDetailScreen(
                         onAttachmentClick = { attachment ->
                             scope.launch {
                                 try {
-                                    // Если уже скачано - открываем
-                                    if (attachment.downloaded && attachment.localPath != null) {
-                                        openFile(context, File(attachment.localPath))
-                                        return@launch
-                                    }
-                                    
-                                    // Проверяем сеть перед скачиванием
-                                    if (!NetworkMonitor.isNetworkAvailable(context)) {
-                                        val noNetworkMsg = if (isRussian) "Нет сети" else "No network"
-                                        Toast.makeText(context, noNetworkMsg, Toast.LENGTH_SHORT).show()
-                                        return@launch
-                                    }
-                                    
-                                    // Скачиваем через EasClient (умеет делать Provision при 449)
+                                    // Tap = preview: берём локальный файл, если есть, иначе скачиваем
                                     downloadingId = attachment.id
-                                    val account = accountRepo.getActiveAccountSync()
-                                    if (account != null) {
-                                        val easClient = accountRepo.createEasClient(account.id)
-                                        if (easClient != null) {
-                                            when (val result = easClient.downloadAttachment(attachment.fileReference)) {
-                                                is EasResult.Success -> {
-                                                    // Сохраняем файл
-                                                    val file = withContext(Dispatchers.IO) {
-                                                        val attachmentsDir = File(context.filesDir, "attachments")
-                                                        if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
-                                                        
-                                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
-                                                        val file = File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
-                                                        FileOutputStream(file).use { it.write(result.data) }
-                                                        
-                                                        // Обновляем policyKey если изменился
+                                    val data: ByteArray? = if (attachment.downloaded && attachment.localPath != null) {
+                                        val localFile = File(attachment.localPath)
+                                        if (localFile.exists()) {
+                                            withContext(Dispatchers.IO) { localFile.readBytes() }
+                                        } else null
+                                    } else {
+                                        if (!NetworkMonitor.isNetworkAvailable(context)) {
+                                            val noNetworkMsg = if (isRussian) "Нет сети" else "No network"
+                                            Toast.makeText(context, noNetworkMsg, Toast.LENGTH_SHORT).show()
+                                            null
+                                        } else {
+                                            val account = accountRepo.getActiveAccountSync()
+                                            val easClient = account?.let { accountRepo.createEasClient(it.id) }
+                                            if (easClient != null) {
+                                                when (val result = withContext(Dispatchers.IO) { easClient.downloadAttachment(attachment.fileReference) }) {
+                                                    is EasResult.Success -> {
                                                         easClient.policyKey?.let { newKey ->
-                                                            if (newKey != account.policyKey) {
+                                                            if (account != null && newKey != account.policyKey) {
                                                                 accountRepo.savePolicyKey(account.id, newKey)
                                                             }
                                                         }
-                                                        file
+                                                        result.data
                                                     }
-                                                    mailRepo.updateAttachmentPath(attachment.id, file.absolutePath)
-                                                    openFile(context, file)
+                                                    is EasResult.Error -> {
+                                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                                        null
+                                                    }
                                                 }
-                                                is EasResult.Error -> {
-                                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                                                }
-                                            }
+                                            } else null
                                         }
                                     }
-                } catch (e: Exception) {
+
+                                    if (data != null) {
+                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
+                                        val tempFile = withContext(Dispatchers.IO) {
+                                            val previewDir = File(context.cacheDir, "email_preview")
+                                            if (!previewDir.exists()) previewDir.mkdirs()
+                                            File(previewDir, safeFileName).apply { writeBytes(data) }
+                                        }
+
+                                        val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                                            .getMimeTypeFromExtension(File(attachment.displayName).extension.lowercase(java.util.Locale.ROOT))
+                                            ?: "application/octet-stream"
+
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                                            context,
+                                            "${context.packageName}.fileprovider",
+                                            tempFile
+                                        )
+
+                                        pendingPreviewFile = tempFile
+                                        try {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(uri, mimeType)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            previewLauncher.launch(intent)
+
+                                            // Fallback: если внешнее приложение не вернёт result, чистим позже
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(60 * 60 * 1000L)
+                                                if (pendingPreviewFile?.absolutePath == tempFile.absolutePath) {
+                                                    pendingPreviewFile?.delete()
+                                                    pendingPreviewFile = null
+                                                }
+                                            }
+                                        } catch (_: Exception) {
+                                            withContext(Dispatchers.IO) { tempFile.delete() }
+                                            pendingPreviewFile = null
+                                            val message = if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file"
+                                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                } catch (e: Exception) {
                                     val errorMsg = "${NotificationStrings.getErrorWithMessage(isRussian, e.message)}"
                                     Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
                                 } finally {
@@ -2167,6 +2202,7 @@ private fun AttachmentsSection(
     onSaveClick: (AttachmentEntity) -> Unit = {},
     onSaveAsClick: (AttachmentEntity) -> Unit = {}
 ) {
+    val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2179,61 +2215,61 @@ private fun AttachmentsSection(
         )
         
         attachments.forEach { attachment ->
+            val isDownloading = downloadingId == attachment.id
             var showSaveMenu by remember { mutableStateOf(false) }
             
             Box {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp)
+                        .padding(vertical = 2.dp)
                         .combinedClickable(
+                            enabled = !isDownloading,
                             onClick = { onAttachmentClick(attachment) },
                             onLongClick = { showSaveMenu = true }
                         )
                 ) {
                     Row(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             AppIcons.fileIconFor(attachment.displayName),
                             contentDescription = null,
-                            modifier = Modifier.size(28.dp),
+                            modifier = Modifier.size(24.dp),
                             tint = Color.Unspecified
                         )
                         
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = attachment.displayName,
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = formatFileSize(attachment.estimatedSize),
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         
-                        when {
-                            downloadingId == attachment.id -> {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            }
-                            attachment.downloaded -> {
+                        if (isDownloading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            IconButton(
+                                onClick = { showSaveMenu = true },
+                                modifier = Modifier.size(24.dp)
+                            ) {
                                 Icon(
-                                    AppIcons.CheckCircle,
-                                    Strings.downloaded,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            else -> {
-                                Icon(
-                                    AppIcons.Download,
-                                    Strings.download,
+                                    AppIcons.MoreVert,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -2245,6 +2281,14 @@ private fun AttachmentsSection(
                     expanded = showSaveMenu,
                     onDismissRequest = { showSaveMenu = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text(if (isRussian) "Просмотр" else "Preview") },
+                        onClick = {
+                            showSaveMenu = false
+                            onAttachmentClick(attachment)
+                        },
+                        leadingIcon = { Icon(AppIcons.Visibility, contentDescription = null) }
+                    )
                     DropdownMenuItem(
                         text = { Text(Strings.save) },
                         onClick = {
@@ -2264,30 +2308,6 @@ private fun AttachmentsSection(
                 }
             }
         }
-    }
-}
-
-private fun openFile(context: android.content.Context, file: File) {
-    try {
-        val uri = androidx.core.content.FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            file
-        )
-        val mimeType = android.webkit.MimeTypeMap.getSingleton()
-            .getMimeTypeFromExtension(file.extension) ?: "application/octet-stream"
-        
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mimeType)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        // Используем NotificationStrings для не-Composable контекста
-        val isRussian = java.util.Locale.getDefault().language == "ru"
-        val message = if (isRussian) "Нет приложения для открытия файла" else "No app to open file"
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
 }
 

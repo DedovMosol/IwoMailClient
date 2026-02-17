@@ -31,6 +31,8 @@ import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.components.EasterEggPlayer
 import com.dedovmosol.iwomail.ui.components.EasterEggOverlay
 import com.dedovmosol.iwomail.ui.components.isEasterEggFound
+import com.dedovmosol.iwomail.ui.components.isEasterEggHintRevealed
+import com.dedovmosol.iwomail.ui.components.setEasterEggHintRevealed
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
@@ -57,9 +59,10 @@ fun AboutScreen(
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val easterFound = remember { isEasterEggFound(context) }
+    val persistedHintRevealed = remember { isEasterEggHintRevealed(context) }
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
     var protocolTapCount by rememberSaveable { mutableStateOf(0) }
-    var base64Revealed by rememberSaveable { mutableStateOf(false) }
+    var base64Revealed by rememberSaveable { mutableStateOf(persistedHintRevealed) }
 
     Scaffold(
         topBar = {
@@ -130,6 +133,7 @@ fun AboutScreen(
                             }
                             if (protocolTapCount >= 7) {
                                 base64Revealed = true
+                                setEasterEggHintRevealed(context, true)
                             }
                         }
                     }

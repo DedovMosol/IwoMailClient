@@ -3319,9 +3319,9 @@ private fun DeletedEventDetailDialog(
 /**
  * Список вложений события календаря с возможностью скачивания.
  * Поведение аналогично вложениям писем (EmailDetailScreen):
- * - Tap: скачать и открыть
- * - Long press: меню "Сохранить" / "Сохранить как"
- * - Дефолтный путь: Downloads/IwoMail/Calendar/
+ * - Tap: предпросмотр через временный файл (cache)
+ * - Меню: "Просмотр" / "Сохранить" / "Сохранить как"
+ * - Для "Сохранить": дефолтный путь Downloads/IwoMail/Calendar/
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -3355,7 +3355,15 @@ private fun CalendarAttachmentsList(
     
     // Save As: системный файл-пикер
     var pendingSaveAsAtt by remember { mutableStateOf<CalendarAttachmentInfo?>(null) }
+    var pendingPreviewFile by remember { mutableStateOf<java.io.File?>(null) }
     var downloadingRef by remember { mutableStateOf<String?>(null) }
+    val previewLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        // Удаляем временный файл после возврата из просмотрщика
+        pendingPreviewFile?.delete()
+        pendingPreviewFile = null
+    }
     val saveAsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
@@ -3402,6 +3410,67 @@ private fun CalendarAttachmentsList(
         attachments.forEach { att ->
             val isDownloading = downloadingRef == att.fileReference
             var showSaveMenu by remember { mutableStateOf(false) }
+            val openPreview = {
+                downloadingRef = att.fileReference
+                scope.launch {
+                    try {
+                        when (val result = calendarRepo.downloadCalendarAttachment(accountId, att.fileReference)) {
+                            is EasResult.Success -> {
+                                val safeFileName = att.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                                val tempFile = withContext(Dispatchers.IO) {
+                                    val previewDir = java.io.File(context.cacheDir, "calendar_preview")
+                                    if (!previewDir.exists()) previewDir.mkdirs()
+                                    java.io.File(previewDir, safeFileName).apply {
+                                        writeBytes(result.data)
+                                    }
+                                }
+
+                                val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                                    .getMimeTypeFromExtension(java.io.File(att.name).extension.lowercase(Locale.ROOT))
+                                    ?: "application/octet-stream"
+
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    tempFile
+                                )
+
+                                pendingPreviewFile = tempFile
+                                try {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                        setDataAndType(uri, mimeType)
+                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    previewLauncher.launch(intent)
+
+                                    // Fallback: если внешнее приложение не вернёт result, чистим позже
+                                    scope.launch {
+                                        kotlinx.coroutines.delay(60 * 60 * 1000L)
+                                        if (pendingPreviewFile?.absolutePath == tempFile.absolutePath) {
+                                            pendingPreviewFile?.delete()
+                                            pendingPreviewFile = null
+                                        }
+                                    }
+                                } catch (_: Exception) {
+                                    withContext(Dispatchers.IO) { tempFile.delete() }
+                                    pendingPreviewFile = null
+                                    Toast.makeText(
+                                        context,
+                                        if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                            is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(context, e.message ?: (if (isRussian) "Ошибка просмотра" else "Preview error"), Toast.LENGTH_LONG).show()
+                    } finally {
+                        downloadingRef = null
+                    }
+                }
+                Unit
+            }
             
             Box {
                 Card(
@@ -3410,54 +3479,7 @@ private fun CalendarAttachmentsList(
                         .padding(vertical = 2.dp)
                         .combinedClickable(
                             enabled = !isDownloading,
-                            onClick = {
-                                // Tap: скачать и открыть файл
-                                downloadingRef = att.fileReference
-                                scope.launch {
-                                    try {
-                                        when (val result = calendarRepo.downloadCalendarAttachment(accountId, att.fileReference)) {
-                                            is EasResult.Success -> {
-                                                val safeFileName = att.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                                                val uri = withContext(Dispatchers.IO) {
-                                                    val contentValues = android.content.ContentValues().apply {
-                                                        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
-                                                        put(android.provider.MediaStore.Downloads.MIME_TYPE,
-                                                            android.webkit.MimeTypeMap.getSingleton()
-                                                                .getMimeTypeFromExtension(java.io.File(safeFileName).extension) ?: "application/octet-stream")
-                                                        put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/IwoMail/Calendar")
-                                                    }
-                                                    val fileUri = context.contentResolver.insert(
-                                                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
-                                                    )
-                                                    fileUri?.let { u ->
-                                                        context.contentResolver.openOutputStream(u)?.use { out -> out.write(result.data) }
-                                                    }
-                                                    fileUri
-                                                }
-                                                // Открываем файл
-                                                if (uri != null) {
-                                                    try {
-                                                        val mimeType = android.webkit.MimeTypeMap.getSingleton()
-                                                            .getMimeTypeFromExtension(java.io.File(att.name).extension) ?: "application/octet-stream"
-                                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                                            setDataAndType(uri, mimeType)
-                                                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                        }
-                                                        context.startActivity(intent)
-                                                    } catch (e: Exception) {
-                                                        Toast.makeText(context, if (isRussian) "Сохранено в Downloads/IwoMail/Calendar/" else "Saved to Downloads/IwoMail/Calendar/", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            }
-                                            is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                                        }
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, if (isRussian) "Ошибка скачивания" else "Download error", Toast.LENGTH_SHORT).show()
-                                    } finally {
-                                        downloadingRef = null
-                                    }
-                                }
-                            },
+                            onClick = openPreview,
                             onLongClick = { showSaveMenu = true }
                         )
                 ) {
@@ -3514,6 +3536,14 @@ private fun CalendarAttachmentsList(
                     expanded = showSaveMenu,
                     onDismissRequest = { showSaveMenu = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text(if (isRussian) "Просмотр" else "Preview") },
+                        onClick = {
+                            showSaveMenu = false
+                            openPreview()
+                        },
+                        leadingIcon = { Icon(AppIcons.Visibility, contentDescription = null) }
+                    )
                     DropdownMenuItem(
                         text = { Text(com.dedovmosol.iwomail.ui.Strings.save) },
                         onClick = {

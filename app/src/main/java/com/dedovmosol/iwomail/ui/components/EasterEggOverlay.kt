@@ -36,6 +36,7 @@ import com.dedovmosol.iwomail.R
 
 private const val PREFS_NAME = "iwo_easter"
 private const val KEY_FOUND = "easter_found"
+private const val KEY_BASE64_REVEALED = "base64_revealed"
 
 /**
  * Синглтон для MediaPlayer пасхалки.
@@ -89,9 +90,22 @@ fun isEasterEggFound(context: Context): Boolean {
         .getBoolean(KEY_FOUND, false)
 }
 
+fun isEasterEggHintRevealed(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getBoolean(KEY_BASE64_REVEALED, false)
+}
+
+fun setEasterEggHintRevealed(context: Context, revealed: Boolean) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit().putBoolean(KEY_BASE64_REVEALED, revealed).apply()
+}
+
 private fun markEasterEggFound(context: Context) {
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        .edit().putBoolean(KEY_FOUND, true).apply()
+        .edit()
+        .putBoolean(KEY_FOUND, true)
+        .putBoolean(KEY_BASE64_REVEALED, false)
+        .apply()
 }
 
 @Suppress("DEPRECATION")

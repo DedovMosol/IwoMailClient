@@ -807,6 +807,66 @@ fun ThemeOutlinedButton(
 }
 
 /**
+ * Кнопка с градиентной заливкой по цвету темы — версия с произвольным content (для иконок, бейджей и т.д.)
+ */
+@Composable
+fun ThemeButton(
+    onClick: () -> Unit,
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    enabled: Boolean = true,
+    isLoading: Boolean = false,
+    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit
+) {
+    val colorTheme = LocalColorTheme.current
+    val isActive = enabled && !isLoading
+    androidx.compose.material3.Button(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = isActive,
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent
+        ),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+    ) {
+        Box(
+            modifier = androidx.compose.ui.Modifier
+                .background(
+                    brush = if (isActive) {
+                        androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
+                        )
+                    } else {
+                        androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            colors = listOf(
+                                colorTheme.gradientStart.copy(alpha = 0.38f),
+                                colorTheme.gradientEnd.copy(alpha = 0.38f)
+                            )
+                        )
+                    },
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
+                )
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            contentAlignment = androidx.compose.ui.Alignment.Center
+        ) {
+            if (isLoading) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = androidx.compose.ui.Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White
+                )
+            } else {
+                androidx.compose.foundation.layout.Row(
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    content()
+                }
+            }
+        }
+    }
+}
+
+/**
  * Кнопка удаления — белый текст на красном фоне
  */
 @Composable
@@ -829,5 +889,29 @@ fun DeleteButton(
     ) {
         Text(text, style = MaterialTheme.typography.labelLarge)
     }
+}
+
+/**
+ * Кнопка удаления — версия с произвольным content (для иконок и т.д.)
+ */
+@Composable
+fun DeleteButton(
+    onClick: () -> Unit,
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    enabled: Boolean = true,
+    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit
+) {
+    androidx.compose.material3.Button(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+            containerColor = AppColors.delete,
+            contentColor = Color.White,
+            disabledContainerColor = AppColors.delete.copy(alpha = 0.38f),
+            disabledContentColor = Color.White.copy(alpha = 0.38f)
+        ),
+        content = content
+    )
 }
 

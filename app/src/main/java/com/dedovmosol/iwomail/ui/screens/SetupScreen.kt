@@ -45,6 +45,7 @@ import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.ui.theme.ThemeButton
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import kotlinx.coroutines.Dispatchers
@@ -596,16 +597,16 @@ fun SetupScreen(
                     val isBeta = type == AccountType.IMAP || type == AccountType.POP3
                     
                     if (accountType == type) {
-                        Button(
+                        ThemeButton(
                             onClick = { },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text(type.displayName, maxLines = 1, softWrap = false)
+                            Text(type.displayName, maxLines = 1, softWrap = false, color = Color.White, style = MaterialTheme.typography.labelLarge)
                             if (isBeta) {
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     "β",
-                                    color = Color(0xFFFFD54F), // Жёлтый/золотой
+                                    color = Color(0xFFFFD54F),
                                     style = MaterialTheme.typography.labelSmall
                                 )
                             }
@@ -802,8 +803,8 @@ fun SetupScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (useSSL) {
-                        Button(onClick = { }, modifier = Modifier.weight(1f)) {
-                            Text("HTTPS")
+                        ThemeButton(onClick = { }, modifier = Modifier.weight(1f)) {
+                            Text("HTTPS", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
                     } else {
                         OutlinedButton(
@@ -814,8 +815,8 @@ fun SetupScreen(
                         }
                     }
                     if (!useSSL) {
-                        Button(onClick = { }, modifier = Modifier.weight(1f)) {
-                            Text("HTTP")
+                        ThemeButton(onClick = { }, modifier = Modifier.weight(1f)) {
+                            Text("HTTP", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
                     } else {
                         OutlinedButton(
@@ -840,11 +841,11 @@ fun SetupScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (useSSL) {
-                        Button(
+                        ThemeButton(
                             onClick = { },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("SSL/TLS")
+                            Text("SSL/TLS", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
                     } else {
                         OutlinedButton(
@@ -863,11 +864,11 @@ fun SetupScreen(
                     }
                     
                     if (!useSSL) {
-                        Button(
+                        ThemeButton(
                             onClick = { },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text(if (isRussian()) "Нет" else "None")
+                            Text(if (isRussian()) "Нет" else "None", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
                     } else {
                         OutlinedButton(

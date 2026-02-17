@@ -37,6 +37,8 @@ import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.ui.theme.ThemeButton
+import com.dedovmosol.iwomail.ui.theme.DeleteButton
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1128,7 +1130,7 @@ private fun CertificateChangeWarning(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Button(
+        ThemeButton(
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertificate(
@@ -1147,10 +1149,10 @@ private fun CertificateChangeWarning(
             },
             modifier = Modifier.weight(1f)
         ) {
-            Text(if (isRu) "✅ Принять" else "✅ Accept")
+            Text(if (isRu) "✅ Принять" else "✅ Accept", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
         
-        OutlinedButton(
+        DeleteButton(
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertHash(accountId, null)
@@ -1159,7 +1161,7 @@ private fun CertificateChangeWarning(
             },
             modifier = Modifier.weight(1f)
         ) {
-            Text(if (isRu) "🔓 Отключить" else "🔓 Disable")
+            Text(if (isRu) "🔓 Отключить" else "🔓 Disable", style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -1228,7 +1230,7 @@ private fun CertificatePinnedInfo(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Button(
+        ThemeButton(
             onClick = {
                 scope.launch {
                     onLoadingChange(true)
@@ -1240,22 +1242,15 @@ private fun CertificatePinnedInfo(
                 }
             },
             enabled = !isLoading,
+            isLoading = isLoading,
             modifier = Modifier.weight(1f)
         ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = Color.White
-                )
-            } else {
-                Icon(AppIcons.Refresh, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(if (isRu) "Обновить" else "Update")
-            }
+            Icon(AppIcons.Refresh, null, modifier = Modifier.size(18.dp), tint = Color.White)
+            Spacer(Modifier.width(4.dp))
+            Text(if (isRu) "Обновить" else "Update", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
         
-        OutlinedButton(
+        DeleteButton(
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertHash(account.id, null)
@@ -1265,7 +1260,7 @@ private fun CertificatePinnedInfo(
             enabled = !isLoading,
             modifier = Modifier.weight(1f)
         ) {
-            Text(if (isRu) "Отключить" else "Disable")
+            Text(if (isRu) "Отключить" else "Disable", style = MaterialTheme.typography.labelLarge)
         }
     }
     
@@ -1315,7 +1310,7 @@ private fun CertificatePinningDisabled(
     
     val context = androidx.compose.ui.platform.LocalContext.current
     
-    Button(
+    ThemeButton(
         onClick = {
             scope.launch {
                 onLoadingChange(true)
@@ -1344,19 +1339,12 @@ private fun CertificatePinningDisabled(
             }
         },
         enabled = !isLoading,
+        isLoading = isLoading,
         modifier = Modifier.fillMaxWidth()
     ) {
-        if (isLoading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp,
-                color = Color.White
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-        Icon(AppIcons.Lock, null, modifier = Modifier.size(18.dp))
+        Icon(AppIcons.Lock, null, modifier = Modifier.size(18.dp), tint = Color.White)
         Spacer(Modifier.width(4.dp))
-        Text(if (isRu) "Включить защиту" else "Enable protection")
+        Text(if (isRu) "Включить защиту" else "Enable protection", color = Color.White, style = MaterialTheme.typography.labelLarge)
     }
     
     Spacer(Modifier.height(8.dp))
