@@ -1341,6 +1341,7 @@ fun ComposeScreen(
                 val allServerAttachments = fileDraftAttachments + inlineDraftAttachments
                 val normalizedTo = normalizeRecipients(to)
                 val normalizedCc = normalizeRecipients(cc)
+                val normalizedBcc = normalizeRecipients(bcc)
                 
                 // Если редактируем существующий черновик
                if (editDraftId != null && editDraftId != "synced" && !editDraftId.startsWith("local_draft_")) {
@@ -1360,7 +1361,7 @@ fun ComposeScreen(
                             val newServerId = withContext(Dispatchers.IO) {
                                 mailRepo.saveDraft(
     accountId = account.id,
-    to = normalizedTo, cc = normalizedCc,
+    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
     subject = subject,
     serverBody = cleanBody,
     localBody = body,
@@ -1436,7 +1437,7 @@ fun ComposeScreen(
                                 mailRepo.updateDraft(
     accountId = account.id,
     serverId = email.serverId,
-    to = normalizedTo, cc = normalizedCc,
+    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
     subject = subject,
     body = body,
     fromEmail = account.email,
@@ -1449,7 +1450,7 @@ fun ComposeScreen(
                         val serverId = withContext(Dispatchers.IO) {
                             mailRepo.saveDraft(
     accountId = account.id,
-    to = normalizedTo, cc = normalizedCc,
+    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
     subject = subject,
     serverBody = cleanBody,
     localBody = body,
@@ -1466,7 +1467,7 @@ fun ComposeScreen(
                     val serverId = withContext(Dispatchers.IO) {
                         mailRepo.saveDraft(
     accountId = account.id,
-    to = normalizedTo, cc = normalizedCc,
+    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
     subject = subject,
     serverBody = cleanBody,
     localBody = body,
@@ -1537,6 +1538,9 @@ fun ComposeScreen(
                 .replace(Regex("(<p>\\s*(<br>|&nbsp;)?\\s*</p>\\s*)+$", RegexOption.IGNORE_CASE), "")
                 .replace(Regex("(<br\\s*/?>\\s*)+$", RegexOption.IGNORE_CASE), "")
                 .trimEnd()
+                // Убираем служебные маркеры вида <конец> и т.п., которые не являются HTML-тегами.
+                // (?![!?]) — сохраняем <!-- комментарии -->, <!DOCTYPE>, <![CDATA[, <?xml ...?>
+                .replace(Regex("<(?!/?[a-zA-Z][a-zA-Z0-9]*[\\s>/])(?![!?])[^>]*>"), "")
             
             // Раскрываем группы контактов [GroupName] → индивидуальные email
             val expandedTo = expandGroupTokens(to, groupMappings)

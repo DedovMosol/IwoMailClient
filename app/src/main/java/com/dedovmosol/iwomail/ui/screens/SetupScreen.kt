@@ -3,6 +3,7 @@ package com.dedovmosol.iwomail.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -589,6 +590,7 @@ fun SetupScreen(
             Text(Strings.accountType, style = MaterialTheme.typography.titleMedium)
             
             // Выбор типа аккаунта с бейджем beta для IMAP/POP3
+            val accountTypeTheme = LocalColorTheme.current
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -597,9 +599,13 @@ fun SetupScreen(
                     val isBeta = type == AccountType.IMAP || type == AccountType.POP3
                     
                     if (accountType == type) {
-                        ThemeButton(
+                        Button(
                             onClick = { },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = accountTypeTheme.gradientStart,
+                                contentColor = Color.White
+                            )
                         ) {
                             Text(type.displayName, maxLines = 1, softWrap = false, color = Color.White, style = MaterialTheme.typography.labelLarge)
                             if (isBeta) {
@@ -630,7 +636,9 @@ fun SetupScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            border = BorderStroke(1.dp, accountTypeTheme.gradientStart),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = accountTypeTheme.gradientStart)
                         ) {
                             Text(type.displayName, maxLines = 1, softWrap = false)
                             if (isBeta) {
@@ -798,30 +806,49 @@ fun SetupScreen(
                     if (isRussian()) "Протокол" else "Protocol", 
                     style = MaterialTheme.typography.labelLarge
                 )
+                val protocolTheme = LocalColorTheme.current
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (useSSL) {
-                        ThemeButton(onClick = { }, modifier = Modifier.weight(1f)) {
+                        Button(
+                            onClick = { },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = protocolTheme.gradientStart,
+                                contentColor = Color.White
+                            )
+                        ) {
                             Text("HTTPS", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
                     } else {
                         OutlinedButton(
                             onClick = { useSSL = true; incomingPort = "443" },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            border = BorderStroke(1.dp, protocolTheme.gradientStart),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = protocolTheme.gradientStart)
                         ) {
                             Text("HTTPS")
                         }
                     }
                     if (!useSSL) {
-                        ThemeButton(onClick = { }, modifier = Modifier.weight(1f)) {
+                        Button(
+                            onClick = { },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = protocolTheme.gradientStart,
+                                contentColor = Color.White
+                            )
+                        ) {
                             Text("HTTP", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
                     } else {
                         OutlinedButton(
                             onClick = { useSSL = false; incomingPort = "80" },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            border = BorderStroke(1.dp, protocolTheme.gradientStart),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = protocolTheme.gradientStart)
                         ) {
                             Text("HTTP")
                         }
@@ -840,10 +867,15 @@ fun SetupScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    val securityTheme = LocalColorTheme.current
                     if (useSSL) {
-                        ThemeButton(
+                        Button(
                             onClick = { },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = securityTheme.gradientStart,
+                                contentColor = Color.White
+                            )
                         ) {
                             Text("SSL/TLS", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
@@ -857,16 +889,22 @@ fun SetupScreen(
                                     else -> {}
                                 }
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            border = BorderStroke(1.dp, securityTheme.gradientStart),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = securityTheme.gradientStart)
                         ) {
                             Text("SSL/TLS")
                         }
                     }
                     
                     if (!useSSL) {
-                        ThemeButton(
+                        Button(
                             onClick = { },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = securityTheme.gradientStart,
+                                contentColor = Color.White
+                            )
                         ) {
                             Text(if (isRussian()) "Нет" else "None", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
@@ -880,7 +918,9 @@ fun SetupScreen(
                                     else -> {}
                                 }
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            border = BorderStroke(1.dp, securityTheme.gradientStart),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = securityTheme.gradientStart)
                         ) {
                             Text(if (isRussian()) "Нет" else "None")
                         }

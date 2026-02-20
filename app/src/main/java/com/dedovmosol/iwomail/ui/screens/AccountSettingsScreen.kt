@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
@@ -37,7 +38,6 @@ import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
-import com.dedovmosol.iwomail.ui.theme.ThemeButton
 import com.dedovmosol.iwomail.ui.theme.DeleteButton
 import kotlinx.coroutines.launch
 
@@ -1130,7 +1130,8 @@ private fun CertificateChangeWarning(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        ThemeButton(
+        val actionTheme = LocalColorTheme.current
+        Button(
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertificate(
@@ -1147,21 +1148,29 @@ private fun CertificateChangeWarning(
                     accountRepo.getAccount(accountId)?.let { onAccountUpdated(it) }
                 }
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = actionTheme.gradientStart,
+                contentColor = Color.White
+            )
         ) {
             Text(if (isRu) "✅ Принять" else "✅ Accept", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
         
-        DeleteButton(
+        Button(
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertHash(accountId, null)
                     accountRepo.getAccount(accountId)?.let { onAccountUpdated(it) }
                 }
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error,
+                contentColor = Color.White
+            )
         ) {
-            Text(if (isRu) "🔓 Отключить" else "🔓 Disable", style = MaterialTheme.typography.labelLarge)
+            Text(if (isRu) "🔓 Отключить" else "🔓 Disable", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -1230,7 +1239,8 @@ private fun CertificatePinnedInfo(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        ThemeButton(
+        val actionTheme = LocalColorTheme.current
+        Button(
             onClick = {
                 scope.launch {
                     onLoadingChange(true)
@@ -1242,15 +1252,26 @@ private fun CertificatePinnedInfo(
                 }
             },
             enabled = !isLoading,
-            isLoading = isLoading,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = actionTheme.gradientStart,
+                contentColor = Color.White
+            )
         ) {
-            Icon(AppIcons.Refresh, null, modifier = Modifier.size(18.dp), tint = Color.White)
-            Spacer(Modifier.width(4.dp))
-            Text(if (isRu) "Обновить" else "Update", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White
+                )
+            } else {
+                Icon(AppIcons.Refresh, null, modifier = Modifier.size(18.dp), tint = Color.White)
+                Spacer(Modifier.width(4.dp))
+                Text(if (isRu) "Обновить" else "Update", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            }
         }
         
-        DeleteButton(
+        Button(
             onClick = {
                 scope.launch {
                     accountRepo.updatePinnedCertHash(account.id, null)
@@ -1258,9 +1279,15 @@ private fun CertificatePinnedInfo(
                 }
             },
             enabled = !isLoading,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error,
+                contentColor = Color.White,
+                disabledContainerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.38f),
+                disabledContentColor = Color.White.copy(alpha = 0.38f)
+            )
         ) {
-            Text(if (isRu) "Отключить" else "Disable", style = MaterialTheme.typography.labelLarge)
+            Text(if (isRu) "Отключить" else "Disable", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
     }
     
@@ -1310,7 +1337,8 @@ private fun CertificatePinningDisabled(
     
     val context = androidx.compose.ui.platform.LocalContext.current
     
-    ThemeButton(
+    val isActive = !isLoading
+    Button(
         onClick = {
             scope.launch {
                 onLoadingChange(true)
@@ -1338,13 +1366,41 @@ private fun CertificatePinningDisabled(
                 }
             }
         },
-        enabled = !isLoading,
-        isLoading = isLoading,
-        modifier = Modifier.fillMaxWidth()
+        enabled = isActive,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent
+        ),
+        contentPadding = PaddingValues(0.dp)
     ) {
-        Icon(AppIcons.Lock, null, modifier = Modifier.size(18.dp), tint = Color.White)
-        Spacer(Modifier.width(4.dp))
-        Text(if (isRu) "Включить защиту" else "Enable protection", color = Color.White, style = MaterialTheme.typography.labelLarge)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    brush = Brush.horizontalGradient(
+                        colors = if (isActive) listOf(Color(0xFF4CAF50), Color(0xFF66BB6A))
+                        else listOf(Color(0xFF4CAF50).copy(alpha = 0.38f), Color(0xFF66BB6A).copy(alpha = 0.38f))
+                    ),
+                    shape = RoundedCornerShape(20.dp)
+                )
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(AppIcons.Lock, null, modifier = Modifier.size(18.dp), tint = Color.White)
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (isRu) "Включить защиту" else "Enable protection", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
     }
     
     Spacer(Modifier.height(8.dp))

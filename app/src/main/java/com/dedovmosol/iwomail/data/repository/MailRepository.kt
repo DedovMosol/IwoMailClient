@@ -315,6 +315,7 @@ class MailRepository(private val context: Context) {
     accountId: Long,
     to: String,
     cc: String,
+    bcc: String = "",
     subject: String,
     serverBody: String,
     localBody: String,
@@ -349,7 +350,7 @@ class MailRepository(private val context: Context) {
                 easClient.createDraft(
                     to = to,
                     cc = cc,
-                    bcc = "",
+                    bcc = bcc,
                     subject = subject,
                     body = serverBody,
                     draftsFolderId = draftsFolder.serverId,
@@ -500,6 +501,7 @@ if (result is EasResult.Success) {
     serverId: String,
     to: String,
     cc: String,
+    bcc: String = "",
     subject: String,
     body: String,
     fromEmail: String,
@@ -556,7 +558,7 @@ if (result is EasResult.Success) {
         }
         
         // Серверный черновик - обновляем через EWS UpdateItem
-        val updateResult = easClient.updateDraft(actualServerId, to, cc, "", subject, body)
+        val updateResult = easClient.updateDraft(actualServerId, to, cc, bcc, subject, body)
 
         if (updateResult is EasResult.Success && updateResult.data) {
             // UpdateItem сработал - обновляем локальную БД.

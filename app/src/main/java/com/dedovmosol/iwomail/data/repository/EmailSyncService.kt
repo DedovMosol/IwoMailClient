@@ -644,6 +644,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      * Синхронизация писем через EAS
      */
     suspend fun syncEmailsEas(accountId: Long, folderId: String, skipRecentEditCheck: Boolean = false, retryCount: Int = 0): EasResult<Int> {
+        android.util.Log.d("SYNC_DIAG", "syncEmailsEas START folder=$folderId retry=$retryCount")
         if (retryCount > 1) {
             return EasResult.Error("Ошибка синхронизации: слишком много попыток")
         }
@@ -651,7 +652,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         initFromPrefs(context)
         
         if (retryCount == 0 && activeSyncs.putIfAbsent(folderId, true) != null) {
-            android.util.Log.w("EmailSyncService", "syncEmailsEas: skipping — folder $folderId already syncing")
+            android.util.Log.w("SYNC_DIAG", "BLOCKED by activeSyncs lock folder=$folderId")
             return EasResult.Error("Синхронизация уже выполняется")
         }
         
@@ -759,6 +760,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 
                 when (val result = client.sync(folder.serverId, syncKey, windowSize, includeMime)) {
                     is EasResult.Success -> {
+                        android.util.Log.d("SYNC_DIAG", "Sync batch #$iterations: status=${result.data.status} emails=${result.data.emails.size} deleted=${result.data.deletedIds.size} changed=${result.data.changedEmails.size} more=${result.data.moreAvailable} newKey=${result.data.syncKey.take(10)}")
                         consecutiveErrors = 0
                         
                         if (result.data.status == 3 || result.data.status == 12) {
@@ -874,6 +876,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val totalCount = emailDao.getCountByFolder(folderId)
             val unreadCount = emailDao.getUnreadCount(folderId)
             folderDao.updateCounts(folderId, unreadCount, totalCount)
+            android.util.Log.d("SYNC_DIAG", "syncEmailsEas END folder=$folderId newEmails=$newEmailsCount syncLoopFull=$syncLoopCompletedFully iterations=$iterations")
             return EasResult.Success(newEmailsCount)
         } finally {
             activeSyncs.remove(folderId)
@@ -908,6 +911,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             emptyMap()
         }
         
+        android.util.Log.d("SYNC_DIAG", "processNewEmailsBatch: serverEmails=${syncData.emails.size} existingIds=${existingIds.size}")
         val emailEntities = syncData.emails.mapNotNull { email ->
             val emailId = "${accountId}_${email.serverId}"
             val existingEmail = existingEmailsMap[emailId]
@@ -977,9 +981,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             emptyList()
         }
         
-        // Дедупликация по содержимому
+        // Дедупликация по содержимому — только для черновиков
+        // Для INBOX/SENT и пр. id/serverId проверок достаточно; content dedup с 5-секундным
+        // окном может ложно дропать настоящие письма с одинаковым subject+from.
         var draftReplacements = emptyMap<String, String>()
-        val filteredByContent = if (filteredByServerId.isNotEmpty()) {
+        val filteredByContent = if (filteredByServerId.isNotEmpty() && folder.type == FolderType.DRAFTS) {
             val existingEmails = emailDao.getEmailsByFolderList(folderId)
             val isDrafts = folder.type == FolderType.DRAFTS
             val dedupCandidates = if (isDrafts) {
@@ -1032,7 +1038,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             draftReplacements = draftReplacementsLocal.toMap()
             filteredByServerId.filter { it.id !in duplicateIds }
         } else {
-            emptyList()
+            filteredByServerId
         }
         
         // Фильтр недавно удалённых
@@ -1142,6 +1148,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             finalFiltered
         }
         var insertedCount = 0
+        android.util.Log.d("SYNC_DIAG", "processNewEmailsBatch FILTERS: entities=${emailEntities.size} new=${newEmails.size} byServerId=${filteredByServerId.size} byContent=${filteredByContent.size} byDelete=${filteredByRecentDelete.size} final=${finalFiltered.size} toInsert=${toInsert.size}")
         if (toInsert.isNotEmpty()) {
             emailDao.insertAllIgnore(toInsert)
             insertedCount += toInsert.size

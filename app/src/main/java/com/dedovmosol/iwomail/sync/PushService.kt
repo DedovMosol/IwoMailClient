@@ -783,10 +783,11 @@ class PushService : Service() {
         
         for (folder in folders) {
             // Сначала инкрементальная синхронизация, при ошибке - полный ресинк
-            // КРИТИЧНО: withTimeoutOrNull предотвращает бесконечное удержание radio
-            // (аналогично SyncWorker — 300 сек per folder)
+            // КРИТИЧНО: инкрементальный sync держит activeSyncs lock — короткий таймаут
+            // освобождает lock быстрее, давая возможность ручному sync отработать.
+            // Инкрементальный delta-sync должен завершаться за секунды (только новые письма).
             try {
-                val result = withTimeoutOrNull(300_000L) {
+                val result = withTimeoutOrNull(60_000L) {
                     mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
                 }
                 if (result == null || result is EasResult.Error) {
@@ -810,47 +811,39 @@ class PushService : Service() {
         lastAccountSyncTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
-        // Уведомления только для НЕПРОЧИТАННЫХ писем (read = 0)
-        val newEmailEntities = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
+        // КРИТИЧНО: Используем getNewEmailsForNotification вместо getNewUnreadEmails
+        // Это позволяет показывать уведомления даже если письмо прочитано на другом устройстве
+        val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
         
-        // Предзагружаем тела ДО блокировки mutex (IO-тяжёлая операция)
-        // КРИТИЧНО: Лимит 5 тел — каждый loadEmailBody = сетевой запрос.
-        // Без лимита 50 новых писем = 50 последовательных HTTP-запросов, держащих radio активным.
-        for (entity in newEmailEntities.take(5)) {
-            try {
-                val email = database.emailDao().getEmail(entity.id)
-                if (email != null && email.body.isEmpty()) {
-                    mailRepo.loadEmailBody(entity.id)
-                }
-            } catch (e: Exception) {
-                android.util.Log.w(TAG, "Failed to preload body for ${entity.id}", e)
-            }
+        // КРИТИЧНО: Фильтруем письма, для которых УЖЕ показывались уведомления на этом устройстве
+        // Решает проблему повторных уведомлений на смартфоне после показа на планшете
+        val shownNotifications = getShownNotifications()
+        val filteredEmails = newEmailEntities.filter { email ->
+            val notifKey = "${account.id}_${email.id}"
+            !shownNotifications.contains(notifKey)
         }
         
-        // Mutex: атомарный check+show+mark предотвращает потерю shown_notifications
-        // при одновременном sync нескольких аккаунтов
-        notificationMutex.withLock {
-            val shownNotifications = getShownNotifications()
-            val filteredEmails = newEmailEntities.filter { email ->
-                val notifKey = "${account.id}_${email.id}"
-                !shownNotifications.contains(notifKey)
-            }
-            // Повторная проверка read-статуса под mutex:
-            // письмо могло стать прочитанным между первичным выбором и показом уведомления.
-            val unreadNow = filteredEmails.filter { email ->
-                database.emailDao().getEmail(email.id)?.read == false
-            }
-            
-            val newEmails = unreadNow.map { email ->
-                NewEmailInfo(email.id, email.fromName, email.from, email.subject)
-            }
-            
-            if (newEmails.isNotEmpty()) {
-                val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-                if (notificationsEnabled && !MailApplication.isInForeground) {
-                    showNewMailNotification(newEmails, account.id, account.email)
-                    markNotificationsAsShown(newEmails.map { "${account.id}_${it.id}" })
+        val newEmails = filteredEmails.map { email ->
+            NewEmailInfo(email.id, email.fromName, email.from, email.subject)
+        }
+        
+        if (newEmails.isNotEmpty()) {
+            // Предзагружаем тело письма ДО показа уведомления
+            for (emailInfo in newEmails) {
+                try {
+                    val email = database.emailDao().getEmail(emailInfo.id)
+                    if (email != null && email.body.isEmpty()) {
+                        mailRepo.loadEmailBody(emailInfo.id)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "Failed to preload body for ${emailInfo.id}", e)
                 }
+            }
+            
+            val notificationsEnabled = settingsRepo.notificationsEnabled.first()
+            if (notificationsEnabled) {
+                showNewMailNotification(newEmails, account.id, account.email)
+                markNotificationsAsShown(newEmails.map { "${account.id}_${it.id}" })
             }
         }
         

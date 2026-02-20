@@ -15,7 +15,10 @@ data class DraftAttachmentData(
 
 private data class DraftEwsDetails(
     val attachments: List<EasAttachment>,
-    val body: String
+    val body: String,
+    val to: String = "",
+    val cc: String = "",
+    val bcc: String = ""
 )
 
 /**
@@ -189,6 +192,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     return withContext(Dispatchers.IO) {
         try {
             val ewsUrl = deps.getEwsUrl()
+            val escapedServerId = deps.escapeXml(serverId)
             
             val soapRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -205,7 +209,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
                 <t:BodyType>HTML</t:BodyType>
             </m:ItemShape>
             <m:ItemIds>
-                <t:ItemId Id="$serverId"/>
+                <t:ItemId Id="$escapedServerId"/>
             </m:ItemIds>
         </m:GetItem>
     </soap:Body>
@@ -224,17 +228,19 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
                 return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
             }
             
-            // Извлекаем Body
-            val bodyPattern = "<t:Body[^>]*><!\\[CDATA\\[([^\\]]+)\\]\\]></t:Body>".toRegex()
-            val cdataBody = bodyPattern.find(responseXml)?.groupValues?.get(1)
-            val body = if (cdataBody != null) {
-                cdataBody // CDATA содержит raw HTML, unescapeXml не нужен
+            // Извлекаем Body c учётом атрибутов (<t:Body BodyType="HTML">...</t:Body>)
+            val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                .find(responseXml)
+                ?.groupValues
+                ?.get(1)
+                ?.trim()
+                .orEmpty()
+
+            // Exchange 2007 SP1 может вернуть как raw HTML, так и XML-escaped body.
+            val body = if (rawBody.startsWith("&lt;") || (!rawBody.startsWith("<") && rawBody.contains("&lt;"))) {
+                unescapeXml(rawBody)
             } else {
-                // КРИТИЧНО: EWS GetItem возвращает Body как XML text,
-                // где HTML-теги закодированы: &lt;html&gt; вместо <html>.
-                // Без unescapeXml тело черновика отображается как сырые entities.
-                val rawBody = XmlValueExtractor.extractEws(responseXml, "Body") ?: ""
-                if (rawBody.isNotEmpty()) unescapeXml(rawBody) else rawBody
+                rawBody
             }
             
             EasResult.Success(body)
@@ -243,6 +249,50 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         }
     }
 }
+    /**
+     * Полноценная синхронизация черновиков через EWS.
+     * FindItem (заголовки) → GetItem batch (body + recipients + attachments).
+     * Совместимо с Exchange 2007 SP1+.
+     */
+    suspend fun syncDraftsEws(): EasResult<List<EasDraft>> = withContext(Dispatchers.IO) {
+        try {
+            if (!deps.isVersionDetected()) {
+                deps.detectEasVersion()
+            }
+            val ewsUrl = deps.getEwsUrl()
+            val exchangeVersion = resolveEwsVersion()
+
+            // 1. FindItem — получаем список черновиков (заголовки)
+            val findRequest = buildFindDraftsRequest(exchangeVersion)
+            var findResponse = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
+            if (findResponse == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+                if (ntlmAuth != null) {
+                    findResponse = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+                }
+            }
+            if (findResponse == null) {
+                return@withContext EasResult.Error("EWS FindItem: нет ответа от сервера")
+            }
+            if (findResponse.contains("ResponseClass=\"Error\"")) {
+                val msg = EasPatterns.EWS_MESSAGE_TEXT.find(findResponse)?.groupValues?.get(1) ?: "FindItem error"
+                return@withContext EasResult.Error("EWS FindItem: $msg")
+            }
+
+            val drafts = parseDraftsResponse(findResponse)
+            if (drafts.isEmpty()) {
+                return@withContext EasResult.Success(emptyList())
+            }
+
+            // 2. GetItem batch — body + recipients + attachments для ВСЕХ черновиков.
+            //    FindItem НЕ возвращает Body и ToRecipients/CcRecipients (MS docs).
+            val enriched = fillDraftDetailsEws(ewsUrl, drafts, exchangeVersion)
+            EasResult.Success(enriched)
+        } catch (e: Exception) {
+            EasResult.Error("EWS syncDrafts: ${e.message}")
+        }
+    }
+
     /**
      * Удаление черновика через EWS DeleteItem (как в старой версии)
      */
@@ -697,57 +747,8 @@ private suspend fun createDraftEws(
     return withContext(Dispatchers.IO) {
         try {
             val ewsUrl = deps.getEwsUrl()
-
-            val escapedSubject = deps.escapeXml(subject)
-            val escapedBody = deps.escapeXml(body)
-
-            val toRecipients = to.split(",", ";")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .joinToString("") { email ->
-                    """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
-                }
-
-            val ccRecipients = cc.split(",", ";")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .joinToString("") { email ->
-                    """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
-                }
-
-            val bccRecipients = bcc.split(",", ";")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .joinToString("") { email ->
-                    """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
-                }
-
             val ewsVersion = resolveEwsVersion()
-            
-            val soapRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="$ewsVersion"/>
-    </soap:Header>
-    <soap:Body>
-        <m:CreateItem MessageDisposition="SaveOnly">
-            <m:SavedItemFolderId>
-                <t:DistinguishedFolderId Id="drafts"/>
-            </m:SavedItemFolderId>
-            <m:Items>
-                <t:Message>
-                    <t:Subject>$escapedSubject</t:Subject>
-                    <t:Body BodyType="HTML">$escapedBody</t:Body>
-                    ${if (toRecipients.isNotBlank()) "<t:ToRecipients>$toRecipients</t:ToRecipients>" else ""}
-                    ${if (ccRecipients.isNotBlank()) "<t:CcRecipients>$ccRecipients</t:CcRecipients>" else ""}
-                    ${if (bccRecipients.isNotBlank()) "<t:BccRecipients>$bccRecipients</t:BccRecipients>" else ""}
-                </t:Message>
-            </m:Items>
-        </m:CreateItem>
-    </soap:Body>
-</soap:Envelope>"""
+            val soapRequest = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
 
             var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "CreateItem")
 
@@ -777,8 +778,7 @@ private suspend fun createDraftEws(
             if (itemId != null) {
                 if (attachments.isNotEmpty()) {
                     try {
-                        val changeKey = """ChangeKey="([^"]+)"""".toRegex()
-                            .find(responseXml)?.groupValues?.get(1)
+                        val changeKey = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "ChangeKey")
                         attachFilesEws(ewsUrl, itemId, changeKey, attachments, ewsVersion)
                     } catch (_: Exception) {}
                 }
@@ -809,11 +809,18 @@ private suspend fun createDraftEws(
                 val ewsVersion = resolveEwsVersion()
                 val request = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
                 
-                val authHeader = deps.performNtlmHandshake(ewsUrl, request, "CreateItem")
-                    ?: return@withContext EasResult.Error("NTLM handshake failed")
+                var response = deps.tryBasicAuthEws(ewsUrl, request, "CreateItem")
                 
-                val response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "CreateItem")
-                    ?: return@withContext EasResult.Error("Ошибка выполнения EWS запроса")
+                if (response == null) {
+                    val authHeader = deps.performNtlmHandshake(ewsUrl, request, "CreateItem")
+                    if (authHeader != null) {
+                        response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "CreateItem")
+                    }
+                }
+                
+                if (response == null) {
+                    return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
+                }
                 
                 val itemId = XmlValueExtractor.extractAttribute(response, "ItemId", "Id")
                     ?: EasPatterns.EWS_ITEM_ID.find(response)?.groupValues?.get(1)
@@ -821,8 +828,7 @@ private suspend fun createDraftEws(
                 if (itemId != null) {
                     if (attachments.isNotEmpty()) {
                         try {
-                            val changeKey = """ChangeKey="([^"]+)"""".toRegex()
-                                .find(response)?.groupValues?.get(1)
+                            val changeKey = XmlValueExtractor.extractAttribute(response, "ItemId", "ChangeKey")
                             attachFilesEws(ewsUrl, itemId, changeKey, attachments, ewsVersion)
                         } catch (_: Exception) {}
                     }
@@ -956,13 +962,14 @@ private suspend fun updateDraftEws(
     return withContext(Dispatchers.IO) {
         try {
             val ewsUrl = deps.getEwsUrl()
+            val exchangeVersion = resolveEwsVersion()
 
             // КРИТИЧНО: Получаем ChangeKey через GetItem перед UpdateItem
             val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
     <soap:Header>
-        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+        <t:RequestServerVersion Version="$exchangeVersion"/>
     </soap:Header>
     <soap:Body>
         <GetItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages">
@@ -985,31 +992,18 @@ private suspend fun updateDraftEws(
             }
             
             // Извлекаем ChangeKey из ответа
-            val changeKeyPattern = """<t:ItemId Id="[^"]+" ChangeKey="([^"]+)"""".toRegex()
-            val changeKeyMatch = changeKeyPattern.find(getItemResponse)
-            val changeKey = changeKeyMatch?.groupValues?.get(1) ?: ""
+            val changeKey = XmlValueExtractor.extractAttribute(getItemResponse, "ItemId", "ChangeKey") ?: ""
 
             val escapedServerId = deps.escapeXml(serverId)
             val escapedChangeKey = deps.escapeXml(changeKey)
             val escapedSubject = deps.escapeXml(subject)
             val escapedBody = deps.escapeXml(body)
 
-            val toRecipients = to.split(",", ";")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .joinToString("") { email ->
-                    """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
-                }
-
-            val ccRecipients = cc.split(",", ";")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .joinToString("") { email ->
-                    """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
-                }
+            val toRecipients = formatRecipients(to)
+            val ccRecipients = formatRecipients(cc)
+            val bccRecipients = formatRecipients(bcc)
 
             val changeKeyAttr = if (changeKey.isNotEmpty()) """ ChangeKey="$escapedChangeKey"""" else ""
-            val exchangeVersion = resolveEwsVersion()
             val soapRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -1045,6 +1039,12 @@ private suspend fun updateDraftEws(
                             <t:FieldURI FieldURI="message:CcRecipients"/>
                             <t:Message>
                                 <t:CcRecipients>${if (ccRecipients.isNotBlank()) ccRecipients else ""}</t:CcRecipients>
+                            </t:Message>
+                        </t:SetItemField>
+                        <t:SetItemField>
+                            <t:FieldURI FieldURI="message:BccRecipients"/>
+                            <t:Message>
+                                <t:BccRecipients>${if (bccRecipients.isNotBlank()) bccRecipients else ""}</t:BccRecipients>
                             </t:Message>
                         </t:SetItemField>
                     </t:Updates>
@@ -1105,7 +1105,7 @@ private suspend fun updateDraftEws(
                             <soap:Body>
                                 <m:DeleteItem DeleteType="MoveToDeletedItems">
                                     <m:ItemIds>
-                                        <t:ItemId Id="$serverId"/>
+                                        <t:ItemId Id="${deps.escapeXml(serverId)}"/>
                                     </m:ItemIds>
                                 </m:DeleteItem>
                             </soap:Body>
@@ -1216,8 +1216,9 @@ private suspend fun updateDraftEws(
             }
             
             // Обновляем ChangeKey из ответа — каждый CreateAttachment меняет ChangeKey элемента
-            val newChangeKey = """ChangeKey="([^"]+)"""".toRegex()
+            val newChangeKey = """RootItemChangeKey="([^"]+)"""".toRegex()
                 .find(response)?.groupValues?.get(1)
+                ?: """ChangeKey="([^"]+)"""".toRegex().find(response)?.groupValues?.get(1)
             if (newChangeKey != null) {
                 currentChangeKey = newChangeKey
             }
@@ -1239,7 +1240,7 @@ private suspend fun updateDraftEws(
         exchangeVersion: String
     ): String {
         val escapedItemId = deps.escapeXml(itemId)
-        val changeKeyAttr = changeKey?.let { " ChangeKey=\"${deps.escapeXml(it)}\"" } ?: ""
+        val changeKeyAttr = changeKey?.takeIf { it.isNotBlank() }?.let { " ChangeKey=\"${deps.escapeXml(it)}\"" } ?: ""
         // Exchange 2007 (Exchange2007_SP1) НЕ поддерживает <t:IsInline>.
         // Только Exchange 2010+ поддерживает IsInline.
         // ContentId поддерживается во всех версиях (по документации Microsoft).
@@ -1440,7 +1441,7 @@ private suspend fun updateDraftEws(
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .joinToString("") { email ->
-                """<t:Mailbox><t:EmailAddress>$email</t:EmailAddress></t:Mailbox>"""
+                """<t:Mailbox><t:EmailAddress>${deps.escapeXml(email)}</t:EmailAddress></t:Mailbox>"""
             }
     }
     
@@ -1448,14 +1449,18 @@ private suspend fun updateDraftEws(
     val drafts = mutableListOf<EasDraft>()
 
     val messagePattern = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
-    messagePattern.findAll(xml).forEach { match ->
-        val messageXml = match.groupValues[1]
+    val itemBlocks = messagePattern.findAll(xml).map { it.groupValues[1] }.toList().ifEmpty {
+        // Fallback для серверов/сборок, где возвращается базовый <t:Item>.
+        "<t:Item>(.*?)</t:Item>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            .findAll(xml)
+            .map { it.groupValues[1] }
+            .toList()
+    }
 
-        val itemIdMatch = "Id=\"([^\"]+)\"".toRegex().find(messageXml)
-        val itemId = itemIdMatch?.groupValues?.get(1) ?: return@forEach
+    itemBlocks.forEach { messageXml ->
 
-        val changeKeyMatch = "ChangeKey=\"([^\"]+)\"".toRegex().find(messageXml)
-        val changeKey = changeKeyMatch?.groupValues?.get(1) ?: ""
+        val itemId = XmlValueExtractor.extractAttribute(messageXml, "ItemId", "Id") ?: return@forEach
+        val changeKey = XmlValueExtractor.extractAttribute(messageXml, "ItemId", "ChangeKey") ?: ""
 
         val subjectMatch = "<t:Subject>(.*?)</t:Subject>".toRegex(RegexOption.DOT_MATCHES_ALL).find(messageXml)
         val subject = subjectMatch?.groupValues?.get(1)?.let { unescapeXml(it) } ?: ""
@@ -1468,7 +1473,7 @@ private suspend fun updateDraftEws(
         toPattern.find(messageXml)?.let { toMatch ->
             val emailPattern = "<t:EmailAddress>(.*?)</t:EmailAddress>".toRegex()
             emailPattern.findAll(toMatch.groupValues[1]).forEach { emailMatch ->
-                toRecipients.add(emailMatch.groupValues[1])
+                toRecipients.add(unescapeXml(emailMatch.groupValues[1]))
             }
         }
 
@@ -1477,12 +1482,24 @@ private suspend fun updateDraftEws(
         ccPattern.find(messageXml)?.let { ccMatch ->
             val emailPattern = "<t:EmailAddress>(.*?)</t:EmailAddress>".toRegex()
             emailPattern.findAll(ccMatch.groupValues[1]).forEach { emailMatch ->
-                ccRecipients.add(emailMatch.groupValues[1])
+                ccRecipients.add(unescapeXml(emailMatch.groupValues[1]))
+            }
+        }
+
+        val bccRecipients = mutableListOf<String>()
+        val bccPattern = "<t:BccRecipients>(.*?)</t:BccRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        bccPattern.find(messageXml)?.let { bccMatch ->
+            val emailPattern = "<t:EmailAddress>(.*?)</t:EmailAddress>".toRegex()
+            emailPattern.findAll(bccMatch.groupValues[1]).forEach { emailMatch ->
+                bccRecipients.add(unescapeXml(emailMatch.groupValues[1]))
             }
         }
 
         val hasAttachmentsMatch = "<t:HasAttachments>(.*?)</t:HasAttachments>".toRegex().find(messageXml)
-        val hasAttachments = hasAttachmentsMatch?.groupValues?.get(1) == "true"
+        val hasAttachments = hasAttachmentsMatch?.groupValues?.get(1)
+            ?.trim()
+            ?.let { it.equals("true", ignoreCase = true) || it == "1" }
+            ?: false
 
         drafts.add(
             EasDraft(
@@ -1491,6 +1508,7 @@ private suspend fun updateDraftEws(
                 subject = subject,
                 to = toRecipients.joinToString(", "),
                 cc = ccRecipients.joinToString(", "),
+                bcc = bccRecipients.joinToString(", "),
                 dateCreated = dateStr,
                 hasAttachments = hasAttachments
             )
@@ -1500,28 +1518,34 @@ private suspend fun updateDraftEws(
     return drafts
 }
 
-    private suspend fun fillDraftAttachmentsEws(
+    /**
+     * GetItem batch для ВСЕХ черновиков: body + recipients + attachments.
+     * Вызывается из syncDraftsEws() после FindItem.
+     */
+    private suspend fun fillDraftDetailsEws(
         ewsUrl: String,
         drafts: List<EasDraft>,
         exchangeVersion: String
     ): List<EasDraft> {
-        val needDetails = drafts.filter { (it.hasAttachments && it.attachments.isEmpty()) || it.body.isBlank() }
-        if (needDetails.isEmpty()) return drafts
+        if (drafts.isEmpty()) return drafts
 
-        val detailsMap = getDraftAttachmentsEws(
+        val detailsMap = getDraftDetailsEws(
             ewsUrl,
-            needDetails.map { it.serverId },
+            drafts.map { it.serverId },
             exchangeVersion
         )
         if (detailsMap.isEmpty()) return drafts
 
         return drafts.map { draft ->
             val details = detailsMap[draft.serverId]
-            if (details != null && (details.attachments.isNotEmpty() || details.body.isNotBlank())) {
+            if (details != null) {
                 draft.copy(
                     attachments = if (details.attachments.isNotEmpty()) details.attachments else draft.attachments,
                     hasAttachments = draft.hasAttachments || details.attachments.isNotEmpty(),
-                    body = if (details.body.isNotBlank()) details.body else draft.body
+                    body = if (details.body.isNotBlank()) details.body else draft.body,
+                    to = if (details.to.isNotBlank()) details.to else draft.to,
+                    cc = if (details.cc.isNotBlank()) details.cc else draft.cc,
+                    bcc = if (details.bcc.isNotBlank()) details.bcc else draft.bcc
                 )
             } else {
                 draft
@@ -1529,7 +1553,28 @@ private suspend fun updateDraftEws(
         }
     }
 
-    private suspend fun getDraftAttachmentsEws(
+    /**
+     * GetItem batch для черновиков: body + recipients + attachments.
+     * Basic Auth first, NTLM fallback. Exchange 2007 SP1+.
+     */
+    private suspend fun getDraftDetailsEws(
+        ewsUrl: String,
+        itemIds: List<String>,
+        exchangeVersion: String
+    ): Map<String, DraftEwsDetails> {
+        if (itemIds.isEmpty()) return emptyMap()
+
+        // Батчим по 50 — Exchange лимитирует размер GetItem запроса.
+        // Для 100+ черновиков одним запросом можно получить таймаут или ошибку.
+        val result = mutableMapOf<String, DraftEwsDetails>()
+        for (chunk in itemIds.chunked(50)) {
+            val chunkResult = getDraftDetailsBatchEws(ewsUrl, chunk, exchangeVersion)
+            result.putAll(chunkResult)
+        }
+        return result
+    }
+
+    private suspend fun getDraftDetailsBatchEws(
         ewsUrl: String,
         itemIds: List<String>,
         exchangeVersion: String
@@ -1558,19 +1603,53 @@ private suspend fun updateDraftEws(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val authHeader = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
-        val response = deps.executeNtlmRequest(ewsUrl, getItemRequest, authHeader, "GetItem") ?: return emptyMap()
+        var response = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
+        if (response == null) {
+            val authHeader = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
+            response = deps.executeNtlmRequest(ewsUrl, getItemRequest, authHeader, "GetItem") ?: return emptyMap()
+        }
 
         val result = mutableMapOf<String, DraftEwsDetails>()
-        val itemPattern = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        itemPattern.findAll(response).forEach { match ->
-            val itemXml = match.groupValues[1]
+        val itemBlocks = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            .findAll(response)
+            .map { it.groupValues[1] }
+            .toList()
+            .ifEmpty {
+                // Fallback для серверов/сборок, где GetItem может вернуть <t:Item>.
+                "<t:Item>(.*?)</t:Item>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                    .findAll(response)
+                    .map { it.groupValues[1] }
+                    .toList()
+            }
+
+        itemBlocks.forEach { itemXml ->
             val itemId = XmlValueExtractor.extractAttribute(itemXml, "ItemId", "Id") ?: return@forEach
             val attachments = parseEwsAttachments(itemXml)
-            val body = EasPatterns.EWS_BODY.find(itemXml)?.groupValues?.get(1)?.trim()?.let { unescapeXml(it) }.orEmpty()
-            if (attachments.isNotEmpty() || body.isNotBlank()) {
-                result[itemId] = DraftEwsDetails(attachments = attachments, body = body)
+            // Exchange 2007 SP1 возвращает raw HTML в <t:Body> (не XML-escaped).
+            // unescapeXml нужен ТОЛЬКО если body escaped (начинается с &lt; вместо <).
+            val rawBody = EasPatterns.EWS_BODY.find(itemXml)?.groupValues?.get(1)?.trim().orEmpty()
+            val body = if (rawBody.startsWith("&lt;") || (!rawBody.startsWith("<") && rawBody.contains("&lt;"))) {
+                unescapeXml(rawBody)
+            } else {
+                rawBody
             }
+            // Извлекаем получателей (GetItem возвращает EmailAddress, в отличие от FindItem)
+            val toXml = "<t:ToRecipients>(.*?)</t:ToRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                .find(itemXml)?.groupValues?.get(1) ?: ""
+            val ccXml = "<t:CcRecipients>(.*?)</t:CcRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                .find(itemXml)?.groupValues?.get(1) ?: ""
+            val bccXml = "<t:BccRecipients>(.*?)</t:BccRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                .find(itemXml)?.groupValues?.get(1) ?: ""
+            val toStr = if (toXml.isNotBlank()) parseRecipients(toXml) else ""
+            val ccStr = if (ccXml.isNotBlank()) parseRecipients(ccXml) else ""
+            val bccStr = if (bccXml.isNotBlank()) parseRecipients(bccXml) else ""
+            result[itemId] = DraftEwsDetails(
+                attachments = attachments,
+                body = body,
+                to = toStr,
+                cc = ccStr,
+                bcc = bccStr
+            )
         }
         return result
     }
@@ -1614,12 +1693,15 @@ private suspend fun updateDraftEws(
                 ?.toLongOrNull()
                 ?: XmlValueExtractor.extractEws(attXml, "EstimatedSize")?.toLongOrNull()
                 ?: 0
-            val isInline = XmlValueExtractor.extractEws(attXml, "IsInline")
+            val isInlineExplicit = XmlValueExtractor.extractEws(attXml, "IsInline")
                 ?.let { it == "true" || it == "1" } ?: false
             val contentId = XmlValueExtractor.extractEws(attXml, "ContentId")?.trim()?.let { raw ->
                 val cleaned = raw.removePrefix("<").removeSuffix(">")
                 if (cleaned.startsWith("cid:", ignoreCase = true)) cleaned.substring(4) else cleaned
             }
+            // Exchange 2007 SP1 НЕ возвращает IsInline — всегда false.
+            // Но если ContentId присутствует, вложение фактически inline (cid: ссылка в HTML).
+            val isInline = isInlineExplicit || !contentId.isNullOrBlank()
 
             attachments.add(
                 EasAttachment(

@@ -29,6 +29,7 @@ class EmailOperationsService(
      * Пометить письмо как прочитанное/непрочитанное
      */
     suspend fun markAsRead(emailId: String, read: Boolean): EasResult<Boolean> {
+        android.util.Log.d("SYNC_DIAG", "markAsRead START emailId=$emailId read=$read")
         val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
         val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error("Аккаунт не найден")
         
@@ -65,7 +66,8 @@ class EmailOperationsService(
                 cancelNotificationForAccount(email.accountId)
             }
             
-            val result = client.markAsRead(folder.serverId, email.serverId, currentSyncKey, read)
+            val result = client.markAsRead(folder.serverId, email.serverId, currentSyncKey, read, email.subject)
+            android.util.Log.d("SYNC_DIAG", "markAsRead result=${if (result is EasResult.Success) "OK newKey=${result.data.take(10)}" else "FAIL: ${(result as EasResult.Error).message}"} syncKey=${currentSyncKey.take(10)}")
             return when (result) {
                 is EasResult.Success -> {
                     folderDao.updateSyncKey(email.folderId, result.data)
@@ -94,7 +96,7 @@ class EmailOperationsService(
                     
                     if (freshSyncKey != null) {
                         folderDao.updateSyncKey(email.folderId, freshSyncKey)
-                        val retryResult = client.markAsRead(folder.serverId, email.serverId, freshSyncKey, read)
+                        val retryResult = client.markAsRead(folder.serverId, email.serverId, freshSyncKey, read, email.subject)
                         when (retryResult) {
                             is EasResult.Success -> {
                                 folderDao.updateSyncKey(email.folderId, retryResult.data)

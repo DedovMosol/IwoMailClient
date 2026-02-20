@@ -1432,8 +1432,9 @@ $foldersXml
         collectionId: String,
         serverId: String,
         syncKey: String,
-        read: Boolean = true
-    ): EasResult<String> = emailService.markAsRead(collectionId, serverId, syncKey, read)
+        read: Boolean = true,
+        subject: String? = null
+    ): EasResult<String> = emailService.markAsRead(collectionId, serverId, syncKey, read, subject)
     
     /**
      * Батч-пометка нескольких писем как прочитанных одним Sync-запросом
@@ -2851,6 +2852,13 @@ $SOAP_ENVELOPE_END"""
     body: String
 ): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body)
     
+    /**
+     * Полноценная синхронизация черновиков через EWS: FindItem + GetItem batch.
+     * Возвращает полные черновики (body, recipients, attachments).
+     * Exchange 2007 SP1+.
+     */
+    suspend fun syncDraftsEws(): EasResult<List<EasDraft>> = draftsService.syncDraftsEws()
+
         /**
      * Загрузка Body черновика
      * Делегирует в DraftsService

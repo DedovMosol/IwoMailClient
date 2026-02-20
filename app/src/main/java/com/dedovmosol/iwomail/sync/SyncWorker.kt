@@ -147,15 +147,16 @@ class SyncWorker(
             for (folder in foldersToSync) {
                 try {
                     // Сначала пробуем инкрементальную синхронизацию (экономит трафик/батарею)
-                    val result = kotlinx.coroutines.withTimeoutOrNull(300_000L) {
+                    // 60 сек — инкрементальный delta-sync быстр; большой таймаут блокирует ручной sync
+                    val result = kotlinx.coroutines.withTimeoutOrNull(60_000L) {
                         mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
                     }
-                    if (result == null) {
-                        // Таймаут — переходим к следующей папке
-                        android.util.Log.w("SyncWorker", "Sync timeout for folder ${folder.id}, skipping")
-                        hasErrors = true
-                    } else if (result is EasResult.Error) {
-                        // При ошибке делаем полный ресинк как страховку
+                    if (result == null || result is EasResult.Error) {
+                        // Таймаут инкрементального sync или ошибка — пробуем полный ресинк.
+                        // Таймаут 60с для delta нормален; полный ресинк (3000+ писем) получает 300с.
+                        if (result == null) {
+                            android.util.Log.w("SyncWorker", "Incremental sync timeout for folder ${folder.id}, falling back to full resync")
+                        }
                         val retryResult = kotlinx.coroutines.withTimeoutOrNull(300_000L) {
                             mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
                         }
@@ -175,8 +176,8 @@ class SyncWorker(
                 }
             }
             
-            // Уведомления только для НЕПРОЧИТАННЫХ писем (read = 0)
-            val newEmailEntities = database.emailDao().getNewUnreadEmails(account.id, lastNotificationCheck)
+            // КРИТИЧНО: getNewEmailsForNotification не зависит от статуса прочитанности
+            val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
             
             // Фильтруем уже показанные уведомления
             val shownNotifications = getShownNotifications(applicationContext)
@@ -216,7 +217,7 @@ class SyncWorker(
             }
             
             val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-            if (notificationsEnabled && !MailApplication.isInForeground) {
+            if (notificationsEnabled) {
                 // Shared Mutex с PushService: атомарный re-filter+show+mark
                 // предотвращает дубликаты при одновременном sync
                 PushService.notificationMutex.withLock {
@@ -225,10 +226,6 @@ class SyncWorker(
                         val shownNow = getShownNotifications(applicationContext)
                         val filtered = emails.filter { e ->
                             !shownNow.contains("${accountId}_${e.id}")
-                        }.filter { e ->
-                            // Повторная проверка read-статуса под mutex:
-                            // письмо могло стать прочитанным между выборкой и показом уведомления.
-                            database.emailDao().getEmail(e.id)?.read == false
                         }
                         if (filtered.isEmpty()) continue
                         val account = accounts.find { it.id == accountId } ?: continue
