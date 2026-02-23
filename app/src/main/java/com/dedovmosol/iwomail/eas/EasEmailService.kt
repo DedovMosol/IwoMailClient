@@ -1282,43 +1282,18 @@ $deleteCommands
         val matches = dataImagePattern.findAll(body).toList()
         
         val sb = StringBuilder()
-        sb.append("Date: $date\r\n")
-        sb.append("From: $fromEmail\r\n")
-        sb.append("To: $to\r\n")
-        if (cc.isNotEmpty()) {
-            sb.append("Cc: $cc\r\n")
-        }
-        if (bcc.isNotEmpty()) {
-            sb.append("Bcc: $bcc\r\n")
-        }
-        sb.append("Message-ID: $messageId\r\n")
-        
-        val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
-        sb.append("Subject: $encodedSubject\r\n")
-        
-        when (importance) {
-            0 -> {
-                sb.append("X-Priority: 5\r\n")
-                sb.append("Importance: Low\r\n")
-            }
-            2 -> {
-                sb.append("X-Priority: 1\r\n")
-                sb.append("Importance: High\r\n")
-            }
-            else -> {
-                sb.append("X-Priority: 3\r\n")
-                sb.append("Importance: Normal\r\n")
-            }
-        }
-        
-        if (requestReadReceipt) {
-            sb.append("Disposition-Notification-To: $fromEmail\r\n")
-        }
-        if (requestDeliveryReceipt) {
-            sb.append("Return-Receipt-To: $fromEmail\r\n")
-        }
-        
-        sb.append("MIME-Version: 1.0\r\n")
+        sb.appendMimeHeaders(
+            date = date,
+            fromEmail = fromEmail,
+            to = to,
+            cc = cc,
+            bcc = bcc,
+            messageId = messageId,
+            subject = subject,
+            importance = importance,
+            requestReadReceipt = requestReadReceipt,
+            requestDeliveryReceipt = requestDeliveryReceipt
+        )
         
         if (matches.isEmpty()) {
             // Нет inline картинок - простой HTML
@@ -1343,8 +1318,6 @@ $deleteCommands
             var modifiedBody = body
             matches.forEachIndexed { index, match ->
                 val fullMatch = match.value
-                val imageType = match.groupValues[1]
-                val base64Data = match.groupValues[2]
                 val contentId = "image${index + 1}@$deviceId"
                 
                 // Заменяем data: URL на cid:

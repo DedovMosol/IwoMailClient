@@ -200,13 +200,20 @@ class EasCalendarService internal constructor(
     }
     
     /**
-     * Удаление события календаря
-     * КРИТИЧНО: Exchange 2007 SP1 синхронизирует календарь через EWS (syncCalendarEws),
-     * поэтому serverId — EWS ItemId (длинная base64 строка).
-     * EAS Sync Delete ожидает КОРОТКИЙ EAS ServerId (формат "22:2").
-     * Маршрутизируем удаление по формату serverId на Exchange 2007.
+     * Удаление события календаря.
+     * КРИТИЧНО: Для meetings (встреч с участниками) простой DeleteItem с SendToNone
+     * вызывает "воскрешение" — Calendar Repair Assistant (CRA) Exchange
+     * обнаруживает пропавшую встречу и воссоздаёт её.
+     * Правильный подход по MS docs:
+     *   - Участник (attendee): DeclineItem → уведомляет организатора, CRA не воссоздаст
+     *   - Организатор: DeleteItem + SendToAllAndSaveCopy → отправляет отмену участникам
+     *   - Обычное событие (не meeting): DeleteItem + HardDelete + SendToNone
      */
-    suspend fun deleteCalendarEvent(serverId: String): EasResult<Boolean> {
+    suspend fun deleteCalendarEvent(
+        serverId: String,
+        isMeeting: Boolean = false,
+        isOrganizer: Boolean = false
+    ): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
@@ -214,24 +221,35 @@ class EasCalendarService internal constructor(
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         
         return if (majorVersion >= 14) {
-            // Exchange 2010+: всегда EAS Sync Delete (serverId всегда EAS формат)
+            // Exchange 2010+: EAS Sync Delete (serverId всегда EAS формат)
             val calendarFolderId = getCalendarFolderId()
                 ?: return EasResult.Error("Папка календаря не найдена")
+            if (isMeeting && !isOrganizer) {
+                // Участник: MeetingResponse(Decline) + Delete
+                meetingResponseEas(serverId, calendarFolderId, userResponse = 3)
+                // После decline удаляем, чтобы гарантировать удаление из календаря
+            }
             deleteCalendarEventEas(serverId, calendarFolderId)
         } else {
             // Exchange 2007 SP1: определяем формат serverId
-            // EAS ServerId: короткий, содержит ":" (напр. "22:2")
-            // EWS ItemId: длинная base64 строка без ":" (напр. "AAMkAD...")
             val isEasServerId = serverId.contains(":") && serverId.length < 20
             if (isEasServerId) {
                 val calendarFolderId = getCalendarFolderId()
                     ?: return EasResult.Error("Папка календаря не найдена")
                 deleteCalendarEventEas(serverId, calendarFolderId)
             } else {
-                // EWS ItemId — удаляем через EWS DeleteItem
-                // Если serverId содержит "|" — это формат "ItemId|ChangeKey", берём только ItemId
+                // EWS ItemId
                 val ewsItemId = if (serverId.contains("|")) serverId.substringBefore("|") else serverId
-                deleteCalendarEventEws(ewsItemId)
+                if (isMeeting && !isOrganizer) {
+                    // Участник: DeclineItem (уведомляет организатора, предотвращает CRA)
+                    declineCalendarEventEws(ewsItemId)
+                } else if (isMeeting && isOrganizer) {
+                    // Организатор: HardDelete + отправка отмены участникам
+                    deleteCalendarEventEws(ewsItemId, sendCancellations = "SendToAllAndSaveCopy")
+                } else {
+                    // Обычное событие без участников
+                    deleteCalendarEventEws(ewsItemId)
+                }
             }
         }
     }
@@ -1178,20 +1196,21 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
         }
     }
     
-    private suspend fun deleteCalendarEventEws(serverId: String): EasResult<Boolean> {
+    /**
+     * EWS DeleteItem для календарных событий.
+     * @param sendCancellations — значение SendMeetingCancellations:
+     *   - "SendToNone" — обычное событие (не meeting) или участник
+     *   - "SendToAllAndSaveCopy" — организатор отменяет встречу (отправляет отмену участникам)
+     */
+    private suspend fun deleteCalendarEventEws(
+        serverId: String,
+        sendCancellations: String = "SendToNone"
+    ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
-                // КРИТИЧНО: Для календарных событий ОБЯЗАТЕЛЕН атрибут SendMeetingCancellations
-                // Без него Exchange 2007 SP1 возвращает ErrorSendMeetingCancellationsRequired
-                // Поэтому НЕ используем generic ewsDeleteItem, а строим calendar-specific запрос
-                // КРИТИЧНО: HardDelete — перманентное удаление из БД Exchange.
-                // MoveToDeletedItems лишь перемещает в корзину, что может вызвать
-                // "воскрешение" событий при определённых условиях синхронизации.
-                // SendMeetingCancellations="SendToNone" — не отправлять уведомления
-                // об отмене (событие удалено пользователем, а не организатором).
                 val deleteBody = """
-                    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="SendToNone">
+                    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="$sendCancellations">
                         <m:ItemIds>
                             <t:ItemId Id="${deps.escapeXml(serverId)}"/>
                         </m:ItemIds>
@@ -1218,6 +1237,95 @@ private suspend fun syncCalendarStandard(folders: List<EasFolder>): EasResult<Li
             } catch (e: Exception) {
                 EasResult.Error("Ошибка удаления события: ${e.message}")
             }
+        }
+    }
+    
+    /**
+     * EWS DeclineItem — участник отклоняет встречу.
+     * КРИТИЧНО: Предотвращает "воскрешение" Calendar Repair Assistant (CRA).
+     * CRA обнаруживает пропавшую встречу у участника и воссоздаёт её,
+     * если участник просто удалил (DeleteItem) без уведомления организатора.
+     * DeclineItem отправляет отказ организатору → CRA не вмешивается.
+     * После DeclineItem делаем HardDelete для гарантированного удаления из календаря
+     * (некоторые конфигурации Exchange оставляют declined meetings в календаре).
+     * Per MS docs: CreateItem + DeclineItem, Exchange 2007 SP1+
+     */
+    private suspend fun declineCalendarEventEws(serverId: String): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val ewsUrl = deps.getEwsUrl()
+                // Шаг 1: DeclineItem — уведомляем организатора (предотвращает CRA resurrection)
+                val declineBody = """
+                    <m:CreateItem MessageDisposition="SendAndSaveCopy">
+                        <m:Items>
+                            <t:DeclineItem>
+                                <t:ReferenceItemId Id="${deps.escapeXml(serverId)}"/>
+                            </t:DeclineItem>
+                        </m:Items>
+                    </m:CreateItem>
+                """.trimIndent()
+                val request = EasXmlTemplates.ewsSoapRequest(declineBody)
+                // DeclineItem — best-effort: ошибка не блокирует HardDelete
+                runCatching {
+                    if (deps.tryBasicAuthEws(ewsUrl, request, "CreateItem") == null) {
+                        val authHeader = deps.performNtlmHandshake(ewsUrl, request, "CreateItem")
+                        if (authHeader != null) {
+                            deps.executeNtlmRequest(ewsUrl, request, authHeader, "CreateItem")
+                        }
+                    }
+                }
+                
+                // Шаг 2: HardDelete — гарантируем физическое удаление из календаря
+                val deleteBody = """
+                    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="SendToNone">
+                        <m:ItemIds>
+                            <t:ItemId Id="${deps.escapeXml(serverId)}"/>
+                        </m:ItemIds>
+                    </m:DeleteItem>
+                """.trimIndent()
+                val deleteRequest = EasXmlTemplates.ewsSoapRequest(deleteBody)
+                var deleteResponse = deps.tryBasicAuthEws(ewsUrl, deleteRequest, "DeleteItem")
+                if (deleteResponse == null) {
+                    val authHeader = deps.performNtlmHandshake(ewsUrl, deleteRequest, "DeleteItem")
+                        ?: return@withContext EasResult.Error("NTLM handshake failed")
+                    deleteResponse = deps.executeNtlmRequest(ewsUrl, deleteRequest, authHeader, "DeleteItem")
+                        ?: return@withContext EasResult.Error("Ошибка выполнения EWS запроса")
+                }
+                val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(deleteResponse)?.groupValues?.get(1)
+                when (responseCode) {
+                    "NoError", "ErrorItemNotFound" -> EasResult.Success(true)
+                    else -> EasResult.Error("EWS DeleteItem: $responseCode")
+                }
+            } catch (e: Exception) {
+                EasResult.Error("Ошибка отклонения встречи: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * EAS MeetingResponse — отклонение встречи через ActiveSync (Exchange 2010+).
+     * MS-ASCMD §2.2.1.10: UserResponse=3 → Decline
+     * Предотвращает воскрешение CRA аналогично DeclineItem в EWS.
+     */
+    private suspend fun meetingResponseEas(
+        serverId: String,
+        calendarFolderId: String,
+        userResponse: Int = 3
+    ): EasResult<Boolean> {
+        val meetingResponseXml = """<?xml version="1.0" encoding="UTF-8"?>
+<MeetingResponse xmlns="MeetingResponse">
+    <Request>
+        <UserResponse>$userResponse</UserResponse>
+        <CollectionId>$calendarFolderId</CollectionId>
+        <RequestId>$serverId</RequestId>
+    </Request>
+</MeetingResponse>""".trimIndent()
+        
+        return try {
+            // Best-effort: результат не блокирует последующий Delete
+            deps.executeEasCommand("MeetingResponse", meetingResponseXml) { true }
+        } catch (_: Exception) {
+            EasResult.Success(true)
         }
     }
     

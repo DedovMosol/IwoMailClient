@@ -131,7 +131,16 @@ fun ContactsScreen(
     
     // Множественный выбор
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
-    var selectedContactIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+    // Используем ArrayList<String> saver: Set<String> не всегда надёжно сохраняется в Bundle
+    var selectedContactIds by rememberSaveable(
+        stateSaver = androidx.compose.runtime.saveable.Saver(
+            save = { ArrayList(it) },
+            restore = { it.toSet() }
+        )
+    ) { mutableStateOf(setOf<String>()) }
+    // Флаг для пропуска первого срабатывания LaunchedEffect(selectedTab) при повороте экрана.
+    // remember (не rememberSaveable) — пересоздаётся при rotation, что нам и нужно.
+    var skipFirstTabEffect by remember { mutableStateOf(true) }
     
     // Email текущего аккаунта для фильтрации себя
     val ownEmail = activeAccount?.email?.lowercase() ?: ""
@@ -1019,8 +1028,15 @@ fun ContactsScreen(
         allContacts.filter { it.id in selectedContactIds }
     }
     
-    // Выход из режима выбора при смене вкладки
+    // Выход из режима выбора при смене вкладки.
+    // skipFirstTabEffect предотвращает сброс выделения при повороте экрана:
+    // LaunchedEffect запускается при каждом входе в composable, но первый запуск — это rotation,
+    // а не настоящая смена вкладки пользователем.
     LaunchedEffect(selectedTab) {
+        if (skipFirstTabEffect) {
+            skipFirstTabEffect = false
+            return@LaunchedEffect
+        }
         if (isSelectionMode) {
             isSelectionMode = false
             selectedContactIds = emptySet()

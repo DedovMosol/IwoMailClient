@@ -1,5 +1,7 @@
 package com.dedovmosol.iwomail.eas
 
+import android.util.Base64
+
 /**
  * Централизованные XML-шаблоны для EAS и EWS запросов
  * Выделено из EasClient.kt для соблюдения принципа DRY
@@ -502,4 +504,73 @@ $SOAP_ENVELOPE_END"""
     $movesXml
 </MoveItems>""".trimIndent()
     }
+}
+
+/**
+ * Добавляет стандартные MIME-заголовки письма (RFC 2822 / MS-OXCMAIL) в StringBuilder.
+ * DRY: единое место для buildMimeMessageBytes (без вложений) и buildMimeWithAttachments (с вложениями).
+ *
+ * @param date                   RFC 2822 дата ("EEE, dd MMM yyyy HH:mm:ss Z")
+ * @param fromEmail              Email отправителя
+ * @param to                     Email(и) получателей
+ * @param cc                     Email(и) копии (пусто если нет)
+ * @param bcc                    Email(и) скрытой копии (пусто если нет)
+ * @param messageId              Message-ID в формате "<timestamp@deviceId>"
+ * @param subject                Тема письма (кодируется в UTF-8 Base64)
+ * @param importance             Приоритет: 0=низкий, 1=обычный, 2=высокий
+ * @param requestReadReceipt     Запросить отчёт о прочтении (MDN)
+ * @param requestDeliveryReceipt Запросить отчёт о доставке (DSN)
+ */
+internal fun StringBuilder.appendMimeHeaders(
+    date: String,
+    fromEmail: String,
+    to: String,
+    cc: String,
+    bcc: String,
+    messageId: String,
+    subject: String,
+    importance: Int,
+    requestReadReceipt: Boolean,
+    requestDeliveryReceipt: Boolean
+) {
+    append("Date: $date\r\n")
+    append("From: $fromEmail\r\n")
+    append("To: $to\r\n")
+    if (cc.isNotEmpty()) append("Cc: $cc\r\n")
+    if (bcc.isNotEmpty()) append("Bcc: $bcc\r\n")
+    append("Message-ID: $messageId\r\n")
+    val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(
+        subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
+    )}?="
+    append("Subject: $encodedSubject\r\n")
+    // Приоритет — RFC 2156 / MS-OXCMAIL (importance: 0=low, 1=normal, 2=high)
+    when (importance) {
+        0 -> {
+            append("X-Priority: 5\r\n")
+            append("Importance: Low\r\n")
+            append("X-MSMail-Priority: Low\r\n")
+        }
+        2 -> {
+            append("X-Priority: 1\r\n")
+            append("Importance: High\r\n")
+            append("X-MSMail-Priority: High\r\n")
+        }
+        else -> {
+            append("X-Priority: 3\r\n")
+            append("Importance: Normal\r\n")
+            append("X-MSMail-Priority: Normal\r\n")
+        }
+    }
+    // Запрос отчёта о прочтении (MDN) — RFC 2298
+    if (requestReadReceipt) {
+        append("Disposition-Notification-To: $fromEmail\r\n")
+        append("X-Confirm-Reading-To: $fromEmail\r\n")
+    }
+    // Запрос отчёта о доставке — MS-OXCMAIL 2.2.3.1.8:
+    // Return-Receipt-To устанавливает PidTagOriginatorDeliveryReportRequested=TRUE.
+    // Exchange читает этот заголовок и генерирует DSN; значение заголовка игнорируется.
+    if (requestDeliveryReceipt) {
+        append("Return-Receipt-To: $fromEmail\r\n")
+    }
+    append("MIME-Version: 1.0\r\n")
 }

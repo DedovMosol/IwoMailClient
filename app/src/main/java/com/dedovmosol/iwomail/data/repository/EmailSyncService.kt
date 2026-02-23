@@ -644,7 +644,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      * Синхронизация писем через EAS
      */
     suspend fun syncEmailsEas(accountId: Long, folderId: String, skipRecentEditCheck: Boolean = false, retryCount: Int = 0): EasResult<Int> {
-        android.util.Log.d("SYNC_DIAG", "syncEmailsEas START folder=$folderId retry=$retryCount")
         if (retryCount > 1) {
             return EasResult.Error("Ошибка синхронизации: слишком много попыток")
         }
@@ -652,7 +651,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         initFromPrefs(context)
         
         if (retryCount == 0 && activeSyncs.putIfAbsent(folderId, true) != null) {
-            android.util.Log.w("SYNC_DIAG", "BLOCKED by activeSyncs lock folder=$folderId")
             return EasResult.Error("Синхронизация уже выполняется")
         }
         
@@ -760,7 +758,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 
                 when (val result = client.sync(folder.serverId, syncKey, windowSize, includeMime)) {
                     is EasResult.Success -> {
-                        android.util.Log.d("SYNC_DIAG", "Sync batch #$iterations: status=${result.data.status} emails=${result.data.emails.size} deleted=${result.data.deletedIds.size} changed=${result.data.changedEmails.size} more=${result.data.moreAvailable} newKey=${result.data.syncKey.take(10)}")
                         consecutiveErrors = 0
                         
                         if (result.data.status == 3 || result.data.status == 12) {
@@ -876,7 +873,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val totalCount = emailDao.getCountByFolder(folderId)
             val unreadCount = emailDao.getUnreadCount(folderId)
             folderDao.updateCounts(folderId, unreadCount, totalCount)
-            android.util.Log.d("SYNC_DIAG", "syncEmailsEas END folder=$folderId newEmails=$newEmailsCount syncLoopFull=$syncLoopCompletedFully iterations=$iterations")
             return EasResult.Success(newEmailsCount)
         } finally {
             activeSyncs.remove(folderId)
@@ -911,7 +907,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             emptyMap()
         }
         
-        android.util.Log.d("SYNC_DIAG", "processNewEmailsBatch: serverEmails=${syncData.emails.size} existingIds=${existingIds.size}")
         val emailEntities = syncData.emails.mapNotNull { email ->
             val emailId = "${accountId}_${email.serverId}"
             val existingEmail = existingEmailsMap[emailId]
@@ -919,8 +914,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             // Если сервер не вернул DateReceived (parsedDate=0), сохраняем существующую дату.
             // Если и существующей нет — это ghost-запись (Exchange 2007 SP1 может отдавать
             // служебные записи без даты). Пропускаем такие, если нет ни даты, ни отправителя.
+            // КРИТИЧНО: не доверяем existingEmail.dateReceived <= 1L — это fallback
+            // от предыдущего неудачного парсинга (epoch). Даём шанс перепарсить.
             val effectiveDate = if (parsedDate > 0L) parsedDate
-                else existingEmail?.dateReceived?.takeIf { it > 0L }
+                else existingEmail?.dateReceived?.takeIf { it > 1L }
                 ?: 0L
             // Фильтруем ghost-записи: нет реальной даты и нет отправителя
             if (effectiveDate <= 0L && email.from.isBlank()) return@mapNotNull null
@@ -1148,7 +1145,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             finalFiltered
         }
         var insertedCount = 0
-        android.util.Log.d("SYNC_DIAG", "processNewEmailsBatch FILTERS: entities=${emailEntities.size} new=${newEmails.size} byServerId=${filteredByServerId.size} byContent=${filteredByContent.size} byDelete=${filteredByRecentDelete.size} final=${finalFiltered.size} toInsert=${toInsert.size}")
         if (toInsert.isNotEmpty()) {
             emailDao.insertAllIgnore(toInsert)
             insertedCount += toInsert.size
@@ -1577,13 +1573,18 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     }
     
     return try {
-        val cleaned = dateStr.replace("Z", "+0000")
+        // Нормализуем timezone: Z → +0000, +04:00 → +0400
+        var cleaned = dateStr.replace("Z", "+0000")
+        // Убираем двоеточие в timezone offset: +04:00 → +0400, -05:30 → -0530
+        cleaned = cleaned.replace(Regex("([+-])(\\d{2}):(\\d{2})$"), "$1$2$3")
         
         val formats = listOf(
             "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
             "yyyy-MM-dd'T'HH:mm:ssZ",
             "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd HH:mm:ss"
+            "yyyy-MM-dd HH:mm:ss",
+            "EEE, dd MMM yyyy HH:mm:ss Z",
+            "dd MMM yyyy HH:mm:ss Z"
         )
         
         for (format in formats) {

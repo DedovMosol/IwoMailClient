@@ -2587,7 +2587,7 @@ private fun FolderCardDisplay(
                 ) {
                     Text(
                         text = name,
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,

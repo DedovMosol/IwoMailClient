@@ -104,6 +104,14 @@ class UpdateChecker(private val context: Context) {
         .readTimeout(90, TimeUnit.SECONDS)
         .build()
     
+    // Клиент для скачивания APK — без callTimeout (файл может быть большим)
+    private val downloadClient = client.newBuilder()
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.SECONDS) // без ограничения на весь вызов
+        .build()
+    
     /**
      * Определяет архитектуру устройства
      */
@@ -305,80 +313,126 @@ class UpdateChecker(private val context: Context) {
     }
     
     /**
-     * Скачивает APK с прогрессом
+     * Скачивает APK с прогрессом.
+     * Использует downloadClient с увеличенными таймаутами и без callTimeout.
+     * При ошибке делает одну повторную попытку.
      */
     fun downloadUpdate(apkUrl: String): Flow<DownloadProgress> = kotlinx.coroutines.flow.channelFlow {
         send(DownloadProgress.Starting)
         
-        try {
-            val request = Request.Builder()
-                .url(apkUrl)
-                .build()
-            
-            val response = withContext(Dispatchers.IO) {
-                client.newCall(request).execute()
+        var lastError: String? = null
+        
+        for (attempt in 0 until MAX_RETRY_ATTEMPTS) {
+            if (attempt > 0) {
+                android.util.Log.w("UpdateChecker", "Download retry attempt ${attempt + 1}, previous error: $lastError")
+                kotlinx.coroutines.delay(2000L * attempt)
+                send(DownloadProgress.Starting)
             }
             
-            if (!response.isSuccessful) {
-                send(DownloadProgress.Error("HTTP ${response.code}"))
-                return@channelFlow
-            }
-            
-            val body = response.body ?: run {
-                send(DownloadProgress.Error("Empty response"))
-                return@channelFlow
-            }
-            
-            val contentLength = body.contentLength()
-            val totalMb = if (contentLength > 0) contentLength / (1024f * 1024f) else 0f
-            
-            // Создаём директорию для обновлений
-            val updatesDir = File(context.filesDir, UPDATES_DIR)
-            if (!updatesDir.exists()) {
-                updatesDir.mkdirs()
-            }
-            
-            // Удаляем старый APK если есть
-            val apkFile = File(updatesDir, APK_FILENAME)
-            if (apkFile.exists()) {
-                apkFile.delete()
-            }
-            
-            // Скачиваем с прогрессом
-            withContext(Dispatchers.IO) {
-                body.byteStream().use { input ->
-                    apkFile.outputStream().use { output ->
-                        val buffer = ByteArray(8192)
-                        var bytesRead: Int
-                        var totalBytesRead = 0L
-                        var lastProgress = -1
-                        
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            totalBytesRead += bytesRead
-                            
-                            val progress = if (contentLength > 0) {
-                                ((totalBytesRead * 100) / contentLength).toInt()
-                            } else {
-                                -1
-                            }
-                            
-                            // Эмитим прогресс каждые 2%
-                            if (progress != lastProgress && (progress % 2 == 0 || progress == 100)) {
-                                lastProgress = progress
-                                val downloadedMb = totalBytesRead / (1024f * 1024f)
-                                trySend(DownloadProgress.Downloading(progress, downloadedMb, totalMb))
+            try {
+                val request = Request.Builder()
+                    .url(apkUrl)
+                    .build()
+                
+                val response = withContext(Dispatchers.IO) {
+                    downloadClient.newCall(request).execute()
+                }
+                
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    response.close()
+                    android.util.Log.w("UpdateChecker", "Download failed: HTTP $code, url=$apkUrl")
+                    // 404 = файл не существует на сервере, retry бессмысленен
+                    if (code == 404) {
+                        send(DownloadProgress.Error("HTTP 404: file not found"))
+                        return@channelFlow
+                    }
+                    lastError = "HTTP $code"
+                    continue
+                }
+                
+                val body = response.body
+                if (body == null) {
+                    response.close()
+                    lastError = "Empty response"
+                    continue
+                }
+                
+                val contentLength = body.contentLength()
+                val totalMb = if (contentLength > 0) contentLength / (1024f * 1024f) else 0f
+                
+                // Создаём директорию для обновлений
+                val updatesDir = File(context.filesDir, UPDATES_DIR)
+                if (!updatesDir.exists()) {
+                    updatesDir.mkdirs()
+                }
+                
+                // Удаляем старый APK если есть
+                val apkFile = File(updatesDir, APK_FILENAME)
+                if (apkFile.exists()) {
+                    apkFile.delete()
+                }
+                
+                // Скачиваем с прогрессом
+                var totalBytesRead = 0L
+                withContext(Dispatchers.IO) {
+                    response.use {
+                        body.byteStream().use { input ->
+                            apkFile.outputStream().use { output ->
+                                val buffer = ByteArray(8192)
+                                var bytesRead: Int
+                                var lastProgress = -1
+                                
+                                while (input.read(buffer).also { bytesRead = it } != -1) {
+                                    output.write(buffer, 0, bytesRead)
+                                    totalBytesRead += bytesRead
+                                    
+                                    val progress = if (contentLength > 0) {
+                                        ((totalBytesRead * 100) / contentLength).toInt()
+                                    } else {
+                                        -1
+                                    }
+                                    
+                                    // Эмитим прогресс каждые 2%
+                                    if (progress != lastProgress && (progress % 2 == 0 || progress == 100)) {
+                                        lastProgress = progress
+                                        val downloadedMb = totalBytesRead / (1024f * 1024f)
+                                        trySend(DownloadProgress.Downloading(progress, downloadedMb, totalMb))
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                
+                // Проверяем что файл скачан полностью
+                if (contentLength > 0 && totalBytesRead != contentLength) {
+                    lastError = "Incomplete download: $totalBytesRead/$contentLength bytes"
+                    android.util.Log.w("UpdateChecker", lastError!!)
+                    apkFile.delete()
+                    continue
+                }
+                
+                // Проверяем что файл не пустой
+                if (!apkFile.exists() || apkFile.length() == 0L) {
+                    lastError = "Downloaded file is empty"
+                    android.util.Log.w("UpdateChecker", lastError!!)
+                    continue
+                }
+                
+                send(DownloadProgress.Completed(apkFile))
+                return@channelFlow
+                
+            } catch (e: Exception) {
+                lastError = "${e.javaClass.simpleName}: ${e.message}"
+                android.util.Log.w("UpdateChecker", "Download attempt ${attempt + 1} failed: $lastError")
+                // Удаляем частично скачанный файл
+                val apkFile = File(File(context.filesDir, UPDATES_DIR), APK_FILENAME)
+                if (apkFile.exists()) apkFile.delete()
             }
-            
-            send(DownloadProgress.Completed(apkFile))
-            
-        } catch (e: Exception) {
-            send(DownloadProgress.Error(e.message ?: "Download failed"))
         }
+        
+        send(DownloadProgress.Error(lastError ?: "Download failed"))
     }
     
     /**

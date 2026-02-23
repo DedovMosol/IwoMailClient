@@ -863,26 +863,32 @@ class EasClient(
             val results = mutableMapOf<String, String>()
             var failedCount = 0
             var lastErrorStatus = 0
+            var lockedCount = 0
             MOVE_RESPONSE_REGEX.findAll(responseXml).forEach { match ->
                 val responseContent = match.groupValues[1]
                 val srcMsgId = extractValue(responseContent, "SrcMsgId") ?: ""
                 val status = extractValue(responseContent, "Status")?.toIntOrNull() ?: 0
                 val dstMsgId = extractValue(responseContent, "DstMsgId") ?: ""
                 
-                // EAS MoveItems status codes (MS-ASCMD §2.2.3.177.9):
-                // 1 = Invalid source collection (неверная исходная папка / устаревший serverId)
-                // 2 = Invalid destination collection
-                // 3 = Success
-                // 4 = Source and destination are the same
-                // 5 = Internal server error (может быть у Exchange 2007 SP1 при нагрузке)
-                // 6 = Already exists in destination
-                // 7 = Locked — сервер заблокировал элемент
+                // MS-ASCMD §2.2.3.177.10 — MoveItems status codes:
+                // 1 = Invalid source collection ID or item ID (устаревший serverId / уже перемещён)
+                // 2 = Invalid destination collection ID
+                // 3 = Success (DstMsgId содержит новый ID)
+                // 4 = Source and destination are the same (DstMsgId НЕ возвращается)
+                // 5 = Item cannot be moved / multiple DstFldId / source locked
+                // 7 = Source or destination locked (transient — рекомендуется retry)
                 when (status) {
-                    3, 4, 6 -> {
-                        // Success cases: moved, same folder, or already exists
+                    3 -> {
                         if (dstMsgId.isNotEmpty()) {
                             results[srcMsgId] = dstMsgId
                         }
+                    }
+                    7 -> {
+                        // Transient lock — считаем как failed, retry на уровне выше
+                        lockedCount++
+                        failedCount++
+                        lastErrorStatus = status
+                        android.util.Log.w("EasClient", "MoveItems locked (transient) for $srcMsgId: status=$status")
                     }
                     else -> {
                         failedCount++
@@ -892,12 +898,11 @@ class EasClient(
                 }
             }
             
-            // КРИТИЧНО: Если ВСЕ элементы отклонены — бросаем исключение.
-            // Ранее возвращали пустой map (Success), вызывающий код видел 0 перемещённых
-            // и показывал "Ничего не удалено" без объяснения.
-            // Статус 1 (Invalid source) означает устаревшие serverId — нужен ресинк.
+            // Если ВСЕ элементы отклонены — бросаем исключение.
+            // Статус 1 (Invalid source) → устаревшие serverId → нужен ресинк.
+            // Статус 7 (Locked) → transient → retry на уровне выше.
             if (results.isEmpty() && failedCount > 0) {
-                throw Exception("MOVEITEMS_ALL_FAILED:status=$lastErrorStatus,failed=$failedCount")
+                throw Exception("MOVEITEMS_ALL_FAILED:status=$lastErrorStatus,failed=$failedCount,locked=$lockedCount")
             }
             
             results
@@ -1585,6 +1590,7 @@ $foldersXml
                 }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             // Добавляем информацию о сертификате для отладки SSL ошибок
             val certInfo = if (certificatePath != null) " [cert: $certificatePath]" else ""
             EasResult.Error("Ошибка: ${e.javaClass.simpleName}: ${e.message}$certInfo")
@@ -1920,9 +1926,15 @@ $SOAP_ENVELOPE_END"""
     /**
      * Удаление события календаря на сервере Exchange
      * Делегирует в CalendarService
+     * @param isMeeting true если это встреча с участниками (meeting)
+     * @param isOrganizer true если текущий пользователь — организатор встречи
      */
-    suspend fun deleteCalendarEvent(serverId: String): EasResult<Boolean> = 
-        calendarService.deleteCalendarEvent(serverId)
+    suspend fun deleteCalendarEvent(
+        serverId: String,
+        isMeeting: Boolean = false,
+        isOrganizer: Boolean = false
+    ): EasResult<Boolean> = 
+        calendarService.deleteCalendarEvent(serverId, isMeeting, isOrganizer)
     
     /**
      * Обновление события календаря на сервере Exchange

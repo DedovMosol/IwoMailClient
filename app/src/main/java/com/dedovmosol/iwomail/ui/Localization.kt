@@ -1111,7 +1111,7 @@ object OnboardingStrings {
     fun chooseLanguageTitle(isRussian: Boolean): String = if (isRussian) "Выберите язык" else "Choose language"
     fun animationsTitle(isRussian: Boolean): String = if (isRussian) "Анимации интерфейса" else "Interface animations"
     fun animationsDescription(isRussian: Boolean): String = if (isRussian)
-        "Включите анимации для плавного интерфейса или отключите для экономии заряда"
+        "Включите анимации для плавного интерфейса или отключите их для экономии заряда аккумулятора"
     else
         "Enable animations for a smooth interface or disable to save battery"
     fun animationsLabel(isRussian: Boolean): String = if (isRussian) "Анимации" else "Animations"
@@ -1143,9 +1143,9 @@ object OnboardingStrings {
     
     fun contactsTitle(isRussian: Boolean): String = if (isRussian) "Контакты" else "Contacts"
     fun contactsDescription(isRussian: Boolean): String = if (isRussian)
-        "Личные и корпоративные (GAL)"
+        "Личные и корпоративные (GAL), локальные группы контактов"
     else
-        "Personal and corporate (GAL)"
+        "Personal and corporate (GAL), contact groups"
     fun calendarTitle(isRussian: Boolean): String = if (isRussian) "Календарь" else "Calendar"
     fun calendarDescription(isRussian: Boolean): String = if (isRussian)
         "События, напоминания, приглашения"
@@ -1300,6 +1300,7 @@ object NotificationStrings {
             errorCode == "SYNC_NOT_READY" -> if (isRussian) "Дождитесь завершения синхронизации папки" else "Wait for folder sync to complete"
             errorCode == "DELETE_FAILED" -> if (isRussian) "Не удалось удалить. Попробуйте синхронизировать и повторить." else "Deletion failed. Try syncing and retry."
             errorCode.startsWith("Delete error:") -> if (isRussian) "Ошибка удаления: ${errorCode.removePrefix("Delete error: ")}" else errorCode
+            errorCode.contains("MOVEITEMS_ALL_FAILED") -> if (isRussian) "Не удалось переместить. Обновите папку и повторите." else "Move failed. Refresh folder and retry."
             // Ошибки удаления
             errorCode.contains("Неверный SyncKey") -> if (isRussian) "Неверный SyncKey. Попробуйте синхронизировать папку." else "Invalid SyncKey. Try syncing the folder."
             errorCode.contains("Письмо не найдено на сервере") -> if (isRussian) "Письмо не найдено на сервере" else "Email not found on server"

@@ -443,7 +443,7 @@ object HttpClientProvider {
                     if (chain.isNotEmpty()) {
                         val serverCert = chain[0]
                         if (serverCert.publicKey == certificate.publicKey) {
-                            try { serverCert.checkValidity() } catch (_: Exception) {}
+                            serverCert.checkValidity()
                             return
                         }
                         try {

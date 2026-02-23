@@ -340,10 +340,31 @@ fun ContactPickerDialog(
                     }
                 } else {
                     val pickerListState = rememberLazyListState()
+                    // Drag selection: long-press + drag выделяет диапазон контактов
+                    val contactKeys = remember(filteredContacts) { filteredContacts.map { it.id } }
+                    val contactIdToEmail = remember(filteredContacts) {
+                        filteredContacts.associate { it.id to it.email }
+                    }
+                    val filteredEmailSet = remember(filteredContacts) {
+                        filteredContacts.map { it.email }.toSet()
+                    }
+                    val selectedIdsForDrag = remember(selectedEmails, filteredContacts) {
+                        filteredContacts.filter { it.email in selectedEmails }.map { it.id }.toSet()
+                    }
+                    val dragSelectModifier = rememberDragSelectModifier(
+                        listState = pickerListState,
+                        itemKeys = contactKeys,
+                        selectedIds = selectedIdsForDrag,
+                        onSelectionChange = { newIds ->
+                            val newEmails = newIds.mapNotNull { contactIdToEmail[it] }.toSet()
+                            val otherEmails = selectedEmails.filter { it !in filteredEmailSet }.toSet()
+                            selectedEmails = otherEmails + newEmails
+                        }
+                    )
                     Box(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(
                             state = pickerListState,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = dragSelectModifier.fillMaxSize(),
                             contentPadding = PaddingValues(vertical = 8.dp)
                         ) {
                             items(filteredContacts, key = { it.id }) { contact ->

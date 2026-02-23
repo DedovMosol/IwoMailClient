@@ -444,7 +444,17 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Error -> return@withContext r
                 }
                 
-                val result = easClient.deleteCalendarEvent(event.serverId)
+                // КРИТИЧНО: Для meetings определяем роль пользователя.
+                // Без этого CRA (Calendar Repair Assistant) воскрешает удалённые встречи.
+                val account = accountRepo.getAccount(event.accountId)
+                val currentEmail = account?.email?.lowercase() ?: ""
+                val isOrganizer = event.organizer.lowercase() == currentEmail
+                
+                val result = easClient.deleteCalendarEvent(
+                    serverId = event.serverId,
+                    isMeeting = event.isMeeting,
+                    isOrganizer = isOrganizer
+                )
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -457,7 +467,6 @@ class CalendarRepository(private val context: Context) {
                         // Защита НЕ имеет TTL — запись удалится только когда syncCalendar()
                         // подтвердит, что сервер больше не возвращает это событие.
                         markAsDeleted(event.serverId, context)
-                        android.util.Log.d("CalendarRepository", "Event soft-deleted and marked: serverId=${event.serverId}")
                         
                         EasResult.Success(true)
                     }
@@ -499,26 +508,23 @@ class CalendarRepository(private val context: Context) {
                 
                 for ((accountId, accountEvents) in eventsByAccount) {
                     val account = accountRepo.getAccount(accountId)
-                    if (account == null) {
-                        android.util.Log.w("CalendarRepository", "Account not found: $accountId, skipping ${accountEvents.size} events")
-                        continue
-                    }
+                    if (account == null) continue
                     
-                    if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                        android.util.Log.w("CalendarRepository", "Account is not Exchange: $accountId, skipping ${accountEvents.size} events")
-                        continue
-                    }
+                    if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) continue
                     
-                    val easClient = accountRepo.createEasClient(accountId)
-                    if (easClient == null) {
-                        android.util.Log.w("CalendarRepository", "Failed to create EAS client for account: $accountId")
-                        continue
-                    }
+                    val easClient = accountRepo.createEasClient(accountId) ?: continue
+                    
+                    val currentEmail = account.email?.lowercase() ?: ""
                     
                     // Удаляем события по одному
                     for (event in accountEvents) {
                         try {
-                            val result = easClient.deleteCalendarEvent(event.serverId)
+                            val isOrganizer = event.organizer.lowercase() == currentEmail
+                            val result = easClient.deleteCalendarEvent(
+                                serverId = event.serverId,
+                                isMeeting = event.isMeeting,
+                                isOrganizer = isOrganizer
+                            )
                             
                             when (result) {
                                 is EasResult.Success -> {
@@ -532,18 +538,15 @@ class CalendarRepository(private val context: Context) {
                                     
                                     totalDeleted++
                                     onProgress(totalDeleted, totalCount)
-                                    android.util.Log.d("CalendarRepository", "Deleted event: ${event.subject} ($totalDeleted/$totalCount)")
                                 }
-                                is EasResult.Error -> {
-                                    android.util.Log.w("CalendarRepository", "Failed to delete event ${event.subject}: ${result.message}")
-                                }
+                                is EasResult.Error -> { }
                             }
                             
                             // Небольшая задержка между удалениями
                             kotlinx.coroutines.delay(100)
                             
                         } catch (e: Exception) {
-                            android.util.Log.e("CalendarRepository", "Error deleting event ${event.subject}: ${e.message}")
+                            if (e is kotlinx.coroutines.CancellationException) throw e
                         }
                     }
                     
@@ -554,7 +557,7 @@ class CalendarRepository(private val context: Context) {
                 EasResult.Success(totalDeleted)
                 
             } catch (e: Exception) {
-                android.util.Log.e("CalendarRepository", "Error in deleteEventsWithProgress: ${e.message}")
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.EVENT_DELETE_ERROR)
             }
         }

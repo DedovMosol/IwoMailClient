@@ -227,40 +227,36 @@ fun EmailListScreen(
     }
 
     // Применяем фильтры
+    // PERF: вычисляем cutoff-дату ОДИН раз, а не на каждое письмо
     val filteredEmails = remember(displayEmails, mailFilter, dateFilter, isTodayAll) {
+        val dateCutoff: Long = if (isTodayAll) 0L else when (dateFilter) {
+            EmailDateFilter.ALL -> 0L
+            EmailDateFilter.TODAY -> {
+                val cal = java.util.Calendar.getInstance()
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                cal.set(java.util.Calendar.MINUTE, 0)
+                cal.set(java.util.Calendar.SECOND, 0)
+                cal.set(java.util.Calendar.MILLISECOND, 0)
+                cal.timeInMillis
+            }
+            else -> dateFilter.days?.let { days ->
+                System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
+            } ?: 0L
+        }
+        val needsDateFilter = dateCutoff > 0L
+        val needsMailFilter = mailFilter != MailFilter.ALL
+        
         displayEmails
-            .distinctBy { it.id } // Защита от дубликатов
+            .distinctBy { it.id }
             .filter { email ->
-                val matchesMail = when (mailFilter) {
+                val matchesMail = if (!needsMailFilter) true else when (mailFilter) {
                     MailFilter.ALL -> true
                     MailFilter.UNREAD -> !email.read
                     MailFilter.STARRED -> email.flagged
                     MailFilter.WITH_ATTACHMENTS -> email.hasAttachments
                     MailFilter.IMPORTANT -> email.importance == 2
                 }
-                
-                // Для TODAY_ALL дата уже отфильтрована SQL-запросом — пропускаем.
-                // Иначе пользователь мог бы выбрать "Неделя/Месяц" в UI,
-                // но SQL всё равно вернул бы только сегодняшние, что вводило бы в заблуждение.
-                val matchesDate = if (isTodayAll) true else when (dateFilter) {
-                    EmailDateFilter.ALL -> true
-                    EmailDateFilter.TODAY -> {
-                        // От полуночи сегодня (не скользящие 24 часа)
-                        val cal = java.util.Calendar.getInstance()
-                        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                        cal.set(java.util.Calendar.MINUTE, 0)
-                        cal.set(java.util.Calendar.SECOND, 0)
-                        cal.set(java.util.Calendar.MILLISECOND, 0)
-                        email.dateReceived >= cal.timeInMillis
-                    }
-                    else -> {
-                        dateFilter.days?.let { days ->
-                            val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
-                            email.dateReceived >= cutoff
-                        } ?: true
-                    }
-                }
-                
+                val matchesDate = !needsDateFilter || email.dateReceived >= dateCutoff
                 matchesMail && matchesDate
             }.sortedByDescending { it.dateReceived }
     }
@@ -1367,7 +1363,9 @@ private fun EmailListContent(
     var imagePreviewCache by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
     
     // Загружаем превью для писем с вложениями
-    LaunchedEffect(emails) {
+    // PERF: emails.size как ключ — Room эмитит новый list на каждое DB-изменение,
+    // но превью нужно загружать только при появлении новых писем.
+    LaunchedEffect(emails.size) {
         val emailsWithAttachments = emails.filter { it.hasAttachments && it.id !in imagePreviewCache }
         if (emailsWithAttachments.isNotEmpty()) {
             withContext(Dispatchers.IO) {

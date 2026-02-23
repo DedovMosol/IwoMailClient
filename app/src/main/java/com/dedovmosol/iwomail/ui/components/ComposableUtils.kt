@@ -88,10 +88,11 @@ fun <T> rememberDebouncedState(
  */
 enum class ScrollbarColor(val code: String, val color: Color, val displayNameRu: String, val displayNameEn: String) {
     BLUE("blue", Color(0xFF1976D2), "Синий", "Blue"),
-    PURPLE("purple", Color(0xFF7B1FA2), "Фиолетовый", "Purple"),
+    PURPLE("purple", Color(0xFF6200EE), "Фиолетовый", "Purple"),
     RED("red", Color(0xFFD32F2F), "Красный", "Red"),
     GREEN("green", Color(0xFF388E3C), "Зелёный", "Green"),
-    ORANGE("orange", Color(0xFFC77700), "Оранжевый", "Orange"),
+    YELLOW("yellow", Color(0xFFC77700), "Жёлтый", "Yellow"),
+    ORANGE("orange", Color(0xFFE65100), "Оранжевый", "Orange"),
     PINK("pink", Color(0xFFC2185B), "Розовый", "Pink"),
     GRAY("gray", Color(0xFF616161), "Серый", "Gray");
 

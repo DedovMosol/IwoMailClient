@@ -31,9 +31,16 @@ import java.util.*
  */
 class MailWidget : GlanceAppWidget() {
 
-    // Exact — LocalSize.current возвращает реальный размер виджета,
-    // позволяя корректно масштабировать шрифты при растягивании
-    override val sizeMode = SizeMode.Exact
+    // Responsive — 3 фиксированных размера вместо SizeMode.Exact.
+    // SizeMode.Exact использует RemoteViews(Map<SizeF,RemoteViews>) на API 31+,
+    // что вызывает краш лаунчера на HyperOS 2.0 (баг в обработке size-map).
+    override val sizeMode = SizeMode.Responsive(
+        setOf(
+            DpSize(180.dp, 140.dp),
+            DpSize(180.dp, 210.dp),
+            DpSize(320.dp, 280.dp),
+        )
+    )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         try {
@@ -46,7 +53,7 @@ class MailWidget : GlanceAppWidget() {
             }
         }
     }
-    
+
     private suspend fun loadWidgetData(context: Context): WidgetData {
         return try {
             val db = MailDatabase.getInstance(context)
@@ -188,12 +195,14 @@ private val accentBlue = Color(0xFF448AFF)
 
 @Composable
 private fun MailWidgetContent(data: WidgetData, context: Context) {
-    // Внешний Box — скруглённые углы, фон-градиент
+    // Внешний Box — скруглённые углы, сплошной фон темы.
+    // ImageProvider как background создаёт FrameLayout+ImageView в RemoteViews,
+    // что крашит лаунчер HyperOS 2.0. ColorProvider = простой setBackgroundColor().
     Box(
         modifier = GlanceModifier
             .fillMaxSize()
             .cornerRadius(24.dp)
-            .background(ImageProvider(data.gradientRes))
+            .background(ColorProvider(Color(data.themeColor)))
     ) {
         if (!data.hasAccount) {
             NoAccountView(context)

@@ -146,44 +146,18 @@ class EasAttachmentService internal constructor(
         val boundary = "----=_Part_${System.currentTimeMillis()}_${System.nanoTime()}"
         
         val sb = StringBuilder()
-        sb.append("Date: $date\r\n")
-        sb.append("From: $fromEmail\r\n")
-        sb.append("To: $to\r\n")
-        if (cc.isNotEmpty()) {
-            sb.append("Cc: $cc\r\n")
-        }
-        if (bcc.isNotEmpty()) {
-            sb.append("Bcc: $bcc\r\n")
-        }
-        sb.append("Message-ID: $messageId\r\n")
-        val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
-        sb.append("Subject: $encodedSubject\r\n")
-        
-        // Приоритет письма (importance: 0=low, 1=normal, 2=high)
-        if (importance == 2) {
-            sb.append("X-Priority: 1\r\n")
-            sb.append("Importance: high\r\n")
-            sb.append("X-MSMail-Priority: High\r\n")
-        } else if (importance == 0) {
-            sb.append("X-Priority: 5\r\n")
-            sb.append("Importance: low\r\n")
-            sb.append("X-MSMail-Priority: Low\r\n")
-        }
-        
-        // Запрос отчёта о прочтении (MDN)
-        if (requestReadReceipt) {
-            sb.append("Disposition-Notification-To: $fromEmail\r\n")
-            sb.append("Return-Receipt-To: $fromEmail\r\n")
-            sb.append("X-Confirm-Reading-To: $fromEmail\r\n")
-        }
-        
-        // Запрос отчёта о доставке (DSN)
-        if (requestDeliveryReceipt) {
-            sb.append("X-MS-Exchange-Organization-DeliveryReportRequested: true\r\n")
-            sb.append("Return-Path: $fromEmail\r\n")
-        }
-        
-        sb.append("MIME-Version: 1.0\r\n")
+        sb.appendMimeHeaders(
+            date = date,
+            fromEmail = fromEmail,
+            to = to,
+            cc = cc,
+            bcc = bcc,
+            messageId = messageId,
+            subject = subject,
+            importance = importance,
+            requestReadReceipt = requestReadReceipt,
+            requestDeliveryReceipt = requestDeliveryReceipt
+        )
         sb.append("Content-Type: multipart/mixed; boundary=\"$boundary\"\r\n")
         sb.append("\r\n")
         

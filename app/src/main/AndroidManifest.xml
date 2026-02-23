@@ -192,13 +192,6 @@
             </intent-filter>
         </receiver>
         
-        <!-- Конфигурация виджета (проверка наличия аккаунта) -->
-        <activity
-            android:name=".widget.WidgetConfigActivity"
-            android:exported="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-            android:excludeFromRecents="true" />
-        
         <!-- Виджет почты -->
         <receiver
             android:name=".widget.MailWidgetReceiver"
