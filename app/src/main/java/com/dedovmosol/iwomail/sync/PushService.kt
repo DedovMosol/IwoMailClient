@@ -705,40 +705,47 @@ class PushService : Service() {
     }
     
     private suspend fun doPing(account: AccountEntity, heartbeat: Int): Int {
+        // MS-ASCMD Ping Status=6: сервер может ограничить количество папок.
+        // 25 — безопасный лимит для Exchange 2007 SP1.
+        val MAX_PING_FOLDERS = 25
+        
         // Мониторим также пользовательские папки (type 1, USER_CREATED=12) для push-уведомлений.
         // Без этого перемещённые в пользовательские папки письма не обновляются push'ом.
         var folders = database.folderDao().getFoldersByAccountList(account.id)
-            .filter { it.syncKey != "0" && it.type in listOf(
-                FolderType.INBOX, FolderType.DRAFTS, FolderType.DELETED_ITEMS,
-                FolderType.SENT_ITEMS, FolderType.OUTBOX, 1, FolderType.USER_CREATED
-            ) }
+            .filter { it.syncKey != "0" && it.type in FolderType.PUSH_TYPES }
         
         if (folders.isEmpty()) {
             mailRepo.syncFolders(account.id)
             val allFolders = database.folderDao().getFoldersByAccountList(account.id)
-                .filter { it.type in listOf(
-                FolderType.INBOX, FolderType.DRAFTS, FolderType.DELETED_ITEMS,
-                FolderType.SENT_ITEMS, FolderType.OUTBOX, 1, FolderType.USER_CREATED
-            ) }
+                .filter { it.type in FolderType.PUSH_TYPES }
             
             if (allFolders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
             
-            for (folder in allFolders) {
-                // Полная синхронизация при первом запуске Push
-                try {
-                mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
-                } catch (_: Exception) {
-                    // Продолжаем с другими папками
+            // Ограничиваем initial sync: таймаут 5 мин + лимит папок
+            kotlinx.coroutines.withTimeoutOrNull(300_000L) {
+                for (folder in allFolders.take(MAX_PING_FOLDERS)) {
+                    try {
+                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        // Продолжаем с другими папками
+                    }
                 }
             }
             
             folders = database.folderDao().getFoldersByAccountList(account.id)
-                .filter { it.syncKey != "0" && it.type in listOf(
-                FolderType.INBOX, FolderType.DRAFTS, FolderType.DELETED_ITEMS,
-                FolderType.SENT_ITEMS, FolderType.OUTBOX
-            ) }
+                .filter { it.syncKey != "0" && it.type in FolderType.PUSH_TYPES }
             
             if (folders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
+        }
+        
+        // Лимит папок для Ping: системные + пользовательские по приоритету непрочитанных
+        if (folders.size > MAX_PING_FOLDERS) {
+            val system = folders.filter { FolderType.isSystemFolder(it.type) }
+            val user = folders.filter { !FolderType.isSystemFolder(it.type) }
+                .sortedByDescending { it.unreadCount }
+                .take(maxOf(0, MAX_PING_FOLDERS - system.size))
+            folders = system + user
         }
         
         val folderIds = folders.map { it.serverId }
@@ -775,37 +782,40 @@ class PushService : Service() {
             lastNotificationCheck = System.currentTimeMillis() - 60_000
         }
         
-        val folders = database.folderDao().getFoldersByAccountList(account.id)
-            .filter { it.type in listOf(
-                FolderType.INBOX, FolderType.DRAFTS, FolderType.DELETED_ITEMS,
-                FolderType.SENT_ITEMS, FolderType.OUTBOX, 1, FolderType.USER_CREATED
-            ) }
+        val allSyncFolders = database.folderDao().getFoldersByAccountList(account.id)
+        val systemFolders = allSyncFolders.filter { it.type in FolderType.SYNC_MAIN_TYPES }
+        val userFolders = allSyncFolders.filter { it.type in FolderType.SYNC_USER_TYPES }
+        // ВСЕ папки синхронизируются инкрементально (быстро, ~1-3 сек/папка).
+        // Full resync (до 280с/папка) — только для первых N несинхронизированных user-папок.
+        val folders = (systemFolders + userFolders)
+            .sortedBy { if (it.type == FolderType.INBOX) 0 else 1 }
+        
+        val unsyncedUserFolderIds = userFolders
+            .filter { it.syncKey == "0" }
+            .take(FolderType.MAX_FULL_RESYNC_USER_FOLDERS)
+            .map { it.id }
+            .toSet()
+        
+        // Бюджет на sync одного аккаунта: 600с.
+        // PushService — foreground, нет 10-мин лимита WorkManager, но 200 папок × 60с timeout = 3.3 часа worst case.
+        // Без бюджета push-уведомления блокируются на часы.
+        // INBOX и системные папки уже синхронизированы (первые в сортировке).
+        val syncBudgetMs = 600_000L
+        val syncStartTime = System.currentTimeMillis()
         
         for (folder in folders) {
-            // Сначала инкрементальная синхронизация, при ошибке - полный ресинк
-            // КРИТИЧНО: инкрементальный sync держит activeSyncs lock — короткий таймаут
-            // освобождает lock быстрее, давая возможность ручному sync отработать.
-            // Инкрементальный delta-sync должен завершаться за секунды (только новые письма).
-            try {
-                val result = withTimeoutOrNull(60_000L) {
-                    mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
-                }
-                if (result == null || result is EasResult.Error) {
-                    // Таймаут или ошибка — пробуем полный ресинк
-                    withTimeoutOrNull(300_000L) {
-                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
-                    }
-                }
-            } catch (_: Exception) {
-                // При исключении тоже пробуем полный ресинк
-                try {
-                    withTimeoutOrNull(300_000L) {
-                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
-                    }
-                } catch (_: Exception) {
-                    // Продолжаем с другими папками
-                }
+            if (System.currentTimeMillis() - syncStartTime > syncBudgetMs) {
+                android.util.Log.w("PushService", "Sync budget exhausted for account ${account.id}, remaining folders in next cycle")
+                break
             }
+            
+            val allowFull = folder.type in FolderType.SYNC_MAIN_TYPES
+                || folder.syncKey != "0"
+                || folder.id in unsyncedUserFolderIds
+            syncFolderWithRetry(
+                mailRepo, account.id, folder.id,
+                allowFullResync = allowFull, tag = "PushService"
+            )
         }
         
         lastAccountSyncTimes[account.id] = System.currentTimeMillis()
@@ -836,6 +846,7 @@ class PushService : Service() {
                         mailRepo.loadEmailBody(emailInfo.id)
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     android.util.Log.w(TAG, "Failed to preload body for ${emailInfo.id}", e)
                 }
             }

@@ -80,7 +80,7 @@ fun ScheduleSendDialog(
                 Column {
                     // Дата
                     OutlinedTextField(
-                        value = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()).format(customDate.time),
+                        value = remember { java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()) }.format(customDate.time),
                         onValueChange = { },
                         label = { Text(Strings.date) },
                         readOnly = true,

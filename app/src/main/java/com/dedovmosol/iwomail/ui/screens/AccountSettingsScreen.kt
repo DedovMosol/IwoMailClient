@@ -326,8 +326,9 @@ fun AccountSettingsScreen(
 
     
     // Диалог сертификата
-    if (showCertificateDialog && !currentAccount.certificatePath.isNullOrBlank()) {
-        val certFile = java.io.File(currentAccount.certificatePath!!)
+    val safeCertPath = currentAccount.certificatePath
+    if (showCertificateDialog && !safeCertPath.isNullOrBlank()) {
+        val certFile = java.io.File(safeCertPath)
         val certFileSize = if (certFile.exists()) "${certFile.length() / 1024} KB" else "—"
         var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
         
@@ -428,8 +429,9 @@ fun AccountSettingsScreen(
 
     
     // Диалог клиентского сертификата
-    if (showClientCertificateDialog && !currentAccount.clientCertificatePath.isNullOrBlank()) {
-        val certFile = java.io.File(currentAccount.clientCertificatePath!!)
+    val safeClientCertPath = currentAccount.clientCertificatePath
+    if (showClientCertificateDialog && !safeClientCertPath.isNullOrBlank()) {
+        val certFile = java.io.File(safeClientCertPath)
         val certFileSize = if (certFile.exists()) "${certFile.length() / 1024} KB" else "—"
         var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
         
@@ -725,7 +727,7 @@ fun AccountSettingsScreen(
                 item {
                     ListItem(
                         headlineContent = { Text(Strings.serverCertificate) },
-                        supportingContent = { Text(java.io.File(currentAccount.certificatePath!!).name) },
+                        supportingContent = { Text(currentAccount.certificatePath?.let { java.io.File(it).name } ?: "") },
                         leadingContent = { Icon(AppIcons.Lock, null) },
                         trailingContent = { Icon(AppIcons.ChevronRight, null) },
                         modifier = Modifier.clickable { showCertificateDialog = true }
@@ -750,7 +752,7 @@ fun AccountSettingsScreen(
                 item {
                     ListItem(
                         headlineContent = { Text(if (isRu) "Клиентский сертификат" else "Client certificate") },
-                        supportingContent = { Text(java.io.File(currentAccount.clientCertificatePath!!).name) },
+                        supportingContent = { Text(currentAccount.clientCertificatePath?.let { java.io.File(it).name } ?: "") },
                         leadingContent = { Icon(AppIcons.Lock, null) },
                         trailingContent = { Icon(AppIcons.ChevronRight, null) },
                         modifier = Modifier.clickable { showClientCertificateDialog = true }

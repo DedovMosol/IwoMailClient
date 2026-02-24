@@ -2273,12 +2273,13 @@ private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
         isLoading = false
     }
     
+    val safeBitmap = bitmap
     when {
         isLoading -> Box(modifier.height(100.dp), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
         }
-        !error && bitmap != null -> androidx.compose.foundation.Image(
-            bitmap = bitmap!!.asImageBitmap(),
+        !error && safeBitmap != null -> androidx.compose.foundation.Image(
+            bitmap = safeBitmap.asImageBitmap(),
             contentDescription = null,
             modifier = modifier,
             contentScale = androidx.compose.ui.layout.ContentScale.FillWidth

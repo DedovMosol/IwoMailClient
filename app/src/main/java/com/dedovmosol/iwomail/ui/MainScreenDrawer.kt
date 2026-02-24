@@ -9,7 +9,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -253,17 +262,72 @@ fun DrawerContent(
             }
         }
         
-        // Остальные папки
+        // Сворачиваемая секция "Папки" для пользовательских папок
         if (otherFolders.isNotEmpty()) {
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
-            items(otherFolders, key = { it.id }) { folder ->
-                FolderItem(
-                    folder = folder,
-                    onClick = { onFolderSelected(folder) },
-                    onLongClick = { onFolderLongClick(folder) }
-                )
+            item(key = "folders_header") {
+                var foldersExpanded by rememberSaveable { mutableStateOf(false) }
+                
+                Column {
+                // Заголовок секции с иконкой раскрытия
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .clickable { foldersExpanded = !foldersExpanded },
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            AppIcons.Folder,
+                            null,
+                            tint = AppColors.folder
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = Strings.folders,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = otherFolders.size.toString(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            if (foldersExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                
+                // Анимированный список папок
+                AnimatedVisibility(
+                    visible = foldersExpanded,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    Column {
+                        otherFolders.forEach { folder ->
+                            FolderItem(
+                                folder = folder,
+                                onClick = { onFolderSelected(folder) },
+                                onLongClick = { onFolderLongClick(folder) }
+                            )
+                        }
+                    }
+                }
+                } // Column
             }
         }
         
@@ -308,23 +372,18 @@ fun DrawerHeader(
     onAccountClick: () -> Unit
 ) {
     val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
-    val accountColor = try {
-        Color(account?.color ?: 0xFF1976D2.toInt())
-    } catch (_: Exception) {
-        Color(0xFF1976D2)
+    // PERF: remember — Color() и Brush не пересоздаются при каждой рекомпозиции DrawerHeader
+    val accountColor = remember(account?.color) {
+        try { Color(account?.color ?: 0xFF1976D2.toInt()) } catch (_: Exception) { Color(0xFF1976D2) }
     }
-    
+    val drawerBrush = remember(colorTheme.gradientStart, colorTheme.gradientEnd) {
+        Brush.linearGradient(colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd))
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                brush = Brush.linearGradient(
-                    colors = listOf(
-                        colorTheme.gradientStart,
-                        colorTheme.gradientEnd
-                    )
-                )
-            )
+            .background(brush = drawerBrush)
     ) {
         Column(
             modifier = Modifier
@@ -392,11 +451,10 @@ fun AccountItem(
     isActive: Boolean,
     onClick: () -> Unit
 ) {
-    val accountColor = try {
-        Color(account.color)
-    } catch (_: Exception) {
-        MaterialTheme.colorScheme.primary
-    }
+    // PERF: remember — Color() не пересоздаётся при каждой рекомпозиции AccountItem
+    val accountColor = remember(account.color) {
+        try { Color(account.color) } catch (_: Exception) { null }
+    } ?: MaterialTheme.colorScheme.primary
     
     ListItem(
         headlineContent = { Text(account.displayName) },

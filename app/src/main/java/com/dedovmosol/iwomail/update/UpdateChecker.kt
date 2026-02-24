@@ -1,11 +1,19 @@
 package com.dedovmosol.iwomail.update
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import com.dedovmosol.iwomail.BuildConfig
+import com.dedovmosol.iwomail.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -77,6 +85,7 @@ class UpdateChecker(private val context: Context) {
         private const val UPDATES_DIR = "updates"
         private const val APK_FILENAME = "update.apk"
         private const val MAX_RETRY_ATTEMPTS = 2
+        private const val ROLLBACK_NOTIFICATION_ID = 9999
 
         // Single-flight защита для автопроверки OTA (между параллельными MainScreen/Activity)
         private val autoCheckMutex = Mutex()
@@ -424,6 +433,7 @@ class UpdateChecker(private val context: Context) {
                 return@channelFlow
                 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 lastError = "${e.javaClass.simpleName}: ${e.message}"
                 android.util.Log.w("UpdateChecker", "Download attempt ${attempt + 1} failed: $lastError")
                 // Удаляем частично скачанный файл
@@ -441,113 +451,241 @@ class UpdateChecker(private val context: Context) {
      * @param isDowngrade true если это откат к предыдущей версии
      */
     fun installApk(apkFile: File, isDowngrade: Boolean = false) {
-        if (isDowngrade && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            // Для downgrade используем PackageInstaller API
-            installApkWithPackageInstaller(apkFile, allowDowngrade = true)
+        if (isDowngrade) {
+            // Android НЕ позволяет обычным приложениям устанавливать APK с меньшим versionCode.
+            // INSTALL_ALLOW_DOWNGRADE — internal API, работает только для system apps / adb.
+            // Единственный 100% рабочий способ:
+            // 1. Копируем APK в Downloads (переживёт удаление приложения)
+            // 2. Запускаем удаление текущего приложения
+            // 3. После удаления пользователь открывает iwomail-rollback.apk из Downloads
+            installDowngrade(apkFile)
         } else {
-            // Для обычной установки используем стандартный Intent
-            val uri: Uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                apkFile
-            )
-            
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-            }
-            
-            context.startActivity(intent)
+            // Для обычного обновления (versionCode выше) — стандартный ACTION_VIEW
+            installApkWithActionView(apkFile)
         }
     }
     
     /**
-     * Устанавливает APK через PackageInstaller API
-     * Поддерживает downgrade для Android 8+
+     * Подготавливает APK для отката — копирует в Downloads.
+     * Вызывается из UI перед показом диалога с инструкцией.
+     * @return true если APK успешно скопирован в Downloads
      */
-    private fun installApkWithPackageInstaller(apkFile: File, allowDowngrade: Boolean = false) {
+    fun prepareDowngrade(apkFile: File): Boolean {
+        return try {
+            val uri = copyApkToDownloads(apkFile)
+            if (uri != null) {
+                showInstallNotification(uri)
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("UpdateChecker", "prepareDowngrade error: ${e.message}", e)
+            false
+        }
+    }
+    
+    /**
+     * Запускает удаление текущего приложения (для отката).
+     * Вызывается из UI после того как пользователь прочитал инструкцию.
+     */
+    fun requestUninstall() {
+        val packageUri = Uri.parse("package:${context.packageName}")
+        val uninstallIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
         try {
-            val packageInstaller = context.packageManager.packageInstaller
-            val params = android.content.pm.PackageInstaller.SessionParams(
-                android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL
-            )
-            
-            if (allowDowngrade) {
-                // Для Android 10+ (API 29+) используем официальный метод
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    try {
-                        // Используем reflection чтобы избежать ошибки компиляции
-                        val method = params.javaClass.getMethod("setRequestDowngrade", Boolean::class.java)
-                        method.invoke(params, true)
-                        android.util.Log.d("UpdateChecker", "Downgrade flag set via official API for API ${android.os.Build.VERSION.SDK_INT}")
-                    } catch (e: Exception) {
-                        android.util.Log.w("UpdateChecker", "Failed to call setRequestDowngrade: ${e.message}")
-                    }
-                }
-                // Для Android 8-9 (API 26-28) используем reflection для установки флага
-                else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    try {
-                        // Пытаемся установить флаг INSTALL_ALLOW_DOWNGRADE через reflection
-                        val field = params.javaClass.getDeclaredField("installFlags")
-                        field.isAccessible = true
-                        var flags = field.getInt(params)
-                        // INSTALL_ALLOW_DOWNGRADE = 0x00000080
-                        flags = flags or 0x00000080
-                        field.setInt(params, flags)
-                        android.util.Log.d("UpdateChecker", "Downgrade flag set via reflection for API ${android.os.Build.VERSION.SDK_INT}")
-                    } catch (e: Exception) {
-                        android.util.Log.w("UpdateChecker", "Failed to set downgrade flag via reflection: ${e.message}")
-                    }
-                }
+            context.startActivity(uninstallIntent)
+        } catch (e: Exception) {
+            // Fallback для OEM-прошивок: открываем экран приложения, где пользователь
+            // может нажать "Удалить" вручную.
+            val detailsIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
-            
-            val sessionId = packageInstaller.createSession(params)
-            val session = packageInstaller.openSession(sessionId)
-            
-            // Копируем APK в сессию
-            session.openWrite("package", 0, -1).use { outputStream ->
-                apkFile.inputStream().use { inputStream ->
-                    inputStream.copyTo(outputStream)
-                }
-                session.fsync(outputStream)
+            context.startActivity(detailsIntent)
+        }
+    }
+    
+    /**
+     * Полноценный откат к предыдущей версии.
+     *
+     * Алгоритм:
+     * 1. Копируем APK в папку Downloads через MediaStore (публичная, переживёт удаление приложения)
+     * 2. Показываем Toast с инструкцией
+     * 3. Запускаем ACTION_DELETE для удаления текущего приложения
+     * 4. После удаления пользователь открывает iwomail-rollback.apk из Downloads
+     */
+    private fun installDowngrade(apkFile: File) {
+        try {
+            // Шаг 1: Копируем APK в Downloads
+            val downloadUri = copyApkToDownloads(apkFile)
+            if (downloadUri == null) {
+                android.util.Log.e("UpdateChecker", "Failed to copy APK to Downloads")
+                android.widget.Toast.makeText(context, "Ошибка копирования APK", android.widget.Toast.LENGTH_LONG).show()
+                return
             }
+            android.util.Log.d("UpdateChecker", "APK copied to Downloads: $downloadUri")
             
-            // Создаём Intent для результата установки
-            val intent = Intent(context, context.javaClass).apply {
-                action = "com.dedovmosol.iwomail.INSTALL_COMPLETE"
-            }
+            // Шаг 2: Показываем notification (на случай если переживёт удаление на некоторых OEM)
+            showInstallNotification(downloadUri)
             
-            val pendingIntent = android.app.PendingIntent.getBroadcast(
+            // Шаг 3: Toast с инструкцией
+            android.widget.Toast.makeText(
                 context,
-                sessionId,
-                intent,
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                    android.app.PendingIntent.FLAG_MUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                } else {
-                    android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                }
-            )
+                "После удаления откройте Downloads → iwomail-rollback.apk",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             
-            // Запускаем установку
-            session.commit(pendingIntent.intentSender)
-            session.close()
+            // Шаг 4: Запускаем удаление текущего приложения
+            val uninstallIntent = Intent(Intent.ACTION_DELETE).apply {
+                data = Uri.parse("package:${context.packageName}")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(uninstallIntent)
             
         } catch (e: Exception) {
-            android.util.Log.e("UpdateChecker", "PackageInstaller error: ${e.message}", e)
-            // Fallback на стандартный метод
-            val uri: Uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                apkFile
-            )
-            
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            android.util.Log.e("UpdateChecker", "Downgrade error: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Копирует APK в папку Downloads через MediaStore API (Android 10+) или напрямую (Android 9-)
+     * @return Uri скопированного файла или null при ошибке
+     */
+    private fun copyApkToDownloads(apkFile: File): Uri? {
+        val apkFileName = "iwomail-rollback.apk"
+        
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10+ — используем MediaStore
+            val contentValues = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, apkFileName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
             }
             
-            context.startActivity(intent)
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                ?: return null
+            
+            try {
+                resolver.openOutputStream(uri)?.use { output ->
+                    apkFile.inputStream().use { input ->
+                        input.copyTo(output)
+                    }
+                }
+                
+                // Снимаем флаг IS_PENDING — файл становится видимым
+                contentValues.clear()
+                contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+                
+                uri
+            } catch (e: Exception) {
+                // Удаляем частично записанный файл
+                try { resolver.delete(uri, null, null) } catch (_: Exception) {}
+                android.util.Log.e("UpdateChecker", "Failed to write APK to Downloads: ${e.message}")
+                null
+            }
+        } else {
+            // Android 9 и ниже — копируем напрямую в Downloads
+            try {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val targetFile = File(downloadsDir, apkFileName)
+                if (targetFile.exists()) targetFile.delete()
+                
+                apkFile.inputStream().use { input ->
+                    targetFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                
+                Uri.fromFile(targetFile)
+            } catch (e: Exception) {
+                android.util.Log.e("UpdateChecker", "Failed to copy APK to Downloads (legacy): ${e.message}")
+                null
+            }
         }
+    }
+    
+    /**
+     * Показывает persistent notification с кнопкой установки APK.
+     * Notification переживёт удаление приложения (системная notification) и позволит
+     * пользователю установить старую версию после удаления текущей.
+     */
+    private fun showInstallNotification(apkUri: Uri) {
+        val channelId = "rollback_install"
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        
+        // Создаём notification channel (Android 8+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Установка обновлений",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Уведомления для установки обновлений и откатов"
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+        
+        // Intent для установки APK из Downloads
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        }
+        
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            0,
+            installIntent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+        )
+        
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("iwo Mail Client — откат готов")
+            .setContentText("После удаления нажмите чтобы установить предыдущую версию")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("Приложение будет удалено. После удаления нажмите на это уведомление чтобы установить предыдущую версию. APK сохранён в папке Downloads."))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(false) // Можно смахнуть
+            .setAutoCancel(true) // Исчезает после нажатия
+            .setContentIntent(pendingIntent)
+            .build()
+        
+        notificationManager.notify(ROLLBACK_NOTIFICATION_ID, notification)
+    }
+    
+    /**
+     * Устанавливает APK через стандартный ACTION_VIEW Intent
+     */
+    private fun installApkWithActionView(apkFile: File) {
+        val uri: Uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            apkFile
+        )
+        
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        }
+        
+        context.startActivity(intent)
+    }
+    
+    /**
+     * Возвращает уже скачанный APK файл, если он существует и не пуст.
+     * Используется для возобновления с текущей стадии при повторном открытии диалога.
+     */
+    fun getExistingApkFile(): File? {
+        val apkFile = File(File(context.filesDir, UPDATES_DIR), APK_FILENAME)
+        return if (apkFile.exists() && apkFile.length() > 0) apkFile else null
     }
     
     /**

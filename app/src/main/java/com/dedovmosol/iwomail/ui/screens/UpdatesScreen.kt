@@ -109,9 +109,10 @@ fun UpdatesScreen(
     )
     
     // Диалог обновления
-    if (showUpdateDialog && updateInfo != null) {
+    val safeUpdateInfo = updateInfo
+    if (showUpdateDialog && safeUpdateInfo != null) {
         UpdateDownloadDialog(
-            updateInfo = updateInfo!!,
+            updateInfo = safeUpdateInfo,
             updateChecker = updateChecker,
             onDismiss = { 
                 showUpdateDialog = false
@@ -121,9 +122,10 @@ fun UpdatesScreen(
     }
     
     // Диалог отката
-    if (showRollbackDialog && previousVersionInfo != null) {
+    val safePreviousInfo = previousVersionInfo
+    if (showRollbackDialog && safePreviousInfo != null) {
         RollbackDialog(
-            previousInfo = previousVersionInfo!!,
+            previousInfo = safePreviousInfo,
             updateChecker = updateChecker,
             onDismiss = { 
                 showRollbackDialog = false
@@ -490,6 +492,8 @@ private sealed class DownloadState {
     object Idle : DownloadState()
     data class Downloading(val progress: Int, val downloadedMb: Float, val totalMb: Float) : DownloadState()
     object Completed : DownloadState()
+    object Preparing : DownloadState()          // Копируем APK в Downloads
+    object ReadyToUninstall : DownloadState()   // APK скопирован, ждём подтверждения удаления
     data class Error(val message: String) : DownloadState()
 }
 
@@ -721,6 +725,26 @@ private fun UpdateDownloadDialog(
                                 }
                             }
                         }
+                        is DownloadState.Preparing -> {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        if (isRussian()) "Подготовка..." else "Preparing...",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                         is DownloadState.Completed -> {
                             Box(
                                 modifier = Modifier
@@ -728,6 +752,33 @@ private fun UpdateDownloadDialog(
                                     .background(
                                         Brush.horizontalGradient(
                                             colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
+                                        )
+                                    )
+                                    .clickable {
+                                        downloadedFile?.let { file ->
+                                            updateChecker.installApk(file)
+                                        }
+                                    }
+                                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(AppIcons.Install, null, modifier = Modifier.size(18.dp), tint = Color.White)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(Strings.install, color = Color.White)
+                                }
+                            }
+                        }
+                        is DownloadState.ReadyToUninstall -> {
+                            // Финальная кнопка — удалить приложение и установить из Downloads
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                MaterialTheme.colorScheme.error,
+                                                MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                                            )
                                         )
                                     )
                                     .clickable {
@@ -763,14 +814,18 @@ private fun RollbackDialog(
     updateChecker: UpdateChecker,
     onDismiss: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val colorTheme = LocalColorTheme.current
+    val isRu = isRussian()
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val scrollContentMaxHeight = (configuration.screenHeightDp * if (isLandscape) 0.42f else 0.56f).dp.coerceAtLeast(220.dp)
     val contentScrollState = rememberScrollState()
-    var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
-    var downloadedFile by remember { mutableStateOf<File?>(null) }
+    // Resume: если APK уже скачан — начинаем с Completed
+    val existingApk = remember { updateChecker.getExistingApkFile() }
+    var downloadState by remember { mutableStateOf<DownloadState>(if (existingApk != null) DownloadState.Completed else DownloadState.Idle) }
+    var downloadedFile by remember { mutableStateOf<File?>(existingApk) }
     var downloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -840,43 +895,40 @@ private fun RollbackDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 
-                // Предупреждение о необходимости удаления (для Android < 8)
-                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
-                    HorizontalDivider()
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    AppIcons.Warning,
-                                    null,
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    if (isRussian()) "Важно!" else "Important!",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
+                // Предупреждение о процессе отката — для ВСЕХ версий Android
+                HorizontalDivider()
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                AppIcons.Warning,
+                                null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                if (isRussian()) 
-                                    "Для установки предыдущей версии потребуется сначала удалить текущую версию приложения. Убедитесь, что у вас есть резервная копия данных."
-                                else 
-                                    "To install the previous version, you need to uninstall the current version first. Make sure you have a backup of your data.",
-                                style = MaterialTheme.typography.bodySmall,
+                                if (isRussian()) "Как работает откат:" else "How rollback works:",
+                                style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer
                             )
                         }
+                        Text(
+                            if (isRussian())
+                                "1. APK v${previousInfo.versionName} сохранится в папку Downloads\n2. Текущая версия будет удалена\n3. После удаления — откройте Downloads и установите iwomail-rollback.apk"
+                            else
+                                "1. APK v${previousInfo.versionName} will be saved to Downloads\n2. Current version will be uninstalled\n3. After uninstall — open Downloads and install iwomail-rollback.apk",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
                     }
                 }
                 
-                // Прогресс скачивания
+                // Прогресс скачивания и статус подготовки
                 when (val state = downloadState) {
                     is DownloadState.Downloading -> {
                         HorizontalDivider()
@@ -899,17 +951,42 @@ private fun RollbackDialog(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                AppIcons.CheckCircle,
-                                null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
+                            Icon(AppIcons.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                            Text(Strings.downloadComplete, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                    is DownloadState.Preparing -> {
+                        HorizontalDivider()
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             Text(
-                                Strings.downloadComplete,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary
+                                if (isRussian()) "Сохранение APK в Downloads..." else "Saving APK to Downloads...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                    is DownloadState.ReadyToUninstall -> {
+                        HorizontalDivider()
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(AppIcons.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                    Text(
+                                        if (isRussian()) "APK готов в Downloads" else "APK ready in Downloads",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                                Text(
+                                    if (isRussian())
+                                        "Файл iwomail-rollback.apk сохранён. Нажмите \"Удалить и установить\" — после удаления откройте Downloads и установите APK."
+                                    else
+                                        "File iwomail-rollback.apk saved. Tap \"Uninstall & Install\" — after uninstall open Downloads and install the APK.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
                     }
                     is DownloadState.Error -> {
@@ -930,28 +1007,43 @@ private fun RollbackDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (downloadState !is DownloadState.Downloading) {
-                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                            onClick = onDismiss,
-                            text = Strings.cancel
-                        )
-                    } else {
-                        com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    if (downloadState !is DownloadState.Downloading && downloadState !is DownloadState.Preparing) {
+                        com.dedovmosol.iwomail.ui.theme.ThemeButton(
+                            onClick = onDismiss
+                        ) {
+                            Text(
+                                Strings.cancel,
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1
+                            )
+                        }
+                    } else if (downloadState is DownloadState.Downloading) {
+                        com.dedovmosol.iwomail.ui.theme.ThemeButton(
                             onClick = {
                                 downloadJob?.cancel()
                                 downloadJob = null
                                 downloadState = DownloadState.Idle
                                 updateChecker.clearUpdateFiles()
-                            },
-                            text = Strings.cancel
-                        )
+                            }
+                        ) {
+                            Text(
+                                Strings.cancel,
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
                     }
                     
+                    val actionBtnModifier = Modifier
+                        .clip(RoundedCornerShape(24.dp))
                     when (downloadState) {
                         is DownloadState.Idle, is DownloadState.Error -> {
                             Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(24.dp))
+                                modifier = actionBtnModifier
                                     .background(
                                         Brush.horizontalGradient(
                                             colors = listOf(
@@ -961,6 +1053,8 @@ private fun RollbackDialog(
                                         )
                                     )
                                     .clickable {
+                                        if (downloadJob != null) return@clickable
+                                        downloadState = DownloadState.Downloading(0, 0f, 0f)
                                         downloadJob = scope.launch {
                                             updateChecker.downloadUpdate(previousInfo.apkUrl).collect { progress ->
                                                 when (progress) {
@@ -987,37 +1081,37 @@ private fun RollbackDialog(
                                             }
                                         }
                                     }
-                                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(AppIcons.Download, null, modifier = Modifier.size(18.dp), tint = Color.White)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(Strings.rollbackConfirm, color = Color.White)
+                                    Icon(AppIcons.Download, null, modifier = Modifier.size(14.dp), tint = Color.White)
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(Strings.downloadUpdate, color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                                 }
                             }
                         }
                         is DownloadState.Downloading -> {
                             Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(24.dp))
+                                modifier = actionBtnModifier
                                     .background(MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
-                                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
+                                        modifier = Modifier.size(14.dp),
                                         strokeWidth = 2.dp,
                                         color = Color.White
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(Strings.downloading, color = Color.White)
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(Strings.downloading, color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                                 }
                             }
                         }
                         is DownloadState.Completed -> {
                             Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(24.dp))
+                                modifier = actionBtnModifier
                                     .background(
                                         Brush.horizontalGradient(
                                             colors = listOf(
@@ -1027,17 +1121,78 @@ private fun RollbackDialog(
                                         )
                                     )
                                     .clickable {
-                                        downloadedFile?.let { file ->
-                                            updateChecker.installApk(file, isDowngrade = true)
+                                        downloadState = DownloadState.Preparing
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            val prepared = downloadedFile?.let { file ->
+                                                updateChecker.prepareDowngrade(file)
+                                            } ?: false
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                if (prepared) {
+                                                    downloadState = DownloadState.ReadyToUninstall
+                                                } else {
+                                                    downloadState = DownloadState.Error(
+                                                        if (isRu) "Не удалось сохранить APK в Downloads" else "Failed to save APK to Downloads"
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
-                                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(AppIcons.Install, null, modifier = Modifier.size(18.dp), tint = Color.White)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(Strings.install, color = Color.White)
+                                    Icon(AppIcons.Install, null, modifier = Modifier.size(14.dp), tint = Color.White)
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        if (isRu) "Подготовить" else "Prepare",
+                                        color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1
+                                    )
                                 }
+                            }
+                        }
+                        is DownloadState.Preparing -> {
+                            Box(
+                                modifier = actionBtnModifier
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        if (isRu) "Подготовка..." else "Preparing...",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                        is DownloadState.ReadyToUninstall -> {
+                            Box(
+                                modifier = actionBtnModifier
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                MaterialTheme.colorScheme.error,
+                                                MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                                            )
+                                        )
+                                    )
+                                    .clickable {
+                                        try {
+                                            updateChecker.requestUninstall()
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                if (isRu) "Ошибка удаления: ${e.message}" else "Uninstall error: ${e.message}",
+                                                android.widget.Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(Strings.rollbackConfirm, color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                             }
                         }
                     }

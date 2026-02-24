@@ -1095,8 +1095,8 @@ object Strings {
     val rollbackTitle: String @Composable get() = if (isRussian()) "Возврат к версии" else "Return to version"
     val rollbackWarning: String @Composable get() = if (isRussian()) "В этой версии НЕТ:" else "This version does NOT have:"
     val rollbackDataLoss: String @Composable get() = if (isRussian()) "Будет потеряно:" else "Will be lost:"
-    val rollbackDataSync: String @Composable get() = if (isRussian()) "Данные синхронизируются с сервера заново." else "Data will be synced from server again."
-    val rollbackConfirm: String @Composable get() = if (isRussian()) "Установить" else "Install"
+    val rollbackDataSync: String @Composable get() = if (isRussian()) "Данные потеряются и клиент будет синхронизирован с сервером заново." else "Data will be lost and client will be synced from server again."
+    val rollbackConfirm: String @Composable get() = if (isRussian()) "Удалить и установить" else "Uninstall & Install"
     val rollbackNotAvailable: String @Composable get() = if (isRussian()) "Предыдущая версия недоступна" else "Previous version not available"
     val rollbackChecking: String @Composable get() = if (isRussian()) "Проверка..." else "Checking..."
 }

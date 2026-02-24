@@ -594,7 +594,9 @@ fun ComposeScreen(
                             showToSuggestions = toSuggestions.isNotEmpty() && toFieldFocused
                         }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                }
             }
         }
     }
@@ -628,8 +630,9 @@ fun ComposeScreen(
     // Загружаем активный аккаунт и все аккаунты
     LaunchedEffect(Unit) {
         // Восстанавливаем аккаунт по сохранённому ID или загружаем активный
-        activeAccount = if (savedActiveAccountId != null) {
-            accountRepo.getAccount(savedActiveAccountId!!)
+        val accId = savedActiveAccountId
+        activeAccount = if (accId != null) {
+            accountRepo.getAccount(accId)
         } else {
             accountRepo.getActiveAccountSync()
         }
@@ -876,7 +879,7 @@ fun ComposeScreen(
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
                                 }
-                            } catch (_: Exception) {}
+                            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         }
                     }
                     
@@ -901,7 +904,7 @@ fun ComposeScreen(
                                 }
                                 is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                     }
                 }
             }
@@ -1041,7 +1044,7 @@ fun ComposeScreen(
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
                                 }
-                            } catch (_: Exception) {}
+                            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         }
                     }
                     
@@ -1069,7 +1072,7 @@ fun ComposeScreen(
                                 }
                                 is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                     }
                 }
             }
@@ -1185,7 +1188,9 @@ fun ComposeScreen(
                                     }
                                 }
                             }
-                        } catch (_: Exception) { }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                        }
                     }
 
                     if (newAttachmentStrings.isNotEmpty()) {
@@ -1221,7 +1226,7 @@ fun ComposeScreen(
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
                                 }
-                            } catch (_: Exception) {}
+                            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         } else if (!easServerId.startsWith("local_draft_") && easServerId.isNotBlank()) {
                             // EWS путь: длинный ItemId (содержит "=", base64).
                             // EAS ItemOperations не работает с EWS ItemId.
@@ -1235,7 +1240,7 @@ fun ComposeScreen(
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
                                 }
-                            } catch (_: Exception) {}
+                            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         }
                     }
                 }
@@ -1250,7 +1255,7 @@ fun ComposeScreen(
                     withContext(Dispatchers.IO) {
                         try {
                             database.emailDao().updateBody(draftId, body)
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                     }
                 }
                 // Сохраняем начальное состояние для сравнения при выходе
@@ -1272,6 +1277,7 @@ fun ComposeScreen(
     
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
+        if (isSavingDraft) return
         scope.launch {
             isSavingDraft = true
             
@@ -1377,7 +1383,11 @@ fun ComposeScreen(
                             // чтобы deleteDraft НЕ удалил НОВЫЙ черновик при поиске по subject.
                             if (success && newServerId != null) {
                                 withContext(Dispatchers.IO) {
-                                    try { mailRepo.deleteDraft(account.id, oldServerId, excludeEwsItemId = newServerId) } catch (_: Exception) {}
+                                    try {
+                                        mailRepo.deleteDraft(account.id, oldServerId, excludeEwsItemId = newServerId)
+                                    } catch (e: Exception) {
+                                        if (e is kotlinx.coroutines.CancellationException) throw e else Unit
+                                    }
                                 }
                                 // ЗАЩИТА: верифицируем что новая запись существует в БД.
                                 // deleteDraft может случайно удалить не тот черновик или
@@ -1427,7 +1437,7 @@ fun ComposeScreen(
                                                 }
                                                 database.attachmentDao().insertAll(attEntities)
                                             }
-                                        } catch (_: Exception) {}
+                                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                                     }
                                 }
                             }
@@ -1595,9 +1605,12 @@ fun ComposeScreen(
                 kotlinx.coroutines.delay(50)
                 try {
                     onSent()
-                } catch (_: Exception) { }
+                } catch (e2: Exception) {
+                    if (e2 is kotlinx.coroutines.CancellationException) throw e2
+                }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             isSending = false
             Toast.makeText(context, "${sendErrorText}: ${e.message}", Toast.LENGTH_LONG).show()
         }
@@ -1823,9 +1836,10 @@ fun ComposeScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
-                        if (pendingGroupSelections.isNotEmpty() && duplicateTargetField != null) {
+                        val targetField = duplicateTargetField
+                        if (pendingGroupSelections.isNotEmpty() && targetField != null) {
                             // Группы из контакт-пикера: добавляем только после подтверждения
-                            applyGroupsSelection(pendingGroupSelections, duplicateTargetField!!)
+                            applyGroupsSelection(pendingGroupSelections, targetField)
                         } else {
                             // Если это группа из подсказки — добавляем токен [GroupName] и сохраняем маппинг
                             val gName = pendingGroupName

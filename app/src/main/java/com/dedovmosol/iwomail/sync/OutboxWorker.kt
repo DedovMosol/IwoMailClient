@@ -185,6 +185,7 @@ class OutboxWorker(
                     is EasResult.Error -> failedEmails.put(email)
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 failedEmails.put(email)
             }
         }
@@ -213,7 +214,8 @@ class OutboxWorker(
                     sentFolder?.let { folder ->
                         mailRepo.syncEmails(accountId, folder.id)
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     // Sync-ошибки не должны блокировать Worker
                 }
             }

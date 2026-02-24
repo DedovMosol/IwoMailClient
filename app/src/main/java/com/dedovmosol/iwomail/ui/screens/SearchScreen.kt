@@ -738,6 +738,12 @@ private fun SearchResultItem(
     HorizontalDivider(modifier = Modifier.padding(start = 68.dp))
 }
 
+// ThreadLocal кэш для SimpleDateFormat — избегаем аллокации на каждый элемент списка
+private val searchTimeFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+private val searchDayFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()) }
+private val searchDateFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()) }
+private val searchFullDateFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("dd.MM.yy", java.util.Locale.getDefault()) }
+
 private fun formatSearchDate(timestamp: Long): String {
     val now = System.currentTimeMillis()
     val diff = now - timestamp
@@ -747,16 +753,16 @@ private fun formatSearchDate(timestamp: Long): String {
     return when {
         diff < 24 * 60 * 60 * 1000 && 
         calendar.get(java.util.Calendar.DAY_OF_YEAR) == today.get(java.util.Calendar.DAY_OF_YEAR) -> {
-            java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(timestamp)
+            searchTimeFormat.get()?.format(timestamp) ?: ""
         }
         diff < 7 * 24 * 60 * 60 * 1000 -> {
-            java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(timestamp)
+            searchDayFormat.get()?.format(timestamp) ?: ""
         }
         calendar.get(java.util.Calendar.YEAR) == today.get(java.util.Calendar.YEAR) -> {
-            java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(timestamp)
+            searchDateFormat.get()?.format(timestamp) ?: ""
         }
         else -> {
-            java.text.SimpleDateFormat("dd.MM.yy", java.util.Locale.getDefault()).format(timestamp)
+            searchFullDateFormat.get()?.format(timestamp) ?: ""
         }
     }
 }

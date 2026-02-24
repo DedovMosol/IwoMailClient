@@ -39,6 +39,7 @@ class MarkTaskCompleteWorker(
             }
             Result.success()
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w(TAG, "Failed to mark task complete", e)
             if (runAttemptCount < MAX_RETRIES) Result.retry() else Result.failure()
         }

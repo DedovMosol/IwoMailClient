@@ -185,7 +185,10 @@ object InitialSyncController {
                             settingsRepo.setLastInstallTime(currentInstallTime)
                         }
                         wasReinstalled
-                    } catch (_: Exception) { false }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        false
+                    }
                 }
                 
                 if (isFirstSync || dbWasRecreated || appUpdated) {
@@ -271,7 +274,9 @@ object InitialSyncController {
                     withContext(Dispatchers.IO) {
                         try {
                             mailRepo.prefetchEmailBodies(accountId, 7)
-                        } catch (_: Exception) { }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                        }
                     }
                     
                     // Синхронизируем контакты, заметки, календарь, задачи параллельно
@@ -284,7 +289,9 @@ object InitialSyncController {
                                         contactRepo.syncExchangeContacts(accountId)
                                         contactRepo.syncGalContactsToDb(accountId)
                                     }
-                                } catch (_: Exception) { }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                }
                             }
                             launch {
                                 try {
@@ -292,7 +299,9 @@ object InitialSyncController {
                                         val noteRepo = com.dedovmosol.iwomail.data.repository.NoteRepository(context)
                                         noteRepo.syncNotes(accountId)
                                     }
-                                } catch (_: Exception) { }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                }
                             }
                             launch {
                                 try {
@@ -300,7 +309,9 @@ object InitialSyncController {
                                         val calendarRepo = com.dedovmosol.iwomail.data.repository.CalendarRepository(context)
                                         calendarRepo.syncCalendar(accountId)
                                     }
-                                } catch (_: Exception) { }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                }
                             }
                             launch {
                                 try {
@@ -308,7 +319,9 @@ object InitialSyncController {
                                         val taskRepo = com.dedovmosol.iwomail.data.repository.TaskRepository(context)
                                         taskRepo.syncTasks(accountId)
                                     }
-                                } catch (_: Exception) { }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                }
                             }
                         }
                     }
@@ -832,7 +845,9 @@ fun MainScreen(
                     settingsRepo.setLastUpdateCheckTime(System.currentTimeMillis())
                 }
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+        }
     }
     
     // Отслеживание удаления аккаунтов (только после загрузки из Flow)
@@ -1120,9 +1135,11 @@ fun MainScreen(
     }
     
     // Диалог автообновления
-    if (showAutoUpdateDialog && autoUpdateInfo != null) {
+    // КРИТИЧНО: используем let{} вместо !! чтобы избежать NPE при race condition в recomposition
+    val currentUpdateInfo = autoUpdateInfo
+    if (showAutoUpdateDialog && currentUpdateInfo != null) {
         AutoUpdateDialog(
-            updateInfo = autoUpdateInfo!!,
+            updateInfo = currentUpdateInfo,
             context = context,
             settingsRepo = settingsRepo,
             onDismiss = { 
@@ -1131,7 +1148,7 @@ fun MainScreen(
             onLater = {
                 // Запоминаем что пользователь отложил эту версию
                 scope.launch {
-                    settingsRepo.setUpdateDismissedVersion(autoUpdateInfo!!.versionCode)
+                    settingsRepo.setUpdateDismissedVersion(currentUpdateInfo.versionCode)
                     settingsRepo.setLastUpdateCheckTime(System.currentTimeMillis())
                 }
                 showAutoUpdateDialog = false
@@ -1367,6 +1384,42 @@ private fun HomeContent(
     // Переменные для диалога доната (вынесены для использования вне LazyColumn)
     val accountCopiedText = Strings.accountCopied
     
+    // PERF: remember orderedFolders — избегаем filter/find/sumOf на каждую рекомпозицию LazyColumn
+    // Вынесено из LazyListScope (не Composable) в Composable scope
+    val chunkedFolders = remember(folders, flaggedCount, notesCount, eventsCount, tasksCount, inboxName) {
+        val mainFolders = folders.filter { it.type in listOf(2, 3, 4, 5) }
+        val orderedFolders = mutableListOf<FolderDisplayData>()
+        
+        mainFolders.find { it.type == 2 }?.let { folder ->
+            orderedFolders.add(FolderDisplayData(folder.id, inboxName, folder.totalCount, folder.unreadCount, folder.type))
+        }
+        mainFolders.find { it.type == 5 }?.let { folder ->
+            orderedFolders.add(FolderDisplayData(folder.id, sentName, folder.totalCount, folder.unreadCount, folder.type))
+        }
+        mainFolders.find { it.type == 3 }?.let { folder ->
+            orderedFolders.add(FolderDisplayData(folder.id, draftsName, folder.totalCount, folder.unreadCount, folder.type))
+        }
+        mainFolders.find { it.type == 4 }?.let { folder ->
+            orderedFolders.add(FolderDisplayData(folder.id, trashName, folder.totalCount, folder.unreadCount, folder.type))
+        }
+        val userMailFolderTypes = listOf(1, FolderType.USER_CREATED)
+        val userFoldersList = folders.filter { it.type in userMailFolderTypes }
+        val userFoldersCount = userFoldersList.size
+        val userFoldersTotalUnread = userFoldersList.sumOf { it.unreadCount }
+        if (userFoldersCount > 0) {
+            orderedFolders.add(FolderDisplayData(
+                "user_folders", userFoldersName, userFoldersCount, userFoldersTotalUnread, -6
+            ))
+        }
+        orderedFolders.add(FolderDisplayData("favorites", favoritesName, flaggedCount, 0, -1))
+        orderedFolders.add(FolderDisplayData("calendar", calendarName, eventsCount, 0, -4))
+        orderedFolders.add(FolderDisplayData("tasks", tasksName, tasksCount, 0, -5))
+        orderedFolders.add(FolderDisplayData("contacts", contactsName, 0, 0, -2))
+        orderedFolders.add(FolderDisplayData("notes", notesName, notesCount, 0, -3))
+        
+        orderedFolders.toList().chunked(2)
+    }
+    
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -1459,6 +1512,10 @@ private fun HomeContent(
             LaunchedEffect(animationsEnabled) { welcomeVisible = true }
             
             val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
+            // PERF: Кэшируем Brush чтобы не создавать новый объект при каждой рекомпозиции
+            val welcomeGradient = remember(colorTheme.gradientStart, colorTheme.gradientEnd) {
+                Brush.linearGradient(colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd))
+            }
             val cardContent = @Composable {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1470,21 +1527,17 @@ private fun HomeContent(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(
-                                brush = Brush.linearGradient(
-                                    colors = listOf(
-                                        colorTheme.gradientStart,
-                                        colorTheme.gradientEnd
-                                    )
-                                )
-                            )
+                            .background(brush = welcomeGradient)
                             .padding(horizontal = 20.dp, vertical = 14.dp)
                     ) {
                         Column {
-                            val safeAccountColor = try {
-                                Color(activeAccount?.color ?: 0xFF1976D2.toInt())
-                            } catch (_: Exception) {
-                                Color(0xFF1976D2)
+                            // PERF: remember — Color() аллокация только при смене цвета аккаунта
+                            val safeAccountColor = remember(activeAccount?.color) {
+                                try {
+                                    Color(activeAccount?.color ?: 0xFF1976D2.toInt())
+                                } catch (_: Exception) {
+                                    Color(0xFF1976D2)
+                                }
                             }
                             
                             Row(
@@ -1537,8 +1590,10 @@ private fun HomeContent(
                             if (!isSyncing && !isLoading && lastSyncTime > 0) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 
-                                val formatter = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
-                                val syncTimeText = "${Strings.lastSync} ${formatter.format(java.util.Date(lastSyncTime))}"
+                                val formatter = remember { java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()) }
+                                val lastSyncLabel = Strings.lastSync
+                                // PERF: Кэшируем форматированное время — Date аллокация только при изменении lastSyncTime
+                                val syncTimeText = remember(lastSyncTime, lastSyncLabel) { "$lastSyncLabel ${formatter.format(java.util.Date(lastSyncTime))}" }
                                 
                                 Text(
                                     text = syncTimeText,
@@ -1666,53 +1721,6 @@ private fun HomeContent(
                 }
             }
             
-            // Основные папки для отображения
-            val mainFolders = folders.filter { it.type in listOf(2, 3, 4, 5) }
-            
-            // Порядок: входящие, отправленные, черновики, удалённые, папки, избранные, календарь, задачи, контакты, заметки
-            val orderedFolders = mutableListOf<FolderDisplayData>()
-            
-            // Входящие (type 2)
-            mainFolders.find { it.type == 2 }?.let { folder ->
-                orderedFolders.add(FolderDisplayData(folder.id, inboxName, folder.totalCount, folder.unreadCount, folder.type))
-            }
-            // Отправленные (type 5)
-            mainFolders.find { it.type == 5 }?.let { folder ->
-                orderedFolders.add(FolderDisplayData(folder.id, sentName, folder.totalCount, folder.unreadCount, folder.type))
-            }
-            // Черновики (type 3)
-            mainFolders.find { it.type == 3 }?.let { folder ->
-                orderedFolders.add(FolderDisplayData(folder.id, draftsName, folder.totalCount, folder.unreadCount, folder.type))
-            }
-            // Удалённые (type 4)
-            mainFolders.find { it.type == 4 }?.let { folder ->
-                orderedFolders.add(FolderDisplayData(folder.id, trashName, folder.totalCount, folder.unreadCount, folder.type))
-            }
-            // Пользовательские ПОЧТОВЫЕ папки — одна карточка-группа
-            // При нажатии открывается UserFoldersScreen со списком всех папок
-            val userMailFolderTypes = listOf(1, FolderType.USER_CREATED)
-            val userFoldersList = folders.filter { it.type in userMailFolderTypes }
-            val userFoldersCount = userFoldersList.size
-            val userFoldersTotalUnread = userFoldersList.sumOf { it.unreadCount }
-            if (userFoldersCount > 0) {
-                orderedFolders.add(FolderDisplayData(
-                    "user_folders", userFoldersName, userFoldersCount, userFoldersTotalUnread, -6
-                ))
-            }
-            // Избранные
-            orderedFolders.add(FolderDisplayData("favorites", favoritesName, flaggedCount, 0, -1))
-            // Календарь
-            orderedFolders.add(FolderDisplayData("calendar", calendarName, eventsCount, 0, -4))
-            // Задачи
-            orderedFolders.add(FolderDisplayData("tasks", tasksName, tasksCount, 0, -5))
-            // Контакты
-            orderedFolders.add(FolderDisplayData("contacts", contactsName, 0, 0, -2))
-            // Заметки
-            orderedFolders.add(FolderDisplayData("notes", notesName, notesCount, 0, -3))
-            
-            val displayFolders: List<FolderDisplayData> = orderedFolders.toList()
-            
-            val chunkedFolders: List<List<FolderDisplayData>> = displayFolders.chunked(2)
             itemsIndexed(chunkedFolders, key = { _, row -> row.firstOrNull()?.id ?: "" }) { index: Int, rowFolders: List<FolderDisplayData> ->
                 val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
                 // Анимация только для первых 4 рядов при первом показе
@@ -1845,35 +1853,26 @@ private fun HomeContent(
             }
         }
         
-        // Кнопка поддержать разработчика
+        // Кнопка "Помощь проекту" — открывает диалог с деталями
         item {
-            val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
-            val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
-            
-            // Пульсирующая анимация
-            val pulseScale = rememberPulseScale(animationsEnabled, from = 1f, to = 1.03f, durationMs = 1000)
-
-            
-            Box(
+            Button(
+                onClick = { showDonateDialog = true },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 32.dp)
-                    .scale(pulseScale)
-                    .clip(MaterialTheme.shapes.large)
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(Color(0xFFE91E63), Color(0xFFAD1457))
-                        )
-                    )
-                    .clickable { showDonateDialog = true }
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFE91E63)
+                ),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(AppIcons.Rocket, null, tint = Color.White)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(Strings.supportDeveloper, fontWeight = FontWeight.SemiBold, color = Color.White)
-                }
+                Text("🚀", style = MaterialTheme.typography.labelLarge)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    Strings.supportDeveloper,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White
+                )
             }
         }
         
@@ -1958,10 +1957,21 @@ private fun HomeContent(
                         
                         Button(
                             onClick = {
-                                val intent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
+                                val baseIntent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
                                     data = android.net.Uri.parse("mailto:andreyid@outlook.com")
                                 }
-                                context.startActivity(intent)
+                                val initialIntents = arrayOf(
+                                    android.content.Intent(baseIntent).apply {
+                                        component = android.content.ComponentName(
+                                            context,
+                                            com.dedovmosol.iwomail.MainActivity::class.java
+                                        )
+                                    }
+                                )
+                                val chooser = android.content.Intent.createChooser(baseIntent, null).apply {
+                                    putExtra(android.content.Intent.EXTRA_INITIAL_INTENTS, initialIntents)
+                                }
+                                try { context.startActivity(chooser) } catch (_: Exception) { }
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -2476,62 +2486,30 @@ private fun FolderCardDisplay(
         label = "scale"
     )
     
-    // Анимация иконки (масштаб/поворот)
-    val iconScale = rememberPulseScale(animationsEnabled, from = 1f, to = 1.08f, durationMs = 1200)
-    val iconRotation = rememberWobble(animationsEnabled, amplitude = 2f, durationMs = 2000)
+    // PERF: Убраны per-card InfiniteTransition для иконок (было 12 карточек × 2 анимации = 24 InfiniteTransition,
+    // каждая тикает каждый кадр и вызывает рекомпозицию — главная причина просадки FPS на главном экране)
+    // Badge анимация вынесена из conditional if блока (Compose slot table corruption при изменении unreadCount)
+    val showBadge = unreadCount > 0 && type != 3 && type != 4 && type != 5
+    val badgeScale = rememberPulseScale(animationsEnabled && showBadge, from = 1f, to = 1.15f, durationMs = 600)
     
-    // Цвета папок по типу (контрастные — белый текст на фоне ≥ 4.5:1, мягкий градиент)
+    // Icon + gradient colors per folder type (AppIcons.* are @Composable — can't use inside remember)
     val folderColors = when (type) {
-        2 -> FolderColorsData(
-            AppIcons.Email, 
-            listOf(Color(0xFF3949AB), Color(0xFF3444A0)) // Indigo
-        )
-        3 -> FolderColorsData(
-            AppIcons.Edit, 
-            listOf(Color(0xFF546E7A), Color(0xFF4E6672)) // Blue Grey
-        )
-        4 -> FolderColorsData(
-            AppIcons.Delete, 
-            listOf(Color(0xFFC62828), Color(0xFFBF2424)) // Red
-        )
-        5 -> FolderColorsData(
-            AppIcons.Send, 
-            listOf(Color(0xFF5E35B1), Color(0xFF5630A8)) // Deep Purple
-        )
-        6 -> FolderColorsData(
-            AppIcons.Outbox, 
-            listOf(Color(0xFF00897B), Color(0xFF008073)) // Teal
-        )
-        -1 -> FolderColorsData(
-            AppIcons.Star, 
-            listOf(Color(0xFFC77700), Color(0xFFBF7000)) // Amber
-        )
-        -2 -> FolderColorsData(
-            AppIcons.People, 
-            listOf(Color(0xFF1565C0), Color(0xFF1260B8)) // Blue
-        )
-        -3 -> FolderColorsData(
-            AppIcons.StickyNote, 
-            listOf(Color(0xFF2E7D32), Color(0xFF28742D)) // Green
-        )
-        -4 -> FolderColorsData(
-            AppIcons.CalendarMonth, 
-            listOf(Color(0xFF1E88E5), Color(0xFF1A7FDB)) // Blue
-        )
-        -5 -> FolderColorsData(
-            AppIcons.Task, 
-            listOf(Color(0xFF7B1FA2), Color(0xFF731D98)) // Purple
-        )
-        -6 -> FolderColorsData(
-            AppIcons.Folder, 
-            listOf(Color(0xFFD84315), Color(0xFFCF3E12)) // Deep Orange
-        )
-        else -> FolderColorsData(
-            AppIcons.Folder, 
-            listOf(Color(0xFF546E7A), Color(0xFF4E6672)) // Blue Grey
-        )
+        2 -> FolderColorsData(AppIcons.Email, listOf(Color(0xFF3949AB), Color(0xFF3444A0)))
+        3 -> FolderColorsData(AppIcons.Edit, listOf(Color(0xFF546E7A), Color(0xFF4E6672)))
+        4 -> FolderColorsData(AppIcons.Delete, listOf(Color(0xFFC62828), Color(0xFFBF2424)))
+        5 -> FolderColorsData(AppIcons.Send, listOf(Color(0xFF5E35B1), Color(0xFF5630A8)))
+        6 -> FolderColorsData(AppIcons.Outbox, listOf(Color(0xFF00897B), Color(0xFF008073)))
+        -1 -> FolderColorsData(AppIcons.Star, listOf(Color(0xFFC77700), Color(0xFFBF7000)))
+        -2 -> FolderColorsData(AppIcons.People, listOf(Color(0xFF1565C0), Color(0xFF1260B8)))
+        -3 -> FolderColorsData(AppIcons.StickyNote, listOf(Color(0xFF2E7D32), Color(0xFF28742D)))
+        -4 -> FolderColorsData(AppIcons.CalendarMonth, listOf(Color(0xFF1E88E5), Color(0xFF1A7FDB)))
+        -5 -> FolderColorsData(AppIcons.Task, listOf(Color(0xFF7B1FA2), Color(0xFF731D98)))
+        -6 -> FolderColorsData(AppIcons.Folder, listOf(Color(0xFFD84315), Color(0xFFCF3E12)))
+        else -> FolderColorsData(AppIcons.Folder, listOf(Color(0xFF546E7A), Color(0xFF4E6672)))
     }
-    
+    // PERF: Brush кэшируется — не пересоздаётся при изменении count/unreadCount
+    val folderBrush = remember(type) { Brush.linearGradient(folderColors.gradientColors) }
+
     Card(
         onClick = onClick,
         modifier = modifier
@@ -2550,9 +2528,7 @@ private fun FolderCardDisplay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    brush = Brush.linearGradient(folderColors.gradientColors)
-                )
+                .background(brush = folderBrush)
         ) {
             Row(
                 modifier = Modifier
@@ -2565,9 +2541,7 @@ private fun FolderCardDisplay(
                     modifier = Modifier
                         .size(38.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.18f))
-                        .scale(if (animationsEnabled) iconScale else 1f)
-                        .rotate(if (animationsEnabled) iconRotation else 0f),
+                        .background(Color.White.copy(alpha = 0.18f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -2612,11 +2586,9 @@ private fun FolderCardDisplay(
                     }
                 }
                 
-                // Badge с непрочитанными или с избранными (только когда включены анимации)
+                // Badge с непрочитанными или с избранными
                 // Для черновиков (type 3), удалённых (type 4) и отправленных (type 5) badge не показываем
-                if (unreadCount > 0 && type != 3 && type != 4 && type != 5) {
-                    val badgeScale = rememberPulseScale(animationsEnabled, from = 1f, to = 1.15f, durationMs = 600)
-                    
+                if (showBadge) {
                     Badge(
                         modifier = Modifier.scale(badgeScale),
                         containerColor = folderColors.gradientColors.first(),
@@ -2652,24 +2624,19 @@ private fun SearchTopBar(
     onSearchClick: () -> Unit
 ) {
     val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
-    val safeAccountColor = try {
-        Color(accountColor)
-    } catch (_: Exception) {
-        Color(0xFF1976D2)
+    // PERF: remember — Color() и Brush не пересоздаются при каждой рекомпозиции TopBar
+    val safeAccountColor = remember(accountColor) {
+        try { Color(accountColor) } catch (_: Exception) { Color(0xFF1976D2) }
     }
-    
+    val topBarBrush = remember(colorTheme.gradientStart, colorTheme.gradientEnd) {
+        Brush.horizontalGradient(colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd))
+    }
+
     // Градиентная шапка поиска
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        colorTheme.gradientStart,
-                        colorTheme.gradientEnd
-                    )
-                )
-            )
+            .background(brush = topBarBrush)
             .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {

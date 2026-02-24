@@ -469,9 +469,11 @@ fun ContactsScreen(
     }
 
     // Диалог подтверждения дубликата при экспорте GAL → локальные контакты
-    if (duplicateCheckContact != null && duplicateExistingContact != null) {
-        val galContact = duplicateCheckContact!!
-        val existingContact = duplicateExistingContact!!
+    val safeGalContact = duplicateCheckContact
+    val safeExistingContact = duplicateExistingContact
+    if (safeGalContact != null && safeExistingContact != null) {
+        val galContact = safeGalContact
+        val existingContact = safeExistingContact
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = {
                 duplicateCheckContactId = null

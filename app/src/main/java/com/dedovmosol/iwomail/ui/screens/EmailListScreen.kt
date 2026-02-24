@@ -300,7 +300,8 @@ fun EmailListScreen(
                     withContext(Dispatchers.IO) { 
                         mailRepo.syncEmails(loadedFolder.accountId, folderId) 
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     // Ошибка синхронизации — не блокируем UI
                 } finally {
                     isRefreshing = false
@@ -343,7 +344,8 @@ fun EmailListScreen(
                     is EasResult.Success -> {}
                     is EasResult.Error -> errorMessage = result.message
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Ошибка синхронизации — не блокируем UI
             } finally {
                 isRefreshing = false
@@ -545,8 +547,11 @@ fun EmailListScreen(
     
     fun starSelected() {
         scope.launch {
-            selectedIds.forEach { id -> mailRepo.toggleFlag(id) }
-            selectedIds = emptySet()
+            try {
+                selectedIds.forEach { id -> mailRepo.toggleFlag(id) }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally { selectedIds = emptySet() }
         }
     }
     
@@ -723,6 +728,7 @@ fun EmailListScreen(
                                         Icon(getFolderIcon(targetFolder.type), null)
                                     },
                                     modifier = Modifier.clickable(enabled = !isMoving) {
+                                        if (isMoving) return@clickable
                                         scope.launch {
                                             isMoving = true
                                             val result = withContext(Dispatchers.IO) {
@@ -1357,6 +1363,7 @@ private fun EmailListContent(
     onDragSelect: (Set<String>) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
     
     // Кэш превью изображений для писем с вложениями
@@ -1423,6 +1430,8 @@ private fun EmailListContent(
         items(emails, key = { it.id }) { email ->
             EmailListItem(
                 email = email,
+                mailRepo = mailRepo,
+                context = context,
                 isSelected = email.id in selectedIds,
                 isSelectionMode = isSelectionMode,
                 showStar = !isTrashOrSpam && !isDrafts,
@@ -1441,6 +1450,8 @@ private fun EmailListContent(
 @Composable
 private fun EmailListItem(
     email: EmailEntity,
+    mailRepo: com.dedovmosol.iwomail.data.repository.MailRepository,
+    context: android.content.Context,
     isSelected: Boolean,
     isSelectionMode: Boolean,
     showStar: Boolean = true,
@@ -1452,9 +1463,7 @@ private fun EmailListItem(
     onStarClick: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
-    val context = LocalContext.current
-    val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
-    
+
     val backgroundColor by animateColorAsState(
         targetValue = when {
             isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
@@ -1733,16 +1742,36 @@ private fun getFolderIcon(type: Int) = when (type) {
     else -> AppIcons.Folder
 }
 
-private fun formatDate(timestamp: Long): String {
+// PERF: Кэшируем "сегодня" чтобы не создавать Calendar.getInstance() на каждый вызов formatDate
+// @Volatile — formatDate может вызываться из разных потоков (ThreadLocal Calendar)
+@Volatile private var cachedTodayDayOfYear = -1
+@Volatile private var cachedTodayYear = -1
+@Volatile private var cachedTodayTimestamp = 0L
+
+private fun ensureTodayCached() {
     val now = System.currentTimeMillis()
+    // Обновляем кэш раз в минуту (достаточно для определения "сегодня")
+    if (now - cachedTodayTimestamp > 60_000) {
+        val today = Calendar.getInstance()
+        cachedTodayDayOfYear = today.get(Calendar.DAY_OF_YEAR)
+        cachedTodayYear = today.get(Calendar.YEAR)
+        cachedTodayTimestamp = now
+    }
+}
+
+// PERF: Один переиспользуемый Calendar для formatDate (ThreadLocal для thread-safety)
+private val reusableCalendar = java.lang.ThreadLocal.withInitial { Calendar.getInstance() }
+
+private fun formatDate(timestamp: Long): String {
+    ensureTodayCached()
+    val now = cachedTodayTimestamp
     val diff = now - timestamp
-    val calendar = Calendar.getInstance().apply { timeInMillis = timestamp }
-    val today = Calendar.getInstance()
+    val calendar = reusableCalendar.get().apply { timeInMillis = timestamp }
     
     return when {
-        diff < 24 * 60 * 60 * 1000 && calendar.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) -> timeFormat.get().format(timestamp)
+        diff < 24 * 60 * 60 * 1000 && calendar.get(Calendar.DAY_OF_YEAR) == cachedTodayDayOfYear && calendar.get(Calendar.YEAR) == cachedTodayYear -> timeFormat.get().format(timestamp)
         diff < 7 * 24 * 60 * 60 * 1000 -> dayFormat.get().format(timestamp)
-        calendar.get(Calendar.YEAR) == today.get(Calendar.YEAR) -> dateFormat.get().format(timestamp)
+        calendar.get(Calendar.YEAR) == cachedTodayYear -> dateFormat.get().format(timestamp)
         else -> fullDateFormat.get().format(timestamp)
     }
 }

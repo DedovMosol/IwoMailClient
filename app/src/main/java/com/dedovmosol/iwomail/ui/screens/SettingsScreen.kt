@@ -455,8 +455,9 @@ private fun AccountSettingsItem(
     }
     
     // Диалог управления сертификатом
-    if (showCertificateDialog && !account.certificatePath.isNullOrBlank()) {
-        val certFile = java.io.File(account.certificatePath!!)
+    val settingsCertPath = account.certificatePath
+    if (showCertificateDialog && !settingsCertPath.isNullOrBlank()) {
+        val certFile = java.io.File(settingsCertPath)
         val certFileName = certFile.name
         val certFileSize = if (certFile.exists()) "${certFile.length() / 1024} KB" else "—"
         
@@ -816,7 +817,7 @@ private fun AccountSettingsItem(
             // Подписи (несколько для каждого аккаунта)
             var showSignaturesDialog by rememberSaveable { mutableStateOf(false) }
             var signatures by remember { mutableStateOf<List<com.dedovmosol.iwomail.data.database.SignatureEntity>>(emptyList()) }
-            val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
+            val database = remember { com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context) }
             
             // Загружаем подписи
             LaunchedEffect(account.id) {

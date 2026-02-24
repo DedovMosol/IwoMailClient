@@ -26,8 +26,11 @@ fun rememberPulseScale(
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val animated by infiniteTransition.animateFloat(
         initialValue = from,
-        targetValue = to,
-        animationSpec = AnimationSpecs.pulse(durationMs),
+        targetValue = if (enabled) to else from,
+        animationSpec = if (enabled) AnimationSpecs.pulse(durationMs) else infiniteRepeatable(
+            animation = tween(1),
+            repeatMode = RepeatMode.Restart
+        ),
         label = "scale"
     )
     return if (enabled) animated else from
@@ -47,8 +50,11 @@ fun rememberRotation(
     val infiniteTransition = rememberInfiniteTransition(label = "rotation")
     val animated by infiniteTransition.animateFloat(
         initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = AnimationSpecs.rotation(durationMs),
+        targetValue = if (enabled) 360f else 0f,
+        animationSpec = if (enabled) AnimationSpecs.rotation(durationMs) else infiniteRepeatable(
+            animation = tween(1),
+            repeatMode = RepeatMode.Restart
+        ),
         label = "rotation"
     )
     return if (enabled) animated else 0f
@@ -69,9 +75,12 @@ fun rememberShake(
 ): Float {
     val infiniteTransition = rememberInfiniteTransition(label = "shake")
     val animated by infiniteTransition.animateFloat(
-        initialValue = -amplitude,
-        targetValue = amplitude,
-        animationSpec = AnimationSpecs.shake(durationMs),
+        initialValue = if (enabled) -amplitude else 0f,
+        targetValue = if (enabled) amplitude else 0f,
+        animationSpec = if (enabled) AnimationSpecs.shake(durationMs) else infiniteRepeatable(
+            animation = tween(1),
+            repeatMode = RepeatMode.Restart
+        ),
         label = "shake"
     )
     return if (enabled) animated else 0f
@@ -93,11 +102,14 @@ fun rememberWobble(
 ): Float {
     val infiniteTransition = rememberInfiniteTransition(label = "wobble")
     val animated by infiniteTransition.animateFloat(
-        initialValue = -amplitude,
-        targetValue = amplitude,
-        animationSpec = infiniteRepeatable(
+        initialValue = if (enabled) -amplitude else 0f,
+        targetValue = if (enabled) amplitude else 0f,
+        animationSpec = if (enabled) infiniteRepeatable(
             animation = tween(durationMs, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
+        ) else infiniteRepeatable(
+            animation = tween(1),
+            repeatMode = RepeatMode.Restart
         ),
         label = "wobble"
     )

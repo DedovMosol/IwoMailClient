@@ -708,7 +708,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             }
             var newEmailsCount = 0
             
-            val windowSize = 200  // Exchange 2007 SP1 поддерживает до 512; 200 — баланс скорости и совместимости
+            val windowSize = 50  // MS-ASCMD: "values >100 cause larger responses, more susceptible to communication errors"; 50×10KB≈500KB/batch
             val includeMime = folder.type == FolderType.SENT_ITEMS && !isFullResync
             
             if (syncKey == "0") {
@@ -740,7 +740,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             var consecutiveErrors = 0
             val maxConsecutiveErrors = 5
             val syncStartTime = System.currentTimeMillis()
-            val maxSyncDurationMs = if (isFullResync) 900_000L else 300_000L  // 15 мин / 5 мин — для больших ящиков (3000+ писем)
+            val maxSyncDurationMs = if (isFullResync) 280_000L else 55_000L  // Должен быть < внешнего timeout (SyncWorker: 300s/60s) для сохранения SyncKey
             var previousSyncKey = syncKey
             var sameKeyCount = 0
             var emptyDataCount = 0

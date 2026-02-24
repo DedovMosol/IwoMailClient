@@ -422,13 +422,13 @@ fun SetupScreen(
                 syncMode = try { SyncMode.valueOf(account.syncMode) } catch (_: Exception) { SyncMode.PUSH }
                 // Загружаем путь к серверному сертификату
                 certificatePath = account.certificatePath
-                if (certificatePath != null) {
-                    certificateFileName = File(certificatePath!!).name
+                certificatePath?.let { path ->
+                    certificateFileName = File(path).name
                 }
                 // Загружаем путь к клиентскому сертификату
                 clientCertificatePath = account.clientCertificatePath
-                if (clientCertificatePath != null) {
-                    clientCertificateFileName = File(clientCertificatePath!!).name
+                clientCertificatePath?.let { path ->
+                    clientCertificateFileName = File(path).name
                 }
             }
         }
@@ -1306,9 +1306,10 @@ fun SetupScreen(
                         successMessage = null
                         
                         try {
-                            if (clientCertificatePath != null) {
+                            val certPath = clientCertificatePath
+                            if (certPath != null) {
                                 val isValid = com.dedovmosol.iwomail.network.HttpClientProvider
-                                    .validateClientCertificate(clientCertificatePath!!, clientCertificatePassword)
+                                    .validateClientCertificate(certPath, clientCertificatePassword)
                                 if (!isValid) {
                                     errorMessage = if (isRussianLang) {
                                         "Неверный пароль или повреждённый сертификат"

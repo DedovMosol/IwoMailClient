@@ -1292,8 +1292,9 @@ fun RichTextToolbar(
                         color = if (hasTextColor) activeContentColor else inactiveContentColor
                     )
                     // Полоска с тонкой обводкой для видимости на любом фоне
-                    val colorBarColor = if (hasTextColor && controller.currentTextColor != null) {
-                        parseColorSafe(controller.currentTextColor!!) 
+                    val textColorVal = controller.currentTextColor
+                    val colorBarColor = if (hasTextColor && textColorVal != null) {
+                        parseColorSafe(textColorVal) 
                             ?: MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.onSurface
@@ -1402,14 +1403,15 @@ fun RichTextToolbar(
                         tint = if (hasHighlight) activeContentColor else inactiveContentColor
                     )
                     // Полоска с цветом выделения
-                    if (hasHighlight && controller.currentHighlightColor != null) {
+                    val highlightColorVal = controller.currentHighlightColor
+                    if (hasHighlight && highlightColorVal != null) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Box(
                             modifier = Modifier
                                 .width(14.dp)
                                 .height(3.dp)
                                 .background(
-                                    parseColorSafe(controller.currentHighlightColor!!) 
+                                    parseColorSafe(highlightColorVal) 
                                         ?: MaterialTheme.colorScheme.primary,
                                     androidx.compose.foundation.shape.RoundedCornerShape(1.dp)
                                 )

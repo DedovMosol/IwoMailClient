@@ -26,6 +26,9 @@
     
     <!-- Для установки обновлений -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    
+    <!-- Для отката (самоудаления) на API 28+ -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <application
         android:name=".MailApplication"

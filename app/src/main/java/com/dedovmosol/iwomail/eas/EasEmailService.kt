@@ -101,7 +101,7 @@ class EasEmailService internal constructor(
                 <FilterType>0</FilterType>
                 <BodyPreference xmlns="AirSyncBase">
                     <Type>2</Type>
-                    <TruncationSize>51200</TruncationSize>
+                    <TruncationSize>10240</TruncationSize>
                 </BodyPreference>
                 $mimeSupport
             </Options>

@@ -158,23 +158,29 @@ fun EasterEggOverlay(
         }
     }
 
-    // Пульсирующая анимация логотипа
+    // PERF: Пульсирующая анимация логотипа — останавливается когда overlay невидим
     val infiniteTransition = rememberInfiniteTransition(label = "iwo_pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
+        targetValue = if (visible) 1.08f else 0.92f,
+        animationSpec = if (visible) infiniteRepeatable(
             animation = tween(800, easing = EaseInOutSine),
             repeatMode = RepeatMode.Reverse
+        ) else infiniteRepeatable(
+            animation = tween(1),
+            repeatMode = RepeatMode.Restart
         ),
         label = "scale"
     )
     val glowAlpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
-        targetValue = 0.9f,
-        animationSpec = infiniteRepeatable(
+        targetValue = if (visible) 0.9f else 0.4f,
+        animationSpec = if (visible) infiniteRepeatable(
             animation = tween(800, easing = EaseInOutSine),
             repeatMode = RepeatMode.Reverse
+        ) else infiniteRepeatable(
+            animation = tween(1),
+            repeatMode = RepeatMode.Restart
         ),
         label = "glow"
     )

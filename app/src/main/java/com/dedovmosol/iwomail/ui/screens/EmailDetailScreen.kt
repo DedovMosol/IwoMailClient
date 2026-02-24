@@ -298,7 +298,8 @@ fun EmailDetailScreen(
                                         }
                                         is EasResult.Error -> null
                                     }
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     null
                                 }
                             }
@@ -388,7 +389,9 @@ fun EmailDetailScreen(
                     is EasResult.Success -> {
                         // Тело загружено — ПОСЛЕДОВАТЕЛЬНО обновляем FileReference вложений
                         launch(Dispatchers.IO) {
-                            try { mailRepo.refreshAttachmentMetadata(emailId) } catch (_: Exception) {}
+                            try { mailRepo.refreshAttachmentMetadata(emailId) } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                            }
                         }
                     }
                     is EasResult.Error -> {
@@ -414,15 +417,17 @@ fun EmailDetailScreen(
         } else if (currentEmail.body.isNotEmpty() && !isLoadingBody) {
             // Тело уже есть — фоновое обновление body + FileReference вложений
             // ПОСЛЕДОВАТЕЛЬНО (не параллельно) чтобы не было race condition с EAS командами
-            // Проверяем isLoadingBody чтобы не дублировать запрос с кнопкой Refresh
+            // ИСПРАВЛЕНО: withContext вместо launch — отменяется вместе с LaunchedEffect,
+            // не пишет isLoadingBody=false в stale state после навигации назад
             isLoadingBody = true
-            launch(Dispatchers.IO) {
-                try {
+            try {
+                withContext(Dispatchers.IO) {
                     mailRepo.loadEmailBody(emailId, forceReload = true)
                     mailRepo.refreshAttachmentMetadata(emailId)
-                } catch (_: Exception) {}
-                finally { withContext(Dispatchers.Main) { isLoadingBody = false } }
-            }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally { isLoadingBody = false }
         }
     }
     
@@ -443,8 +448,10 @@ fun EmailDetailScreen(
     }
     
     // Диалог MDN
-    if (showMdnDialog && email != null && !email?.mdnRequestedBy.isNullOrBlank()) {
-        val mdnEmail = email!!
+    // КРИТИЧНО: используем локальную переменную вместо !! чтобы избежать NPE при race condition в recomposition
+    val currentEmail = email
+    if (showMdnDialog && currentEmail != null && !currentEmail.mdnRequestedBy.isNullOrBlank()) {
+        val mdnEmail = currentEmail
         val readReceiptSentText = Strings.readReceiptSent
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = { 
@@ -585,7 +592,8 @@ fun EmailDetailScreen(
                                     leadingContent = { 
                                         Icon(AppIcons.Folder, null) 
                                     },
-                                    modifier = Modifier.clickable {
+                                    modifier = Modifier.clickable(enabled = !isMoving) {
+                                        if (isMoving) return@clickable
                                         scope.launch {
                                             isMoving = true
                                             val result = withContext(Dispatchers.IO) {
@@ -784,8 +792,8 @@ fun EmailDetailScreen(
             }
         } else {
             // Используем локальную переменную для безопасного доступа
-            // email гарантированно не null в этом блоке
-            val currentEmail = email!!
+            // PERF: smart-cast вместо !! — безопаснее при recomposition race
+            val currentEmail = email ?: return@Scaffold
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1309,7 +1317,9 @@ fun EmailDetailScreen(
                                         }
                                     }
                                 }
-                            } catch (_: Exception) { }
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                            }
                             isLoadingIcal = false
                         }
                     }
@@ -1317,9 +1327,10 @@ fun EmailDetailScreen(
                     // Используем данные из тела или из загруженного вложения
                     // Обрабатываем iCalendar line folding (RFC 5545): строки могут быть разбиты
                     // с пробелом или табом в начале продолжения
+                    val resolvedIcalData = loadedIcalData
                     val icalData = when {
                         bodyHasVEvent -> currentEmail.body
-                        loadedIcalData != null -> loadedIcalData!!
+                        resolvedIcalData != null -> resolvedIcalData
                         else -> ""
                     }.replace(LINE_FOLDING_REGEX, "") // Убираем line folding
                     
@@ -1812,6 +1823,8 @@ fun EmailDetailScreen(
                         // key нужен чтобы WebView не пересоздавался при рекомпозиции
                         var webViewHeight by remember { mutableStateOf(0) }
                         var webViewRef by remember { mutableStateOf<WebView?>(null) }
+                        // PERF: Отслеживаем последний загруженный HTML чтобы не перезагружать WebView при каждой рекомпозиции
+                        var lastLoadedHtml by remember { mutableStateOf("") }
                         
                         DisposableEffect(emailId) {
                             onDispose {
@@ -1957,6 +1970,13 @@ fun EmailDetailScreen(
                                                 .replace("cid:$cid", dataUrl)
                                                 .replace("cid:${cid.removePrefix("<").removeSuffix(">")}", dataUrl)
                                         }
+                                        
+                                        // PERF: Пропускаем перезагрузку если контент не изменился
+                                        // Без этой проверки loadDataWithBaseURL вызывается при КАЖДОЙ рекомпозиции,
+                                        // что перезагружает WebView, сбрасывает скролл и убивает FPS
+                                        val contentKey = processedBody.hashCode().toString() + "_" + inlineImages.size
+                                        if (contentKey == lastLoadedHtml) return@AndroidView
+                                        lastLoadedHtml = contentKey
                                         
                                         // Оборачиваем в HTML с адаптивным контентом
                                         val styledHtml = """
@@ -2311,9 +2331,10 @@ private fun AttachmentsSection(
     }
 }
 
+private val detailDateFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault()) }
+
 private fun formatFullDate(timestamp: Long): String {
-    return java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault())
-        .format(java.util.Date(timestamp))
+    return detailDateFormat.get()?.format(java.util.Date(timestamp)) ?: ""
 }
 
 private fun formatFileSize(bytes: Long): String {

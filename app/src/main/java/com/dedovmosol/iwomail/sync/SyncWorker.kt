@@ -87,7 +87,8 @@ class SyncWorker(
         if (isManualSync) {
             try {
                 setForeground(createForegroundInfo())
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Игнорируем ошибку - продолжаем работу в фоне
             }
         }
@@ -119,61 +120,68 @@ class SyncWorker(
         val newEmailsByAccount = mutableMapOf<Long, MutableList<NewEmailInfo>>()
         var hasErrors = false
         
+        // Общий бюджет времени на email sync всех аккаунтов.
+        // Автоматический sync: 480с (оставляем ~2 мин на контакты/календарь/задачи/cleanup из 10 мин WorkManager).
+        // Ручной sync (foreground): 900с — нет жёсткого лимита WorkManager, но разумный предел.
+        // При 200 папках × ~2 сек = 400 сек — укладываемся. При зависаниях — прерываемся,
+        // INBOX и системные папки уже синхронизированы (они первые в сортировке).
+        val emailSyncBudgetMs = if (isManualSync) 900_000L else 480_000L
+        val emailSyncStartTime = System.currentTimeMillis()
+        
         for (account in accounts) {
+            // Проверяем бюджет перед каждым аккаунтом
+            if (System.currentTimeMillis() - emailSyncStartTime > emailSyncBudgetMs) {
+                android.util.Log.w("SyncWorker", "Email sync budget exhausted before account ${account.id}, skipping remaining accounts")
+                hasErrors = true
+                break
+            }
+            
             // Синхронизируем папки (игнорируем ошибки - пробуем синхронизировать письма в любом случае)
             when (mailRepo.syncFolders(account.id)) {
                 is EasResult.Error -> hasErrors = true
                 is EasResult.Success -> { }
             }
             
-            val mainFolderTypes = listOf(
-                FolderType.INBOX, FolderType.DRAFTS, FolderType.DELETED_ITEMS,
-                FolderType.SENT_ITEMS, FolderType.OUTBOX, FolderType.JUNK_EMAIL
-            )
             val allFolders = database.folderDao().getFoldersByAccountList(account.id)
-            // КРИТИЧНО: Синхронизируем И пользовательские папки (type 1, USER_CREATED=12).
+            // КРИТИЧНО: Синхронизируем ВСЕ пользовательские папки (type 1, USER_CREATED=12).
             // Без этого письма, перемещённые в пользовательские папки через MoveItems,
-            // исчезают: локальная вставка происходит, но при resetAllSyncKeys (status 3)
-            // syncKey папки сбрасывается в "0" → при следующем sync deleteByFolder
-            // удаляет письма, а SyncWorker не ресинхронизирует пользовательские папки.
-            // Type 1 = Generic user-created folder (EAS), 12 = User-created mail folder.
-            // Пользовательские папки синхронизируем ПОСЛЕ системных (менее приоритетны).
-            val userFolderTypes = listOf(1, FolderType.USER_CREATED)
-            val foldersToSync = allFolders.filter { it.type in mainFolderTypes } +
-                allFolders.filter { it.type in userFolderTypes }
+            // исчезают при resetAllSyncKeys (status 3).
+            //
+            // Стратегия: ВСЕ папки получают быстрый инкрементальный sync (~1-3 сек/папка).
+            // Тяжёлый full resync (до 280с/папка) — только для первых N несинхронизированных.
+            // Остальные несинхронизированные подтянутся в следующих циклах (каждые 15 мин).
+            val systemFolders = allFolders.filter { it.type in FolderType.SYNC_MAIN_TYPES }
+            val userFolders = allFolders.filter { it.type in FolderType.SYNC_USER_TYPES }
+            val foldersToSync = (systemFolders + userFolders)
+                .sortedBy { if (it.type == FolderType.INBOX) 0 else 1 }
             
-            // Синхронизируем письма: сначала инкрементально, при ошибке - полный ресинк
-            // Per-folder таймаут (300 сек) — защита от превышения WorkManager ~10 мин лимита.
+            // Считаем сколько папок ещё не синхронизированы (syncKey == "0") — им нужен full resync
+            val unsyncedUserFolderIds = userFolders
+                .filter { it.syncKey == "0" }
+                .take(FolderType.MAX_FULL_RESYNC_USER_FOLDERS)
+                .map { it.id }
+                .toSet()
+            
+            // Синхронизируем письма: инкрементально для всех, full resync только для лимитированных
             for (folder in foldersToSync) {
-                try {
-                    // Сначала пробуем инкрементальную синхронизацию (экономит трафик/батарею)
-                    // 60 сек — инкрементальный delta-sync быстр; большой таймаут блокирует ручной sync
-                    val result = kotlinx.coroutines.withTimeoutOrNull(60_000L) {
-                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = false)
-                    }
-                    if (result == null || result is EasResult.Error) {
-                        // Таймаут инкрементального sync или ошибка — пробуем полный ресинк.
-                        // Таймаут 60с для delta нормален; полный ресинк (3000+ писем) получает 300с.
-                        if (result == null) {
-                            android.util.Log.w("SyncWorker", "Incremental sync timeout for folder ${folder.id}, falling back to full resync")
-                        }
-                        val retryResult = kotlinx.coroutines.withTimeoutOrNull(300_000L) {
-                            mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
-                        }
-                        if (retryResult == null || retryResult is EasResult.Error) {
-                            hasErrors = true
-                        }
-                    }
-                } catch (_: Exception) {
-                    // При исключении тоже пробуем полный ресинк
-                    try {
-                        kotlinx.coroutines.withTimeoutOrNull(300_000L) {
-                            mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
-                        }
-                    } catch (_: Exception) {
-                        hasErrors = true
-                    }
+                // Проверяем общий бюджет времени — INBOX и системные уже синхронизированы (первые в списке)
+                if (System.currentTimeMillis() - emailSyncStartTime > emailSyncBudgetMs) {
+                    android.util.Log.w("SyncWorker", "Email sync budget exhausted (${emailSyncBudgetMs/1000}s), " +
+                        "synced folders so far, remaining will sync in next cycle")
+                    hasErrors = true
+                    break
                 }
+                
+                // Системные папки всегда получают full resync при ошибке
+                // Пользовательские: full resync только если в лимите или уже синхронизированы
+                val allowFull = folder.type in FolderType.SYNC_MAIN_TYPES
+                    || folder.syncKey != "0"
+                    || folder.id in unsyncedUserFolderIds
+                val success = syncFolderWithRetry(
+                    mailRepo, account.id, folder.id,
+                    allowFullResync = allowFull, tag = "SyncWorker"
+                )
+                if (!success) hasErrors = true
             }
             
             // КРИТИЧНО: getNewEmailsForNotification не зависит от статуса прочитанности
@@ -210,6 +218,7 @@ class SyncWorker(
                             mailRepo.loadEmailBody(emailInfo.id)
                         }
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         android.util.Log.w("SyncWorker", "Failed to preload body for ${emailInfo.id}", e)
                         // Продолжаем с другими письмами
                     }
@@ -494,6 +503,7 @@ class SyncWorker(
                                 // Удаляем черновик
                                 database.emailDao().delete(draft.id)
                             } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
                                 draftsFailed = true
                                 hasCleanupErrors = true
                                 android.util.Log.w("SyncWorker", "Auto cleanup local draft failed for ${draft.id}", e)
@@ -542,6 +552,7 @@ class SyncWorker(
                 true
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w("SyncWorker", "Auto cleanup failed with exception", e)
             false
         }
@@ -573,6 +584,7 @@ class SyncWorker(
                     settingsRepo.setLastContactsSyncTime(account.id, System.currentTimeMillis())
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Игнорируем ошибки синхронизации контактов
             }
         }
@@ -603,6 +615,7 @@ class SyncWorker(
                     settingsRepo.setLastNotesSyncTime(account.id, System.currentTimeMillis())
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Игнорируем ошибки синхронизации заметок
             }
         }
@@ -633,6 +646,7 @@ class SyncWorker(
                     settingsRepo.setLastCalendarSyncTime(account.id, System.currentTimeMillis())
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Игнорируем ошибки синхронизации календаря
             }
         }
@@ -663,6 +677,7 @@ class SyncWorker(
                     settingsRepo.setLastTasksSyncTime(account.id, System.currentTimeMillis())
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Игнорируем ошибки синхронизации задач
             }
         }

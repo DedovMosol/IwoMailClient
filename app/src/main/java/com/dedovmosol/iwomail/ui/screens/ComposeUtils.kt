@@ -148,9 +148,10 @@ class GroupColorVisualTransformation(
 /**
  * Форматирует дату для отображения в письмах/цитатах
  */
+private val emailDateFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()) }
+
 fun formatEmailDate(timestamp: Long): String {
-    return java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
-        .format(java.util.Date(timestamp))
+    return emailDateFormat.get()?.format(java.util.Date(timestamp)) ?: ""
 }
 
 /**

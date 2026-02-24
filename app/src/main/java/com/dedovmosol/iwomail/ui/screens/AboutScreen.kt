@@ -171,18 +171,11 @@ fun AboutScreen(
                         .padding(horizontal = 16.dp, vertical = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // PERF: Анимация вынесена из conditional if блока (Compose slot table corruption при изменении easterFound)
+                    val guitarRotation = com.dedovmosol.iwomail.ui.utils.rememberWobble(
+                        enabled = easterFound, amplitude = 8f, durationMs = 600
+                    )
                     if (easterFound) {
-                        // Анимация покачивания гитары
-                        val infiniteTransition = rememberInfiniteTransition(label = "guitar_wobble")
-                        val guitarRotation by infiniteTransition.animateFloat(
-                            initialValue = -8f,
-                            targetValue = 8f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(600, easing = EaseInOutSine),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "guitar_rotation"
-                        )
                         // Кликабельная гитара с анимацией покачивания
                         Text(
                             text = "\uD83C\uDFB8",
