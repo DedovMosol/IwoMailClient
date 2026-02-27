@@ -61,6 +61,9 @@ class PushService : Service() {
     // Сохранённые heartbeat для каждого аккаунта (восстанавливаются между перезапусками)
     private val accountHeartbeats = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
     
+    // MS-ASCMD: При Ping Status=6 сервер возвращает MaxFolders — адаптивный лимит
+    private val maxPingFoldersPerAccount = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
+    
     // Per-account debounce: предотвращает блокировку sync аккаунта B из-за аккаунта A
     private val lastAccountSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     // Per-account notification checkpoint: предотвращает пропуск писем аккаунта B
@@ -89,6 +92,7 @@ class PushService : Service() {
         private const val STATUS_EXPIRED = 1
         private const val STATUS_CHANGES_FOUND = 2
         private const val STATUS_HEARTBEAT_OUT_OF_BOUNDS = 5
+        private const val STATUS_TOO_MANY_FOLDERS = 6
         private const val STATUS_FOLDER_REFRESH_NEEDED = 7
         private const val STATUS_SERVER_ERROR = 8
         
@@ -659,6 +663,15 @@ class PushService : Service() {
                             saveHeartbeat(accountId, heartbeat)
                             consecutiveSuccesses = 0
                         }
+                        STATUS_TOO_MANY_FOLDERS -> {
+                            // MS-ASCMD: Сервер отклонил Ping — слишком много папок.
+                            // Снижаем лимит для этого аккаунта (min 5).
+                            val currentMax = maxPingFoldersPerAccount[accountId] ?: 25
+                            val reducedMax = maxOf(5, currentMax - 5)
+                            maxPingFoldersPerAccount[accountId] = reducedMax
+                            android.util.Log.w("PushService", "Ping Status=6: too many folders for account $accountId, reducing to $reducedMax")
+                            consecutiveSuccesses = 0
+                        }
                         STATUS_FOLDER_REFRESH_NEEDED -> {
                             syncFolders(currentAccount)
                             consecutiveSuccesses = 0
@@ -706,8 +719,9 @@ class PushService : Service() {
     
     private suspend fun doPing(account: AccountEntity, heartbeat: Int): Int {
         // MS-ASCMD Ping Status=6: сервер может ограничить количество папок.
-        // 25 — безопасный лимит для Exchange 2007 SP1.
-        val MAX_PING_FOLDERS = 25
+        // Начинаем с 25, при Status=6 снижаем до serverMaxFolders.
+        val serverMax = maxPingFoldersPerAccount[account.id]
+        val MAX_PING_FOLDERS = serverMax ?: 25
         
         // Мониторим также пользовательские папки (type 1, USER_CREATED=12) для push-уведомлений.
         // Без этого перемещённые в пользовательские папки письма не обновляются push'ом.
@@ -721,14 +735,28 @@ class PushService : Service() {
             
             if (allFolders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
             
-            // Ограничиваем initial sync: таймаут 5 мин + лимит папок
-            kotlinx.coroutines.withTimeoutOrNull(300_000L) {
-                for (folder in allFolders.take(MAX_PING_FOLDERS)) {
-                    try {
-                        mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        // Продолжаем с другими папками
+            // КРИТИЧНО: Не конкурируем с InitialSyncController
+            if (com.dedovmosol.iwomail.ui.InitialSyncController.isSyncingAccount(account.id)) {
+                // Ждём завершения первичной синхронизации вместо конкуренции
+                var waited = 0
+                while (com.dedovmosol.iwomail.ui.InitialSyncController.isSyncingAccount(account.id) && waited < 60) {
+                    kotlinx.coroutines.delay(5000)
+                    waited += 5
+                }
+                // Перечитываем папки — InitialSyncController мог их обновить
+                folders = database.folderDao().getFoldersByAccountList(account.id)
+                    .filter { it.syncKey != "0" && it.type in FolderType.PUSH_TYPES }
+                if (folders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
+            } else {
+                // Ограничиваем initial sync: таймаут 5 мин + лимит папок
+                kotlinx.coroutines.withTimeoutOrNull(300_000L) {
+                    for (folder in allFolders.take(MAX_PING_FOLDERS)) {
+                        try {
+                            mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            // Продолжаем с другими папками
+                        }
                     }
                 }
             }
@@ -767,6 +795,13 @@ class PushService : Service() {
     )
     
     private suspend fun syncAccount(account: AccountEntity) {
+        // КРИТИЧНО: Не конкурируем с InitialSyncController — он управляет первичной синхронизацией.
+        // Без этого PushService может сбросить syncKey (forceFullSync) пока InitialSyncController
+        // ещё синхронизирует папку → Status=3 → потеря данных → застревание на ~100 письмах.
+        if (com.dedovmosol.iwomail.ui.InitialSyncController.isSyncingAccount(account.id)) {
+            return
+        }
+        
         // Per-account debounce: не блокируем аккаунт B из-за недавнего sync аккаунта A
         val lastSync = lastAccountSyncTimes[account.id] ?: 0L
         if (System.currentTimeMillis() - lastSync < 30_000) {

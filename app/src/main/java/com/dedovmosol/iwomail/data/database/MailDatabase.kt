@@ -353,6 +353,14 @@ data class EmailEntity(
     val mdnSent: Boolean = false // Отчёт о прочтении уже отправлен
 )
 
+data class EmailDedupInfo(
+    val id: String,
+    val serverId: String,
+    val subject: String,
+    val from: String,
+    val dateReceived: Long
+)
+
 @Entity(
     tableName = "attachments",
     foreignKeys = [ForeignKey(

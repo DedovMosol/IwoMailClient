@@ -1,6 +1,62 @@
-﻿# Changelog
+# Changelog
 
-## v1.6.2 (16.02.2026)
+## v1.6.2 (27.02.2026)
+
+### Fixes (27.02.2026)
+
+#### Sync — incomplete folder sync and data loss during initial sync
+- **Problem:** During initial sync some folders didn't fully sync. Manual sync inside one folder (e.g. notes) caused local data loss in other folders (sent items).
+- **Root cause:** `resetAllSyncKeys(accountId)` on Status=3/12 was resetting SyncKey for ALL account folders, not just the failing one. This violates the MS-ASCMD specification.
+- **Fix:** Replaced with `updateSyncKey(folderId, "0")` — resets only the affected folder. Removed unnecessary FolderSync key reset (`updateFolderSyncKey`).
+- **Reference:** [MS-ASCMD Status (Sync)](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-ascmd/08151746-faf7-40a3-832b-b42e88a0b729)
+
+#### Tasks — incomplete tasks not loading from Exchange 2007 SP1
+- **Problem:** Tasks with minimal fields (no StartDate, DueDate, etc.) were not displayed — only fully-formed tasks loaded.
+- **Root cause 1:** ItemClass filter rejected items whose ItemClass didn't contain "Task" — but items are already from the Tasks folder, so they are tasks by definition.
+- **Root cause 2:** Fallback parsing only triggered when 0 tasks were found, not covering partial parsing.
+- **Root cause 3:** `BaseShape=IdOnly` with `task:*` fields — Exchange 2007 SP1 could return items without task-specific fields.
+- **Fix:** Removed ItemClass filter. Fallback now triggers when ItemId count exceeds parsed task count. Switched to `AllProperties` BaseShape.
+
+#### Calendar — attachments missing after reinstall and resync
+- **Problem:** After uninstalling and reinstalling the app, calendar event attachments were not visible after sync.
+- **Root cause:** GetItem request used `AllProperties` without explicit `item:Attachments`. Exchange 2007 SP1 may not include Attachments in AllProperties response.
+- **Fix:** Added `AdditionalProperties` with `item:Attachments` and `item:HasAttachments` to GetItem request.
+- **Reference:** [AdditionalProperties](https://learn.microsoft.com/en-us/previous-versions/office/developer/exchange-server-2010/aa563810(v=exchg.140))
+
+#### Calendar — incomplete server-side event deletion
+- **Problem:** When deleting two events (to trash, then permanently), one could remain on the server.
+- `deleteEventPermanently` now performs a best-effort server-side delete before local deletion (safety net if soft-delete failed).
+- Batch soft-delete switched to a single `EasClient` (`deleteEvents`) instead of creating a new client per event (eliminates duplicate NTLM handshakes and SyncKey conflicts).
+- `deleteEventsWithProgress` now logs errors (previously: `is EasResult.Error -> { }`, completely silent).
+- EWS `ErrorItemNotFound` on delete is now logged as a warning for diagnostics.
+
+#### Tasks — only 1 task loads from Exchange 2007 SP1
+- **Problem:** Only one task loaded (the one with both StartDate AND DueDate set). Server returned `totalItemsInView=1`.
+- **Root cause:** `FindItem` with any BaseShape other than `IdOnly` (without AdditionalProperties) caused implicit server-side filtering on Exchange 2007 SP1.
+- **Fix:** Two-step approach (per MS documentation): `FindItem(IdOnly)` → get ALL ItemIds, then `GetItem(AllProperties)` → get full task data (Subject, Body, StartDate, DueDate, Status, etc.). Eliminated the need for a separate `getTaskBodiesEws` call.
+- `discoverTaskSubfolderIds` expanded: searches from `msgfolderroot` (entire mailbox) instead of just `tasks` subfolders, added `folder:TotalCount` for diagnostics.
+- **Reference:** [FindItem Operation](https://learn.microsoft.com/en-us/previous-versions/office/developer/exchange-server-2007/aa566107), [GetItem (Task)](https://learn.microsoft.com/en-us/previous-versions/office/developer/exchange-server-2007/aa581352)
+
+#### Calendar — attachments missing after reinstall (final fix)
+- **Problem:** Previous fix (AdditionalProperties in GetItem) didn't help because `syncCalendar()` always uses EAS Sync, and `fetchCalendarAttachmentsEws` was only called from an unused EWS path.
+- **Fix:** After EAS sync, added `supplementAttachmentsViaEws` — EWS FindItem+CalendarView to detect HasAttachments, then GetItem for metadata. EAS↔EWS matching by Subject+StartTime (IDs are incompatible). Fallback by Subject for recurring events.
+
+#### Calendar — inaccurate batch delete counting
+- **Problem:** `deleteCalendarEventsBatchEws` treated ALL items as deleted when at least one `ResponseClass="Success"` was present in the response.
+- **Fix:** Now returns exact count of successful deletions (counting `ResponseClass="Success"` + `ErrorItemNotFound` per-item). Return type changed from `EasResult<Boolean>` to `EasResult<Int>`.
+
+#### Onboarding — low slide transition smoothness
+- **Fix:** Added `beyondBoundsPageCount = 1` to HorizontalPager — pre-loads adjacent pages for instant transitions.
+
+#### Calendar — event not showing after creation (earlier)
+- Added `RECENT_CREATE_THRESHOLD` (30 sec) in `syncCalendar()` to protect newly created events from premature deletion.
+- Removed redundant `syncCalendar()` call after event creation/update in UI.
+
+#### Calendar — attachments not visible when editing (earlier)
+- Added `deleteCalendarAttachments` to `EasCalendarService` and `EasClient` (EWS DeleteAttachment).
+- `CalendarRepository.updateEvent` accepts `removedAttachmentIds` for detaching attachments.
+- `CreateEventDialog` displays existing attachments with a remove button.
+- `EventDetailDialog` shows a placeholder when `hasAttachments=true` but metadata is not yet loaded.
 
 ### Highlights
 - UI redesign across key screens: refreshed components, custom file icons, extra scrollbars, and an updated widget.
@@ -10,6 +66,7 @@
 - Calendar received major upgrades: event attachments, recurring event handling, local trash, and safer delete/sync flow.
 - Contacts improvements: group support while composing and clearer duplicate prevention warnings.
 - Drafts now support a switchable storage mode (**local / server**) in account settings.
+- Exchange 2007 SP1: deeper EAS/EWS compatibility — more stable task sync, calendar attachment loading, and folder sync.
 
 ### Reliability, Performance, and Security
 - Improved Sync/Push stability: fewer race conditions and duplicates, better timeout handling, and controlled parallelism for large mailboxes.

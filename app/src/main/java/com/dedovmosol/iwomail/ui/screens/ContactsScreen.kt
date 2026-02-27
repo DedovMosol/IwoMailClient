@@ -48,26 +48,15 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.ui.utils.getAvatarColor
+import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
 import kotlinx.coroutines.launch
 
-// Цвета для аватаров как в Gmail — стабильные для каждой буквы (32 цвета)
-private val avatarColors = listOf(
-    Color(0xFFE53935), Color(0xFFD81B60), Color(0xFFC2185B),
-    Color(0xFF8E24AA), Color(0xFF7B1FA2), Color(0xFF5E35B1), Color(0xFF512DA8),
-    Color(0xFF3949AB), Color(0xFF303F9F), Color(0xFF1E88E5), Color(0xFF1976D2),
-    Color(0xFF039BE5), Color(0xFF0288D1), Color(0xFF00ACC1), Color(0xFF0097A7),
-    Color(0xFF00897B), Color(0xFF00796B), Color(0xFF43A047), Color(0xFF388E3C),
-    Color(0xFF7CB342), Color(0xFF689F38), Color(0xFFC0CA33), Color(0xFFAFB42B),
-    Color(0xFFFDD835), Color(0xFFFBC02D), Color(0xFFFFB300), Color(0xFFFFA000),
-    Color(0xFFFB8C00), Color(0xFFF57C00), Color(0xFFF4511E), Color(0xFFE64A19),
-    Color(0xFF6D4C41), Color(0xFF5D4037), Color(0xFF546E7A), Color(0xFF455A64)
+private val GROUP_COLORS = listOf(
+    0xFF1976D2.toInt(), 0xFFD32F2F.toInt(), 0xFF388E3C.toInt(), 0xFFF57C00.toInt(),
+    0xFF7B1FA2.toInt(), 0xFF0097A7.toInt(), 0xFFC2185B.toInt(), 0xFF5D4037.toInt(),
+    0xFF303F9F.toInt(), 0xFF00796B.toInt(), 0xFFFBC02D.toInt(), 0xFF455A64.toInt()
 )
-
-private fun getAvatarColor(name: String): Color {
-    if (name.isBlank()) return avatarColors[0]
-    val hash = name.lowercase().hashCode()
-    return avatarColors[(hash and 0x7FFFFFFF) % avatarColors.size]
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,7 +81,8 @@ fun ContactsScreen(
     // Личные контакты - используем key чтобы пересоздавать Flow при смене accountId
     val localContacts by remember(accountId) { contactRepo.getLocalContacts(accountId) }.collectAsState(initial = emptyList())
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
-    var filteredLocalContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
+    val debouncedLocalSearch by rememberDebouncedState(localSearchQuery)
+    // filteredLocalContacts вычисляется ниже через remember с ключами
     
     // Группы контактов - используем key чтобы пересоздавать Flow при смене accountId
     val groups by remember(accountId) { contactRepo.getGroups(accountId) }.collectAsState(initial = emptyList())
@@ -111,6 +101,7 @@ fun ContactsScreen(
     // Exchange контакты из БД (синхронизированные в фоне)
     val exchangeContacts by remember(accountId) { contactRepo.getExchangeContacts(accountId) }.collectAsState(initial = emptyList())
     var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
+    val debouncedExchangeSearch by rememberDebouncedState(exchangeSearchQuery)
     var isSyncing by remember { mutableStateOf(false) }
     var syncError by remember { mutableStateOf<String?>(null) }
     
@@ -155,14 +146,14 @@ fun ContactsScreen(
     }
     
     // Фильтрация Exchange контактов по поиску (исключая себя)
-    val filteredExchangeContacts = remember(exchangeContacts, exchangeSearchQuery, ownEmail) {
-        val filtered = if (exchangeSearchQuery.isBlank()) {
+    val filteredExchangeContacts = remember(exchangeContacts, debouncedExchangeSearch, ownEmail) {
+        val filtered = if (debouncedExchangeSearch.isBlank()) {
             exchangeContacts
         } else {
             exchangeContacts.filter { contact ->
-                contact.displayName.contains(exchangeSearchQuery, ignoreCase = true) ||
-                contact.email.contains(exchangeSearchQuery, ignoreCase = true) ||
-                contact.company.contains(exchangeSearchQuery, ignoreCase = true)
+                contact.displayName.contains(debouncedExchangeSearch, ignoreCase = true) ||
+                contact.email.contains(debouncedExchangeSearch, ignoreCase = true) ||
+                contact.company.contains(debouncedExchangeSearch, ignoreCase = true)
             }
         }
         // Исключаем себя из списка
@@ -178,7 +169,7 @@ fun ContactsScreen(
     var editingContactId by rememberSaveable { mutableStateOf<String?>(null) }
     var showDeleteDialogId by rememberSaveable { mutableStateOf<String?>(null) }
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
-    var showMoreMenu by remember { mutableStateOf(false) }
+    var showMoreMenu by rememberSaveable { mutableStateOf(false) }
     var showExportDialog by rememberSaveable { mutableStateOf(false) }
     var bulkDuplicateAlertCount by rememberSaveable { mutableStateOf(0) }
     var addToContactsConfirmId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -239,29 +230,24 @@ fun ContactsScreen(
         }
     }
     
-    // Фильтрация локальных контактов (исключая себя)
-    LaunchedEffect(localContacts, localSearchQuery, selectedGroupId, ownEmail) {
-        filteredLocalContacts = localContacts.filter { contact ->
-            // Исключаем себя
+    val filteredLocalContacts = remember(localContacts, debouncedLocalSearch, selectedGroupId, ownEmail) {
+        localContacts.filter { contact ->
             val notSelf = ownEmail.isBlank() || contact.email.lowercase() != ownEmail
-            // Фильтр по группе
             val matchesGroup = when (selectedGroupId) {
-                null -> true // Все контакты
-                "favorites" -> contact.isFavorite // Избранные
-                "ungrouped" -> contact.groupId == null // Без группы
+                null -> true
+                "favorites" -> contact.isFavorite
+                "ungrouped" -> contact.groupId == null
                 else -> contact.groupId == selectedGroupId
             }
-            // Фильтр по поиску
-            val matchesSearch = localSearchQuery.isBlank() || 
-                contact.displayName.contains(localSearchQuery, true) ||
-                contact.email.contains(localSearchQuery, true) ||
-                contact.company.contains(localSearchQuery, true)
+            val matchesSearch = debouncedLocalSearch.isBlank() || 
+                contact.displayName.contains(debouncedLocalSearch, true) ||
+                contact.email.contains(debouncedLocalSearch, true) ||
+                contact.company.contains(debouncedLocalSearch, true)
             
             notSelf && matchesGroup && matchesSearch
         }
     }
     
-    // Счётчики контактов по группам (считаем из ВСЕХ контактов, не фильтрованных)
     val groupCounts = remember(localContacts) {
         val counts = mutableMapOf<String, Int>()
         var ungroupedCount = 0
@@ -277,7 +263,6 @@ fun ContactsScreen(
         counts
     }
     
-    // Группировка по алфавиту
     val groupedContacts = remember(filteredLocalContacts) {
         filteredLocalContacts
             .sortedBy { it.displayName.lowercase() }
@@ -627,28 +612,9 @@ fun ContactsScreen(
         var newGroupName by rememberSaveable { mutableStateOf("") }
         val groupCreatedMsg = Strings.groupCreated
         
-        // Палитра цветов для групп (12 ярких цветов Material Design)
-        val groupColors = remember {
-            listOf(
-                0xFF1976D2.toInt(), // Blue
-                0xFFD32F2F.toInt(), // Red
-                0xFF388E3C.toInt(), // Green
-                0xFFF57C00.toInt(), // Orange
-                0xFF7B1FA2.toInt(), // Purple
-                0xFF0097A7.toInt(), // Cyan
-                0xFFC2185B.toInt(), // Pink
-                0xFF5D4037.toInt(), // Brown
-                0xFF303F9F.toInt(), // Indigo
-                0xFF00796B.toInt(), // Teal
-                0xFFFBC02D.toInt(), // Yellow
-                0xFF455A64.toInt()  // Blue Grey
-            )
-        }
-        
-        // Автоматический выбор первого неиспользованного цвета
         val defaultColor = remember(groups) {
             val usedColors = groups.map { it.color }.toSet()
-            groupColors.firstOrNull { it !in usedColors } ?: groupColors[0]
+            GROUP_COLORS.firstOrNull { it !in usedColors } ?: GROUP_COLORS[0]
         }
         
         var selectedColor by rememberSaveable { mutableIntStateOf(defaultColor) }
@@ -712,7 +678,7 @@ fun ContactsScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            groupColors.chunked(6).forEach { rowColors ->
+                            GROUP_COLORS.chunked(6).forEach { rowColors ->
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
@@ -781,24 +747,6 @@ fun ContactsScreen(
         var newName by rememberSaveable { mutableStateOf(group.name) }
         val groupRenamedMsg = Strings.groupRenamed
         
-        // Палитра цветов для групп
-        val groupColors = remember {
-            listOf(
-                0xFF1976D2.toInt(), // Blue
-                0xFFD32F2F.toInt(), // Red
-                0xFF388E3C.toInt(), // Green
-                0xFFF57C00.toInt(), // Orange
-                0xFF7B1FA2.toInt(), // Purple
-                0xFF0097A7.toInt(), // Cyan
-                0xFFC2185B.toInt(), // Pink
-                0xFF5D4037.toInt(), // Brown
-                0xFF303F9F.toInt(), // Indigo
-                0xFF00796B.toInt(), // Teal
-                0xFFFBC02D.toInt(), // Yellow
-                0xFF455A64.toInt()  // Blue Grey
-            )
-        }
-        
         var selectedColor by rememberSaveable { mutableIntStateOf(group.color) }
         
         val currentConfig = LocalContext.current.resources.configuration
@@ -859,7 +807,7 @@ fun ContactsScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            groupColors.chunked(6).forEach { rowColors ->
+                            GROUP_COLORS.chunked(6).forEach { rowColors ->
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {

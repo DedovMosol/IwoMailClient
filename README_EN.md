@@ -1,4 +1,4 @@
-﻿# iwo Mail Client
+# iwo Mail Client
 
 🇷🇺 [Русская версия](README.md)
 
@@ -12,7 +12,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 ## 🌟 Features
 
 - 📧 **Exchange ActiveSync** — EAS 12.0-14.1 support (Exchange 2007+). Tested on Exchange 2007 SP1 (EAS 12.1)
-- 🔄 **EWS for Exchange 2007** — notes sync and creation via EWS with NTLMv2 (fallback for EAS 12.x)
+- 🔄 **EWS for Exchange 2007** — calendar, tasks, notes, drafts via EWS with NTLMv2 (fallback for EAS 12.x)
 - 📬 **IMAP/POP3** — works with any mail server (coming soon)
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
 - 🔒 **Exchange 2007 compatibility** — TLS 1.0-1.3 support via Conscrypt
@@ -37,12 +37,16 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 ## 🆕 What's New in v1.6.2
 
-- Stability and sync: improved behavior on large mailboxes, fewer duplicates, stronger protection from races/leaks, and more reliable Push/Sync/notifications.
-- Mail and contacts: improved reply/forward and mark-as-read flows, better drafts/folder handling, stronger contact validation/export checks.
-- Calendar, tasks, and widget: expanded support for recurring events/attachments/online links, plus fresher widget data and scaling.
-- Calendar: fixed "resurrection" of deleted events after sync (EAS/EWS — permanent server-side deletion, improved error handling and retry logic per MS-ASCMD).
-- Interface: consolidated themes and visual components, improved dialogs, scrollbar behavior, and UX interactions.
-- Security: stronger handling of sensitive data.
+- Redesigned UI: new elements, custom file icons, extra scrollbars, updated widget
+- Full "Save" and "Save as" actions for all attachments
+- Improved multi-select: drag selection and batch operations
+- Stronger email validation before sending
+- Calendar: attachments, recurring events, and local trash
+- Contacts: group support when composing + duplicate warnings
+- Drafts: local save mode (switchable in settings)
+- Exchange 2007 SP1: deeper EAS/EWS compatibility — more stable task, attachment, and folder sync
+- Significant performance improvements
+- Bug fixes, reduced memory leaks and battery usage, improved stability and security
 
 📋 Full changelog: [CHANGELOG_EN.md](docs/CHANGELOG_EN.md)
 
@@ -94,7 +98,6 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 - **IMAP/POP3** — beta version, may be unstable
 - **EAS 16.0+** (Exchange 2016+) — not tested, possible issues
 - **S/MIME signatures** — not supported
-- **Calendar** — no recurring events support
 
 ## 📊 Tech Stack
 
@@ -137,6 +140,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 - [Changelog](docs/CHANGELOG_EN.md)
 - [Project Architecture](docs/ARCHITECTURE.md)
+- [XmlPullParser Migration Plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 - [Privacy Policy](docs/PRIVACY_POLICY.md)
 
 ## 🤝 Contributing
@@ -180,14 +184,15 @@ Protocol Layer
   IMAP — ImapClient  |  POP3 — Pop3Client  |  SMTP — SmtpClient
     ↓
 Database Layer                    Network Layer
-  Room — 8 DAOs, 7 Entities        HttpClientProvider, NetworkMonitor
-  MailDatabase (v33)                RetryUtils, NtlmAuthenticator
+  Room — 10 DAOs, 10 Entities      HttpClientProvider, NetworkMonitor
+  MailDatabase (v34)                RetryUtils, NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker
   BootReceiver, SyncAlarmReceiver, PushRestartWorker
   ServiceWatchdogReceiver, ScheduledEmailWorker
   CalendarReminderReceiver, TaskReminderReceiver
+  MarkEmailReadWorker, MarkTaskCompleteWorker
 ```
 
 ## 📄 License

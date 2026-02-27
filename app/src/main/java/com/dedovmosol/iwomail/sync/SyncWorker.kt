@@ -123,14 +123,24 @@ class SyncWorker(
         // Общий бюджет времени на email sync всех аккаунтов.
         // Автоматический sync: 480с (оставляем ~2 мин на контакты/календарь/задачи/cleanup из 10 мин WorkManager).
         // Ручной sync (foreground): 900с — нет жёсткого лимита WorkManager, но разумный предел.
-        // При 200 папках × ~2 сек = 400 сек — укладываемся. При зависаниях — прерываемся,
-        // INBOX и системные папки уже синхронизированы (они первые в сортировке).
-        val emailSyncBudgetMs = if (isManualSync) 900_000L else 480_000L
+        val totalEmailSyncBudgetMs = if (isManualSync) 900_000L else 480_000L
         val emailSyncStartTime = System.currentTimeMillis()
         
-        for (account in accounts) {
-            // Проверяем бюджет перед каждым аккаунтом
-            if (System.currentTimeMillis() - emailSyncStartTime > emailSyncBudgetMs) {
+        val activeAccounts = accounts.filter {
+            !com.dedovmosol.iwomail.ui.InitialSyncController.isSyncingAccount(it.id)
+        }
+        // Бюджет делится поровну между активными аккаунтами (минимум 60с на аккаунт)
+        val perAccountBudgetMs = if (activeAccounts.isNotEmpty()) {
+            maxOf(60_000L, totalEmailSyncBudgetMs / activeAccounts.size)
+        } else {
+            totalEmailSyncBudgetMs
+        }
+        
+        for (account in activeAccounts) {
+            val accountStartTime = System.currentTimeMillis()
+            
+            // Проверяем общий бюджет
+            if (accountStartTime - emailSyncStartTime > totalEmailSyncBudgetMs) {
                 android.util.Log.w("SyncWorker", "Email sync budget exhausted before account ${account.id}, skipping remaining accounts")
                 hasErrors = true
                 break
@@ -145,7 +155,7 @@ class SyncWorker(
             val allFolders = database.folderDao().getFoldersByAccountList(account.id)
             // КРИТИЧНО: Синхронизируем ВСЕ пользовательские папки (type 1, USER_CREATED=12).
             // Без этого письма, перемещённые в пользовательские папки через MoveItems,
-            // исчезают при resetAllSyncKeys (status 3).
+            // не будут видны пользователю.
             //
             // Стратегия: ВСЕ папки получают быстрый инкрементальный sync (~1-3 сек/папка).
             // Тяжёлый full resync (до 280с/папка) — только для первых N несинхронизированных.
@@ -162,12 +172,18 @@ class SyncWorker(
                 .map { it.id }
                 .toSet()
             
-            // Синхронизируем письма: инкрементально для всех, full resync только для лимитированных
             for (folder in foldersToSync) {
-                // Проверяем общий бюджет времени — INBOX и системные уже синхронизированы (первые в списке)
-                if (System.currentTimeMillis() - emailSyncStartTime > emailSyncBudgetMs) {
-                    android.util.Log.w("SyncWorker", "Email sync budget exhausted (${emailSyncBudgetMs/1000}s), " +
-                        "synced folders so far, remaining will sync in next cycle")
+                val now = System.currentTimeMillis()
+                // Проверяем per-account бюджет И общий бюджет
+                if (now - accountStartTime > perAccountBudgetMs) {
+                    android.util.Log.w("SyncWorker", "Per-account budget exhausted (${perAccountBudgetMs/1000}s) for account ${account.id}, " +
+                        "remaining folders will sync in next cycle")
+                    hasErrors = true
+                    break
+                }
+                if (now - emailSyncStartTime > totalEmailSyncBudgetMs) {
+                    android.util.Log.w("SyncWorker", "Total email sync budget exhausted (${totalEmailSyncBudgetMs/1000}s), " +
+                        "remaining will sync in next cycle")
                     hasErrors = true
                     break
                 }

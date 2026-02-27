@@ -182,6 +182,7 @@ class TaskRepository(private val context: Context) {
                     is EasResult.Error -> result
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_CREATE_ERROR)
             }
         }
@@ -289,12 +290,16 @@ class TaskRepository(private val context: Context) {
                             TaskReminderReceiver.scheduleReminder(context, updatedTask)
                         }
                         
-                        // КРИТИЧНО: Синхронизируем задачи для получения актуального serverId с сервера
-                        // Это необходимо для последующего удаления (EWS DeleteItem требует ПОЛНЫЙ ItemId)
-                        // Exchange 2007 SP1 требует 2 секунды для обработки UpdateItem
-                        // skipRecentDeleteCheck = true отключает защиту от race condition для получения актуального serverId
-                        kotlinx.coroutines.delay(2000)
-                        val syncResult = syncTasks(task.accountId, skipRecentDeleteCheck = true)
+                        // NonCancellable: sync должен завершиться даже при повороте экрана
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            kotlinx.coroutines.delay(2000)
+                            try {
+                                syncTasks(task.accountId, skipRecentDeleteCheck = true)
+                            } catch (e: Exception) {
+                                android.util.Log.w("TaskRepository",
+                                    "updateTask: post-update sync failed: ${e.message}")
+                            }
+                        }
                         
                         // Отправляем уведомление если указан assignTo
                         if (!assignTo.isNullOrBlank()) {
@@ -313,6 +318,7 @@ class TaskRepository(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_UPDATE_ERROR)
             }
         }
@@ -395,6 +401,7 @@ class TaskRepository(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_DELETE_ERROR)
             }
         }
@@ -536,29 +543,38 @@ class TaskRepository(private val context: Context) {
                 
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
-                var deletedCount = 0
-                for (task in deletedTasks) {
-                    val result = easClient.deleteTaskPermanently(task.serverId)
-                    
-                    when (result) {
-                        is EasResult.Success -> {
-                            taskDao.delete(task.id)
-                            deletedCount++
-                        }
-                        is EasResult.Error -> {
-                            // Если на сервере уже нет — удаляем локально
-                            if (result.message.contains("not found", ignoreCase = true) ||
-                                result.message.contains("ErrorItemNotFound", ignoreCase = true)) {
+
+                val batchResult = easClient.deleteTasksPermanentlyBatch(deletedTasks.map { it.serverId })
+                val batchOk = batchResult is EasResult.Success && batchResult.data > 0
+
+                if (batchOk) {
+                    for (task in deletedTasks) {
+                        taskDao.delete(task.id)
+                    }
+                    EasResult.Success((batchResult as EasResult.Success).data)
+                } else {
+                    val errMsg = (batchResult as? EasResult.Error)?.message ?: "batch returned 0"
+                    android.util.Log.w("TaskRepository",
+                        "emptyTasksTrash: batch failed ($errMsg), falling back to sequential")
+                    var deletedCount = 0
+                    for (task in deletedTasks) {
+                        val result = easClient.deleteTaskPermanently(task.serverId)
+                        when (result) {
+                            is EasResult.Success -> {
                                 taskDao.delete(task.id)
                                 deletedCount++
                             }
-                            // Иначе пропускаем, попробуем в следующий раз
+                            is EasResult.Error -> {
+                                if (result.message.contains("not found", ignoreCase = true) ||
+                                    result.message.contains("ErrorItemNotFound", ignoreCase = true)) {
+                                    taskDao.delete(task.id)
+                                    deletedCount++
+                                }
+                            }
                         }
                     }
+                    EasResult.Success(deletedCount)
                 }
-                
-                EasResult.Success(deletedCount)
             } catch (e: Exception) {
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_TRASH_EMPTY_ERROR)
             }
@@ -631,11 +647,27 @@ class TaskRepository(private val context: Context) {
                         val allExistingServerIds = currentExistingTasks.map { it.serverId }.toSet()
                         val deletedServerIds = allExistingServerIds - serverIds
                         
-                        // Удаляем те, которых нет на сервере ВООБЩЕ (окончательно удалены)
-                        for (serverId in deletedServerIds) {
-                            val taskId = "${accountId}_${serverId}"
-                            TaskReminderReceiver.cancelReminder(context, taskId)
-                            taskDao.delete(taskId)
+                        // КРИТИЧНО: Защита от массового удаления при неполном ответе сервера.
+                        // Если сервер вернул подозрительно мало задач (0 или намного меньше локальных),
+                        // НЕ удаляем — вероятно, ошибка синхронизации/парсинга, а не реальное удаление.
+                        val activeLocalTasks = currentExistingTasks.filter { !it.isDeleted && !it.serverId.startsWith("pending_sync_") }
+                        val activeServerTasks = serverTasks.filter { !it.isDeleted }
+                        val shouldDeleteFromServer = if (activeLocalTasks.size > 3 && activeServerTasks.isEmpty()) {
+                            android.util.Log.w("TaskRepository", "syncTasks: server returned 0 active tasks but local has ${activeLocalTasks.size}, skipping deletion")
+                            false
+                        } else if (activeLocalTasks.size >= 5 && activeServerTasks.size == 1 && deletedServerIds.size >= 3) {
+                            android.util.Log.w("TaskRepository", "syncTasks: server returned only ${activeServerTasks.size} active tasks but local has ${activeLocalTasks.size}, skipping mass deletion of ${deletedServerIds.size}")
+                            false
+                        } else {
+                            true
+                        }
+                        
+                        if (shouldDeleteFromServer) {
+                            for (serverId in deletedServerIds) {
+                                val taskId = "${accountId}_${serverId}"
+                                TaskReminderReceiver.cancelReminder(context, taskId)
+                                taskDao.delete(taskId)
+                            }
                         }
                         
                         // КРИТИЧНО: Фильтруем дубликаты по serverId (защита от повторной вставки)

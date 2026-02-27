@@ -57,10 +57,40 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val BODY_SAVE_THRESHOLD = 100_000
+
+private fun createLargeStringSaver(cacheDir: java.io.File, tag: String) =
+    androidx.compose.runtime.saveable.Saver<String, String>(
+        save = { value ->
+            if (value.length <= BODY_SAVE_THRESHOLD) value
+            else try {
+                val file = java.io.File(cacheDir, "compose_state_$tag.tmp")
+                file.writeText(value)
+                "\u0000FILE:${file.absolutePath}"
+            } catch (_: Exception) { value.take(BODY_SAVE_THRESHOLD) }
+        },
+        restore = { saved ->
+            if (saved.startsWith("\u0000FILE:")) {
+                try {
+                    val file = java.io.File(saved.removePrefix("\u0000FILE:"))
+                    if (file.exists()) file.readText().also { file.delete() } else ""
+                } catch (_: Exception) { "" }
+            } else saved
+        }
+    )
+
 private val SIGNATURE_REGEX = Regex("\n\n--\n.*", RegexOption.DOT_MATCHES_ALL)
 // HTML версия подписи - ищем от открывающего до закрывающего маркера
 // Жадный квантификатор .* захватит всё до последнего <!--/signature-->
 private val HTML_SIGNATURE_REGEX = Regex("<div class=\"signature\"[^>]*>.*</div><!--/signature-->", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+private val CID_PATTERN = Regex("cid:([^\"'\\s>]+)")
+private val DATA_URL_REGEX = """src\s*=\s*"data:([^;]+);base64,([^"]+)"""".toRegex()
+private val HTML_TAG_STRIP_REGEX = Regex("<[^>]*>")
+private val WHITESPACE_COLLAPSE_REGEX = Regex("\\s+")
+private val TRAILING_EMPTY_DIV_REGEX = Regex("(<div>\\s*(<br>|&nbsp;)?\\s*</div>\\s*)+$", RegexOption.IGNORE_CASE)
+private val TRAILING_EMPTY_P_REGEX = Regex("(<p>\\s*(<br>|&nbsp;)?\\s*</p>\\s*)+$", RegexOption.IGNORE_CASE)
+private val TRAILING_BR_REGEX = Regex("(<br\\s*/?>\\s*)+$", RegexOption.IGNORE_CASE)
+private val NON_HTML_TAG_REGEX = Regex("<(?!/?[a-zA-Z][a-zA-Z0-9]*[\\s>/])(?![!?])[^>]*>")
 
 /**
  * Формирует HTML подпись
@@ -110,13 +140,11 @@ private fun formatHtmlQuote(
 // Regex для определения HTML контента (ищем HTML теги)
 private val HTML_TAG_REGEX = Regex("<[a-zA-Z][^>]*>")
 private val BRACKET_EMAIL_REGEX = Regex("<([^>]+@[^>]+)>")
-private val SIMPLE_EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
-// Предкомпилированные regex для normalizeRecipients и обработки вложений
+// Предкомпилированные regex для normalizeRecipients, обработки вложений и извлечения адресов
 private val NORMALIZE_EMAIL_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
 private val NORMALIZE_BRACKET_REGEX = Regex("<([^>]+)>")
 private val SAFE_FILENAME_COMPOSE_REGEX = Regex("[\\\\/:*?\"<>|]")
 private val SIGNATURE_DIV_REGEX = Regex("<div class=\"signature\">.*</div>", RegexOption.DOT_MATCHES_ALL)
-private val HTML_STRIP_REGEX = Regex("<[^>]*>")
 
 /**
  * Проверяет, содержит ли строка HTML теги
@@ -127,7 +155,7 @@ private fun extractEmailFromString(raw: String, queryHint: String? = null): Stri
     if (raw.isBlank()) return null
     val cleaned = raw.replace("\r", " ").replace("\n", " ").trim()
     if (cleaned.isBlank()) return null
-    val emails = SIMPLE_EMAIL_REGEX.findAll(cleaned).map { it.value }.toList()
+    val emails = NORMALIZE_EMAIL_REGEX.findAll(cleaned).map { it.value }.toList()
     val queryLower = queryHint?.trim()?.lowercase().orEmpty()
     if (queryLower.isNotEmpty()) {
         emails.firstOrNull { it.lowercase().contains(queryLower) }?.let { return it }
@@ -226,11 +254,12 @@ fun ComposeScreen(
     var bcc by rememberSaveable { mutableStateOf("") }
     var subject by rememberSaveable { mutableStateOf("") }
     
-    val isToValid = to.isBlank() || isValidRecipientList(to)
-    val isCcValid = isValidRecipientList(cc)
-    val isBccValid = isValidRecipientList(bcc)
-    val areRecipientsValid = to.isNotBlank() && isToValid && isCcValid && isBccValid
-    var body by rememberSaveable { mutableStateOf("") }
+    val isToValid by remember { derivedStateOf { to.isBlank() || isValidRecipientList(to) } }
+    val isCcValid by remember { derivedStateOf { isValidRecipientList(cc) } }
+    val isBccValid by remember { derivedStateOf { isValidRecipientList(bcc) } }
+    val areRecipientsValid by remember { derivedStateOf { to.isNotBlank() && isToValid && isCcValid && isBccValid } }
+    val bodySaver = remember { createLargeStringSaver(context.cacheDir, "body") }
+    var body by rememberSaveable(stateSaver = bodySaver) { mutableStateOf("") }
     var isSending by rememberSaveable { mutableStateOf(false) }
     var showCcBcc by rememberSaveable { mutableStateOf(false) }
     
@@ -383,7 +412,7 @@ fun ComposeScreen(
     }
     
     // Меню и диалоги
-    var showMenu by remember { mutableStateOf(false) }
+    var showMenu by rememberSaveable { mutableStateOf(false) }
     var showScheduleDialog by rememberSaveable { mutableStateOf(false) }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
     var isSavingDraft by remember { mutableStateOf(false) }
@@ -619,7 +648,7 @@ fun ComposeScreen(
                 try {
                     accountRepo.setActiveAccount(currentAccountId)
                 } catch (e: Exception) {
-                    // Игнорируем ошибки при переключении аккаунта
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                 }
             }
             
@@ -728,7 +757,7 @@ fun ComposeScreen(
                     richTextController.insertImage(base64, outputMimeType)
                 }
             } catch (e: Exception) {
-                // Ошибка при загрузке изображения
+                if (e is kotlinx.coroutines.CancellationException) throw e
             }
         }
     }
@@ -780,60 +809,27 @@ fun ComposeScreen(
                     originalBody = originalBody
                 )
                 
-                // Загружаем вложения оригинального письма для ответа
-                // Инлайн-картинки встраиваются в тело (data URL), файлы — как вложения
-                val originalAttachments = mailRepo.getAttachmentsSync(emailId)
+                val originalAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(emailId) }
                 if (originalAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
                     val inlineImages = mutableMapOf<String, String>()
                     val account = accountRepo.getAccount(email.accountId)
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
-                    // collectionId и serverId для fallback-скачивания (когда fileReference пуст)
                     val collectionId = folder?.serverId
                     val emailServerId = email.serverId
                     
-                    for (att in originalAttachments) {
-                        try {
-                            val localPath = att.localPath
-                            if (localPath != null && java.io.File(localPath).exists()) {
-                                val file = java.io.File(localPath)
-                                if (att.isInline && !att.contentId.isNullOrBlank()) {
-                                    // Инлайн-вложение — встраиваем как data URL
-                                    val bytes = file.readBytes()
-                                    val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                    val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                    inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
-                                } else {
-                                    // Файловое вложение
-                                    val uri = androidx.core.content.FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        file
-                                    )
-                                    val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
-                                    newAttachmentStrings.add(attInfo.toSaveableString())
-                                }
-                            } else if (easClient != null && att.fileReference.isNotBlank()) {
-                                // Скачиваем вложение с сервера
-                                // Передаём collectionId/serverId для fallback (Exchange 2007 GetAttachment)
-                                val downloadResult = easClient.downloadAttachment(
-                                    att.fileReference, collectionId, emailServerId
-                                )
-                                
-                                if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
-                                    val attachmentsDir = java.io.File(context.filesDir, "reply_attachments")
-                                    if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
-                                    val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
-                                    val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
-                                    java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
-                                    
+                    withContext(Dispatchers.IO) {
+                        for (att in originalAttachments) {
+                            try {
+                                val localPath = att.localPath
+                                if (localPath != null && java.io.File(localPath).exists()) {
+                                    val file = java.io.File(localPath)
                                     if (att.isInline && !att.contentId.isNullOrBlank()) {
-                                        // Инлайн — встраиваем как data URL
-                                        val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
+                                        val bytes = file.readBytes()
+                                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                        inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
+                                        inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
                                     } else {
-                                        // Файловое вложение
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
                                             "${context.packageName}.fileprovider",
@@ -842,14 +838,41 @@ fun ComposeScreen(
                                         val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
                                         newAttachmentStrings.add(attInfo.toSaveableString())
                                     }
+                                } else if (easClient != null && att.fileReference.isNotBlank()) {
+                                    val downloadResult = easClient.downloadAttachment(
+                                        att.fileReference, collectionId, emailServerId
+                                    )
+                                    
+                                    if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
+                                        val attachmentsDir = java.io.File(context.filesDir, "reply_attachments")
+                                        if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
+                                        val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
+                                        val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
+                                        java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
+                                        
+                                        if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                            val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
+                                            val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                            inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                        } else {
+                                            val uri = androidx.core.content.FileProvider.getUriForFile(
+                                                context,
+                                                "${context.packageName}.fileprovider",
+                                                file
+                                            )
+                                            val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
+                                            newAttachmentStrings.add(attInfo.toSaveableString())
+                                        }
+                                    } else {
+                                        android.util.Log.w("ComposeScreen", "Reply: download failed for ${att.displayName} (ref=${att.fileReference})")
+                                    }
                                 } else {
-                                    android.util.Log.w("ComposeScreen", "Reply: download failed for ${att.displayName} (ref=${att.fileReference})")
+                                    android.util.Log.w("ComposeScreen", "Reply: skipping attachment ${att.displayName} (localPath=$localPath, fileRef='${att.fileReference}', hasClient=${easClient != null})")
                                 }
-                            } else {
-                                android.util.Log.w("ComposeScreen", "Reply: skipping attachment ${att.displayName} (localPath=$localPath, fileRef='${att.fileReference}', hasClient=${easClient != null})")
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                android.util.Log.w("ComposeScreen", "Reply: error loading attachment ${att.displayName}: ${e.message}")
                             }
-                        } catch (e: Exception) {
-                            android.util.Log.w("ComposeScreen", "Reply: error loading attachment ${att.displayName}: ${e.message}")
                         }
                     }
                     
@@ -857,12 +880,8 @@ fun ComposeScreen(
                         attachmentStrings = attachmentStrings + newAttachmentStrings
                     }
                     
-                    // Fallback: если тело содержит неразрешённые cid: ссылки —
-                    // загружаем инлайн-картинки через fetchInlineImages (MIME extraction).
-                    // Критично для писем из Отправленных, где fileReference часто пустой.
                     if (body.contains("cid:", ignoreCase = true) && easClient != null) {
-                        val cidPattern = Regex("cid:([^\"'\\s>]+)")
-                        val allCids = cidPattern.findAll(body).map { it.groupValues[1] }.toSet()
+                        val allCids = CID_PATTERN.findAll(body).map { it.groupValues[1] }.toSet()
                         val resolvedCids = inlineImages.keys.flatMap { 
                             listOf(it, it.removePrefix("<").removeSuffix(">"))
                         }.toSet()
@@ -871,7 +890,10 @@ fun ComposeScreen(
                         }
                         if (missingCids.isNotEmpty() && collectionId != null) {
                             try {
-                                when (val fetchResult = easClient.fetchInlineImages(collectionId, emailServerId)) {
+                                val fetchResult = withContext(Dispatchers.IO) {
+                                    easClient.fetchInlineImages(collectionId, emailServerId)
+                                }
+                                when (fetchResult) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         fetchResult.data.forEach { (cid, dataUrl) ->
                                             inlineImages[cid] = dataUrl
@@ -888,15 +910,15 @@ fun ComposeScreen(
                     }
                 }
                 
-                // Если после обработки вложений в body всё ещё есть cid: —
-                // значит не все инлайн-картинки найдены через attachment records.
-                // Пробуем fetchInlineImages напрямую (загрузка MIME с сервера).
                 if (body.contains("cid:", ignoreCase = true)) {
                     val fbAccount = accountRepo.getAccount(email.accountId)
                     val fbClient = fbAccount?.let { accountRepo.createEasClient(it.id) }
                     if (fbClient != null && folder?.serverId != null) {
                         try {
-                            when (val fetchResult = fbClient.fetchInlineImages(folder.serverId, email.serverId)) {
+                            val fetchResult = withContext(Dispatchers.IO) {
+                                fbClient.fetchInlineImages(folder.serverId, email.serverId)
+                            }
+                            when (fetchResult) {
                                 is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                     if (fetchResult.data.isNotEmpty()) {
                                         body = replaceCidWithDataUrl(body, fetchResult.data)
@@ -943,63 +965,30 @@ fun ComposeScreen(
                     originalBody = originalBody
                 )
                 
-                // Загружаем вложения оригинального письма для пересылки
-                // Инлайн-картинки встраиваются в тело (data URL), файлы — как вложения
-                val originalAttachments = mailRepo.getAttachmentsSync(emailId)
+                val originalAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(emailId) }
                 if (originalAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
                     val inlineImages = mutableMapOf<String, String>()
                     val account = accountRepo.getAccount(email.accountId)
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
-                    // Получаем folder для collectionId (fallback-скачивание при пустом fileReference)
                     val fwdFolder = withContext(Dispatchers.IO) {
                         database.folderDao().getFolder(email.folderId)
                     }
                     val collectionId = fwdFolder?.serverId
                     val emailServerId = email.serverId
                     
-                    for (att in originalAttachments) {
-                        try {
-                            val localPath = att.localPath
-                            if (localPath != null && java.io.File(localPath).exists()) {
-                                val file = java.io.File(localPath)
-                                if (att.isInline && !att.contentId.isNullOrBlank()) {
-                                    // Инлайн-вложение — встраиваем как data URL
-                                    val bytes = file.readBytes()
-                                    val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                    val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                    inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
-                                } else {
-                                    // Файловое вложение
-                                    val uri = androidx.core.content.FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        file
-                                    )
-                                    val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
-                                    newAttachmentStrings.add(attInfo.toSaveableString())
-                                }
-                            } else if (easClient != null && att.fileReference.isNotBlank()) {
-                                // Скачиваем вложение с сервера
-                                // Передаём collectionId/serverId для fallback (Exchange 2007 GetAttachment)
-                                val downloadResult = easClient.downloadAttachment(
-                                    att.fileReference, collectionId, emailServerId
-                                )
-                                
-                                if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
-                                    val attachmentsDir = java.io.File(context.filesDir, "forward_attachments")
-                                    if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
-                                    val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
-                                    val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
-                                    java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
-                                    
+                    withContext(Dispatchers.IO) {
+                        for (att in originalAttachments) {
+                            try {
+                                val localPath = att.localPath
+                                if (localPath != null && java.io.File(localPath).exists()) {
+                                    val file = java.io.File(localPath)
                                     if (att.isInline && !att.contentId.isNullOrBlank()) {
-                                        // Инлайн — встраиваем как data URL
-                                        val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
+                                        val bytes = file.readBytes()
+                                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                        inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
+                                        inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
                                     } else {
-                                        // Файловое вложение
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
                                             "${context.packageName}.fileprovider",
@@ -1008,26 +997,49 @@ fun ComposeScreen(
                                         val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
                                         newAttachmentStrings.add(attInfo.toSaveableString())
                                     }
+                                } else if (easClient != null && att.fileReference.isNotBlank()) {
+                                    val downloadResult = easClient.downloadAttachment(
+                                        att.fileReference, collectionId, emailServerId
+                                    )
+                                    
+                                    if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
+                                        val attachmentsDir = java.io.File(context.filesDir, "forward_attachments")
+                                        if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
+                                        val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
+                                        val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
+                                        java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
+                                        
+                                        if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                            val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
+                                            val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                            inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                        } else {
+                                            val uri = androidx.core.content.FileProvider.getUriForFile(
+                                                context,
+                                                "${context.packageName}.fileprovider",
+                                                file
+                                            )
+                                            val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
+                                            newAttachmentStrings.add(attInfo.toSaveableString())
+                                        }
+                                    } else {
+                                        android.util.Log.w("ComposeScreen", "Forward: download failed for ${att.displayName} (ref=${att.fileReference})")
+                                    }
                                 } else {
-                                    android.util.Log.w("ComposeScreen", "Forward: download failed for ${att.displayName} (ref=${att.fileReference})")
+                                    android.util.Log.w("ComposeScreen", "Forward: skipping attachment ${att.displayName} (localPath=$localPath, fileRef='${att.fileReference}', hasClient=${easClient != null})")
                                 }
-                            } else {
-                                android.util.Log.w("ComposeScreen", "Forward: skipping attachment ${att.displayName} (localPath=$localPath, fileRef='${att.fileReference}', hasClient=${easClient != null})")
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                android.util.Log.w("ComposeScreen", "Forward: error loading attachment ${att.displayName}: ${e.message}")
                             }
-                        } catch (e: Exception) {
-                            android.util.Log.w("ComposeScreen", "Forward: error loading attachment ${att.displayName}: ${e.message}")
                         }
                     }
                     if (newAttachmentStrings.isNotEmpty()) {
                         attachmentStrings = attachmentStrings + newAttachmentStrings
                     }
                     
-                    // Fallback: если тело содержит неразрешённые cid: ссылки —
-                    // загружаем инлайн-картинки через fetchInlineImages (MIME extraction).
-                    // Критично для писем из Отправленных, где fileReference часто пустой.
                     if (body.contains("cid:", ignoreCase = true) && easClient != null) {
-                        val cidPattern = Regex("cid:([^\"'\\s>]+)")
-                        val allCids = cidPattern.findAll(body).map { it.groupValues[1] }.toSet()
+                        val allCids = CID_PATTERN.findAll(body).map { it.groupValues[1] }.toSet()
                         val resolvedCids = inlineImages.keys.flatMap { 
                             listOf(it, it.removePrefix("<").removeSuffix(">"))
                         }.toSet()
@@ -1036,7 +1048,10 @@ fun ComposeScreen(
                         }
                         if (missingCids.isNotEmpty() && collectionId != null) {
                             try {
-                                when (val fetchResult = easClient.fetchInlineImages(collectionId, emailServerId)) {
+                                val fetchResult = withContext(Dispatchers.IO) {
+                                    easClient.fetchInlineImages(collectionId, emailServerId)
+                                }
+                                when (fetchResult) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         fetchResult.data.forEach { (cid, dataUrl) ->
                                             inlineImages[cid] = dataUrl
@@ -1053,9 +1068,6 @@ fun ComposeScreen(
                     }
                 }
                 
-                // Если после обработки вложений в body всё ещё есть cid: —
-                // значит не все инлайн-картинки найдены через attachment records.
-                // Пробуем fetchInlineImages напрямую (загрузка MIME с сервера).
                 if (body.contains("cid:", ignoreCase = true)) {
                     val fbAccount = accountRepo.getAccount(email.accountId)
                     val fbClient = fbAccount?.let { accountRepo.createEasClient(it.id) }
@@ -1064,7 +1076,10 @@ fun ComposeScreen(
                     }
                     if (fbClient != null && fwdFolderForFetch?.serverId != null) {
                         try {
-                            when (val fetchResult = fbClient.fetchInlineImages(fwdFolderForFetch.serverId, email.serverId)) {
+                            val fetchResult = withContext(Dispatchers.IO) {
+                                fbClient.fetchInlineImages(fwdFolderForFetch.serverId, email.serverId)
+                            }
+                            when (fetchResult) {
                                 is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                     if (fetchResult.data.isNotEmpty()) {
                                         body = replaceCidWithDataUrl(body, fetchResult.data)
@@ -1089,7 +1104,8 @@ fun ComposeScreen(
     var initialDraftTo by rememberSaveable { mutableStateOf("") }
     var initialDraftCc by rememberSaveable { mutableStateOf("") }
     var initialDraftSubject by rememberSaveable { mutableStateOf("") }
-    var initialDraftBody by rememberSaveable { mutableStateOf("") }
+    val initialDraftBodySaver = remember { createLargeStringSaver(context.cacheDir, "draft_body") }
+    var initialDraftBody by rememberSaveable(stateSaver = initialDraftBodySaver) { mutableStateOf("") }
     var initialDraftAttachments by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     
     // Загружаем данные черновика для редактирования
@@ -1132,64 +1148,61 @@ fun ComposeScreen(
                         }
                     }
                 }
-                // Загружаем вложения черновика
-                val draftAttachments = mailRepo.getAttachmentsSync(draftId)
+                val draftAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(draftId) }
                 if (draftAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
                     val inlineImages = mutableMapOf<String, String>()
                     val account = accountRepo.getAccount(draft.accountId)
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
 
-                    for (att in draftAttachments) {
-                        try {
-                            val localPath = att.localPath
-                            if (localPath != null && java.io.File(localPath).exists()) {
-                                val file = java.io.File(localPath)
-                                if (att.isInline && !att.contentId.isNullOrBlank()) {
-                                    // Инлайн-вложение — встраиваем как data URL
-                                    val bytes = file.readBytes()
-                                    val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                    val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                    inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
-                                } else {
-                                    // Файловое вложение
-                                    val uri = androidx.core.content.FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        file
-                                    )
-                                    val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
-                                    newAttachmentStrings.add(attInfo.toSaveableString())
-                                }
-                            } else if (easClient != null && att.fileReference.isNotBlank()) {
-                                when (val result = easClient.downloadDraftAttachment(att.fileReference)) {
-                                    is com.dedovmosol.iwomail.eas.EasResult.Success -> {
-                                        val attachmentsDir = java.io.File(context.filesDir, "draft_attachments")
-                                        if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
-                                        val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
-                                        val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
-                                        java.io.FileOutputStream(file).use { it.write(result.data) }
-                                        if (att.isInline && !att.contentId.isNullOrBlank()) {
-                                            val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
-                                            val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                            inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
-                                        } else {
-                                            val uri = androidx.core.content.FileProvider.getUriForFile(
-                                                context,
-                                                "${context.packageName}.fileprovider",
-                                                file
-                                            )
-                                            val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
-                                            newAttachmentStrings.add(attInfo.toSaveableString())
+                    withContext(Dispatchers.IO) {
+                        for (att in draftAttachments) {
+                            try {
+                                val localPath = att.localPath
+                                if (localPath != null && java.io.File(localPath).exists()) {
+                                    val file = java.io.File(localPath)
+                                    if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                        val bytes = file.readBytes()
+                                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                        val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                        inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                    } else {
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                                            context,
+                                            "${context.packageName}.fileprovider",
+                                            file
+                                        )
+                                        val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
+                                        newAttachmentStrings.add(attInfo.toSaveableString())
+                                    }
+                                } else if (easClient != null && att.fileReference.isNotBlank()) {
+                                    when (val result = easClient.downloadDraftAttachment(att.fileReference)) {
+                                        is com.dedovmosol.iwomail.eas.EasResult.Success -> {
+                                            val attachmentsDir = java.io.File(context.filesDir, "draft_attachments")
+                                            if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
+                                            val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
+                                            val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
+                                            java.io.FileOutputStream(file).use { it.write(result.data) }
+                                            if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                                val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
+                                                val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                                inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                            } else {
+                                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                                    context,
+                                                    "${context.packageName}.fileprovider",
+                                                    file
+                                                )
+                                                val attInfo = AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType)
+                                                newAttachmentStrings.add(attInfo.toSaveableString())
+                                            }
                                         }
-                                    }
-                                    is com.dedovmosol.iwomail.eas.EasResult.Error -> {
-                                        // Не удалось скачать - пропускаем
+                                        is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
                                     }
                                 }
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
                             }
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
                         }
                     }
 
@@ -1218,7 +1231,10 @@ fun ComposeScreen(
                         if (collId != null && easServerId.contains(":") && !easServerId.contains("=")) {
                             // EAS путь: serverId = "5:17" — fetchInlineImages через ItemOperations
                             try {
-                                when (val fetchResult = fbClient.fetchInlineImages(collId, easServerId)) {
+                                val fetchResult = withContext(Dispatchers.IO) {
+                                    fbClient.fetchInlineImages(collId, easServerId)
+                                }
+                                when (fetchResult) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         if (fetchResult.data.isNotEmpty()) {
                                             body = replaceCidWithDataUrl(body, fetchResult.data)
@@ -1251,10 +1267,11 @@ fun ComposeScreen(
                 // Без этого: при каждом открытии черновика нужен сетевой запрос
                 // для скачивания инлайн-картинок, который может упасть.
                 // С этим: body в БД всегда содержит data: URLs → отображается мгновенно.
-                if (body.isNotBlank() && body != draft.body && !body.contains("cid:", ignoreCase = true)) {
+                val bodyForDb = body
+                if (bodyForDb.isNotBlank() && bodyForDb != draft.body && !bodyForDb.contains("cid:", ignoreCase = true)) {
                     withContext(Dispatchers.IO) {
                         try {
-                            database.emailDao().updateBody(draftId, body)
+                            database.emailDao().updateBody(draftId, bodyForDb)
                         } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                     }
                 }
@@ -1291,18 +1308,21 @@ fun ComposeScreen(
             try {
                 val success: Boolean
                 // Файловые вложения — байты
-                val fileDraftAttachments = attachments.mapNotNull { att ->
-                    try {
-                        context.contentResolver.openInputStream(att.uri)?.use { input ->
-                            val bytes = input.readBytes()
-                            com.dedovmosol.iwomail.eas.DraftAttachmentData(
-                                name = att.name,
-                                mimeType = att.mimeType,
-                                data = bytes
-                            )
+                val fileDraftAttachments = withContext(Dispatchers.IO) {
+                    attachments.mapNotNull { att ->
+                        try {
+                            context.contentResolver.openInputStream(att.uri)?.use { input ->
+                                val bytes = input.readBytes()
+                                com.dedovmosol.iwomail.eas.DraftAttachmentData(
+                                    name = att.name,
+                                    mimeType = att.mimeType,
+                                    data = bytes
+                                )
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
                         }
-                    } catch (_: Exception) {
-                        null
                     }
                 }
                 
@@ -1313,9 +1333,8 @@ fun ComposeScreen(
                 // поэтому cid: + ContentId — единственный рабочий способ.
                 val inlineDraftAttachments = mutableListOf<com.dedovmosol.iwomail.eas.DraftAttachmentData>()
                 var cleanBody = body
-                val dataUrlRegex = """src\s*=\s*"data:([^;]+);base64,([^"]+)"""".toRegex()
                 var inlineCounter = 0
-                for (match in dataUrlRegex.findAll(body)) {
+                for (match in DATA_URL_REGEX.findAll(body)) {
                     inlineCounter++
                     val mimeType = match.groupValues[1]
                     val base64Data = match.groupValues[2]
@@ -1340,6 +1359,7 @@ fun ComposeScreen(
                             "cid:$contentId"
                         )
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         android.util.Log.w("ComposeScreen", "Failed to decode inline image #$inlineCounter: ${e.message}")
                     }
                 }
@@ -1398,10 +1418,11 @@ fun ComposeScreen(
                                     database.emailDao().getEmail(newEmailId)
                                 }
                                 if (verified == null) {
+                                    val capturedBody = body
                                     withContext(Dispatchers.IO) {
                                         try {
-                                            val previewText = body.replace(Regex("<[^>]*>"), " ")
-                                                .replace(Regex("\\s+"), " ").trim().take(150)
+                                            val previewText = capturedBody.replace(HTML_TAG_STRIP_REGEX, " ")
+                                                .replace(WHITESPACE_COLLAPSE_REGEX, " ").trim().take(150)
                                             val fallback = com.dedovmosol.iwomail.data.database.EmailEntity(
                                                 id = newEmailId,
                                                 accountId = account.id,
@@ -1413,7 +1434,7 @@ fun ComposeScreen(
                                                 cc = normalizedCc,
                                                 subject = subject,
                                                 preview = previewText,
-                                                body = body,
+                                                body = capturedBody,
                                                 bodyType = 2,
                                                 dateReceived = System.currentTimeMillis(),
                                                 read = true,
@@ -1497,10 +1518,11 @@ fun ComposeScreen(
                     Toast.makeText(context, draftSaveErrorMsg, Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Toast.makeText(context, "${draftSaveErrorMsg}: ${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                isSavingDraft = false
             }
-            
-            isSavingDraft = false
         }
     }
     
@@ -1509,89 +1531,77 @@ fun ComposeScreen(
     val sendErrorText = Strings.sendError // Захватываем в Composable scope
     
     fun sendEmail(scheduledTime: Long? = null) {
-        // Защита от double-tap: если уже отправляем — игнорируем
         if (isSending) return
         isSending = true
         
-        try {
-            val account = activeAccount
-            if (account == null) {
-                isSending = false
-                Toast.makeText(context, accountNotFoundMsg, Toast.LENGTH_SHORT).show()
-                return
-            }
-            
-            // Если запланировано - создаём WorkManager задачу (без обратного отсчёта)
-            if (scheduledTime != null) {
-                val delay = scheduledTime - System.currentTimeMillis()
-                if (delay > 0) {
-                    scheduleEmail(context, account.id, expandGroupTokens(to, groupMappings), expandGroupTokens(cc, groupMappings), expandGroupTokens(bcc, groupMappings), subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
-                    Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
-                    onSent()
-                    return
+        scope.launch {
+            try {
+                val account = activeAccount
+                if (account == null) {
+                    isSending = false
+                    Toast.makeText(context, accountNotFoundMsg, Toast.LENGTH_SHORT).show()
+                    return@launch
                 }
-            }
-            
-            // Читаем данные вложений синхронно перед закрытием экрана
-            val attachmentDataList = attachments.mapNotNull { att ->
-                try {
-                    context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
-                        ?.let { bytes -> com.dedovmosol.iwomail.ui.components.AttachmentData(att.name, att.mimeType, bytes) }
-                } catch (e: Exception) {
-                    null
+                
+                if (scheduledTime != null) {
+                    val delay = scheduledTime - System.currentTimeMillis()
+                    if (delay > 0) {
+                        scheduleEmail(context, account.id, expandGroupTokens(to, groupMappings), expandGroupTokens(cc, groupMappings), expandGroupTokens(bcc, groupMappings), subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
+                        Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
+                        onSent()
+                        return@launch
+                    }
                 }
-            }
-            
-            // Убираем хвост пустых элементов от RichTextEditor
-            val cleanBody = body
-                .replace(Regex("(<div>\\s*(<br>|&nbsp;)?\\s*</div>\\s*)+$", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("(<p>\\s*(<br>|&nbsp;)?\\s*</p>\\s*)+$", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("(<br\\s*/?>\\s*)+$", RegexOption.IGNORE_CASE), "")
-                .trimEnd()
-                // Убираем служебные маркеры вида <конец> и т.п., которые не являются HTML-тегами.
-                // (?![!?]) — сохраняем <!-- комментарии -->, <!DOCTYPE>, <![CDATA[, <?xml ...?>
-                .replace(Regex("<(?!/?[a-zA-Z][a-zA-Z0-9]*[\\s>/])(?![!?])[^>]*>"), "")
-            
-            // Раскрываем группы контактов [GroupName] → индивидуальные email
-            val expandedTo = expandGroupTokens(to, groupMappings)
-            val expandedCc = expandGroupTokens(cc, groupMappings)
-            val expandedBcc = expandGroupTokens(bcc, groupMappings)
-            
-            // Создаём PendingEmail
-            val pendingEmail = com.dedovmosol.iwomail.ui.components.PendingEmail(
-                account = account,
-                to = expandedTo,
-                cc = expandedCc,
-                bcc = expandedBcc,
-                subject = subject,
-                body = cleanBody,
-                attachments = attachmentDataList,
-                importance = if (highPriority) 2 else 1,
-                requestReadReceipt = requestReadReceipt,
-                requestDeliveryReceipt = requestDeliveryReceipt,
-                draftId = editDraftId // Черновик удалится после успешной отправки
-            )
-            
-            // Запускаем отложенную отправку
-            sendController.startSend(
-                email = pendingEmail,
-                message = sendingMessageText,
-                context = context,
-                mailRepo = mailRepo,
-                onSuccess = { },
-                onCancel = { }
-            )
-            
-            // Скрываем WebView и ждём завершения рендеринга перед навигацией
-            // Это предотвращает краш в RenderThread (GLFunctorDrawable::onDraw)
-            hideWebView = true
-            
-            // Закрываем экран с задержкой чтобы RenderThread успел завершить работу
-            scope.launch {
-                // Сначала скрываем WebView (visibility = GONE через hideWebView)
+                
+                val attachmentDataList = withContext(Dispatchers.IO) {
+                    attachments.mapNotNull { att ->
+                        try {
+                            context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
+                                ?.let { bytes -> com.dedovmosol.iwomail.ui.components.AttachmentData(att.name, att.mimeType, bytes) }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
+                        }
+                    }
+                }
+                
+                val cleanBody = body
+                    .replace(TRAILING_EMPTY_DIV_REGEX, "")
+                    .replace(TRAILING_EMPTY_P_REGEX, "")
+                    .replace(TRAILING_BR_REGEX, "")
+                    .trimEnd()
+                    .replace(NON_HTML_TAG_REGEX, "")
+                
+                val expandedTo = expandGroupTokens(to, groupMappings)
+                val expandedCc = expandGroupTokens(cc, groupMappings)
+                val expandedBcc = expandGroupTokens(bcc, groupMappings)
+                
+                val pendingEmail = com.dedovmosol.iwomail.ui.components.PendingEmail(
+                    account = account,
+                    to = expandedTo,
+                    cc = expandedCc,
+                    bcc = expandedBcc,
+                    subject = subject,
+                    body = cleanBody,
+                    attachments = attachmentDataList,
+                    importance = if (highPriority) 2 else 1,
+                    requestReadReceipt = requestReadReceipt,
+                    requestDeliveryReceipt = requestDeliveryReceipt,
+                    draftId = editDraftId
+                )
+                
+                sendController.startSend(
+                    email = pendingEmail,
+                    message = sendingMessageText,
+                    context = context,
+                    mailRepo = mailRepo,
+                    onSuccess = { },
+                    onCancel = { }
+                )
+                
+                hideWebView = true
                 kotlinx.coroutines.delay(100)
                 
-                // Теперь безопасно уничтожаем WebView
                 richTextController.webView?.let { webView ->
                     webView.stopLoading()
                     webView.loadUrl("about:blank")
@@ -1601,18 +1611,17 @@ fun ComposeScreen(
                 richTextController.webView = null
                 richTextController.isLoaded = false
                 
-                // Ещё немного ждём и навигируем
                 kotlinx.coroutines.delay(50)
                 try {
                     onSent()
                 } catch (e2: Exception) {
                     if (e2 is kotlinx.coroutines.CancellationException) throw e2
                 }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                isSending = false
+                Toast.makeText(context, "${sendErrorText}: ${e.message}", Toast.LENGTH_LONG).show()
             }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            isSending = false
-            Toast.makeText(context, "${sendErrorText}: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
     
@@ -2026,7 +2035,7 @@ fun ComposeScreen(
             // Проверяем есть ли реальный контент (body может содержать пустой HTML и подпись)
             val bodyPlainText = body
                 .replace(SIGNATURE_DIV_REGEX, "")
-                .replace(HTML_STRIP_REGEX, "")
+                .replace(HTML_TAG_STRIP_REGEX, "")
                 .replace("&nbsp;", " ")
                 .trim()
             val hasContent = to.isNotBlank() || subject.isNotBlank() || bodyPlainText.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)

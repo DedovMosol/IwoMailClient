@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
-    
+
+    <!-- Добавить виджет -->
+    <shortcut
+        android:shortcutId="widget"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_widget"
+        android:shortcutShortLabel="@string/shortcut_widget"
+        android:shortcutLongLabel="@string/shortcut_widget_long">
+        <intent
+            android:action="com.dedovmosol.iwomail.SHORTCUT_ADD_WIDGET"
+            android:targetPackage="com.dedovmosol.iwomail"
+            android:targetClass="com.dedovmosol.iwomail.MainActivity" />
+    </shortcut>
+
     <!-- Написать письмо -->
     <shortcut
         android:shortcutId="compose"
@@ -13,7 +26,7 @@
             android:targetPackage="com.dedovmosol.iwomail"
             android:targetClass="com.dedovmosol.iwomail.MainActivity" />
     </shortcut>
-    
+
     <!-- Входящие -->
     <shortcut
         android:shortcutId="inbox"
@@ -26,7 +39,7 @@
             android:targetPackage="com.dedovmosol.iwomail"
             android:targetClass="com.dedovmosol.iwomail.MainActivity" />
     </shortcut>
-    
+
     <!-- Синхронизировать -->
     <shortcut
         android:shortcutId="sync"
@@ -39,5 +52,5 @@
             android:targetPackage="com.dedovmosol.iwomail"
             android:targetClass="com.dedovmosol.iwomail.MainActivity" />
     </shortcut>
-    
+
 </shortcuts>

@@ -90,14 +90,11 @@ object XmlValueExtractor {
     /**
      * Извлекает атрибут из XML элемента
      * Например: extractAttribute(xml, "ItemId", "Id") для <t:ItemId Id="..."/>
+     * Поддерживает: t:, m:, без префикса, самозакрывающиеся теги
      */
     fun extractAttribute(xml: String, element: String, attribute: String): String? {
-        // Пробуем с namespace prefix "t:"
-        val patternWithNs = """<t:$element[^>]*$attribute="([^"]+)"[^>]*>""".toRegex()
-        patternWithNs.find(xml)?.let { return it.groupValues[1] }
-        
-        // Пробуем без namespace
-        val pattern = """<$element[^>]*$attribute="([^"]+)"[^>]*>""".toRegex()
+        // Универсальный паттерн: опциональный namespace prefix, поддержка /> и >
+        val pattern = """<(?:\w+:)?$element\b[^>]*\b$attribute="([^"]+)"[^>]*/?>""".toRegex()
         return pattern.find(xml)?.groupValues?.get(1)
     }
 }

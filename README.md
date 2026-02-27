@@ -1,4 +1,4 @@
-﻿# iwo Mail Client
+# iwo Mail Client
 
 🇬🇧 [English version](README_EN.md)
 
@@ -12,7 +12,7 @@
 ## 🌟 Особенности
 
 - 📧 **Exchange ActiveSync** — поддержка EAS 12.0-14.1 (Exchange 2007+). Протестировано на Exchange 2007 SP1 (EAS 12.1)
-- 🔄 **EWS для Exchange 2007** — синхронизация и создание заметок через EWS с NTLMv2 (fallback для EAS 12.x)
+- 🔄 **EWS для Exchange 2007** — календарь, задачи, заметки, черновики через EWS с NTLMv2 (fallback для EAS 12.x)
 - 📬 **IMAP/POP3** — работа с любыми почтовыми серверами (скоро ожидается)
 - 📱 **Android 8.0 - 16** — работает на данных версиях Android
 - 🔒 **Совместимость с Exchange 2007** — поддержка TLS 1.0/1.1 через Conscrypt
@@ -37,12 +37,16 @@
 
 ## 🆕 Что нового в v1.6.2
 
-- Стабильность и синхронизация: ускорена работа на больших ящиках, снижены дубли, усилена защита от гонок/утечек и ошибок в Push/Sync/уведомлениях.
-- Почта и контакты: улучшены reply/forward и mark-as-read, доработаны черновики и работа с папками, усилена валидация/экспорт контактов.
-- Календарь, задачи и виджет: расширена поддержка событий/повторов/вложений, обновлены данные и масштабирование виджета.
-- Календарь: исправлено «воскрешение» удалённых событий после синхронизации (EAS/EWS — перманентное удаление на сервере, улучшена обработка ошибок и retry-логика по MS-ASCMD).
-- Интерфейс: унифицированы темы и визуальные компоненты, улучшены диалоги, скроллбар и UX-взаимодействия.
-- Безопасность: усиленная обработка чувствительных данных.
+- Переработан UI: новые элементы, кастомные иконки файлов, доп. скроллбары, обновлён виджет
+- Для всех вложений добавлены действия «Сохранить» и «Сохранить как»
+- Улучшен мультивыбор: drag selection и batch-операции
+- Улучшена валидация email перед отправкой
+- Календарь: вложения, повторяющиеся события и локальная корзина
+- Контакты: поддержка групп при написании письма + предупреждение о дубликатах
+- Черновики: режим локального сохранения (переключается в настройках)
+- Exchange 2007 SP1: углублена совместимость EAS/EWS, стабильнее синхронизация задач, вложений и папок
+- Существенное повышение производительности
+- Багфиксы, снижение утечек памяти и энергопотребления, выше стабильность и безопасность
 
 📋 Полная история изменений: [CHANGELOG_RU.md](docs/CHANGELOG_RU.md)
 
@@ -94,7 +98,6 @@
 - **IMAP/POP3** — в beta-версии, может работать нестабильно
 - **EAS 16.0+** (Exchange 2016+) — не протестировано, возможны проблемы
 - **S/MIME подписи** — не поддерживается
-- **Календарь** — нет поддержки повторяющихся событий (recurring)
 
 ## 📊 Технологический стек
 
@@ -137,6 +140,7 @@
 
 - [История изменений](docs/CHANGELOG_RU.md)
 - [Архитектура проекта](docs/ARCHITECTURE.md)
+- [План миграции на XmlPullParser](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 - [Политика конфиденциальности](docs/PRIVACY_POLICY.md)
 
 ## 🤝 Вклад в проект
@@ -180,14 +184,15 @@ Protocol Layer
   IMAP — ImapClient  |  POP3 — Pop3Client  |  SMTP — SmtpClient
     ↓
 Database Layer                    Network Layer
-  Room — 8 DAO, 7 Entity           HttpClientProvider, NetworkMonitor
-  MailDatabase (v33)                RetryUtils, NtlmAuthenticator
+  Room — 10 DAO, 10 Entity         HttpClientProvider, NetworkMonitor
+  MailDatabase (v34)                RetryUtils, NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker
   BootReceiver, SyncAlarmReceiver, PushRestartWorker
   ServiceWatchdogReceiver, ScheduledEmailWorker
   CalendarReminderReceiver, TaskReminderReceiver
+  MarkEmailReadWorker, MarkTaskCompleteWorker
 ```
 
 ## 📄 Лицензия

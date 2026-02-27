@@ -126,6 +126,7 @@ class NoteRepository(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e("NotesDebug", "=== RESTORE NOTE FINISH: EXCEPTION - ${e.message}")
                 EasResult.Error(e.message ?: RepositoryErrors.NOTE_RESTORE_ERROR)
             }
@@ -289,6 +290,7 @@ class NoteRepository(private val context: Context) {
                     is EasResult.Error -> result
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.NOTE_CREATE_ERROR)
             }
         }
@@ -353,6 +355,7 @@ class NoteRepository(private val context: Context) {
                 }
 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.NOTE_UPDATE_ERROR)
             }
         }
@@ -490,6 +493,7 @@ class NoteRepository(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e("NotesDebug", "=== DELETE NOTE FINISH: EXCEPTION - ${e.message}")
                 EasResult.Error(e.message ?: RepositoryErrors.NOTE_DELETE_ERROR)
             }
@@ -552,6 +556,7 @@ class NoteRepository(private val context: Context) {
                     is EasResult.Error -> result
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.NOTE_DELETE_ERROR)
             }
         }
@@ -578,54 +583,54 @@ class NoteRepository(private val context: Context) {
         return withContext(Dispatchers.IO) {
             if (notes.isEmpty()) return@withContext EasResult.Success(0)
             
-            // Группируем по accountId
             val byAccount = notes.groupBy { it.accountId }
             var totalDeleted = 0
             var totalFailed = 0
             val total = notes.size
-            var processed = 0
             
             for ((accountId, accountNotes) in byAccount) {
                 val account = accountRepo.getAccount(accountId)
                 if (account == null || AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
                     totalFailed += accountNotes.size
-                    processed += accountNotes.size
                     onProgress(totalDeleted, total)
                     continue
                 }
                 
-                // Один клиент для всех заметок этого аккаунта
                 val easClient = accountRepo.createEasClient(accountId)
                 if (easClient == null) {
                     totalFailed += accountNotes.size
-                    processed += accountNotes.size
                     onProgress(totalDeleted, total)
                     continue
                 }
                 
-                for (note in accountNotes) {
-                    android.util.Log.d("NotesDebug", "=== DELETE (batch): subject='${note.subject.take(30)}', serverId=${note.serverId}, isDeleted=${note.isDeleted}")
-                    val result = easClient.deleteNote(note.serverId)
-                    when (result) {
-                        is EasResult.Success -> {
-                            noteDao.markAsDeleted(note.id)
-                            totalDeleted++
-                            android.util.Log.d("NotesDebug", "<<< SUCCESS: marked as deleted")
-                        }
-                        is EasResult.Error -> {
-                            totalFailed++
-                            android.util.Log.w("NotesDebug", "<<< ERROR: ${result.message}")
-                        }
+                val batchResult = easClient.deleteNotesBatch(accountNotes.map { it.serverId })
+                val batchOk = batchResult is EasResult.Success && batchResult.data > 0
+
+                if (batchOk) {
+                    for (note in accountNotes) {
+                        noteDao.markAsDeleted(note.id)
                     }
-                    processed++
+                    totalDeleted += (batchResult as EasResult.Success).data
                     onProgress(totalDeleted, total)
+                } else {
+                    val errMsg = (batchResult as? EasResult.Error)?.message ?: "batch returned 0"
+                    android.util.Log.w("NotesDebug",
+                        "deleteNotesWithProgress: batch failed ($errMsg), falling back to sequential")
+                    for (note in accountNotes) {
+                        val result = easClient.deleteNote(note.serverId)
+                        when (result) {
+                            is EasResult.Success -> {
+                                noteDao.markAsDeleted(note.id)
+                                totalDeleted++
+                            }
+                            is EasResult.Error -> totalFailed++
+                        }
+                        onProgress(totalDeleted, total)
+                    }
                 }
                 
-                // КРИТИЧНО: Синхронизируем СРАЗУ после удаления с skipRecentDeleteCheck=true
-                // Это позволяет сразу восстановить заметки без ошибки EWS
-                // Exchange 2007 SP1 требует 2 секунды для обработки MoveItems
                 android.util.Log.d("NotesDebug", "Syncing after batch delete to update trash...")
-                kotlinx.coroutines.delay(2000) // Даём серверу 2 секунды обработать удаление
+                kotlinx.coroutines.delay(2000)
                 val syncAfterDeleteResult = syncNotes(accountId, skipRecentDeleteCheck = true)
                 when (syncAfterDeleteResult) {
                     is EasResult.Success -> android.util.Log.d("NotesDebug", "Sync after batch delete: SUCCESS")
@@ -755,18 +760,30 @@ class NoteRepository(private val context: Context) {
                     continue
                 }
                 
-                for (note in accountNotes) {
-                    val result = easClient.deleteNotePermanently(note.serverId)
-                    when (result) {
-                        is EasResult.Success -> {
-                            noteDao.delete(note.id)
-                            totalDeleted++
-                        }
-                        is EasResult.Error -> {
-                            totalFailed++
-                        }
+                val batchResult = easClient.deleteNotesPermanentlyBatch(accountNotes.map { it.serverId })
+                val batchOk = batchResult is EasResult.Success && batchResult.data > 0
+
+                if (batchOk) {
+                    for (note in accountNotes) {
+                        noteDao.delete(note.id)
                     }
+                    totalDeleted += (batchResult as EasResult.Success).data
                     onProgress(totalDeleted, total)
+                } else {
+                    val errMsg = (batchResult as? EasResult.Error)?.message ?: "batch returned 0"
+                    android.util.Log.w("NotesDebug",
+                        "deleteNotesPermanentlyWithProgress: batch failed ($errMsg), falling back to sequential")
+                    for (note in accountNotes) {
+                        val result = easClient.deleteNotePermanently(note.serverId)
+                        when (result) {
+                            is EasResult.Success -> {
+                                noteDao.delete(note.id)
+                                totalDeleted++
+                            }
+                            is EasResult.Error -> totalFailed++
+                        }
+                        onProgress(totalDeleted, total)
+                    }
                 }
             }
 
@@ -963,6 +980,7 @@ class NoteRepository(private val context: Context) {
                     is EasResult.Error -> result
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.NOTE_SYNC_ERROR)
             }
         }

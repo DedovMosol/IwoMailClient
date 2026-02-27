@@ -507,6 +507,7 @@ private fun UpdateDownloadDialog(
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val isRu = isRussian()
     val colorTheme = LocalColorTheme.current
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -518,7 +519,7 @@ private fun UpdateDownloadDialog(
     
     com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
         onDismissRequest = { 
-            if (downloadState !is DownloadState.Downloading) {
+            if (downloadState !is DownloadState.Downloading && downloadState !is DownloadState.Preparing) {
                 onDismiss()
             }
         },
@@ -665,6 +666,7 @@ private fun UpdateDownloadDialog(
                                         )
                                     )
                                     .clickable {
+                                        if (downloadJob != null) return@clickable
                                         downloadJob = scope.launch {
                                             updateChecker.downloadUpdate(updateInfo.apkUrl).collect { progress ->
                                                 when (progress) {
@@ -739,7 +741,7 @@ private fun UpdateDownloadDialog(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        if (isRussian()) "Подготовка..." else "Preparing...",
+                                        if (isRu) "Подготовка..." else "Preparing...",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
@@ -822,15 +824,62 @@ private fun RollbackDialog(
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val scrollContentMaxHeight = (configuration.screenHeightDp * if (isLandscape) 0.42f else 0.56f).dp.coerceAtLeast(220.dp)
     val contentScrollState = rememberScrollState()
-    // Resume: если APK уже скачан — начинаем с Completed
-    val existingApk = remember { updateChecker.getExistingApkFile() }
-    var downloadState by remember { mutableStateOf<DownloadState>(if (existingApk != null) DownloadState.Completed else DownloadState.Idle) }
-    var downloadedFile by remember { mutableStateOf<File?>(existingApk) }
+    // НЕ используем getExistingApkFile(): файл update.apk общий для обновления и отката,
+    // resume с чужим APK привёл бы к копированию НЕПРАВИЛЬНОГО файла в Downloads.
+    var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
+    var downloadedFile by remember { mutableStateOf<File?>(null) }
     var downloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var showOverwriteAlert by rememberSaveable { mutableStateOf(false) }
+    
+    // Alert: файл уже существует в Downloads/iwomail rollback/
+    if (showOverwriteAlert) {
+        AlertDialog(
+            onDismissRequest = { showOverwriteAlert = false },
+            icon = { Icon(AppIcons.Warning, null) },
+            title = { Text(if (isRu) "Файл уже существует" else "File already exists") },
+            text = {
+                Text(
+                    if (isRu)
+                        "Файл iwomail-rollback-v${previousInfo.versionName}.apk уже есть в папке Downloads/iwomail rollback/. Перезаписать?"
+                    else
+                        "File iwomail-rollback-v${previousInfo.versionName}.apk already exists in Downloads/iwomail rollback/. Overwrite?"
+                )
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeButton(
+                    onClick = {
+                        showOverwriteAlert = false
+                        downloadState = DownloadState.Preparing
+                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            val prepared = downloadedFile?.let { file ->
+                                updateChecker.prepareDowngrade(file, previousInfo.versionName)
+                            } ?: false
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                if (prepared) {
+                                    downloadState = DownloadState.ReadyToUninstall
+                                } else {
+                                    downloadState = DownloadState.Error(
+                                        if (isRu) "Не удалось сохранить APK" else "Failed to save APK"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text(if (isRu) "Перезаписать" else "Overwrite", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverwriteAlert = false }) {
+                    Text(Strings.cancel)
+                }
+            }
+        )
+    }
     
     com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
         onDismissRequest = { 
-            if (downloadState !is DownloadState.Downloading) {
+            if (downloadState !is DownloadState.Downloading && downloadState !is DownloadState.Preparing) {
                 onDismiss()
             }
         },
@@ -912,16 +961,16 @@ private fun RollbackDialog(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                if (isRussian()) "Как работает откат:" else "How rollback works:",
+                                if (isRu) "Как работает откат:" else "How rollback works:",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer
                             )
                         }
                         Text(
-                            if (isRussian())
-                                "1. APK v${previousInfo.versionName} сохранится в папку Downloads\n2. Текущая версия будет удалена\n3. После удаления — откройте Downloads и установите iwomail-rollback.apk"
+                            if (isRu)
+                                "APK будет сохранён в Downloads/iwomail rollback/. После этого удалите текущую версию и установите сохранённый APK."
                             else
-                                "1. APK v${previousInfo.versionName} will be saved to Downloads\n2. Current version will be uninstalled\n3. After uninstall — open Downloads and install iwomail-rollback.apk",
+                                "APK will be saved to Downloads/iwomail rollback/. Then uninstall the current version and install the saved APK.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
@@ -960,7 +1009,7 @@ private fun RollbackDialog(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             Text(
-                                if (isRussian()) "Сохранение APK в Downloads..." else "Saving APK to Downloads...",
+                                if (isRu) "Сохранение APK в Downloads..." else "Saving APK to Downloads...",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -973,16 +1022,16 @@ private fun RollbackDialog(
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Icon(AppIcons.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                                     Text(
-                                        if (isRussian()) "APK готов в Downloads" else "APK ready in Downloads",
+                                        if (isRu) "APK готов" else "APK ready",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                 }
                                 Text(
-                                    if (isRussian())
-                                        "Файл iwomail-rollback.apk сохранён. Нажмите \"Удалить и установить\" — после удаления откройте Downloads и установите APK."
+                                    if (isRu)
+                                        "Файл iwomail-rollback-v${previousInfo.versionName}.apk сохранён. Нажмите \"См. загрузки\" и убедитесь, затем нажмите \"Удалить\"."
                                     else
-                                        "File iwomail-rollback.apk saved. Tap \"Uninstall & Install\" — after uninstall open Downloads and install the APK.",
+                                        "File iwomail-rollback-v${previousInfo.versionName}.apk saved. Tap \"See downloads\" to verify, then tap \"Uninstall\".",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
@@ -1007,7 +1056,27 @@ private fun RollbackDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (downloadState !is DownloadState.Downloading && downloadState !is DownloadState.Preparing) {
+                    if (downloadState is DownloadState.ReadyToUninstall) {
+                        com.dedovmosol.iwomail.ui.theme.ThemeButton(
+                            onClick = {
+                                val opened = updateChecker.openDownloads()
+                                if (!opened) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        if (isRu) "Не удалось открыть загрузки" else "Failed to open downloads",
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        ) {
+                            Text(
+                                if (isRu) "См. загрузки" else "See downloads",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1
+                            )
+                        }
+                    } else if (downloadState !is DownloadState.Downloading && downloadState !is DownloadState.Preparing) {
                         com.dedovmosol.iwomail.ui.theme.ThemeButton(
                             onClick = onDismiss
                         ) {
@@ -1035,7 +1104,7 @@ private fun RollbackDialog(
                             )
                         }
                     } else {
-                        Spacer(modifier = Modifier.width(1.dp))
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                     
                     val actionBtnModifier = Modifier
@@ -1121,18 +1190,27 @@ private fun RollbackDialog(
                                         )
                                     )
                                     .clickable {
+                                        if (downloadState !is DownloadState.Completed) return@clickable
                                         downloadState = DownloadState.Preparing
                                         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                            val prepared = downloadedFile?.let { file ->
-                                                updateChecker.prepareDowngrade(file)
-                                            } ?: false
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                if (prepared) {
-                                                    downloadState = DownloadState.ReadyToUninstall
-                                                } else {
-                                                    downloadState = DownloadState.Error(
-                                                        if (isRu) "Не удалось сохранить APK в Downloads" else "Failed to save APK to Downloads"
-                                                    )
+                                            val exists = updateChecker.checkApkExistsInDownloads(previousInfo.versionName)
+                                            if (exists) {
+                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                    downloadState = DownloadState.Completed
+                                                    showOverwriteAlert = true
+                                                }
+                                            } else {
+                                                val prepared = downloadedFile?.let { file ->
+                                                    updateChecker.prepareDowngrade(file, previousInfo.versionName)
+                                                } ?: false
+                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                    downloadState = if (prepared) {
+                                                        DownloadState.ReadyToUninstall
+                                                    } else {
+                                                        DownloadState.Error(
+                                                            if (isRu) "Не удалось сохранить APK в Downloads" else "Failed to save APK to Downloads"
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -1189,10 +1267,16 @@ private fun RollbackDialog(
                                             ).show()
                                         }
                                     }
-                                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text(Strings.rollbackConfirm, color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                Text(
+                                    if (isRu) "Удалить" else "Uninstall",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
                             }
                         }
                     }

@@ -141,6 +141,44 @@ class EasNotesService internal constructor(
     }
     
     /**
+     * Batch-удаление заметок (в корзину). Один EWS DeleteItem на весь пакет.
+     * @return количество успешно удалённых
+     */
+    suspend fun deleteNotesBatch(serverIds: List<String>): EasResult<Int> {
+        if (serverIds.isEmpty()) return EasResult.Success(0)
+        if (!deps.isVersionDetected()) deps.detectEasVersion()
+        val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
+        return if (majorVersion >= 14) {
+            // EAS: по одному (нет batch в EAS Sync Delete)
+            var deleted = 0
+            for (sid in serverIds) {
+                if (deleteNoteEas(sid) is EasResult.Success) deleted++
+            }
+            EasResult.Success(deleted)
+        } else {
+            deleteNotesBatchEws(serverIds, "MoveToDeletedItems")
+        }
+    }
+
+    /**
+     * Batch окончательное удаление заметок (HardDelete). Один EWS DeleteItem на весь пакет.
+     */
+    suspend fun deleteNotesPermanentlyBatch(serverIds: List<String>): EasResult<Int> {
+        if (serverIds.isEmpty()) return EasResult.Success(0)
+        if (!deps.isVersionDetected()) deps.detectEasVersion()
+        val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
+        return if (majorVersion >= 14) {
+            var deleted = 0
+            for (sid in serverIds) {
+                if (deleteNotePermanentlyEas(sid) is EasResult.Success) deleted++
+            }
+            EasResult.Success(deleted)
+        } else {
+            deleteNotesBatchEws(serverIds, "HardDelete")
+        }
+    }
+
+    /**
      * Восстановление заметки из корзины
      */
     suspend fun restoreNote(serverId: String): EasResult<String> {
@@ -890,6 +928,65 @@ class EasNotesService internal constructor(
             EasResult.Success(success)
         } catch (e: Exception) {
             EasResult.Error("Ошибка EWS: ${e.message}")
+        }
+    }
+
+    /**
+     * Batch EWS DeleteItem для заметок — один запрос с несколькими ItemId.
+     * Сначала резолвит EAS→EWS ItemId (если нужно), затем батч-удаляет.
+     */
+    private suspend fun deleteNotesBatchEws(
+        serverIds: List<String>,
+        deleteType: String
+    ): EasResult<Int> = withContext(Dispatchers.IO) {
+        try {
+            val ewsUrl = deps.getEwsUrl()
+            val ewsItemIds = mutableListOf<String>()
+
+            for (sid in serverIds) {
+                val ewsItemId = if (sid.length >= 50 && !sid.contains(":")) {
+                    sid
+                } else {
+                    val searchDeleted = (deleteType == "HardDelete")
+                    deps.findEwsNoteItemId(ewsUrl, sid, searchDeleted) ?: sid
+                }
+                ewsItemIds.add(ewsItemId)
+            }
+
+            if (ewsItemIds.isEmpty()) return@withContext EasResult.Success(0)
+
+            val itemIdsXml = ewsItemIds.joinToString("\n") {
+                """            <t:ItemId Id="${deps.escapeXml(it)}"/>"""
+            }
+            val soapBody = """
+    <m:DeleteItem DeleteType="$deleteType">
+        <m:ItemIds>
+$itemIdsXml
+        </m:ItemIds>
+    </m:DeleteItem>""".trimIndent()
+            val soapRequest = EasXmlTemplates.ewsSoapRequest(soapBody)
+
+            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
+            val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+
+            android.util.Log.d("EasNotesService",
+                "deleteNotesBatchEws: ${ewsItemIds.size} items, deleteType=$deleteType, response len=${responseXml.length}")
+
+            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
+            val hasNoError = responseXml.contains("NoError")
+            val hasNotFound = responseXml.contains("ErrorItemNotFound")
+
+            if (hasSuccess || hasNoError || hasNotFound) {
+                EasResult.Success(ewsItemIds.size)
+            } else {
+                val errorCode = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>"
+                    .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)?.groupValues?.get(1)?.trim()
+                EasResult.Error("EWS batch DeleteItem notes: $errorCode")
+            }
+        } catch (e: Exception) {
+            EasResult.Error("Ошибка batch EWS notes: ${e.message}")
         }
     }
     

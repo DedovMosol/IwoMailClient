@@ -13,15 +13,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -51,6 +56,7 @@ private val urlPattern = Regex("https?://[\\w\\-.]+\\.[a-z]{2,}[\\w\\-._~:/?#\\[
 private val emailPattern = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
 // Паттерн для телефонов (российские и международные)
 private val phonePattern = Regex("(?:\\+7|8)[\\s-]?\\(?\\d{3}\\)?[\\s-]?\\d{3}[\\s-]?\\d{2}[\\s-]?\\d{2}|\\+?\\d{1,3}[\\s-]?\\(?\\d{2,4}\\)?[\\s-]?\\d{2,4}[\\s-]?\\d{2,4}")
+private val PHONE_CLEAN_REGEX = Regex("[\\s()-]")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,16 +90,22 @@ fun NotesScreen(
     // Таб: 0 = Активные, 1 = Удалённые
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showDeletedTab by rememberSaveable { mutableStateOf(false) }
-    var selectedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+    var selectedIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
     
  var searchQuery by rememberSaveable { mutableStateOf("") }
-    var debouncedSearchQuery by remember { mutableStateOf("") }
+    val debouncedSearchQuery by rememberDebouncedState(searchQuery)
     
-    // Debounce поиска для оптимизации
-    LaunchedEffect(searchQuery) {
-        delay(300)
-        debouncedSearchQuery = searchQuery
+    // Сохранение фокуса поиска при повороте экрана
+    val searchFocusRequester = remember { FocusRequester() }
+    var isSearchFocused by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(isSearchFocused) {
+        if (isSearchFocused) {
+            kotlinx.coroutines.delay(100)
+            try { searchFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
     }
     var isSyncing by remember { mutableStateOf(false) }
     // КРИТИЧНО: dataLoaded rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
@@ -109,10 +121,13 @@ fun NotesScreen(
             if (notes.isEmpty() && !isSyncing) {
                 dataLoaded = true
                 isSyncing = true
-                syncScope.launch {
+                try {
                     withContext(Dispatchers.IO) {
                         noteRepo.syncNotes(accountId)
                     }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                } finally {
                     isSyncing = false
                 }
             }
@@ -123,18 +138,27 @@ fun NotesScreen(
     LaunchedEffect(selectedTab) {
         if (selectedTab == 1 && accountId > 0 && !isSyncing) {
             isSyncing = true
-            syncScope.launch {
+            try {
                 withContext(Dispatchers.IO) {
                     noteRepo.syncNotes(accountId, skipRecentDeleteCheck = true)
                 }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally {
                 isSyncing = false
             }
         }
     }
-    var selectedNote by remember { mutableStateOf<NoteEntity?>(null) }
+    var selectedNoteId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedNote = remember(selectedNoteId, notes, deletedNotes) {
+        selectedNoteId?.let { id -> notes.find { it.id == id } ?: deletedNotes.find { it.id == id } }
+    }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var editingNote by remember { mutableStateOf<NoteEntity?>(null) }
-    var isCreating by remember { mutableStateOf(false) }
+    var editingNoteId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editingNote = remember(editingNoteId, notes) {
+        editingNoteId?.let { id -> notes.find { it.id == id } }
+    }
+    var isCreating by rememberSaveable { mutableStateOf(false) }
     var showEmptyTrashConfirm by rememberSaveable { mutableStateOf(false) }
     var showDeleteSelectedDialog by rememberSaveable { mutableStateOf(false) }
     var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
@@ -173,14 +197,14 @@ fun NotesScreen(
         
         NoteDetailDialog(
             note = note,
-            onDismiss = { selectedNote = null },
+            onDismiss = { selectedNoteId = null },
             onEditClick = {
-                editingNote = note
-                selectedNote = null
+                editingNoteId = note.id
+                selectedNoteId = null
                 showCreateDialog = true
             },
             onDeleteClick = {
-                selectedNote = null  // Закрываем диалог сразу
+                selectedNoteId = null  // Закрываем диалог сразу
                 
                 if (note.isDeleted) {
                     // Окончательное удаление с прогрессом
@@ -225,7 +249,7 @@ fun NotesScreen(
                 }
             },
             onRestoreClick = {
-                selectedNote = null  // Закрываем диалог
+                selectedNoteId = null  // Закрываем диалог
                 
                 // Восстанавливаем заметку с задержкой и возможностью отмены
                 deletionController.startDeletion(
@@ -436,7 +460,7 @@ fun NotesScreen(
             isCreating = isCreating,
             onDismiss = {
                 showCreateDialog = false
-                editingNote = null
+                editingNoteId = null
             },
             onSave = { subject, body ->
                 // Защита от double-tap: если уже создаём — игнорируем
@@ -463,7 +487,7 @@ fun NotesScreen(
                                 Toast.LENGTH_SHORT
                             ).show()
                             showCreateDialog = false
-                            editingNote = null
+                            editingNoteId = null
                             // Автоскролл вверх после создания (с задержкой для обновления списка)
                             if (!isEditing) {
                                 kotlinx.coroutines.delay(100)
@@ -538,21 +562,26 @@ fun NotesScreen(
                             onClick = {
                                 syncScope.launch {
                                     isSyncing = true
-                                    val result = withContext(Dispatchers.IO) {
-                                        noteRepo.syncNotes(accountId)
-                                    }
-                                    isSyncing = false
-                                    when (result) {
-                                        is EasResult.Success -> {
-                                            Toast.makeText(
-                                                context,
-                                                "$notesSyncedText: ${result.data}",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                    try {
+                                        val result = withContext(Dispatchers.IO) {
+                                            noteRepo.syncNotes(accountId)
                                         }
-                                        is EasResult.Error -> {
-                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        when (result) {
+                                            is EasResult.Success -> {
+                                                Toast.makeText(
+                                                    context,
+                                                    "$notesSyncedText: ${result.data}",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            is EasResult.Error -> {
+                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            }
                                         }
+                                    } catch (e: Exception) {
+                                        if (e is kotlinx.coroutines.CancellationException) throw e
+                                    } finally {
+                                        isSyncing = false
                                     }
                                 }
                             },
@@ -586,7 +615,7 @@ fun NotesScreen(
             if (selectedTab == 0 && !isSelectionMode) {
                 com.dedovmosol.iwomail.ui.theme.AnimatedFab(
                     onClick = {
-                        editingNote = null
+                        editingNoteId = null
                         showCreateDialog = true
                     },
                     containerColor = LocalColorTheme.current.gradientStart
@@ -614,7 +643,9 @@ fun NotesScreen(
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .focusRequester(searchFocusRequester)
+                    .onFocusChanged { isSearchFocused = it.isFocused },
                 placeholder = { Text(Strings.searchNotes) },
                 leadingIcon = { Icon(AppIcons.Search, null) },
                 trailingIcon = {
@@ -761,7 +792,7 @@ fun NotesScreen(
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     selectedIds = if (note.id in selectedIds) selectedIds - note.id else selectedIds + note.id
                                 } else {
-                                    selectedNote = note
+                                    selectedNoteId = note.id
                                 }
                             },
                             onLongClick = {
@@ -791,6 +822,11 @@ private fun NoteCard(
     onLongClick: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+    val formattedDate = remember(note.lastModified) { dateFormat.format(Date(note.lastModified)) }
+    val categoryChips = remember(note.categories) {
+        if (note.categories.isNotBlank()) note.categories.split(",").take(2).map { it.trim() }.filter { it.isNotBlank() }
+        else emptyList()
+    }
     val backgroundColor by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -856,27 +892,24 @@ private fun NoteCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = dateFormat.format(Date(note.lastModified)),
+                        text = formattedDate,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                     
-                    if (note.categories.isNotBlank()) {
+                    if (categoryChips.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            note.categories.split(",").take(2).forEach { category ->
-                                val trimmed = category.trim()
-                                if (trimmed.isNotBlank()) {
-                                    AssistChip(
-                                        onClick = { },
-                                        label = { Text(trimmed, style = MaterialTheme.typography.labelSmall) },
-                                        modifier = Modifier.height(24.dp),
-                                        colors = AssistChipDefaults.assistChipColors(
-                                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                                            labelColor = MaterialTheme.colorScheme.primary
-                                        ),
-                                        border = null
-                                    )
-                                }
+                            categoryChips.forEach { trimmed ->
+                                AssistChip(
+                                    onClick = { },
+                                    label = { Text(trimmed, style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.height(24.dp),
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                        labelColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    border = null
+                                )
                             }
                         }
                     }
@@ -937,6 +970,11 @@ private fun NoteDetailDialog(
     onRestoreClick: () -> Unit = {}
 ) {
     val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
+    val formattedDate = remember(note.lastModified) { dateFormat.format(Date(note.lastModified)) }
+    val categoryChips = remember(note.categories) {
+        if (note.categories.isNotBlank()) note.categories.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        else emptyList()
+    }
     
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
@@ -948,22 +986,19 @@ private fun NoteDetailDialog(
         },
         text = {
             Column {
-                // Дата
                 Text(
-                    text = dateFormat.format(Date(note.lastModified)),
+                    text = formattedDate,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 
-                // Категории
-                if (note.categories.isNotBlank()) {
+                if (categoryChips.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        note.categories.split(",").forEach { category ->
-                            val trimmed = category.trim()
+                        categoryChips.forEach { trimmed ->
                             if (trimmed.isNotBlank()) {
                                 AssistChip(
                                     onClick = { },
@@ -1114,7 +1149,7 @@ private fun ClickableNoteText(
             // Проверяем что не пересекается с другими ссылками
             val overlaps = allMatches.any { it.range.first <= match.range.last && it.range.last >= match.range.first }
             if (!overlaps) {
-                val cleanPhone = match.value.replace(Regex("[\\s()-]"), "")
+                val cleanPhone = match.value.replace(PHONE_CLEAN_REGEX, "")
                 allMatches.add(LinkMatch(match.range, match.value, "tel:$cleanPhone"))
             }
         }
@@ -1145,13 +1180,17 @@ private fun ClickableNoteText(
         return parts
     }
     
+    val parsedLines = remember(text) {
+        text.split("\n").map { line ->
+            if (line.isBlank()) null else findAllLinks(line)
+        }
+    }
+    
     Column {
-        val lines = text.split("\n")
-        lines.forEachIndexed { lineIndex, line ->
-            if (line.isBlank()) {
+        parsedLines.forEachIndexed { lineIndex, lineParts ->
+            if (lineParts == null) {
                 Spacer(modifier = Modifier.height(8.dp))
             } else {
-                val lineParts = findAllLinks(line)
                 
                 // Отображаем строку
                 Row(modifier = Modifier.fillMaxWidth()) {
@@ -1183,7 +1222,7 @@ private fun ClickableNoteText(
             }
             
             // Добавляем отступ между строками (кроме последней)
-            if (lineIndex < lines.size - 1 && lines[lineIndex + 1].isNotBlank()) {
+            if (lineIndex < parsedLines.size - 1 && parsedLines[lineIndex + 1] != null) {
                 Spacer(modifier = Modifier.height(2.dp))
             }
         }

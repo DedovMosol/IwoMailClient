@@ -110,107 +110,105 @@ fun VerificationScreen(
 
     // Запускаем верификацию
     LaunchedEffect(Unit) {
-        scope.launch {
-            val result = verifyEmail(
-                email = email,
-                serverUrl = serverUrl,
-                username = username,
-                password = password,
-                domain = domain,
-                acceptAllCerts = acceptAllCerts,
-                port = incomingPort,
-                useSSL = useSSL,
-                certificatePath = certificatePath,
-                clientCertificatePath = clientCertificatePath,
-                clientCertificatePassword = clientCertificatePassword,
-                verifyingAccountText = verifyingAccountText,
-                verifyingEmailText = verifyingEmailText,
-                sendingTestEmailText = sendingTestEmailText,
-                testEmailSubjectText = testEmailSubjectText,
-                testEmailBodyText = testEmailBodyText,
-                onStatusChange = { statusText = it }
-            )
-            
-            when (result) {
-                is VerificationResult.Success -> {
-                    // Email подтверждён — сохраняем аккаунт
-                    val addResult = accountRepo.addAccount(
-                        email = email,
-                        displayName = displayName,
-                        serverUrl = serverUrl,
-                        username = username,
-                        password = password,
-                        domain = domain,
-                        acceptAllCerts = acceptAllCerts,
-                        color = color,
-                        accountType = AccountType.EXCHANGE,
-                        incomingPort = incomingPort,
-                        outgoingServer = outgoingServer,
-                        outgoingPort = outgoingPort,
-                        useSSL = useSSL,
-                        syncMode = syncMode,
-                        certificatePath = certificatePath,
-                        clientCertificatePath = clientCertificatePath,
-                        clientCertificatePassword = clientCertificatePassword
-                    )
-                    
-                    when (addResult) {
-                        is EasResult.Success -> {
-                            val accountId = addResult.data
-                            
-                            // Автоматически включаем Certificate Pinning если был загружен сертификат
-                            if (certificatePath != null) {
-                                try {
-                                    val pinResult = accountRepo.pinCertificate(accountId)
-                                    if (pinResult is EasResult.Success) {
-                                        android.util.Log.d("VerificationScreen", "Certificate Pinning enabled automatically for new account")
-                                    } else if (pinResult is EasResult.Error) {
-                                        android.util.Log.w("VerificationScreen", "Failed to auto-enable Certificate Pinning: ${pinResult.message}")
-                                    }
-                                } catch (e: Exception) {
-                                    android.util.Log.w("VerificationScreen", "Exception during auto-enable Certificate Pinning", e)
+        val result = verifyEmail(
+            email = email,
+            serverUrl = serverUrl,
+            username = username,
+            password = password,
+            domain = domain,
+            acceptAllCerts = acceptAllCerts,
+            port = incomingPort,
+            useSSL = useSSL,
+            certificatePath = certificatePath,
+            clientCertificatePath = clientCertificatePath,
+            clientCertificatePassword = clientCertificatePassword,
+            verifyingAccountText = verifyingAccountText,
+            verifyingEmailText = verifyingEmailText,
+            sendingTestEmailText = sendingTestEmailText,
+            testEmailSubjectText = testEmailSubjectText,
+            testEmailBodyText = testEmailBodyText,
+            onStatusChange = { statusText = it }
+        )
+        
+        when (result) {
+            is VerificationResult.Success -> {
+                // Email подтверждён — сохраняем аккаунт
+                val addResult = accountRepo.addAccount(
+                    email = email,
+                    displayName = displayName,
+                    serverUrl = serverUrl,
+                    username = username,
+                    password = password,
+                    domain = domain,
+                    acceptAllCerts = acceptAllCerts,
+                    color = color,
+                    accountType = AccountType.EXCHANGE,
+                    incomingPort = incomingPort,
+                    outgoingServer = outgoingServer,
+                    outgoingPort = outgoingPort,
+                    useSSL = useSSL,
+                    syncMode = syncMode,
+                    certificatePath = certificatePath,
+                    clientCertificatePath = clientCertificatePath,
+                    clientCertificatePassword = clientCertificatePassword
+                )
+                
+                when (addResult) {
+                    is EasResult.Success -> {
+                        val accountId = addResult.data
+                        
+                        // Автоматически включаем Certificate Pinning если был загружен сертификат
+                        if (certificatePath != null) {
+                            try {
+                                val pinResult = accountRepo.pinCertificate(accountId)
+                                if (pinResult is EasResult.Success) {
+                                    android.util.Log.d("VerificationScreen", "Certificate Pinning enabled automatically for new account")
+                                } else if (pinResult is EasResult.Error) {
+                                    android.util.Log.w("VerificationScreen", "Failed to auto-enable Certificate Pinning: ${pinResult.message}")
                                 }
+                            } catch (e: Exception) {
+                                android.util.Log.w("VerificationScreen", "Exception during auto-enable Certificate Pinning", e)
                             }
-                            
-                            // Запускаем начальную синхронизацию в фоне
-                            scope.launch {
-                                val mailRepo = com.dedovmosol.iwomail.data.repository.MailRepository(context)
-                                val settingsRepo = com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
-                                com.dedovmosol.iwomail.ui.InitialSyncController.startSyncIfNeeded(
-                                    context, accountId, mailRepo, settingsRepo
-                                )
-                            }
-                            
-                            // Пароль клиентского сертификата уже сохранен в addAccount()
-                            onSuccess()
                         }
-                        is EasResult.Error -> onError(addResult.message, createSavedData())
+                        
+                        // Запускаем начальную синхронизацию в фоне
+                        scope.launch {
+                            val mailRepo = com.dedovmosol.iwomail.data.repository.MailRepository(context)
+                            val settingsRepo = com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
+                            com.dedovmosol.iwomail.ui.InitialSyncController.startSyncIfNeeded(
+                                context, accountId, mailRepo, settingsRepo
+                            )
+                        }
+                        
+                        // Пароль клиентского сертификата уже сохранен в addAccount()
+                        onSuccess()
                     }
+                    is EasResult.Error -> onError(addResult.message, createSavedData())
                 }
-                is VerificationResult.EmailMismatch -> {
-                    // Показываем диалог
-                    mismatchEnteredEmail = result.enteredEmail
-                    mismatchActualEmail = result.actualEmail
-                    showMismatchDialog = true
-                }
-                is VerificationResult.Error -> {
-                    val errorMessage = when (result.message) {
-                        "CLIENT_CERT_PASSWORD_REQUIRED" -> {
-                            if (isRussianLang) 
-                                "Требуется пароль клиентского сертификата" 
-                            else 
-                                "Client certificate password required"
-                        }
-                        "CLIENT_CERT_LOAD_FAILED" -> {
-                            if (isRussianLang)
-                                "Не удалось загрузить клиентский сертификат. Проверьте пароль."
-                            else
-                                "Failed to load client certificate. Check the password."
-                        }
-                        else -> NotificationStrings.localizeError(result.message, isRussianLang)
+            }
+            is VerificationResult.EmailMismatch -> {
+                // Показываем диалог
+                mismatchEnteredEmail = result.enteredEmail
+                mismatchActualEmail = result.actualEmail
+                showMismatchDialog = true
+            }
+            is VerificationResult.Error -> {
+                val errorMessage = when (result.message) {
+                    "CLIENT_CERT_PASSWORD_REQUIRED" -> {
+                        if (isRussianLang) 
+                            "Требуется пароль клиентского сертификата" 
+                        else 
+                            "Client certificate password required"
                     }
-                    onError(errorMessage, createSavedData())
+                    "CLIENT_CERT_LOAD_FAILED" -> {
+                        if (isRussianLang)
+                            "Не удалось загрузить клиентский сертификат. Проверьте пароль."
+                        else
+                            "Failed to load client certificate. Check the password."
+                    }
+                    else -> NotificationStrings.localizeError(result.message, isRussianLang)
                 }
+                onError(errorMessage, createSavedData())
             }
         }
     }

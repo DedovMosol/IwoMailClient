@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,37 +78,48 @@ fun OnboardingScreen(
     val pageScale = if (isPhoneLandscape) 0.9f else 1f
     
     // Состояние языка и анимаций (для первого запуска используем локальное состояние)
-    var selectedLanguage by remember { mutableStateOf(settingsRepo.getLanguageSync()) }
-    var selectedAnimations by remember { mutableStateOf(settingsRepo.getAnimationsEnabledSync()) }
-    var selectedTheme by remember { mutableStateOf(settingsRepo.getColorThemeSync()) }
-    var selectedScrollbarColor by remember { mutableStateOf(settingsRepo.getScrollbarColorSync()) }
-    var selectedDraftMode by remember { mutableStateOf(settingsRepo.getDefaultDraftModeSync()) }
+    var selectedLanguage by rememberSaveable { mutableStateOf(settingsRepo.getLanguageSync()) }
+    var selectedAnimations by rememberSaveable { mutableStateOf(settingsRepo.getAnimationsEnabledSync()) }
+    var selectedTheme by rememberSaveable { mutableStateOf(settingsRepo.getColorThemeSync()) }
+    var selectedScrollbarColor by rememberSaveable { mutableStateOf(settingsRepo.getScrollbarColorSync()) }
+    var selectedDraftMode by rememberSaveable { mutableStateOf(settingsRepo.getDefaultDraftModeSync()) }
     
     // Определяем русский ли язык
     val isRussian = selectedLanguage == AppLanguage.RUSSIAN.code
     
+    val mailIcon = AppIcons.Email
+    val organizerIcon = AppIcons.CalendarMonth
+    val settingsIcon = AppIcons.Settings
+
     // Слайды с возможностями — объединённые
-    val pages = listOf(
-        // Слайд 1: Почта и уведомления
-        OnboardingPage(
-            type = OnboardingPageType.Mail,
-            icon = AppIcons.Email,
-            color = Color(0xFF1565C0)
-        ),
-        // Слайд 2: Органайзер
-        OnboardingPage(
-            type = OnboardingPageType.Organizer,
-            icon = AppIcons.CalendarMonth,
-            color = Color(0xFF1565C0)
-        ),
-        // Слайд 3: Настройки и обновления
-        OnboardingPage(
-            type = OnboardingPageType.Settings,
-            icon = AppIcons.Settings,
-            color = Color(0xFF455A64)
+    val pages = remember(mailIcon, organizerIcon, settingsIcon) {
+        listOf(
+            // Слайд 1: Почта и уведомления
+            OnboardingPage(
+                type = OnboardingPageType.Mail,
+                icon = mailIcon,
+                color = Color(0xFF1565C0)
+            ),
+            // Слайд 2: Органайзер
+            OnboardingPage(
+                type = OnboardingPageType.Organizer,
+                icon = organizerIcon,
+                color = Color(0xFF1565C0)
+            ),
+            // Слайд 3: Настройки и обновления
+            OnboardingPage(
+                type = OnboardingPageType.Settings,
+                icon = settingsIcon,
+                color = Color(0xFF455A64)
+            )
         )
-    )
+    }
     
+    val sharedPulse = rememberPulseScale(selectedAnimations, from = 1f, to = 1.1f, durationMs = 1000)
+    val sharedShake = rememberShake(selectedAnimations, amplitude = 10f, durationMs = 300)
+    val sharedFeatureRotation = rememberRotation(selectedAnimations, durationMs = 3000)
+    val sharedAnimRotation = rememberRotation(selectedAnimations, durationMs = 2000)
+
     // Добавляем слайды выбора языка, анимаций, темы и режима черновиков в начало для первого запуска
     val totalPages = if (isFirstLaunch) pages.size + 4 else pages.size
     val pagerState = rememberPagerState(pageCount = { totalPages })
@@ -130,6 +142,7 @@ fun OnboardingScreen(
             // Pager
             HorizontalPager(
                 state = pagerState,
+                beyondBoundsPageCount = 1,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -165,7 +178,8 @@ fun OnboardingScreen(
                                     }
                                 },
                                 colorTheme = colorTheme,
-                                isRussian = isRussian
+                                isRussian = isRussian,
+                                rotation = sharedAnimRotation
                             )
                             2 -> ThemeSelectionPage(
                                 selectedTheme = selectedTheme,
@@ -184,7 +198,8 @@ fun OnboardingScreen(
                                     }
                                 },
                                 isRussian = isRussian,
-                                animationsEnabled = selectedAnimations
+                                animationsEnabled = selectedAnimations,
+                                pulse = sharedPulse
                             )
                             3 -> DraftModeSelectionPage(
                                 selectedDraftMode = selectedDraftMode,
@@ -203,7 +218,10 @@ fun OnboardingScreen(
                                 FeaturePage(
                                     page = pageData,
                                     isRussian = isRussian,
-                                    animationsEnabled = selectedAnimations
+                                    animationsEnabled = selectedAnimations,
+                                    pulse = sharedPulse,
+                                    shake = sharedShake,
+                                    rotation = sharedFeatureRotation
                                 )
                             }
                         }
@@ -211,7 +229,10 @@ fun OnboardingScreen(
                         FeaturePage(
                             page = pages[page],
                             isRussian = isRussian,
-                            animationsEnabled = selectedAnimations
+                            animationsEnabled = selectedAnimations,
+                            pulse = sharedPulse,
+                            shake = sharedShake,
+                            rotation = sharedFeatureRotation
                         )
                     }
                 }
@@ -463,16 +484,13 @@ private fun AnimationsSelectionPage(
     animationsEnabled: Boolean,
     onAnimationsChanged: (Boolean) -> Unit,
     colorTheme: AppColorTheme,
-    isRussian: Boolean
+    isRussian: Boolean,
+    rotation: Float
 ) {
-    // Анимация появления - всегда для этого слайда
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         visible = true
     }
-    
-    // Бесконечное вращение иконки (когда анимации включены)
-    val rotation = rememberRotation(animationsEnabled, durationMs = 2000)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||
@@ -608,7 +626,8 @@ private fun ThemeSelectionPage(
     selectedScrollbarColor: String = "blue",
     onScrollbarColorSelected: (String) -> Unit = {},
     isRussian: Boolean,
-    animationsEnabled: Boolean
+    animationsEnabled: Boolean,
+    pulse: Float
 ) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -622,9 +641,6 @@ private fun ThemeSelectionPage(
     val scrollState = rememberScrollState()
 
     val currentTheme = AppColorTheme.fromCode(selectedTheme)
-    
-    // Пульсация для выбранной темы
-    val pulse = rememberPulseScale(animationsEnabled, from = 1f, to = 1.1f, durationMs = 1000)
     
     Box(
         modifier = Modifier
@@ -1000,20 +1016,17 @@ private fun DraftModeSelectionPage(
 private fun FeaturePage(
     page: OnboardingPage,
     isRussian: Boolean,
-    animationsEnabled: Boolean
+    animationsEnabled: Boolean,
+    pulse: Float,
+    shake: Float,
+    rotation: Float
 ) {
-    // Анимация появления - сбрасываем при каждом показе страницы
     var visible by remember(page.type) { mutableStateOf(false) }
     LaunchedEffect(page.type) {
         visible = false
-        kotlinx.coroutines.delay(100) // Увеличена задержка для надёжности анимации
+        kotlinx.coroutines.delay(100)
         visible = true
     }
-    
-    // Бесконечные анимации для иконок
-    val pulse = rememberPulseScale(animationsEnabled, from = 1f, to = 1.1f, durationMs = 1000)
-    val shake = rememberShake(animationsEnabled, amplitude = 10f, durationMs = 300)
-    val rotation = rememberRotation(animationsEnabled, durationMs = 3000)
     
     val configuration = LocalConfiguration.current
     val isCompactHeight = configuration.screenHeightDp < 500 ||

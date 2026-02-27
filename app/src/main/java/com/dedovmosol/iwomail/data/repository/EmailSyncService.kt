@@ -651,7 +651,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         initFromPrefs(context)
         
         if (retryCount == 0 && activeSyncs.putIfAbsent(folderId, true) != null) {
-            return EasResult.Error("Синхронизация уже выполняется")
+            // Ждём завершения текущей синхронизации вместо мгновенного отказа
+            var waited = 0
+            while (activeSyncs[folderId] == true && waited < 30) {
+                kotlinx.coroutines.delay(1000)
+                waited++
+            }
+            if (activeSyncs.putIfAbsent(folderId, true) != null) {
+                return EasResult.Error("Синхронизация уже выполняется")
+            }
         }
         
         try {
@@ -715,8 +723,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 when (val result = client.sync(folder.serverId, "0", windowSize, false)) {
                     is EasResult.Success -> {
                         if (result.data.status == 12 || result.data.status == 3) {
-                            folderDao.resetAllSyncKeys(accountId)
-                            accountDao.updateFolderSyncKey(accountId, "0")
+                            folderDao.updateSyncKey(folderId, "0")
                             if (retryCount < 1) {
                                 return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
                             } else {
@@ -761,8 +768,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         consecutiveErrors = 0
                         
                         if (result.data.status == 3 || result.data.status == 12) {
-                            folderDao.resetAllSyncKeys(accountId)
-                            accountDao.updateFolderSyncKey(accountId, "0")
+                            folderDao.updateSyncKey(folderId, "0")
                             return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
                         }
                         
@@ -838,8 +844,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             result.message.contains("Status=12") ||
                             result.message.contains("Status 3") ||
                             result.message.contains("Status 12")) {
-                            folderDao.resetAllSyncKeys(accountId)
-                            accountDao.updateFolderSyncKey(accountId, "0")
+                            folderDao.updateSyncKey(folderId, "0")
                             return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
                         }
                         
@@ -978,21 +983,18 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             emptyList()
         }
         
-        // Дедупликация по содержимому — только для черновиков
+        // Дедупликация по содержимому — только для черновиков.
         // Для INBOX/SENT и пр. id/serverId проверок достаточно; content dedup с 5-секундным
         // окном может ложно дропать настоящие письма с одинаковым subject+from.
+        // Используем облегчённый getDedupInfoByFolder вместо полного getEmailsByFolderList
+        // для экономии памяти (не загружаем body/preview).
         var draftReplacements = emptyMap<String, String>()
         val filteredByContent = if (filteredByServerId.isNotEmpty() && folder.type == FolderType.DRAFTS) {
-            val existingEmails = emailDao.getEmailsByFolderList(folderId)
-            val isDrafts = folder.type == FolderType.DRAFTS
-            val dedupCandidates = if (isDrafts) {
-                val deletedInBatch = syncData.deletedIds.toSet()
-                existingEmails.filter { e ->
-                    !(e.serverId.length > 30 && !e.serverId.contains(":") && !e.serverId.startsWith("local_draft_"))
-                    && e.serverId !in deletedInBatch
-                }
-            } else {
-                existingEmails
+            val dedupInfos = emailDao.getDedupInfoByFolder(folderId)
+            val deletedInBatch = syncData.deletedIds.toSet()
+            val dedupCandidates = dedupInfos.filter { e ->
+                !(e.serverId.length > 30 && !e.serverId.contains(":") && !e.serverId.startsWith("local_draft_"))
+                && e.serverId !in deletedInBatch
             }
             
             val contentIndex = dedupCandidates.groupBy { "${it.subject}|${it.from}" }
@@ -1003,7 +1005,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 val key = "${newEmail.subject}|${newEmail.from}"
                 var candidates = contentIndex[key]
                 
-                if (candidates == null && isDrafts) {
+                if (candidates == null) {
                     val subjectPrefix = "${newEmail.subject}|"
                     for ((existingKey, existingCandidates) in contentIndex) {
                         if (existingKey.startsWith(subjectPrefix)) {
@@ -1023,7 +1025,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         kotlin.math.abs(existing.dateReceived - newEmail.dateReceived) < 5000
                     }
                     if (matchingCandidate != null) {
-                        if (isDrafts && matchingCandidate.serverId != newEmail.serverId) {
+                        if (matchingCandidate.serverId != newEmail.serverId) {
                             draftReplacementsLocal[newEmail.id] = matchingCandidate.id
                         } else {
                             duplicateIds.add(newEmail.id)

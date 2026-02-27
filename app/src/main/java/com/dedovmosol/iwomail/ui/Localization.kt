@@ -840,6 +840,9 @@ object Strings {
     val endBeforeStart: String @Composable get() = if (isRussian()) "Время окончания должно быть позже времени начала" else "End time must be after start time"
     val eventCreated: String @Composable get() = if (isRussian()) "Событие создано" else "Event created"
     val eventUpdated: String @Composable get() = if (isRussian()) "Событие обновлено" else "Event updated"
+    val eventAttachmentsMayNotUpload: String @Composable get() = if (isRussian())
+        "Событие отправлено, но вложения могли не загрузиться"
+        else "Event was sent, but attachments may not have uploaded"
     val eventDeleted: String @Composable get() = if (isRussian()) "Событие перемещено в корзину" else "Event moved to trash"
     val eventsDeletedPermanently: String @Composable get() = if (isRussian()) "Событий удалено навсегда" else "Events permanently deleted"
     val eventsRestored: String @Composable get() = if (isRussian()) "События восстановлены" else "Events restored"

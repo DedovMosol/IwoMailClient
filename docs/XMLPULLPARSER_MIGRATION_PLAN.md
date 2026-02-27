@@ -1,10 +1,23 @@
 # План миграции на XmlPullParser (v1.7.0)
 
+> Обновлено: 27.02.2026
+
 ## Текущее состояние
-- **251 Regex** в 8 EAS/EWS сервисах
+- **190 Regex** в 8 EAS/EWS сервисах (было 251 — часть вынесена в `EasPatterns`, часть заменена `XmlValueExtractor`)
 - `EasPatterns.kt` — кэш Regex паттернов (ConcurrentHashMap)
 - `XmlValueExtractor.kt` — обёртка над Regex с namespace support
 - `deps.extractValue()` — per-service Regex extraction
+
+| Сервис | Regex | Сложность |
+|--------|-------|-----------|
+| EasCalendarService | 70 | Очень высокая |
+| EasDraftsService | 30 | Высокая |
+| EasTasksService | 26 | Средняя |
+| EasEmailService | 25 | Высокая |
+| EasClient | 18 | Критическая |
+| EasNotesService | 15 | Средняя |
+| EasContactsService | 4 | Низкая |
+| EasAttachmentService | 2 | Низкая |
 
 ## Утилита (ГОТОВА)
 `EasXmlParser.kt` — обёртка над `android.util.Xml.newPullParser()`:
@@ -32,28 +45,24 @@
 - Простейший сервис, идеален для smoke test
 - Проверить: GAL поиск, список контактов
 
-### Этап 2: EasAttachmentService (10 regex)
+### Этап 2: EasAttachmentService (2 regex)
 - FileReference extraction, content download
 - Проверить: скачивание вложений email/calendar/tasks
 
-### Этап 3: EasNotesService (17 regex)
+### Этап 3: EasNotesService (15 regex)
 - Sync response парсинг (Add/Change/Delete)
 - EWS CreateItem/UpdateItem/GetItem для заметок
 - `parseNoteFromXml`, `parseEwsNotesResponse`
 - Проверить: CRUD заметок, синхронизация, Exchange 2007 SP1
 
-### Этап 4: EasTasksService (23 regex)
-- Аналогично EasNotesService
+### Этап 4: EasTasksService (26 regex)
+- Аналогично EasNotesService + EWS FindItem (AllProperties)
 - `parseTaskFromXml`, `parseEwsTasksResponse`
-- Проверить: CRUD задач, синхронизация, Exchange 2007 SP1
+- `discoverTaskSubfolderIds` — FindFolder response парсинг
+- `getTaskBodiesEws` — GetItem для тел задач
+- Проверить: CRUD задач, синхронизация, Exchange 2007 SP1, задачи без дат
 
-### Этап 5: EasDraftsService (35 regex)
-- EWS CreateItem MimeContent
-- GetItem для черновиков
-- Attachment download
-- Проверить: создание/редактирование/отправка черновиков
-
-### Этап 6: EasEmailService (44 regex)
+### Этап 5: EasEmailService (25 regex)
 - ItemOperations Data extraction
 - Attachment parsing
 - Sync Add/Change/Delete
@@ -61,13 +70,21 @@
 - Inline image MIME parsing — НЕ ТРОГАТЬ (остаётся Regex)
 - Проверить: полный цикл работы с почтой
 
-### Этап 7: EasCalendarService (74 regex) — самый сложный
+### Этап 6: EasDraftsService (30 regex)
+- EWS CreateItem MimeContent
+- GetItem для черновиков
+- Attachment download
+- Проверить: создание/редактирование/отправка черновиков
+
+### Этап 7: EasCalendarService (70 regex) — самый сложный
 - Sync response с событиями (много полей)
 - EWS FindItem/GetItem/CreateItem/UpdateItem/DeleteItem
 - Attendees, Exceptions, Attachments парсинг
-- Проверить: CRUD событий, повторяющиеся события, Exchange 2007 SP1
+- `deleteCalendarAttachments` — DeleteAttachment response
+- `findCalendarItemIdBySubject` — FindItem response
+- Проверить: CRUD событий, повторяющиеся события, вложения, Exchange 2007 SP1
 
-### Этап 8: EasClient (44 regex)
+### Этап 8: EasClient (18 regex)
 - КРИТИЧЕСКИЙ — FolderSync, Provision, Autodiscover, EWS fallback
 - `fetchEmailBodyViaEws` (FindItem + GetItem)
 - FolderHierarchy парсинг

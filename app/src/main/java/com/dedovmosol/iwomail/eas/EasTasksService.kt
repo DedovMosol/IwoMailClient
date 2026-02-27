@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.eas
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 
 /**
  * Сервис для работы с задачами Exchange (EAS/EWS)
@@ -259,6 +260,40 @@ class EasTasksService internal constructor(
         }
     }
     
+    /**
+     * Batch-удаление задач (в корзину). Один EWS DeleteItem на весь пакет.
+     */
+    suspend fun deleteTasksBatch(serverIds: List<String>): EasResult<Int> {
+        if (serverIds.isEmpty()) return EasResult.Success(0)
+        if (!deps.isVersionDetected()) deps.detectEasVersion()
+        return if (deps.getEasVersion().startsWith("12.")) {
+            deleteTasksBatchEws(serverIds, "MoveToDeletedItems")
+        } else {
+            var deleted = 0
+            for (sid in serverIds) {
+                if (deleteTask(sid) is EasResult.Success) deleted++
+            }
+            EasResult.Success(deleted)
+        }
+    }
+
+    /**
+     * Batch окончательное удаление задач (HardDelete). Один EWS DeleteItem на весь пакет.
+     */
+    suspend fun deleteTasksPermanentlyBatch(serverIds: List<String>): EasResult<Int> {
+        if (serverIds.isEmpty()) return EasResult.Success(0)
+        if (!deps.isVersionDetected()) deps.detectEasVersion()
+        return if (deps.getEasVersion().startsWith("12.")) {
+            deleteTasksBatchEws(serverIds, "HardDelete")
+        } else {
+            var deleted = 0
+            for (sid in serverIds) {
+                if (deleteTaskPermanently(sid) is EasResult.Success) deleted++
+            }
+            EasResult.Success(deleted)
+        }
+    }
+
     /**
      * Восстановление задачи из корзины
      * Перемещает задачу из Deleted Items обратно в Tasks
@@ -571,53 +606,223 @@ class EasTasksService internal constructor(
     private suspend fun syncTasksEws(): EasResult<List<EasTask>> = withContext(Dispatchers.IO) {
         try {
             val ewsUrl = deps.getEwsUrl()
-            val allTasks = mutableListOf<EasTask>()
+            val allActiveTasks = mutableListOf<EasTask>()
+
+            // 0. Диагностика: GetFolder на tasks → TotalCount + ChildFolderCount
+            val folderInfo = getTasksFolderInfo(ewsUrl)
+            android.util.Log.d("EasTasksService",
+                "syncTasksEws: GetFolder tasks → totalCount=${folderInfo.first}, childFolders=${folderInfo.second}")
+
+            // 1. Синхронизация из корневой папки Tasks (DistinguishedFolderId)
+            val rootTasks = syncTasksFromFolderEws(ewsUrl, "tasks", isDeleted = false) { offset, pageSize ->
+                buildEwsFindTasksRequest(offset, pageSize)
+            }
+            allActiveTasks.addAll(rootTasks)
+            android.util.Log.d("EasTasksService", "syncTasksEws: root tasks folder: ${rootTasks.size}")
             
-            // Синхронизация активных задач
-            val activeTasks = syncTasksFromFolderEws(ewsUrl, "tasks", isDeleted = false)
-            allTasks.addAll(activeTasks)
+            // 2. Обнаруживаем подпапки Tasks и ищем в каждой.
+            val subfolderIds = discoverTaskSubfolderIds(ewsUrl)
+            if (subfolderIds.isNotEmpty()) {
+                android.util.Log.d("EasTasksService", "syncTasksEws: discovered ${subfolderIds.size} task subfolders")
+                for (subfolderId in subfolderIds) {
+                    val subTasks = syncTasksFromFolderEws(ewsUrl, "tasks-sub-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
+                        buildEwsFindTasksByFolderIdRequest(subfolderId, offset, pageSize)
+                    }
+                    allActiveTasks.addAll(subTasks)
+                }
+            }
+
+            // 2b. Подпапки непосредственно внутри "tasks" (Deep от msgfolderroot может пропустить)
+            val directSubfolders = discoverDirectTaskSubfolders(ewsUrl)
+            if (directSubfolders.isNotEmpty()) {
+                android.util.Log.d("EasTasksService",
+                    "syncTasksEws: ${directSubfolders.size} direct subfolders under tasks")
+                for (subfolderId in directSubfolders) {
+                    if (subfolderIds.contains(subfolderId)) continue
+                    val subTasks = syncTasksFromFolderEws(ewsUrl, "tasks-direct-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
+                        buildEwsFindTasksByFolderIdRequest(subfolderId, offset, pageSize)
+                    }
+                    allActiveTasks.addAll(subTasks)
+                }
+            }
+
+            // todosearch (DistinguishedFolderId "todosearch") введён в Exchange 2010 (v14).
+            // EWS-путь используется только для Exchange 2007 SP1 (majorVersion < 14),
+            // поэтому todosearch гарантированно вернёт ErrorFolderNotFound — пропускаем.
+            android.util.Log.d("EasTasksService",
+                "syncTasksEws: skipping todosearch (not supported on Exchange 2007 SP1)")
+
+            // 3. Дедупликация по serverId
+            val uniqueActive = allActiveTasks.distinctBy { it.serverId }
+            android.util.Log.d("EasTasksService", "syncTasksEws: active tasks total: ${uniqueActive.size} (before dedup: ${allActiveTasks.size})")
             
-            // Синхронизация удалённых задач
-            val deletedTasks = syncTasksFromFolderEws(ewsUrl, "deleteditems", isDeleted = true)
-            allTasks.addAll(deletedTasks)
+            // 4. Синхронизация удалённых задач
+            val deletedTasks = syncTasksFromFolderEws(ewsUrl, "deleteditems", isDeleted = true) { offset, pageSize ->
+                buildEwsFindDeletedTasksRequest(offset, pageSize)
+            }
+            android.util.Log.d("EasTasksService", "syncTasksEws: deleted tasks: ${deletedTasks.size}")
             
+            val allTasks = uniqueActive + deletedTasks
             EasResult.Success(allTasks)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("EasTasksService", "syncTasksEws: exception: ${e.message}")
             EasResult.Success(emptyList())
         }
     }
     
-    private suspend fun syncTasksFromFolderEws(ewsUrl: String, folderId: String, isDeleted: Boolean): List<EasTask> {
+    private suspend fun syncTasksFromFolderEws(
+        ewsUrl: String, 
+        folderLabel: String, 
+        isDeleted: Boolean,
+        buildRequest: (offset: Int, pageSize: Int) -> String
+    ): List<EasTask> {
         try {
-            val findRequest = if (folderId == "tasks") {
-                buildEwsFindTasksRequest()
-            } else {
-                EasXmlTemplates.ewsSoapRequest(EasXmlTemplates.ewsFindItem(folderId))
-            }
+            // ЭТАП 1: FindItem с IdOnly — получаем ВСЕ ItemId из папки.
+            // Exchange 2007 SP1 при AllProperties/IdOnly+task:* может фильтровать items.
+            // IdOnly без AdditionalProperties гарантирует ВСЕ элементы.
+            val allItemIds = mutableListOf<String>()
+            var offset = 0
+            val pageSize = 200
+            var hasMore = true
             
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                ?: return emptyList()
-            
-            val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-                ?: return emptyList()
-            
-            val tasks = parseEwsTasksResponse(responseXml).toMutableList()
-            
-            if (tasks.isNotEmpty()) {
-                val bodies = getTaskBodiesEws(ewsUrl, tasks.map { it.serverId })
-                return tasks.map { task ->
-                    val body = bodies[task.serverId]
-                    task.copy(
-                        body = if (!body.isNullOrBlank()) body else task.body,
-                        isDeleted = isDeleted
-                    )
+            while (hasMore) {
+                yield()
+                val findRequest = buildRequest(offset, pageSize)
+                
+                var responseXml = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
+                if (responseXml == null) {
+                    val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+                        ?: break
+                    responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+                        ?: break
+                }
+                
+                val totalItemsMatch = "TotalItemsInView=\"(\\d+)\"".toRegex().find(responseXml)
+                val totalItems = totalItemsMatch?.groupValues?.get(1)?.toIntOrNull() ?: -1
+                val indexedPagingOffsetMatch = "IndexedPagingOffset=\"(\\d+)\"".toRegex().find(responseXml)
+                val nextOffset = indexedPagingOffsetMatch?.groupValues?.get(1)?.toIntOrNull()
+                val includesLast = responseXml.contains("IncludesLastItemInRange=\"true\"")
+                val hasError = responseXml.contains("ResponseClass=\"Error\"")
+                
+                if (hasError) {
+                    android.util.Log.w("EasTasksService",
+                        "syncTasksFromFolderEws($folderLabel): FindItem returned error at offset=$offset")
+                    break
+                }
+                
+                val itemIdPattern = """<(?:t:)?ItemId\s[^>]*Id="([^"]+)"[^>]*/?>""".toRegex()
+                val pageIds = itemIdPattern.findAll(responseXml).map { it.groupValues[1] }.toList()
+                allItemIds.addAll(pageIds)
+                
+                android.util.Log.d("EasTasksService", 
+                    "syncTasksFromFolderEws($folderLabel): offset=$offset, totalItemsInView=$totalItems, " +
+                    "pageItemIds=${pageIds.size}, includesLast=$includesLast")
+                
+                if (includesLast || pageIds.isEmpty()) {
+                    hasMore = false
+                } else if (nextOffset != null && nextOffset > offset) {
+                    offset = nextOffset
+                    if (offset > 5000) {
+                        android.util.Log.w("EasTasksService", "syncTasksFromFolderEws($folderLabel): stopping at offset=$offset")
+                        hasMore = false
+                    }
+                } else {
+                    hasMore = false
                 }
             }
             
-            return emptyList()
+            val uniqueIds = allItemIds.distinct()
+            android.util.Log.d("EasTasksService", 
+                "syncTasksFromFolderEws($folderLabel): FindItem complete, ${uniqueIds.size} unique ItemIds")
+            
+            if (uniqueIds.isEmpty()) return emptyList()
+            
+            // ЭТАП 2: GetItem с AllProperties — получаем ВСЕ свойства задач (включая Body).
+            val tasks = getTaskDetailsEws(ewsUrl, uniqueIds, folderLabel)
+            return tasks.map { it.copy(isDeleted = isDeleted) }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("EasTasksService", "syncTasksFromFolderEws($folderLabel): exception: ${e.message}")
             return emptyList()
         }
+    }
+    
+    /**
+     * GetItem для списка ItemId — возвращает полные EasTask объекты (включая Body).
+     * Exchange 2007 SP1: GetItem с AllProperties возвращает ВСЕ свойства задач.
+     */
+    private suspend fun getTaskDetailsEws(
+        ewsUrl: String,
+        itemIds: List<String>,
+        label: String
+    ): List<EasTask> {
+        val allTasks = mutableListOf<EasTask>()
+        val seenIds = mutableSetOf<String>()
+        
+        for (batch in itemIds.chunked(50)) {
+            kotlinx.coroutines.yield()
+            
+            val itemIdsXml = batch.joinToString("") {
+                """<t:ItemId Id="${deps.escapeXml(it)}"/>"""
+            }
+            val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <GetItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages">
+            <ItemShape>
+                <t:BaseShape>AllProperties</t:BaseShape>
+            </ItemShape>
+            <ItemIds>
+                $itemIdsXml
+            </ItemIds>
+        </GetItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+            
+            var responseXml = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
+            if (responseXml == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: continue
+                responseXml = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem") ?: continue
+            }
+            
+            if (responseXml.isBlank()) continue
+            
+            android.util.Log.d("EasTasksService",
+                "getTaskDetailsEws($label): batch ${batch.size} ids, response len=${responseXml.length}")
+            
+            val pageTasks = parseEwsTasksResponse(responseXml)
+            allTasks.addAll(pageTasks)
+            seenIds.addAll(pageTasks.map { it.serverId })
+            
+            if (pageTasks.size < batch.size) {
+                val parsedIds = pageTasks.map { it.serverId }.toSet()
+                val missingIds = batch.filter { it !in parsedIds && it !in seenIds }
+                if (missingIds.isNotEmpty()) {
+                    android.util.Log.w("EasTasksService",
+                        "getTaskDetailsEws($label): ${missingIds.size} items not parsed from GetItem, trying fragment fallback")
+                    val itemsBlockMatch = "<(?:t:|m:)?Items>(.*?)</(?:t:|m:)?Items>"
+                        .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)
+                    val searchArea = itemsBlockMatch?.groupValues?.get(1) ?: responseXml
+                    for (missingId in missingIds) {
+                        val idIdx = searchArea.indexOf(missingId)
+                        if (idIdx < 0) continue
+                        val fragStart = maxOf(0, idIdx - 200)
+                        val fragEnd = minOf(searchArea.length, idIdx + 3000)
+                        val fragment = searchArea.substring(fragStart, fragEnd)
+                        parseTaskFromEwsItemXml(fragment, seenIds)?.let { allTasks.add(it) }
+                    }
+                }
+            }
+        }
+        
+        android.util.Log.d("EasTasksService",
+            "getTaskDetailsEws($label): total ${allTasks.size} tasks from ${itemIds.size} ids")
+        return allTasks.distinctBy { it.serverId }
     }
     
     private suspend fun createTaskEws(
@@ -683,11 +888,14 @@ class EasTasksService internal constructor(
             
             val soapRequest = buildEwsDeleteRequest(escapedItemId, "MoveToDeletedItems")
             
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-            
-            val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+            // КРИТИЧНО: Basic Auth first, NTLM fallback
+            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
+            if (responseXml == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+            }
             
             // КРИТИЧНО: Для delete проверяем Success+NoError ИЛИ ErrorItemNotFound (уже удалено)
             val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
@@ -711,11 +919,14 @@ class EasTasksService internal constructor(
             
             val soapRequest = buildEwsDeleteRequest(escapedItemId, "HardDelete")
             
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-            
-            val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+            // КРИТИЧНО: Basic Auth first, NTLM fallback
+            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
+            if (responseXml == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+            }
             
             // КРИТИЧНО: Для delete проверяем Success+NoError ИЛИ ErrorItemNotFound (уже удалено)
             val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
@@ -727,6 +938,68 @@ class EasTasksService internal constructor(
             EasResult.Success(success)
         } catch (e: Exception) {
             EasResult.Error("Ошибка EWS: ${e.message}")
+        }
+    }
+
+    /**
+     * Batch EWS DeleteItem для задач — один запрос с несколькими ItemId.
+     * AffectedTaskOccurrences="AllOccurrences" обязателен для задач.
+     */
+    private suspend fun deleteTasksBatchEws(
+        serverIds: List<String>,
+        deleteType: String
+    ): EasResult<Int> = withContext(Dispatchers.IO) {
+        try {
+            val ewsUrl = deps.getEwsUrl()
+            val ewsItemIds = mutableListOf<String>()
+
+            for (sid in serverIds) {
+                val ewsItemId = resolveEwsTaskItemId(ewsUrl, sid)
+                if (ewsItemId != null) {
+                    ewsItemIds.add(ewsItemId)
+                } else {
+                    android.util.Log.w("EasTasksService",
+                        "deleteTasksBatchEws: could not resolve EWS ItemId for $sid, skipping")
+                }
+            }
+
+            if (ewsItemIds.isEmpty()) return@withContext EasResult.Success(0)
+
+            val itemIdsXml = ewsItemIds.joinToString("\n") {
+                """        <t:ItemId Id="${deps.escapeXml(it)}"/>"""
+            }
+            val soapBody = """
+    <m:DeleteItem DeleteType="$deleteType" AffectedTaskOccurrences="AllOccurrences">
+        <m:ItemIds>
+$itemIdsXml
+        </m:ItemIds>
+    </m:DeleteItem>""".trimIndent()
+            val soapRequest = EasXmlTemplates.ewsSoapRequest(soapBody)
+
+            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
+            if (responseXml == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
+                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
+                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
+                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+            }
+
+            android.util.Log.d("EasTasksService",
+                "deleteTasksBatchEws: ${ewsItemIds.size} items, deleteType=$deleteType, response len=${responseXml.length}")
+
+            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
+            val hasNoError = responseXml.contains("NoError")
+            val hasNotFound = responseXml.contains("ErrorItemNotFound")
+
+            if (hasSuccess || hasNoError || hasNotFound) {
+                EasResult.Success(ewsItemIds.size)
+            } else {
+                val errorCode = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>"
+                    .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)?.groupValues?.get(1)?.trim()
+                EasResult.Error("EWS batch DeleteItem tasks: $errorCode")
+            }
+        } catch (e: Exception) {
+            EasResult.Error("Ошибка batch EWS tasks: ${e.message}")
         }
     }
     
@@ -988,12 +1261,19 @@ class EasTasksService internal constructor(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
         
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
-        val responseXml = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem") ?: return emptyMap()
+        // КРИТИЧНО: Basic Auth first, NTLM fallback
+        var responseXml = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
+        if (responseXml == null) {
+            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
+            responseXml = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem") ?: return emptyMap()
+        }
         
         val result = mutableMapOf<String, String>()
-        val taskPattern = "<t:Task>(.*?)</t:Task>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        // Namespace-tolerant: Exchange может вернуть <t:Task>, <Task>, или <m:Task>
+        val taskPattern = "<(?:t:|m:)?Task[^>]*>(.*?)</(?:t:|m:)?Task>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val taskMatches = taskPattern.findAll(responseXml).toList()
+        
+        android.util.Log.d("EasTasksService", "getTaskBodiesEws: found ${taskMatches.size} Task elements in GetItem response")
         
         taskMatches.forEach { match ->
             val taskXml = match.groupValues[1]
@@ -1048,14 +1328,13 @@ class EasTasksService internal constructor(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-        if (ntlmAuth == null) {
-            return null
-        }
-        
-        val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+        // КРИТИЧНО: Basic Auth first, NTLM fallback
+        var responseXml = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
         if (responseXml == null) {
-            return null
+            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+                ?: return null
+            responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+                ?: return null
         }
 
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
@@ -1104,8 +1383,12 @@ class EasTasksService internal constructor(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem") ?: return null
-        val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem") ?: return null
+        // КРИТИЧНО: Basic Auth first, NTLM fallback
+        var responseXml = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
+        if (responseXml == null) {
+            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem") ?: return null
+            responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem") ?: return null
+        }
 
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
         val matches = itemIdPattern.findAll(responseXml).toList()
@@ -1159,7 +1442,278 @@ class EasTasksService internal constructor(
     
     // ==================== EWS XML builders ====================
     
-    private fun buildEwsFindTasksRequest(): String = """<?xml version="1.0" encoding="utf-8"?>
+    /**
+     * FindItem для Deleted Items: ищем ТОЛЬКО задачи (IPM.Task) через Restriction.
+     * Без фильтра AllProperties на Deleted Items вернёт тысячи email/contacts → timeout.
+     * КРИТИЧНО: Порядок элементов в FindItem по XSD: ItemShape → IndexedPageItemView → Restriction → ParentFolderIds
+     */
+    /**
+     * Обнаруживает подпапки Tasks через EWS FindFolder(Traversal="Deep").
+     * Exchange 2007 SP1: FindItem не поддерживает Traversal="Deep", но FindFolder — да.
+     * Outlook может создавать подсписки задач (My Tasks, etc.) как подпапки.
+     * Без этого шага FindItem с Traversal="Shallow" найдёт только задачи
+     * в корне папки Tasks, пропустив задачи в подпапках.
+     */
+    /**
+     * Ищет ВСЕ папки с FolderClass=IPF.Task* во всём почтовом ящике.
+     * Поиск от msgfolderroot (а не от "tasks") гарантирует обнаружение
+     * задач в нестандартных расположениях (Outlook "My Tasks", пользовательские списки).
+     * Возвращает folderIds включая TotalCount каждой папки для диагностики.
+     */
+    private suspend fun discoverTaskSubfolderIds(ewsUrl: String): List<String> {
+        try {
+            val request = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindFolder Traversal="Deep">
+            <m:FolderShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="folder:FolderClass"/>
+                    <t:FieldURI FieldURI="folder:DisplayName"/>
+                    <t:FieldURI FieldURI="folder:TotalCount"/>
+                </t:AdditionalProperties>
+            </m:FolderShape>
+            <m:ParentFolderIds>
+                <t:DistinguishedFolderId Id="msgfolderroot"/>
+            </m:ParentFolderIds>
+        </m:FindFolder>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+            
+            var responseXml = deps.tryBasicAuthEws(ewsUrl, request, "FindFolder")
+            if (responseXml == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "FindFolder")
+                    ?: return emptyList()
+                responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "FindFolder")
+                    ?: return emptyList()
+            }
+            
+            android.util.Log.d("EasTasksService",
+                "discoverTaskSubfolderIds: response len=${responseXml.length}")
+            // Логируем больше ответа для диагностики: первые 2000 символов
+            val logChunks = responseXml.take(2000).chunked(800)
+            logChunks.forEachIndexed { i, chunk ->
+                android.util.Log.d("EasTasksService", "discoverTaskSubfolderIds[chunk$i]: $chunk")
+            }
+            
+            val folderIds = mutableListOf<String>()
+            val folderPattern = "<(?:t:)?(?:TasksFolder|Folder|SearchFolder)\\b[^>]*>(.*?)</(?:t:)?(?:TasksFolder|Folder|SearchFolder)>"
+                .toRegex(setOf(RegexOption.DOT_MATCHES_ALL))
+            val idPattern = "<(?:t:)?FolderId[^>]*\\bId=\"([^\"]+)\"".toRegex()
+            val classPattern = "<(?:t:)?FolderClass>(.*?)</(?:t:)?FolderClass>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val namePattern = "<(?:t:)?DisplayName>(.*?)</(?:t:)?DisplayName>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val countPattern = "<(?:t:)?TotalCount>(\\d+)</(?:t:)?TotalCount>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            
+            for (match in folderPattern.findAll(responseXml)) {
+                val folderXml = match.groupValues[1]
+                val folderClass = classPattern.find(folderXml)?.groupValues?.get(1) ?: ""
+                if (!folderClass.startsWith("IPF.Task", ignoreCase = true)) continue
+                
+                val folderId = idPattern.find(folderXml)?.groupValues?.get(1) ?: continue
+                val displayName = namePattern.find(folderXml)?.groupValues?.get(1) ?: ""
+                val totalCount = countPattern.find(folderXml)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+                folderIds.add(folderId)
+                android.util.Log.d("EasTasksService", 
+                    "discoverTaskSubfolderIds: found '$displayName' (class=$folderClass, items=$totalCount, id=${folderId.take(20)}...)")
+            }
+            
+            android.util.Log.d("EasTasksService", "discoverTaskSubfolderIds: total ${folderIds.size} task folders")
+            return folderIds
+        } catch (e: Exception) {
+            android.util.Log.w("EasTasksService", "discoverTaskSubfolderIds: ${e.message}")
+            return emptyList()
+        }
+    }
+    
+    /**
+     * GetFolder на "tasks" → TotalCount + ChildFolderCount для диагностики.
+     */
+    private suspend fun getTasksFolderInfo(ewsUrl: String): Pair<Int, Int> {
+        try {
+            val request = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <GetFolder xmlns="http://schemas.microsoft.com/exchange/services/2006/messages">
+            <FolderShape>
+                <t:BaseShape>Default</t:BaseShape>
+            </FolderShape>
+            <FolderIds>
+                <t:DistinguishedFolderId Id="tasks"/>
+            </FolderIds>
+        </GetFolder>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+            var responseXml = deps.tryBasicAuthEws(ewsUrl, request, "GetFolder")
+            if (responseXml == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "GetFolder") ?: return Pair(-1, -1)
+                responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "GetFolder") ?: return Pair(-1, -1)
+            }
+            android.util.Log.d("EasTasksService",
+                "getTasksFolderInfo: response: ${responseXml.take(800)}")
+
+            val totalCount = "<(?:t:)?TotalCount>(\\d+)</(?:t:)?TotalCount>"
+                .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)
+                ?.groupValues?.get(1)?.toIntOrNull() ?: -1
+            val childFolderCount = "<(?:t:)?ChildFolderCount>(\\d+)</(?:t:)?ChildFolderCount>"
+                .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)
+                ?.groupValues?.get(1)?.toIntOrNull() ?: -1
+            return Pair(totalCount, childFolderCount)
+        } catch (e: Exception) {
+            android.util.Log.w("EasTasksService", "getTasksFolderInfo: ${e.message}")
+            return Pair(-1, -1)
+        }
+    }
+
+    /**
+     * FindFolder Shallow непосредственно под "tasks" — ищет дочерние папки,
+     * которые Deep-поиск от msgfolderroot мог пропустить.
+     */
+    private suspend fun discoverDirectTaskSubfolders(ewsUrl: String): List<String> {
+        try {
+            val request = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindFolder Traversal="Shallow">
+            <m:FolderShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="folder:FolderClass"/>
+                    <t:FieldURI FieldURI="folder:DisplayName"/>
+                    <t:FieldURI FieldURI="folder:TotalCount"/>
+                </t:AdditionalProperties>
+            </m:FolderShape>
+            <m:ParentFolderIds>
+                <t:DistinguishedFolderId Id="tasks"/>
+            </m:ParentFolderIds>
+        </m:FindFolder>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+            var responseXml = deps.tryBasicAuthEws(ewsUrl, request, "FindFolder")
+            if (responseXml == null) {
+                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "FindFolder") ?: return emptyList()
+                responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "FindFolder") ?: return emptyList()
+            }
+            android.util.Log.d("EasTasksService",
+                "discoverDirectTaskSubfolders: response len=${responseXml.length}, first 600: ${responseXml.take(600)}")
+
+            val folderIds = mutableListOf<String>()
+            val folderPattern = "<(?:t:)?(?:TasksFolder|Folder|SearchFolder)\\b[^>]*>(.*?)</(?:t:)?(?:TasksFolder|Folder|SearchFolder)>"
+                .toRegex(setOf(RegexOption.DOT_MATCHES_ALL))
+            val idPattern = "<(?:t:)?FolderId[^>]*\\bId=\"([^\"]+)\"".toRegex()
+            val namePattern = "<(?:t:)?DisplayName>(.*?)</(?:t:)?DisplayName>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val countPattern = "<(?:t:)?TotalCount>(\\d+)</(?:t:)?TotalCount>".toRegex(RegexOption.DOT_MATCHES_ALL)
+
+            for (match in folderPattern.findAll(responseXml)) {
+                val folderXml = match.groupValues[1]
+                val folderId = idPattern.find(folderXml)?.groupValues?.get(1) ?: continue
+                val displayName = namePattern.find(folderXml)?.groupValues?.get(1) ?: ""
+                val totalCount = countPattern.find(folderXml)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+                folderIds.add(folderId)
+                android.util.Log.d("EasTasksService",
+                    "discoverDirectTaskSubfolders: found '$displayName' (items=$totalCount, id=${folderId.take(20)}...)")
+            }
+            return folderIds
+        } catch (e: Exception) {
+            android.util.Log.w("EasTasksService", "discoverDirectTaskSubfolders: ${e.message}")
+            return emptyList()
+        }
+    }
+
+    private fun buildEwsFindTasksByFolderIdRequest(folderId: String, offset: Int = 0, pageSize: Int = 200): String {
+        val escapedId = deps.escapeXml(folderId)
+        return """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">${taskItemShapeXml()}
+            <m:IndexedPageItemView MaxEntriesReturned="$pageSize" Offset="$offset" BasePoint="Beginning"/>
+            <m:ParentFolderIds>
+                <t:FolderId Id="$escapedId"/>
+            </m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+    }
+    
+    private fun buildEwsFindDeletedTasksRequest(offset: Int = 0, pageSize: Int = 200): String = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">${taskItemShapeXml()}
+            <m:IndexedPageItemView MaxEntriesReturned="$pageSize" Offset="$offset" BasePoint="Beginning"/>
+            <m:Restriction>
+                <t:Contains ContainmentMode="Prefixed" ContainmentComparison="IgnoreCase">
+                    <t:FieldURI FieldURI="item:ItemClass"/>
+                    <t:Constant Value="IPM.Task"/>
+                </t:Contains>
+            </m:Restriction>
+            <m:ParentFolderIds>
+                <t:DistinguishedFolderId Id="deleteditems"/>
+            </m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+    
+    /**
+     * ItemShape для FindItem задач.
+     * IdOnly без AdditionalProperties — единственный способ получить ВСЕ элементы
+     * из папки Tasks на Exchange 2007 SP1. AllProperties и IdOnly+task:* вызывают
+     * неявную серверную фильтрацию — возвращаются только "полные" задачи.
+     * Свойства получаем отдельным GetItem (getTaskDetailsEws).
+     */
+    private fun taskItemShapeXml(): String = """
+            <m:ItemShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+            </m:ItemShape>"""
+
+    private fun buildEwsFindTasksRequest(offset: Int = 0, pageSize: Int = 200): String = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">${taskItemShapeXml()}
+            <m:IndexedPageItemView MaxEntriesReturned="$pageSize" Offset="$offset" BasePoint="Beginning"/>
+            <m:ParentFolderIds>
+                <t:DistinguishedFolderId Id="tasks"/>
+            </m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+    /**
+     * FindItem в todosearch (Outlook "To-Do Search" folder) с фильтром по IPM.Task.
+     * todosearch агрегирует задачи из ВСЕХ папок + помеченные письма;
+     * Restriction ItemClass="IPM.Task" отсекает помеченные письма (IPM.Note).
+     */
+    private fun buildEwsFindToDoSearchRequest(offset: Int = 0, pageSize: Int = 200): String = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
                xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
@@ -1169,19 +1723,17 @@ class EasTasksService internal constructor(
     <soap:Body>
         <m:FindItem Traversal="Shallow">
             <m:ItemShape>
-                <t:BaseShape>IdOnly</t:BaseShape>
-                <t:AdditionalProperties>
-                    <t:FieldURI FieldURI="item:Subject"/>
-                    <t:FieldURI FieldURI="task:StartDate"/>
-                    <t:FieldURI FieldURI="task:DueDate"/>
-                    <t:FieldURI FieldURI="task:Status"/>
-                    <t:FieldURI FieldURI="task:CompleteDate"/>
-                    <t:FieldURI FieldURI="item:Importance"/>
-                </t:AdditionalProperties>
+                <t:BaseShape>AllProperties</t:BaseShape>
             </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="200" Offset="0" BasePoint="Beginning"/>
+            <m:IndexedPageItemView MaxEntriesReturned="$pageSize" Offset="$offset" BasePoint="Beginning"/>
+            <m:Restriction>
+                <t:Contains ContainmentMode="Prefixed" ContainmentComparison="IgnoreCase">
+                    <t:FieldURI FieldURI="item:ItemClass"/>
+                    <t:Constant Value="IPM.Task"/>
+                </t:Contains>
+            </m:Restriction>
             <m:ParentFolderIds>
-                <t:DistinguishedFolderId Id="tasks"/>
+                <t:DistinguishedFolderId Id="todosearch"/>
             </m:ParentFolderIds>
         </m:FindItem>
     </soap:Body>
@@ -1347,67 +1899,95 @@ class EasTasksService internal constructor(
     
     private fun parseEwsTasksResponse(xml: String): List<EasTask> {
         val tasks = mutableListOf<EasTask>()
+        val seenIds = mutableSetOf<String>()
 
         val itemsPattern = "<(?:t:|m:)?Items>(.*?)</(?:t:|m:)?Items>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val itemsXml = itemsPattern.find(xml)?.groupValues?.get(1) ?: xml
+        val itemsBlocks = itemsPattern.findAll(xml).map { it.groupValues[1] }.toList()
+        val itemsXml = if (itemsBlocks.isNotEmpty()) itemsBlocks.joinToString("\n") else xml
 
         val itemPatterns = listOf(
-            "<t:Task[^>]*>(.*?)</t:Task>",
-            "<Task[^>]*>(.*?)</Task>",
-            "<t:Item[^>]*>(.*?)</t:Item>",
-            "<Item[^>]*>(.*?)</Item>",
-            "<t:Message[^>]*>(.*?)</t:Message>",
-            "<Message[^>]*>(.*?)</Message>"
+            "<(?:t:)?Task\\b[^>]*>(.*?)</(?:t:)?Task>",
+            "<(?:t:)?Item\\b[^>]*>(.*?)</(?:t:)?Item>",
+            "<(?:t:)?Message\\b[^>]*>(.*?)</(?:t:)?Message>"
         )
+
+        var totalRawMatches = 0
 
         for (pattern in itemPatterns) {
             val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
             val matches = regex.findAll(itemsXml).toList()
+            totalRawMatches += matches.size
 
-            matches.forEach { match ->
+            for (match in matches) {
                 val itemXml = match.groupValues[1]
-
-                val itemClass = XmlValueExtractor.extractEws(itemXml, "ItemClass") ?: ""
-                if (itemClass.isNotEmpty() && !itemClass.contains("Task", ignoreCase = true)) {
-                    return@forEach
-                }
-
-                val serverId = XmlValueExtractor.extractAttribute(itemXml, "ItemId", "Id") ?: return@forEach
-                val subject = XmlValueExtractor.extractEws(itemXml, "Subject") ?: ""
-                val rawBody = extractEwsBody(itemXml) ?: ""
-                val body = removeDuplicateLines(rawBody)
-                val startDate = parseDate(XmlValueExtractor.extractEws(itemXml, "StartDate"))
-                val dueDate = parseDate(XmlValueExtractor.extractEws(itemXml, "DueDate"))
-                val complete = XmlValueExtractor.extractEws(itemXml, "Status") == "Completed"
-                val dateCompleted = parseDate(XmlValueExtractor.extractEws(itemXml, "CompleteDate"))
-                val importance = when (XmlValueExtractor.extractEws(itemXml, "Importance")) {
-                    "High" -> 2
-                    "Low" -> 0
-                    else -> 1
-                }
-
-                tasks.add(
-                    EasTask(
-                        serverId = serverId,
-                        subject = subject,
-                        body = body,
-                        startDate = startDate,
-                        dueDate = dueDate,
-                        complete = complete,
-                        dateCompleted = dateCompleted,
-                        importance = importance,
-                        sensitivity = 0,
-                        reminderSet = false,
-                        reminderTime = 0,
-                        categories = emptyList()
-                    )
-                )
+                parseTaskFromEwsItemXml(itemXml, seenIds)?.let { tasks.add(it) }
             }
-
-            if (tasks.isNotEmpty()) break
         }
 
+        // Fallback: Exchange 2007 SP1 может вернуть элементы в нестандартной обёртке
+        // (не <Task>, <Item>, <Message>). Проверяем есть ли непропарсенные ItemId.
+        val itemIdPattern = """<(?:t:)?ItemId\s[^>]*Id="([^"]+)"[^>]*/?>""".toRegex()
+        val allIds = itemIdPattern.findAll(itemsXml).toList()
+        if (allIds.size > tasks.size) {
+            android.util.Log.w("EasTasksService",
+                "parseEwsTasksResponse: found ${allIds.size} ItemIds but only ${tasks.size} parsed → fallback for remaining")
+            for (i in allIds.indices) {
+                val id = allIds[i].groupValues[1]
+                if (id in seenIds) continue
+                val startIdx = maxOf(0, allIds[i].range.first - 200)
+                val endIdx = if (i + 1 < allIds.size) allIds[i + 1].range.first else itemsXml.length
+                val fragment = itemsXml.substring(startIdx, minOf(itemsXml.length, endIdx))
+                parseTaskFromEwsItemXml(fragment, seenIds)?.let { tasks.add(it) }
+            }
+        }
+
+        android.util.Log.d("EasTasksService",
+            "parseEwsTasksResponse: itemsBlocks=${itemsBlocks.size}, rawMatches=$totalRawMatches, " +
+            "totalItemIds=${allIds.size}, parsed=${tasks.size}")
+
         return tasks
+    }
+
+    private fun parseTaskFromEwsItemXml(itemXml: String, seenIds: MutableSet<String>): EasTask? {
+        val serverId = XmlValueExtractor.extractAttribute(itemXml, "ItemId", "Id") ?: return null
+        if (serverId in seenIds) return null
+        seenIds.add(serverId)
+
+        val subject = XmlValueExtractor.extractEws(itemXml, "Subject") ?: ""
+        val rawBody = extractEwsBody(itemXml) ?: ""
+        val body = removeDuplicateLines(rawBody)
+        val startDate = parseDate(XmlValueExtractor.extractEws(itemXml, "StartDate"))
+        val dueDate = parseDate(XmlValueExtractor.extractEws(itemXml, "DueDate"))
+        val status = XmlValueExtractor.extractEws(itemXml, "Status") ?: ""
+        val complete = status == "Completed"
+        val dateCompleted = parseDate(XmlValueExtractor.extractEws(itemXml, "CompleteDate"))
+        val importance = when (XmlValueExtractor.extractEws(itemXml, "Importance")) {
+            "High" -> 2
+            "Low" -> 0
+            else -> 1
+        }
+        val sensitivity = when (XmlValueExtractor.extractEws(itemXml, "Sensitivity")) {
+            "Confidential" -> 3
+            "Private" -> 2
+            "Personal" -> 1
+            else -> 0
+        }
+        val categories = extractEwsCategories(itemXml)
+
+        return EasTask(
+            serverId = serverId,
+            subject = subject,
+            body = body,
+            startDate = startDate,
+            dueDate = dueDate,
+            complete = complete,
+            dateCompleted = dateCompleted,
+            importance = importance,
+            sensitivity = sensitivity,
+            reminderSet = false,
+            reminderTime = 0,
+            categories = categories
+        )
     }
     
     private fun extractTaskBody(xml: String): String {
@@ -1448,6 +2028,23 @@ class EasTasksService internal constructor(
             categoryPattern.findAll(categoriesXml).forEach { match ->
                 categories.add(match.groupValues[1].trim())
             }
+        }
+        return categories
+    }
+
+    private fun extractEwsCategories(xml: String): List<String> {
+        val categories = mutableListOf<String>()
+        val patternsOuter = listOf(
+            "<(?:t:)?Categories>(.*?)</(?:t:)?Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        )
+        for (outer in patternsOuter) {
+            val outerMatch = outer.find(xml) ?: continue
+            val inner = "<(?:t:)?String>(.*?)</(?:t:)?String>".toRegex()
+            inner.findAll(outerMatch.groupValues[1]).forEach { m ->
+                val cat = m.groupValues[1].trim()
+                if (cat.isNotEmpty()) categories.add(cat)
+            }
+            if (categories.isNotEmpty()) break
         }
         return categories
     }

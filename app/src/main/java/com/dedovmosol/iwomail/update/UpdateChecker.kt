@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.update
 
 import android.app.NotificationChannel
+import android.app.DownloadManager
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.ContentValues
@@ -76,7 +77,8 @@ sealed class DownloadProgress {
 /**
  * Сервис проверки и установки обновлений
  */
-class UpdateChecker(private val context: Context) {
+class UpdateChecker(context: Context) {
+    private val context: Context = context.applicationContext
     
     companion object {
         // URL к JSON файлу с информацией об обновлении
@@ -86,6 +88,7 @@ class UpdateChecker(private val context: Context) {
         private const val APK_FILENAME = "update.apk"
         private const val MAX_RETRY_ATTEMPTS = 2
         private const val ROLLBACK_NOTIFICATION_ID = 9999
+        private const val ROLLBACK_SUBFOLDER = "iwomail rollback"
 
         // Single-flight защита для автопроверки OTA (между параллельными MainScreen/Activity)
         private val autoCheckMutex = Mutex()
@@ -457,7 +460,7 @@ class UpdateChecker(private val context: Context) {
             // Единственный 100% рабочий способ:
             // 1. Копируем APK в Downloads (переживёт удаление приложения)
             // 2. Запускаем удаление текущего приложения
-            // 3. После удаления пользователь открывает iwomail-rollback.apk из Downloads
+            // 3. После удаления пользователь открывает iwomail-rollback-vX.X.X.apk из Downloads/iwomail rollback/
             installDowngrade(apkFile)
         } else {
             // Для обычного обновления (versionCode выше) — стандартный ACTION_VIEW
@@ -466,15 +469,46 @@ class UpdateChecker(private val context: Context) {
     }
     
     /**
+     * Проверяет, существует ли APK отката в папке Downloads/iwomail rollback/.
+     * @return true если файл уже существует
+     */
+    fun checkApkExistsInDownloads(versionName: String): Boolean {
+        val apkFileName = "iwomail-rollback-v${versionName}.apk"
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+: проверяем через MediaStore.
+                // ВАЖНО: MediaStore всегда хранит RELATIVE_PATH с trailing slash.
+                val relPath = "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER/"
+                val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
+                val selectionArgs = arrayOf(apkFileName, relPath)
+                context.contentResolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Downloads._ID),
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor -> cursor.count > 0 } ?: false
+            } else {
+                // Android 9-: проверяем файл напрямую
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val targetFile = File(File(downloadsDir, ROLLBACK_SUBFOLDER), apkFileName)
+                targetFile.exists() && targetFile.length() > 0
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("UpdateChecker", "checkApkExistsInDownloads error: ${e.message}")
+            false
+        }
+    }
+    
+    /**
      * Подготавливает APK для отката — копирует в Downloads.
      * Вызывается из UI перед показом диалога с инструкцией.
      * @return true если APK успешно скопирован в Downloads
      */
-    fun prepareDowngrade(apkFile: File): Boolean {
+    fun prepareDowngrade(apkFile: File, versionName: String): Boolean {
         return try {
-            val uri = copyApkToDownloads(apkFile)
+            val uri = copyApkToDownloads(apkFile, versionName)
             if (uri != null) {
-                showInstallNotification(uri)
                 true
             } else {
                 false
@@ -505,6 +539,58 @@ class UpdateChecker(private val context: Context) {
             context.startActivity(detailsIntent)
         }
     }
+
+    /**
+     * Открывает папку Downloads/iwomail rollback/ в файловом менеджере.
+     * КРИТИЧНО: FLAG_ACTIVITY_NEW_DOCUMENT гарантирует отдельный task —
+     * файловый менеджер НЕ закроется при удалении нашего приложения.
+     */
+    fun openDownloads(): Boolean {
+        return try {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val rollbackDir = File(downloadsDir, ROLLBACK_SUBFOLDER)
+            if (!rollbackDir.exists()) rollbackDir.mkdirs()
+
+            val docId = "primary:${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER"
+            val encodedDocId = Uri.encode(docId, ":")
+
+            // 1. ACTION_VIEW с vnd.android.document/directory — стандартный MIME для директорий.
+            //    Файловые менеджеры (Files by Google, Samsung My Files, MIUI Files)
+            //    открывают СОДЕРЖИМОЕ папки, а не показывают её как один элемент.
+            val docUri = Uri.parse(
+                "content://com.android.externalstorage.documents/document/$encodedDocId"
+            )
+            val browseIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(docUri, "vnd.android.document/directory")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+            }
+            try {
+                context.startActivity(browseIntent)
+                return true
+            } catch (_: Exception) { }
+
+            // 2. Fallback: file:// URI для сторонних файловых менеджеров (Total Commander и др.)
+            val fileUri = Uri.fromFile(rollbackDir)
+            val fileIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(fileUri, "resource/folder")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+            }
+            try {
+                context.startActivity(fileIntent)
+                return true
+            } catch (_: Exception) { }
+
+            // 3. Fallback: системная папка Downloads
+            val downloadsIntent = Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+            }
+            context.startActivity(downloadsIntent)
+            true
+        } catch (e: Exception) {
+            android.util.Log.w("UpdateChecker", "openDownloads failed: ${e.message}")
+            false
+        }
+    }
     
     /**
      * Полноценный откат к предыдущей версии.
@@ -513,12 +599,12 @@ class UpdateChecker(private val context: Context) {
      * 1. Копируем APK в папку Downloads через MediaStore (публичная, переживёт удаление приложения)
      * 2. Показываем Toast с инструкцией
      * 3. Запускаем ACTION_DELETE для удаления текущего приложения
-     * 4. После удаления пользователь открывает iwomail-rollback.apk из Downloads
+     * 4. После удаления пользователь открывает iwomail-rollback-vX.X.X.apk из Downloads/iwomail rollback/
      */
     private fun installDowngrade(apkFile: File) {
         try {
-            // Шаг 1: Копируем APK в Downloads
-            val downloadUri = copyApkToDownloads(apkFile)
+            // Шаг 1: Копируем APK в Downloads (fallback version = "unknown")
+            val downloadUri = copyApkToDownloads(apkFile, "unknown")
             if (downloadUri == null) {
                 android.util.Log.e("UpdateChecker", "Failed to copy APK to Downloads")
                 android.widget.Toast.makeText(context, "Ошибка копирования APK", android.widget.Toast.LENGTH_LONG).show()
@@ -532,7 +618,7 @@ class UpdateChecker(private val context: Context) {
             // Шаг 3: Toast с инструкцией
             android.widget.Toast.makeText(
                 context,
-                "После удаления откройте Downloads → iwomail-rollback.apk",
+                "После удаления откройте Downloads/$ROLLBACK_SUBFOLDER",
                 android.widget.Toast.LENGTH_LONG
             ).show()
             
@@ -552,27 +638,52 @@ class UpdateChecker(private val context: Context) {
      * Копирует APK в папку Downloads через MediaStore API (Android 10+) или напрямую (Android 9-)
      * @return Uri скопированного файла или null при ошибке
      */
-    private fun copyApkToDownloads(apkFile: File): Uri? {
-        val apkFileName = "iwomail-rollback.apk"
+    private fun copyApkToDownloads(apkFile: File, versionName: String): Uri? {
+        val apkFileName = "iwomail-rollback-v${versionName}.apk"
         
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10+ — используем MediaStore
+            // Android 10+ — используем MediaStore, подпапка iwomail rollback
+            val resolver = context.contentResolver
+            // КРИТИЧНО: удаляем старую запись в MediaStore перед insert,
+            // иначе MediaStore создаст дубль с именем "iwomail-rollback-vX(1).apk"
+            val relPath = "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER/"
+            val existingSelection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
+            resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Downloads._ID),
+                existingSelection,
+                arrayOf(apkFileName, relPath),
+                null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
+                    val deleteUri = android.content.ContentUris.withAppendedId(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, id
+                    )
+                    try { resolver.delete(deleteUri, null, null) } catch (_: Exception) {}
+                }
+            }
+
             val contentValues = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, apkFileName)
                 put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                // При insert trailing slash необязателен — MediaStore добавит сам
+                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             
-            val resolver = context.contentResolver
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
                 ?: return null
             
             try {
-                resolver.openOutputStream(uri)?.use { output ->
+                val copiedBytes = resolver.openOutputStream(uri)?.use { output ->
                     apkFile.inputStream().use { input ->
                         input.copyTo(output)
                     }
+                } ?: throw IllegalStateException("Failed to open output stream for Downloads")
+
+                if (copiedBytes <= 0L) {
+                    throw IllegalStateException("Copied APK is empty")
                 }
                 
                 // Снимаем флаг IS_PENDING — файл становится видимым
@@ -588,16 +699,22 @@ class UpdateChecker(private val context: Context) {
                 null
             }
         } else {
-            // Android 9 и ниже — копируем напрямую в Downloads
+            // Android 9 и ниже — копируем напрямую в Downloads/iwomail rollback/
             try {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetFile = File(downloadsDir, apkFileName)
+                val rollbackDir = File(downloadsDir, ROLLBACK_SUBFOLDER)
+                if (!rollbackDir.exists()) rollbackDir.mkdirs()
+                val targetFile = File(rollbackDir, apkFileName)
                 if (targetFile.exists()) targetFile.delete()
                 
                 apkFile.inputStream().use { input ->
                     targetFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
+                }
+
+                if (!targetFile.exists() || targetFile.length() <= 0L) {
+                    throw IllegalStateException("Copied APK is empty")
                 }
                 
                 Uri.fromFile(targetFile)

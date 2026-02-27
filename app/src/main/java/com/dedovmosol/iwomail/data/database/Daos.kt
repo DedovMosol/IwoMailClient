@@ -205,6 +205,9 @@ interface EmailDao {
     @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC")
     suspend fun getEmailsByFolderList(folderId: String): List<EmailEntity>
     
+    @Query("SELECT id, serverId, subject, `from`, dateReceived FROM emails WHERE folderId = :folderId")
+    suspend fun getDedupInfoByFolder(folderId: String): List<EmailDedupInfo>
+    
     @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC LIMIT :limit OFFSET :offset")
     suspend fun getEmailsByFolderPaged(folderId: String, limit: Int, offset: Int): List<EmailEntity>
     

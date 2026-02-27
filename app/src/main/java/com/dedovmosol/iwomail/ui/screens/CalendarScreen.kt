@@ -18,7 +18,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.verticalScroll
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.window.DialogProperties
@@ -26,10 +29,14 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -59,6 +66,7 @@ import kotlinx.coroutines.delay
 
 // Предкомпилированные regex для производительности
 private val HTML_TAG_REGEX = Regex("<[^>]*>")
+private val WHITESPACE_REGEX = "\\s+".toRegex()
 private val EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
 
 // Модель вложения события календаря (вне composable для стабильности типа)
@@ -139,55 +147,64 @@ fun CalendarScreen(
     val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsState(initial = emptyList())
     val deletedEvents by remember(accountId) { calendarRepo.getDeletedEvents(accountId) }.collectAsState(initial = emptyList())
     
-    // Флаг: данные из Room загружены (Flow эмитнул хотя бы раз)
-    // КРИТИЧНО: rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация.
-    // С remember флаг сбрасывается при configuration change → events ещё emptyList (initial)
-    // → LaunchedEffect видит events.isEmpty() и стартует sync заново.
-    var dataLoaded by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(events) {
-        if (events.isNotEmpty()) dataLoaded = true
-    }
-    
+    // ID аккаунта, для которого уже был запущен автосинк.
+    // rememberSaveable: сохраняется при повороте → не запускает повторный синк для того же аккаунта.
+    // При смене accountId значение не совпадёт → синк запустится для нового аккаунта.
+    var syncedForAccountId by rememberSaveable { mutableStateOf(0L) }
+
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
     
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var debouncedSearchQuery by remember { mutableStateOf("") }
+    val debouncedSearchQuery by rememberDebouncedState(searchQuery)
     
-    // Debounce поиска для оптимизации
-    LaunchedEffect(searchQuery) {
-        delay(300)
-        debouncedSearchQuery = searchQuery
+    // Сохранение фокуса поиска при повороте экрана
+    val searchFocusRequester = remember { FocusRequester() }
+    var isSearchFocused by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(isSearchFocused) {
+        if (isSearchFocused) {
+            kotlinx.coroutines.delay(100)
+            try { searchFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
     }
     var isSyncing by remember { mutableStateOf(false) }
     
-    // Автоматическая синхронизация при первом открытии если нет данных
-    // Ждём загрузку из Room перед тем как решить что данных нет
-    // КРИТИЧНО: проверяем !dataLoaded чтобы при повороте экрана НЕ запускать повторную синхронизацию
+    // Автоматическая синхронизация при первом открытии экрана или смене аккаунта.
+    // syncedForAccountId != accountId → синк не запускался для этого аккаунта → запускаем.
+    // При повороте экрана accountId не меняется → syncedForAccountId совпадает → синк не повторяется.
     LaunchedEffect(accountId) {
-        if (accountId > 0 && !dataLoaded) {
-            delay(500)
-            if (events.isEmpty() && !isSyncing) {
-                dataLoaded = true
-                isSyncing = true
-                syncScope.launch {
-                    withContext(Dispatchers.IO) {
-                        calendarRepo.syncCalendar(accountId)
-                    }
-                    isSyncing = false
+        if (accountId > 0 && syncedForAccountId != accountId && !isSyncing) {
+            syncedForAccountId = accountId
+            isSyncing = true
+            try {
+                withContext(Dispatchers.IO) {
+                    calendarRepo.syncCalendar(accountId)
                 }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally {
+                isSyncing = false
             }
         }
     }
-    var selectedEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
+    var selectedEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedEvent = remember(selectedEventId, events, deletedEvents) {
+        selectedEventId?.let { id -> events.find { it.id == id } ?: deletedEvents.find { it.id == id } }
+    }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
-    var selectedDate by remember { mutableStateOf(Date()) }
+    var selectedDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
+    val selectedDate = remember(selectedDateMillis) { Date(selectedDateMillis) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var editingEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
-    var isCreating by remember { mutableStateOf(false) }
+    var editingEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editingEvent = remember(editingEventId, events) {
+        editingEventId?.let { id -> events.find { it.id == id } }
+    }
+    var isCreating by rememberSaveable { mutableStateOf(false) }
     
     // Множественный выбор
     val haptic = LocalHapticFeedback.current
-    var selectedEventIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+    var selectedEventIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedEventIds.isNotEmpty()
     
     // Определяем, есть ли среди выделенных удалённые события (для корректного TopBar/диалога)
@@ -208,7 +225,12 @@ fun CalendarScreen(
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
-    var deleteConfirmTargetIds by remember { mutableStateOf(setOf<String>()) }
+    var deleteConfirmTargetIds by rememberSaveable(
+        saver = listSaver(
+            save = { it.value.toList() },
+            restore = { mutableStateOf(it.toSet()) }
+        )
+    ) { mutableStateOf(setOf<String>()) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
     
     // Состояние списка для автоскролла
@@ -288,9 +310,9 @@ fun CalendarScreen(
             // Диалог для удалённого события — восстановить или удалить навсегда
             DeletedEventDetailDialog(
                 event = event,
-                onDismiss = { selectedEvent = null },
+                onDismiss = { selectedEventId = null },
                 onRestoreClick = {
-                    selectedEvent = null  // Закрываем диалог СРАЗУ
+                    selectedEventId = null  // Закрываем диалог СРАЗУ
                     
                     deletionController.startDeletion(
                         emailIds = listOf(event.id),
@@ -313,7 +335,7 @@ fun CalendarScreen(
                     }
                 },
                 onDeletePermanentlyClick = {
-                    selectedEvent = null
+                    selectedEventId = null
                     com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                     
                     deletionController.startDeletion(
@@ -351,15 +373,15 @@ fun CalendarScreen(
                 event = event,
                 calendarRepo = calendarRepo,
                 currentUserEmail = activeAccount?.email ?: "",
-                onDismiss = { selectedEvent = null },
+                onDismiss = { selectedEventId = null },
                 onComposeClick = onComposeClick,
                 onEditClick = { 
-                    editingEvent = originalEvent
-                    selectedEvent = null
+                    editingEventId = originalEvent.id
+                    selectedEventId = null
                     showCreateDialog = true
                 },
                 onDeleteClick = {
-                    selectedEvent = null  // Закрываем диалог СРАЗУ
+                    selectedEventId = null  // Закрываем диалог СРАЗУ
                     com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                     
                     // Soft-delete (в корзину) — без прогрессбара, просто удаляем
@@ -447,17 +469,22 @@ fun CalendarScreen(
                                     }
                                 }
                             } else {
-                                // Soft-delete (в корзину) — без прогрессбара
+                                // Soft-delete (в корзину) через единый EasClient (deleteEvents).
+                                // Раньше для каждого события создавался отдельный EasClient →
+                                // дублирование NTLM-хэндшейков и конфликт SyncKey (EAS).
                                 scope.launch {
-                                    var deleted = 0
-                                    for (event in eventsToDelete) {
-                                        val result = withContext(Dispatchers.IO) {
-                                            calendarRepo.deleteEvent(event)
-                                        }
-                                        if (result is EasResult.Success) deleted++
+                                    val result = withContext(Dispatchers.IO) {
+                                        calendarRepo.deleteEvents(eventsToDelete)
+                                    }
+                                    val deleted = when (result) {
+                                        is EasResult.Success -> result.data
+                                        is EasResult.Error -> 0
                                     }
                                     if (deleted > 0) {
                                         Toast.makeText(context, "$eventsDeletedText: $deleted", Toast.LENGTH_SHORT).show()
+                                    }
+                                    if (result is EasResult.Error) {
+                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                                     }
                                 }
                             }
@@ -526,6 +553,7 @@ fun CalendarScreen(
         val eventUpdatedText = Strings.eventUpdated
         val eventCreatedText = Strings.eventCreated
         val invitationSentText = Strings.invitationSent
+        val eventAttachmentsMayNotUploadText = Strings.eventAttachmentsMayNotUpload
         val isEditing = editingEvent != null
         CreateEventDialog(
             event = editingEvent,
@@ -535,9 +563,9 @@ fun CalendarScreen(
             ownEmail = activeAccount?.email ?: "",
             onDismiss = { 
                 showCreateDialog = false
-                editingEvent = null
+                editingEventId = null
             },
-            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, attachments ->
+            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, attachments, removedAttachmentIds ->
                 // Защита от double-tap: если уже создаём — игнорируем
                 if (isCreating) return@CreateEventDialog
                 isCreating = true
@@ -562,8 +590,10 @@ fun CalendarScreen(
                                     allDayEvent = allDayEvent,
                                     reminder = reminder,
                                     busyStatus = busyStatus,
+                                    attendees = attendeeList,
                                     recurrenceType = recurrenceType,
-                                    attachments = attachments
+                                    attachments = attachments,
+                                    removedAttachmentIds = removedAttachmentIds
                                 )
                             }
                         } else {
@@ -588,19 +618,35 @@ fun CalendarScreen(
                         
                         when (result) {
                             is EasResult.Success -> {
-                                // Принудительная синхронизация для получения актуальных данных с сервера
-                                // (в том числе корректных fileReference для вложений)
-                                withContext(Dispatchers.IO) {
-                                    calendarRepo.syncCalendar(accountId)
-                                }
-                                val message = if (attendeeList.isNotEmpty()) {
+                                // НЕ вызываем syncCalendar() здесь:
+                                // createEvent() и updateEvent() уже синхронизируют внутри себя.
+                                // Повторный sync опасен: Exchange может не успеть проиндексировать
+                                // новое событие → sync не увидит его → удалит локально.
+                                val messageBase = if (attendeeList.isNotEmpty()) {
                                     "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
                                 } else {
                                     if (isEditing) eventUpdatedText else eventCreatedText
                                 }
+
+                                // Индикатор частичного успеха: событие отправлено, но вложения могли не загрузиться.
+                                // Используем мягкую эвристику по изменению локального attachments JSON.
+                                val attachmentWarning = if (attachments.isEmpty()) {
+                                    false
+                                } else if (eventToEdit != null) {
+                                    result.data.attachments == eventToEdit.attachments
+                                } else {
+                                    result.data.attachments.isBlank()
+                                }
+
+                                val message = if (attachmentWarning) {
+                                    "$messageBase. $eventAttachmentsMayNotUploadText"
+                                } else {
+                                    messageBase
+                                }
+
                                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                 showCreateDialog = false
-                                editingEvent = null
+                                editingEventId = null
                                 // Автоскролл вверх после создания (с задержкой для обновления списка)
                                 if (!isEditing) {
                                     kotlinx.coroutines.delay(100)
@@ -707,21 +753,26 @@ fun CalendarScreen(
                             onClick = {
                                 syncScope.launch {
                                     isSyncing = true
-                                    val result = withContext(Dispatchers.IO) {
-                                        calendarRepo.syncCalendar(accountId)
-                                    }
-                                    isSyncing = false
-                                    when (result) {
-                                        is EasResult.Success -> {
-                                            Toast.makeText(
-                                                context,
-                                                "$calendarSyncedText: ${result.data}",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                    try {
+                                        val result = withContext(Dispatchers.IO) {
+                                            calendarRepo.syncCalendar(accountId)
                                         }
-                                        is EasResult.Error -> {
-                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        when (result) {
+                                            is EasResult.Success -> {
+                                                Toast.makeText(
+                                                    context,
+                                                    "$calendarSyncedText: ${result.data}",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            is EasResult.Error -> {
+                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            }
                                         }
+                                    } catch (e: Exception) {
+                                        if (e is kotlinx.coroutines.CancellationException) throw e
+                                    } finally {
+                                        isSyncing = false
                                     }
                                 }
                             },
@@ -754,7 +805,7 @@ fun CalendarScreen(
             if (dateFilter != CalendarDateFilter.DELETED) {
                 com.dedovmosol.iwomail.ui.theme.AnimatedFab(
                     onClick = { 
-                        editingEvent = null
+                        editingEventId = null
                         showCreateDialog = true 
                     },
                     containerColor = LocalColorTheme.current.gradientStart
@@ -775,9 +826,11 @@ fun CalendarScreen(
                         events = filteredEvents,
                         searchQuery = searchQuery,
                         onSearchQueryChange = { searchQuery = it },
+                        searchFocusRequester = searchFocusRequester,
+                        onSearchFocusChanged = { isSearchFocused = it },
                         onEventClick = { event ->
                             if (!isSelectionMode) {
-                                selectedEvent = event
+                                selectedEventId = event.id
                             }
                         },
                         listState = listState,
@@ -795,7 +848,7 @@ fun CalendarScreen(
                             selectedEventIds = selectedEventIds + eventId
                         },
                         onDragSelect = { newIds -> selectedEventIds = newIds },
-                        isLoading = !dataLoaded || isSyncing,
+                        isLoading = syncedForAccountId != accountId || isSyncing,
                         dateFilter = dateFilter,
                         onDateFilterChange = { selectedEventIds = emptySet(); dateFilter = it },
                         deletedCount = deletedEvents.size,
@@ -813,10 +866,10 @@ fun CalendarScreen(
                     MonthView(
                         events = filteredEvents,
                         selectedDate = selectedDate,
-                        onDateSelected = { selectedDate = it },
+                        onDateSelected = { selectedDateMillis = it.time },
                         onEventClick = { event ->
                             if (!isSelectionMode) {
-                                selectedEvent = event
+                                selectedEventId = event.id
                             }
                         },
                         selectedEventIds = selectedEventIds,
@@ -914,6 +967,8 @@ private fun AgendaView(
     events: List<CalendarEventEntity>,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
+    searchFocusRequester: FocusRequester = FocusRequester(),
+    onSearchFocusChanged: (Boolean) -> Unit = {},
     onEventClick: (CalendarEventEntity) -> Unit,
     listState: androidx.compose.foundation.lazy.LazyListState,
     selectedEventIds: Set<String> = emptySet(),
@@ -934,7 +989,9 @@ private fun AgendaView(
             onValueChange = onSearchQueryChange,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .focusRequester(searchFocusRequester)
+                .onFocusChanged { onSearchFocusChanged(it.isFocused) },
             placeholder = { Text(Strings.searchEvents) },
             leadingIcon = { Icon(AppIcons.Search, null) },
             trailingIcon = {
@@ -965,16 +1022,19 @@ private fun AgendaView(
         )
         
         if (events.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator()
-                } else {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            val emptyScrollState = rememberScrollState()
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(emptyScrollState)
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator()
+                    } else {
                         Icon(
                             AppIcons.Calendar,
                             contentDescription = null,
@@ -989,6 +1049,7 @@ private fun AgendaView(
                         )
                     }
                 }
+                ScrollColumnScrollbar(emptyScrollState)
             }
         } else {
             // Группировка по датам (новые сверху)
@@ -1194,17 +1255,23 @@ private fun MonthView(
             }
                 }
         } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = Strings.noEvents,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            val emptyMonthScrollState = rememberScrollState()
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(emptyMonthScrollState)
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = Strings.noEvents,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                ScrollColumnScrollbar(emptyMonthScrollState)
             }
         }
         }
@@ -1439,6 +1506,26 @@ private fun CalendarGrid(
         
         Spacer(modifier = Modifier.height(8.dp))
         
+        val eventDays = remember(events, year, month) {
+            val reuseCal = Calendar.getInstance()
+            val days = mutableSetOf<Int>()
+            for (event in events) {
+                reuseCal.timeInMillis = event.startTime
+                if (reuseCal.get(Calendar.YEAR) == year && reuseCal.get(Calendar.MONTH) == month) {
+                    days.add(reuseCal.get(Calendar.DAY_OF_MONTH))
+                }
+            }
+            days
+        }
+        val selectedDay = remember(selectedDate) {
+            val cal = Calendar.getInstance().apply { time = selectedDate }
+            Triple(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
+        }
+        val todayTriple = remember {
+            val cal = Calendar.getInstance()
+            Triple(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
+        }
+        
         // Сетка дней
         LazyVerticalGrid(
             columns = GridCells.Fixed(7),
@@ -1448,39 +1535,18 @@ private fun CalendarGrid(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Пустые ячейки до первого дня месяца
             items(firstDayOffset) {
                 Spacer(modifier = Modifier.height(40.dp))
             }
             
-            // Дни месяца
             items(daysInMonth) { dayIndex ->
                 val day = dayIndex + 1
                 calendar.set(year, month, day)
                 val date = calendar.time
                 
-                val hasEvents = events.any { event ->
-                    val eventCalendar = Calendar.getInstance()
-                    eventCalendar.timeInMillis = event.startTime
-                    eventCalendar.get(Calendar.YEAR) == year &&
-                    eventCalendar.get(Calendar.MONTH) == month &&
-                    eventCalendar.get(Calendar.DAY_OF_MONTH) == day
-                }
-                
-                val isSelected = remember(selectedDate, date) {
-                    val selectedCal = Calendar.getInstance().apply { time = selectedDate }
-                    val dateCal = Calendar.getInstance().apply { time = date }
-                    selectedCal.get(Calendar.YEAR) == dateCal.get(Calendar.YEAR) &&
-                    selectedCal.get(Calendar.MONTH) == dateCal.get(Calendar.MONTH) &&
-                    selectedCal.get(Calendar.DAY_OF_MONTH) == dateCal.get(Calendar.DAY_OF_MONTH)
-                }
-                
-                val isToday = remember(date) {
-                    val today = Calendar.getInstance()
-                    val dateCal = Calendar.getInstance().apply { time = date }
-                    today.get(Calendar.YEAR) == dateCal.get(Calendar.YEAR) &&
-                    today.get(Calendar.DAY_OF_YEAR) == dateCal.get(Calendar.DAY_OF_YEAR)
-                }
+                val hasEvents = day in eventDays
+                val isSelected = selectedDay.first == year && selectedDay.second == month && selectedDay.third == day
+                val isToday = todayTriple.first == year && todayTriple.second == month && todayTriple.third == day
                 
                 DayCell(
                     day = day,
@@ -1566,8 +1632,8 @@ private fun EventDetailDialog(
     val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
-    var expanded by remember { mutableStateOf(false) }
+    var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     
     // Очищаем body от дублированных строк
     val cleanBody = remember(event.body) {
@@ -1598,7 +1664,7 @@ private fun EventDetailDialog(
         val result = mutableListOf<String>()
         for (line in lines) {
             // Нормализуем: убираем все пробелы и приводим к lowercase для сравнения
-            val normalized = line.trim().replace("\\s+".toRegex(), " ")
+            val normalized = line.trim().replace(WHITESPACE_REGEX, " ")
             if (normalized.isBlank()) continue
             val key = normalized.lowercase().replace(" ", "")
             if (seen.add(key)) {
@@ -1838,13 +1904,33 @@ private fun EventDetailDialog(
                     }
                     
                     // Вложения
-                    if (event.hasAttachments && event.attachments.isNotBlank()) {
+                    if (event.hasAttachments) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        CalendarAttachmentsList(
-                            attachmentsJson = event.attachments,
-                            accountId = event.accountId,
-                            calendarRepo = calendarRepo
-                        )
+                        if (event.attachments.isNotBlank()) {
+                            CalendarAttachmentsList(
+                                attachmentsJson = event.attachments,
+                                accountId = event.accountId,
+                                calendarRepo = calendarRepo
+                            )
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    AppIcons.Attachment,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN)
+                                        "Есть вложения (синхронизируйте для загрузки)"
+                                    else
+                                        "Has attachments (sync to load details)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                     
                     // Участники
@@ -2023,19 +2109,15 @@ private fun MiniMonthCard(
     
     // Дни с событиями в этом месяце
     val daysWithEvents = remember(events, month, year) {
-        events.filter { event ->
-            val eventCal = Calendar.getInstance()
-            eventCal.timeInMillis = event.startTime
-            eventCal.get(Calendar.YEAR) == year && eventCal.get(Calendar.MONTH) == month
-        }.map { event ->
-            val eventCal = Calendar.getInstance()
-            eventCal.timeInMillis = event.startTime
-            eventCal.get(Calendar.DAY_OF_MONTH)
-        }.toSet()
+        val cal = Calendar.getInstance()
+        events.mapNotNullTo(mutableSetOf()) { event ->
+            cal.timeInMillis = event.startTime
+            if (cal.get(Calendar.YEAR) == year && cal.get(Calendar.MONTH) == month)
+                cal.get(Calendar.DAY_OF_MONTH) else null
+        }
     }
     
-    // Текущий день
-    val today = Calendar.getInstance()
+    val today = remember { Calendar.getInstance() }
     val isCurrentMonth = today.get(Calendar.YEAR) == year && today.get(Calendar.MONTH) == month
     val currentDay = today.get(Calendar.DAY_OF_MONTH)
     
@@ -2157,56 +2239,53 @@ private fun ClickableHtmlText(
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
     val couldNotOpenLinkText = Strings.couldNotOpenLink
     
-    // Типы элементов: 0=text, 1=link, 2=image, 3=clickable image
     data class Part(val content: String, val type: Int, val url: String = "", val linkUrl: String = "")
-    val parts = mutableListOf<Part>()
     
-    // Собираем все элементы
-    data class Element(val start: Int, val end: Int, val imageUrl: String, val linkUrl: String, val display: String, val isImage: Boolean, val isClickableImage: Boolean = false)
-    val elements = mutableListOf<Element>()
-    
-    // Сначала markdown формат [image]<link>
-    markdownImageLinkPattern.findAll(text).forEach { match ->
-        val imgUrl = match.groupValues[1]
-        val lnkUrl = match.groupValues[2]
-        val isImg = imageExtensions.any { imgUrl.lowercase().contains(it) }
-        elements.add(Element(match.range.first, match.range.last + 1, imgUrl, lnkUrl, imgUrl, isImg, isImg))
-    }
-    
-    // HTML ссылки
-    hrefPattern.findAll(text).forEach { match ->
-        val overlaps = elements.any { it.start <= match.range.first && it.end >= match.range.last }
-        if (!overlaps) {
-            elements.add(Element(match.range.first, match.range.last + 1, match.groupValues[1], match.groupValues[1], match.groupValues[2], false))
+    val parts = remember(text) {
+        data class Element(val start: Int, val end: Int, val imageUrl: String, val linkUrl: String, val display: String, val isImage: Boolean, val isClickableImage: Boolean = false)
+        val elements = mutableListOf<Element>()
+        
+        markdownImageLinkPattern.findAll(text).forEach { match ->
+            val imgUrl = match.groupValues[1]
+            val lnkUrl = match.groupValues[2]
+            val isImg = imageExtensions.any { imgUrl.lowercase().contains(it) }
+            elements.add(Element(match.range.first, match.range.last + 1, imgUrl, lnkUrl, imgUrl, isImg, isImg))
         }
-    }
-    
-    // Обычные URL
-    urlPattern.findAll(text).forEach { match ->
-        val overlaps = elements.any { it.start <= match.range.first && it.end >= match.range.last }
-        if (!overlaps) {
-            val isImg = imageExtensions.any { match.value.lowercase().contains(it) }
-            elements.add(Element(match.range.first, match.range.last + 1, match.value, match.value, match.value, isImg))
+        
+        hrefPattern.findAll(text).forEach { match ->
+            val overlaps = elements.any { it.start <= match.range.first && it.end >= match.range.last }
+            if (!overlaps) {
+                elements.add(Element(match.range.first, match.range.last + 1, match.groupValues[1], match.groupValues[1], match.groupValues[2], false))
+            }
         }
-    }
-    
-    elements.sortBy { it.start }
-    
-    // Разбиваем на части
-    var lastIndex = 0
-    elements.forEach { elem ->
-        if (elem.start > lastIndex) {
-            parts.add(Part(text.substring(lastIndex, elem.start), 0))
+        
+        urlPattern.findAll(text).forEach { match ->
+            val overlaps = elements.any { it.start <= match.range.first && it.end >= match.range.last }
+            if (!overlaps) {
+                val isImg = imageExtensions.any { match.value.lowercase().contains(it) }
+                elements.add(Element(match.range.first, match.range.last + 1, match.value, match.value, match.value, isImg))
+            }
         }
-        when {
-            elem.isClickableImage -> parts.add(Part(elem.imageUrl, 3, elem.imageUrl, elem.linkUrl))
-            elem.isImage -> parts.add(Part(elem.imageUrl, 2, elem.imageUrl))
-            else -> parts.add(Part(elem.display, 1, elem.linkUrl))
+        
+        elements.sortBy { it.start }
+        
+        val result = mutableListOf<Part>()
+        var lastIndex = 0
+        elements.forEach { elem ->
+            if (elem.start > lastIndex) {
+                result.add(Part(text.substring(lastIndex, elem.start), 0))
+            }
+            when {
+                elem.isClickableImage -> result.add(Part(elem.imageUrl, 3, elem.imageUrl, elem.linkUrl))
+                elem.isImage -> result.add(Part(elem.imageUrl, 2, elem.imageUrl))
+                else -> result.add(Part(elem.display, 1, elem.linkUrl))
+            }
+            lastIndex = elem.end
         }
-        lastIndex = elem.end
-    }
-    if (lastIndex < text.length) {
-        parts.add(Part(text.substring(lastIndex), 0))
+        if (lastIndex < text.length) {
+            result.add(Part(text.substring(lastIndex), 0))
+        }
+        result.toList()
     }
     
     Column {
@@ -2264,7 +2343,16 @@ private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
                     conn.connectTimeout = 10000
                     conn.readTimeout = 10000
                     conn.connect()
-                    android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                    val maxDim = 2048
+                    var sampleSize = 1
+                    while (opts.outWidth / sampleSize > maxDim || opts.outHeight / sampleSize > maxDim) {
+                        sampleSize *= 2
+                    }
+                    val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
                 } finally {
                     conn?.disconnect()
                 }
@@ -2311,7 +2399,8 @@ private fun CreateEventDialog(
         busyStatus: Int,
         attendees: String,
         recurrenceType: Int,
-        attachments: List<DraftAttachmentData>
+        attachments: List<DraftAttachmentData>,
+        removedAttachmentIds: List<String>
     ) -> Unit
 ) {
     val context = LocalContext.current
@@ -2342,6 +2431,7 @@ private fun CreateEventDialog(
     
     // Вложения
     var pickedAttachments by remember { mutableStateOf(listOf<DraftAttachmentData>()) }
+    var removedExistingAttachmentRefs by remember { mutableStateOf(setOf<String>()) }
     val isRussianPicker = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -2865,15 +2955,19 @@ private fun CreateEventDialog(
                                     val jsonArray = org.json.JSONArray(event.attachments)
                                     (0 until jsonArray.length()).map { i ->
                                         val obj = jsonArray.getJSONObject(i)
-                                        Triple(
-                                            obj.optString("name", "attachment"),
-                                            obj.optLong("size", 0),
-                                            obj.optBoolean("isInline", false)
+                                        CalendarAttachmentInfo(
+                                            name = obj.optString("name", "attachment"),
+                                            fileReference = obj.optString("fileReference", ""),
+                                            size = obj.optLong("size", 0),
+                                            isInline = obj.optBoolean("isInline", false)
                                         )
-                                    }.filter { !it.third }
+                                    }.filter { !it.isInline }
                                 } catch (_: Exception) { emptyList() }
                             }
-                            if (existingAttachments.isNotEmpty()) {
+                            val visibleAttachments = existingAttachments.filter { 
+                                it.fileReference !in removedExistingAttachmentRefs 
+                            }
+                            if (visibleAttachments.isNotEmpty()) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
                                         AppIcons.Attachment,
@@ -2883,13 +2977,13 @@ private fun CreateEventDialog(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (isRussianAtt) "Вложения (${existingAttachments.size})" else "Attachments (${existingAttachments.size})",
+                                        text = if (isRussianAtt) "Текущие вложения (${visibleAttachments.size})" else "Current attachments (${visibleAttachments.size})",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
-                                existingAttachments.forEach { (name, size, _) ->
+                                visibleAttachments.forEach { att ->
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -2897,24 +2991,36 @@ private fun CreateEventDialog(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
-                                            imageVector = AppIcons.fileIconFor(name),
+                                            imageVector = AppIcons.fileIconFor(att.name),
                                             contentDescription = null,
                                             modifier = Modifier.size(16.dp),
                                             tint = Color.Unspecified
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = name,
+                                            text = att.name,
                                             style = MaterialTheme.typography.bodySmall,
                                             modifier = Modifier.weight(1f),
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        if (size > 0) {
+                                        if (att.size > 0) {
                                             Text(
-                                                text = Strings.formatFileSize(size),
+                                                text = Strings.formatFileSize(att.size),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                removedExistingAttachmentRefs = removedExistingAttachmentRefs + att.fileReference
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = AppIcons.Close,
+                                                contentDescription = if (isRussianAtt) "Открепить" else "Detach",
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         }
                                     }
@@ -3015,7 +3121,7 @@ private fun CreateEventDialog(
                             return@ThemeOutlinedButton
                         }
                         
-                        onSave(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, pickedAttachments)
+                        onSave(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, pickedAttachments, removedExistingAttachmentRefs.toList())
                     }
                 },
                 text = Strings.save,

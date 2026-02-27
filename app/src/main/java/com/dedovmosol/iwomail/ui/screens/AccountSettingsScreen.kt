@@ -84,9 +84,9 @@ fun AccountSettingsScreen(
     var showCertificateDialog by rememberSaveable { mutableStateOf(false) }
     var showClientCertificateDialog by rememberSaveable { mutableStateOf(false) }
     var showClientCertPasswordDialog by rememberSaveable { mutableStateOf(false) }
-    var pendingClientCertPath by remember { mutableStateOf<String?>(null) }
-    var pendingClientCertFileName by remember { mutableStateOf<String?>(null) }
-    var pendingOldClientCertPath by remember { mutableStateOf<String?>(null) }
+    var pendingClientCertPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingClientCertFileName by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingOldClientCertPath by rememberSaveable { mutableStateOf<String?>(null) }
     var clientCertPasswordInput by rememberSaveable { mutableStateOf("") }
     var clientCertPasswordVisible by rememberSaveable { mutableStateOf(false) }
     
@@ -1532,10 +1532,10 @@ private fun CertificateDetails(
     Text("• Hash: ${cert.hash.take(16)}...", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = textColor)
 }
 
-/**
- * Форматирование даты
- */
+private val ACCOUNT_DATE_FORMAT = java.lang.ThreadLocal.withInitial {
+    java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
+}
+
 private fun formatDate(timestamp: Long): String {
-    val sdf = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
-    return sdf.format(java.util.Date(timestamp))
+    return ACCOUNT_DATE_FORMAT.get()?.format(java.util.Date(timestamp)) ?: ""
 }

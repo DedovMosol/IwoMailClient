@@ -435,7 +435,7 @@ $SOAP_ENVELOPE_END"""
                     <ItemShape>
                         <t:BaseShape>AllProperties</t:BaseShape>
                     </ItemShape>
-                    <CalendarView MaxEntriesReturned="2000"
+                    <CalendarView MaxEntriesReturned="5000"
                                   StartDate="$startDate"
                                   EndDate="$endDate"/>
                     <ParentFolderIds>

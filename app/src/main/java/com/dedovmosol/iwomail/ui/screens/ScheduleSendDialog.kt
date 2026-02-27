@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -23,8 +24,9 @@ fun ScheduleSendDialog(
     onSchedule: (Long) -> Unit
 ) {
     val context = LocalContext.current
-    var showCustomPicker by remember { mutableStateOf(false) }
-    var customDate by remember { mutableStateOf(Calendar.getInstance()) }
+    var showCustomPicker by rememberSaveable { mutableStateOf(false) }
+    var customDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
+    val customDate = remember(customDateMillis) { Calendar.getInstance().apply { timeInMillis = customDateMillis } }
     
     // Кэшируем Calendar и варианты времени для оптимизации recomposition
     val calendar = remember { Calendar.getInstance() }
@@ -68,9 +70,9 @@ fun ScheduleSendDialog(
     
     if (showCustomPicker) {
         // Отдельные state для редактирования времени
-        var hourText by remember { mutableStateOf(String.format("%02d", customDate.get(Calendar.HOUR_OF_DAY))) }
-        var minuteText by remember { mutableStateOf(String.format("%02d", customDate.get(Calendar.MINUTE))) }
-        var secondText by remember { mutableStateOf(String.format("%02d", customDate.get(Calendar.SECOND))) }
+        var hourText by rememberSaveable { mutableStateOf(String.format("%02d", customDate.get(Calendar.HOUR_OF_DAY))) }
+        var minuteText by rememberSaveable { mutableStateOf(String.format("%02d", customDate.get(Calendar.MINUTE))) }
+        var secondText by rememberSaveable { mutableStateOf(String.format("%02d", customDate.get(Calendar.SECOND))) }
         
         // Диалог выбора кастомной даты и времени
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -91,11 +93,11 @@ fun ScheduleSendDialog(
                                 android.app.DatePickerDialog(
                                     context,
                                     { _, year, month, day ->
-                                        customDate = (customDate.clone() as Calendar).apply {
+                                        customDateMillis = (customDate.clone() as Calendar).apply {
                                             set(Calendar.YEAR, year)
                                             set(Calendar.MONTH, month)
                                             set(Calendar.DAY_OF_MONTH, day)
-                                        }
+                                        }.timeInMillis
                                     },
                                     customDate.get(Calendar.YEAR),
                                     customDate.get(Calendar.MONTH),
@@ -122,9 +124,9 @@ fun ScheduleSendDialog(
                                     hourText = value
                                     value.toIntOrNull()?.let { hour ->
                                         if (hour in 0..23) {
-                                            customDate = (customDate.clone() as Calendar).apply {
+                                            customDateMillis = (customDate.clone() as Calendar).apply {
                                                 set(Calendar.HOUR_OF_DAY, hour)
-                                            }
+                                            }.timeInMillis
                                         }
                                     }
                                 }
@@ -141,9 +143,9 @@ fun ScheduleSendDialog(
                                     minuteText = value
                                     value.toIntOrNull()?.let { minute ->
                                         if (minute in 0..59) {
-                                            customDate = (customDate.clone() as Calendar).apply {
+                                            customDateMillis = (customDate.clone() as Calendar).apply {
                                                 set(Calendar.MINUTE, minute)
-                                            }
+                                            }.timeInMillis
                                         }
                                     }
                                 }
@@ -160,9 +162,9 @@ fun ScheduleSendDialog(
                                     secondText = value
                                     value.toIntOrNull()?.let { second ->
                                         if (second in 0..59) {
-                                            customDate = (customDate.clone() as Calendar).apply {
+                                            customDateMillis = (customDate.clone() as Calendar).apply {
                                                 set(Calendar.SECOND, second)
-                                            }
+                                            }.timeInMillis
                                         }
                                     }
                                 }

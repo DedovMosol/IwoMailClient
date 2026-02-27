@@ -1841,6 +1841,18 @@ $SOAP_ENVELOPE_END"""
         return notesService.deleteNotePermanently(serverId)
     }
 
+    /**
+     * Batch-удаление заметок (в корзину). Один EWS DeleteItem на весь пакет.
+     */
+    suspend fun deleteNotesBatch(serverIds: List<String>): EasResult<Int> =
+        notesService.deleteNotesBatch(serverIds)
+
+    /**
+     * Batch окончательное удаление заметок (HardDelete).
+     */
+    suspend fun deleteNotesPermanentlyBatch(serverIds: List<String>): EasResult<Int> =
+        notesService.deleteNotesPermanentlyBatch(serverIds)
+
     private suspend fun getDeletedItemsFolderId(): String? {
         cachedDeletedItemsFolderId?.let { return it }
         val foldersResult = folderSync("0")
@@ -1937,6 +1949,16 @@ $SOAP_ENVELOPE_END"""
         calendarService.deleteCalendarEvent(serverId, isMeeting, isOrganizer)
     
     /**
+     * Batch-удаление событий календаря (один EWS DeleteItem на группу).
+     * @param requests список (serverId, isMeeting, isOrganizer)
+     * @return количество успешно удалённых
+     */
+    suspend fun deleteCalendarEventsBatch(
+        requests: List<Triple<String, Boolean, Boolean>>
+    ): EasResult<Int> =
+        calendarService.deleteCalendarEventsBatch(requests)
+    
+    /**
      * Обновление события календаря на сервере Exchange
      * Делегирует в CalendarService
      */
@@ -1951,12 +1973,20 @@ $SOAP_ENVELOPE_END"""
         reminder: Int = 15,
         busyStatus: Int = 2,
         sensitivity: Int = 0,
+        attendees: List<String> = emptyList(),
         oldSubject: String? = null,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList()
     ): EasResult<String> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, emptyList(), oldSubject, recurrenceType, attachments
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, oldSubject, recurrenceType, attachments
     )
+    
+    /**
+     * Удаление вложений события календаря через EWS DeleteAttachment
+     */
+    suspend fun deleteCalendarAttachments(
+        attachmentIds: List<String>
+    ): EasResult<Boolean> = calendarService.deleteCalendarAttachments(attachmentIds)
     
     /**
      * Ответ на приглашение на встречу через EAS MeetingResponse
@@ -2796,6 +2826,18 @@ $SOAP_ENVELOPE_END"""
     suspend fun deleteTaskPermanently(serverId: String): EasResult<Boolean> {
         return tasksService.deleteTaskPermanently(serverId)
     }
+
+    /**
+     * Batch-удаление задач (в корзину). Один EWS DeleteItem на весь пакет.
+     */
+    suspend fun deleteTasksBatch(serverIds: List<String>): EasResult<Int> =
+        tasksService.deleteTasksBatch(serverIds)
+
+    /**
+     * Batch окончательное удаление задач (HardDelete).
+     */
+    suspend fun deleteTasksPermanentlyBatch(serverIds: List<String>): EasResult<Int> =
+        tasksService.deleteTasksPermanentlyBatch(serverIds)
     
     /**
      * Восстановление задачи из корзины

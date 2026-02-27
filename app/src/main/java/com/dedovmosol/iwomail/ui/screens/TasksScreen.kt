@@ -10,7 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.verticalScroll
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
@@ -19,9 +22,13 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -51,6 +58,11 @@ import kotlinx.coroutines.delay
 // ThreadLocal гарантирует thread-safety для SimpleDateFormat (каждый поток — свой экземпляр)
 private val TASK_PARSE_DATE_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 private val TASK_PARSE_TIME_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+private val TASK_BR_REGEX = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
+private val TASK_P_CLOSE_OPEN_REGEX = Regex("</p>\\s*<p[^>]*>", RegexOption.IGNORE_CASE)
+private val TASK_P_TAG_REGEX = Regex("</?p[^>]*>", RegexOption.IGNORE_CASE)
+private val TASK_DIV_TAG_REGEX = Regex("</?div[^>]*>", RegexOption.IGNORE_CASE)
+private val TASK_WHITESPACE_REGEX = "\\s+".toRegex()
 
 enum class TaskFilter {
     ALL, TODAY, ACTIVE, COMPLETED, HIGH_PRIORITY, OVERDUE, DELETED
@@ -86,28 +98,42 @@ fun TasksScreen(
     }
     
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var debouncedSearchQuery by remember { mutableStateOf("") }
+    val debouncedSearchQuery by rememberDebouncedState(searchQuery)
     
-    // Debounce поиска для оптимизации
-    LaunchedEffect(searchQuery) {
-        delay(300)
-        debouncedSearchQuery = searchQuery
+    // Сохранение фокуса поиска при повороте экрана
+    val searchFocusRequester = remember { FocusRequester() }
+    var isSearchFocused by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(isSearchFocused) {
+        if (isSearchFocused) {
+            kotlinx.coroutines.delay(100)
+            try { searchFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
     }
     var isSyncing by remember { mutableStateOf(false) }
     
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
     
-    var selectedTask by remember { mutableStateOf<TaskEntity?>(null) }
+    var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedTask = remember(selectedTaskId, allTasks, deletedTasks) {
+        selectedTaskId?.let { id -> allTasks.find { it.id == id } ?: deletedTasks.find { it.id == id } }
+    }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var editingTask by remember { mutableStateOf<TaskEntity?>(null) }
-    var isCreating by remember { mutableStateOf(false) }
+    var editingTaskId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editingTask = remember(editingTaskId, allTasks) {
+        editingTaskId?.let { id -> allTasks.find { it.id == id } }
+    }
+    var isCreating by rememberSaveable { mutableStateOf(false) }
     var currentFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
     
     // Множественный выбор для активных задач
-    var selectedTaskIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedTaskIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     // Множественный выбор для удалённых задач
-    var selectedDeletedIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedDeletedIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedTaskIds.isNotEmpty() || selectedDeletedIds.isNotEmpty()
     val hasDeletedSelected = selectedDeletedIds.isNotEmpty()
     val hasActiveSelected = selectedTaskIds.isNotEmpty()
@@ -116,22 +142,26 @@ fun TasksScreen(
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
-    var deleteConfirmTargetIds by remember { mutableStateOf(setOf<String>()) }
+    var deleteConfirmTargetIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     
     // Автоматическая синхронизация при первом открытии если нет данных
     // Ждём загрузку из Room (небольшая задержка) перед тем как решить что данных нет
     // КРИТИЧНО: проверяем !dataLoaded чтобы при повороте экрана НЕ запускать повторную синхронизацию
     LaunchedEffect(accountId) {
         if (accountId > 0 && !dataLoaded) {
-            // Даём Room время эмитнуть кэшированные данные
             kotlinx.coroutines.delay(500)
             if (allTasks.isEmpty() && !isSyncing) {
-                dataLoaded = true // Данных реально нет — помечаем как загружено
+                dataLoaded = true
                 isSyncing = true
-                syncScope.launch {
+                try {
                     withContext(Dispatchers.IO) {
                         taskRepo.syncTasks(accountId)
                     }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                } finally {
                     isSyncing = false
                 }
             }
@@ -142,10 +172,13 @@ fun TasksScreen(
     LaunchedEffect(currentFilter) {
         if (currentFilter == TaskFilter.DELETED && accountId > 0 && !isSyncing) {
             isSyncing = true
-            syncScope.launch {
+            try {
                 withContext(Dispatchers.IO) {
                     taskRepo.syncTasks(accountId)
                 }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally {
                 isSyncing = false
             }
         }
@@ -162,8 +195,8 @@ fun TasksScreen(
     // Фильтрация задач
     val filteredTasks = remember(allTasks, deletedTasks, debouncedSearchQuery, currentFilter, sortDescending) {
         // Выбираем базовый набор задач в зависимости от фильтра
-        val baseTasks = when (currentFilter) {
-            TaskFilter.ALL -> allTasks + deletedTasks
+        val baseTasks: List<com.dedovmosol.iwomail.data.database.TaskEntity> = when (currentFilter) {
+            TaskFilter.ALL -> if (deletedTasks.isEmpty()) allTasks else allTasks + deletedTasks
             TaskFilter.DELETED -> deletedTasks
             else -> allTasks
         }
@@ -226,9 +259,9 @@ fun TasksScreen(
             // Диалог для удалённой задачи — восстановить или удалить навсегда
             DeletedTaskDetailDialog(
                 task = task,
-                onDismiss = { selectedTask = null },
+                onDismiss = { selectedTaskId = null },
                 onRestoreClick = {
-                    selectedTask = null
+                    selectedTaskId = null
                     
                     deletionController.startDeletion(
                         emailIds = listOf(task.id),
@@ -251,7 +284,7 @@ fun TasksScreen(
                     }
                 },
                 onDeletePermanentlyClick = {
-                    selectedTask = null  // Закрываем диалог СРАЗУ
+                    selectedTaskId = null  // Закрываем диалог СРАЗУ
                     com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                     
                     deletionController.startDeletion(
@@ -280,10 +313,10 @@ fun TasksScreen(
             TaskDetailDialog(
                 task = task,
                 taskRepo = taskRepo,
-                onDismiss = { selectedTask = null },
+                onDismiss = { selectedTaskId = null },
                 onEditClick = {
-                    editingTask = task
-                    selectedTask = null
+                    editingTaskId = task.id
+                    selectedTaskId = null
                     showCreateDialog = true
                 },
                 onDeleteClick = {
@@ -299,7 +332,7 @@ fun TasksScreen(
                                 Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                             }
                         }
-                        selectedTask = null
+                        selectedTaskId = null
                     }
                 },
                 onToggleComplete = {
@@ -316,7 +349,7 @@ fun TasksScreen(
                                 Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                             }
                         }
-                        selectedTask = null
+                        selectedTaskId = null
                     }
                 }
             )
@@ -337,7 +370,7 @@ fun TasksScreen(
             activeAccountEmail = activeAccount?.email ?: "",
             onDismiss = {
                 showCreateDialog = false
-                editingTask = null
+                editingTaskId = null
             },
             onSave = { subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo ->
                 // Защита от double-tap: если уже создаём — игнорируем
@@ -385,7 +418,7 @@ fun TasksScreen(
                                 Toast.LENGTH_SHORT
                             ).show()
                             showCreateDialog = false
-                            editingTask = null
+                            editingTaskId = null
                         }
                         is EasResult.Error -> {
                             Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
@@ -616,21 +649,26 @@ fun TasksScreen(
                             onClick = {
                                 syncScope.launch {
                                     isSyncing = true
-                                    val result = withContext(Dispatchers.IO) {
-                                        taskRepo.syncTasks(accountId)
-                                    }
-                                    isSyncing = false
-                                    when (result) {
-                                        is EasResult.Success -> {
-                                            Toast.makeText(
-                                                context,
-                                                "$tasksSyncedText: ${result.data}",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                    try {
+                                        val result = withContext(Dispatchers.IO) {
+                                            taskRepo.syncTasks(accountId)
                                         }
-                                        is EasResult.Error -> {
-                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        when (result) {
+                                            is EasResult.Success -> {
+                                                Toast.makeText(
+                                                    context,
+                                                    "$tasksSyncedText: ${result.data}",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            is EasResult.Error -> {
+                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            }
                                         }
+                                    } catch (e: Exception) {
+                                        if (e is kotlinx.coroutines.CancellationException) throw e
+                                    } finally {
+                                        isSyncing = false
                                     }
                                 }
                             },
@@ -662,7 +700,7 @@ fun TasksScreen(
         floatingActionButton = {
             com.dedovmosol.iwomail.ui.theme.AnimatedFab(
                 onClick = {
-                    editingTask = null
+                    editingTaskId = null
                     showCreateDialog = true
                 },
                 containerColor = LocalColorTheme.current.gradientStart
@@ -682,7 +720,9 @@ fun TasksScreen(
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .focusRequester(searchFocusRequester)
+                    .onFocusChanged { isSearchFocused = it.isFocused },
                 placeholder = { Text(Strings.searchTasks) },
                 leadingIcon = { Icon(AppIcons.Search, null) },
                 trailingIcon = {
@@ -713,17 +753,19 @@ fun TasksScreen(
             )
             
             if (filteredTasks.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (!dataLoaded || isSyncing) {
-                        // Данные ещё загружаются — показываем индикатор
-                        CircularProgressIndicator()
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                val emptyScrollState = rememberScrollState()
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(emptyScrollState)
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        if (!dataLoaded || isSyncing) {
+                            CircularProgressIndicator()
+                        } else {
                             Icon(
                                 AppIcons.CheckCircle,
                                 contentDescription = null,
@@ -738,6 +780,7 @@ fun TasksScreen(
                             )
                         }
                     }
+                    ScrollColumnScrollbar(emptyScrollState)
                 }
             } else {
                 val taskCompletedTextList = Strings.taskCompleted
@@ -801,7 +844,7 @@ fun TasksScreen(
                                             selectedDeletedIds + task.id
                                         }
                                     } else {
-                                        selectedTask = task
+                                        selectedTaskId = task.id
                                     }
                                 },
                                 onLongClick = {
@@ -824,7 +867,7 @@ fun TasksScreen(
                                             selectedTaskIds + task.id
                                         }
                                     } else {
-                                        selectedTask = task
+                                        selectedTaskId = task.id
                                     }
                                 },
                                 onLongClick = {
@@ -913,6 +956,9 @@ private fun DeletedTaskCard(
     onLongClick: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("d MMM", Locale.getDefault()) }
+    val formattedDueDate = remember(task.dueDate) {
+        if (task.dueDate > 0) dateFormat.format(Date(task.dueDate)) else null
+    }
     
     Card(
         modifier = Modifier
@@ -977,10 +1023,10 @@ private fun DeletedTaskCard(
                     )
                 }
                 
-                if (task.dueDate > 0) {
+                if (formattedDueDate != null) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = dateFormat.format(Date(task.dueDate)),
+                        text = formattedDueDate,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1085,6 +1131,9 @@ private fun TaskCard(
     onToggleComplete: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("d MMM", Locale.getDefault()) }
+    val formattedDueDate = remember(task.dueDate) {
+        if (task.dueDate > 0) dateFormat.format(Date(task.dueDate)) else null
+    }
     val isOverdue = task.dueDate > 0 && task.dueDate < System.currentTimeMillis() && !task.complete
     val backgroundColor by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
@@ -1178,7 +1227,7 @@ private fun TaskCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = dateFormat.format(Date(task.dueDate)),
+                            text = formattedDueDate ?: "",
                             style = MaterialTheme.typography.bodySmall,
                             color = if (isOverdue) com.dedovmosol.iwomail.ui.theme.AppColors.delete else MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1294,17 +1343,16 @@ private fun TaskDetailDialog(
                 
                 // Описание
                              val cleanBody = remember(task.body) {
-                    // Сначала заменяем HTML теги на переносы строк
                     val normalized = task.body
-                        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
-                        .replace(Regex("</p>\\s*<p[^>]*>", RegexOption.IGNORE_CASE), "\n")
-                        .replace(Regex("</?p[^>]*>", RegexOption.IGNORE_CASE), "\n")
-                        .replace(Regex("</?div[^>]*>", RegexOption.IGNORE_CASE), "\n")
+                        .replace(TASK_BR_REGEX, "\n")
+                        .replace(TASK_P_CLOSE_OPEN_REGEX, "\n")
+                        .replace(TASK_P_TAG_REGEX, "\n")
+                        .replace(TASK_DIV_TAG_REGEX, "\n")
                     
                     val seen = mutableSetOf<String>()
                     normalized.lines()
                         .filter { line ->
-                            val trimmed = line.trim().replace("\\s+".toRegex(), " ")
+                            val trimmed = line.trim().replace(TASK_WHITESPACE_REGEX, " ")
                             if (trimmed.isBlank()) true
                             else seen.add(trimmed.lowercase())
                         }

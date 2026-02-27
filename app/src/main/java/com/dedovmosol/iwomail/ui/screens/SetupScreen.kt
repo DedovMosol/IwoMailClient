@@ -96,7 +96,7 @@ fun SetupScreen(
     var acceptAllCerts by rememberSaveable { mutableStateOf(false) }
     var selectedColor by rememberSaveable { mutableStateOf(ACCOUNT_COLORS[0]) }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
-    var isLoading by rememberSaveable { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var successMessage by rememberSaveable { mutableStateOf<String?>(null) }
     
@@ -146,6 +146,21 @@ fun SetupScreen(
     var clientCertificatePassword by rememberSaveable { mutableStateOf("") }
     var clientCertPasswordVisible by rememberSaveable { mutableStateOf(false) }
     
+    // Трекер cert-файлов, созданных во время сессии (для очистки при выходе без сохранения)
+    var createdCertFiles by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var accountSaved by rememberSaveable { mutableStateOf(false) }
+    
+    // Очистка сиротских cert-файлов при выходе из SetupScreen без сохранения
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!accountSaved) {
+                createdCertFiles.forEach { path ->
+                    try { File(path).delete() } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+    
     // Допустимые расширения сертификатов
     val validCertExtensions = listOf("cer", "crt", "pem", "der", "p12", "pfx", "p7b", "p7c")
     
@@ -193,10 +208,14 @@ fun SetupScreen(
                     // Удаляем старый файл ТОЛЬКО после успешного копирования нового
                     certificatePath?.let { oldPath ->
                         try { File(oldPath).delete() } catch (_: Exception) {}
+                        createdCertFiles = createdCertFiles.filterNot { it == oldPath }
                     }
                     
                     certificatePath = certFile.absolutePath
                     certificateFileName = originalFileName ?: fileName
+                    if (!createdCertFiles.contains(certFile.absolutePath)) {
+                        createdCertFiles = createdCertFiles + certFile.absolutePath
+                    }
                 } catch (e: Exception) {
                     errorMessage = NotificationStrings.getCertificateLoadingError(isRussianLang)
                 }
@@ -253,6 +272,7 @@ fun SetupScreen(
                         try { 
                             File(oldPath).delete()
                             android.util.Log.d("SetupScreen", "Old client certificate deleted: $oldPath")
+                            createdCertFiles = createdCertFiles.filterNot { it == oldPath }
                         } catch (e: Exception) {
                             android.util.Log.e("SetupScreen", "Failed to delete old client certificate: ${e.message}")
                         }
@@ -260,6 +280,9 @@ fun SetupScreen(
                     
                     clientCertificatePath = certFile.absolutePath
                     clientCertificateFileName = originalFileName ?: fileName
+                    if (!createdCertFiles.contains(certFile.absolutePath)) {
+                        createdCertFiles = createdCertFiles + certFile.absolutePath
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e("SetupScreen", "Client certificate loading error: ${e.message}", e)
                     errorMessage = NotificationStrings.getClientCertificateLoadingError(isRussianLang)
@@ -1023,6 +1046,10 @@ fun SetupScreen(
                         acceptAllCerts = it
                         // КРИТИЧНО: Если включаем "принимать все" - обнуляем выбранный сертификат
                         if (it) {
+                            certificatePath?.let { path ->
+                                try { File(path).delete() } catch (_: Exception) {}
+                                createdCertFiles = createdCertFiles.filterNot { tracked -> tracked == path }
+                            }
                             certificatePath = null
                             certificateFileName = ""
                         }
@@ -1036,6 +1063,10 @@ fun SetupScreen(
                         acceptAllCerts = !acceptAllCerts
                         // КРИТИЧНО: Если включаем "принимать все" - обнуляем выбранный сертификат
                         if (acceptAllCerts) {
+                            certificatePath?.let { path ->
+                                try { File(path).delete() } catch (_: Exception) {}
+                                createdCertFiles = createdCertFiles.filterNot { tracked -> tracked == path }
+                            }
                             certificatePath = null
                             certificateFileName = ""
                         }
@@ -1113,6 +1144,7 @@ fun SetupScreen(
                                         // Удаляем файл сертификата
                                         certificatePath?.let { path ->
                                             try { File(path).delete() } catch (_: Exception) {}
+                                            createdCertFiles = createdCertFiles.filterNot { tracked -> tracked == path }
                                         }
                                         certificatePath = null
                                         certificateFileName = null
@@ -1232,6 +1264,7 @@ fun SetupScreen(
                                 onClick = {
                                     clientCertificatePath?.let { path ->
                                         try { File(path).delete() } catch (_: Exception) {}
+                                        createdCertFiles = createdCertFiles.filterNot { tracked -> tracked == path }
                                     }
                                     clientCertificatePath = null
                                     clientCertificateFileName = null
@@ -1292,24 +1325,28 @@ fun SetupScreen(
             Spacer(modifier = Modifier.height(8.dp))
             
             // Кнопки
-            val canSave = displayName.isNotBlank() && email.isNotBlank() && 
-                          serverUrl.isNotBlank() && username.isNotBlank() && 
-                          password.isNotBlank() &&
-                          // Если указан клиентский сертификат, должен быть указан пароль
-                          (clientCertificatePath == null || clientCertificatePassword.isNotBlank())
+            val canSave by remember { derivedStateOf {
+                displayName.isNotBlank() && email.isNotBlank() && 
+                serverUrl.isNotBlank() && username.isNotBlank() && 
+                password.isNotBlank() &&
+                (clientCertificatePath == null || clientCertificatePassword.isNotBlank())
+            } }
             
             Button(
                 onClick = {
+                    if (isLoading) return@Button
+                    isLoading = true
                     scope.launch {
-                        isLoading = true
                         errorMessage = null
                         successMessage = null
                         
                         try {
                             val certPath = clientCertificatePath
                             if (certPath != null) {
-                                val isValid = com.dedovmosol.iwomail.network.HttpClientProvider
-                                    .validateClientCertificate(certPath, clientCertificatePassword)
+                                val isValid = withContext(Dispatchers.IO) {
+                                    com.dedovmosol.iwomail.network.HttpClientProvider
+                                        .validateClientCertificate(certPath, clientCertificatePassword)
+                                }
                                 if (!isValid) {
                                     errorMessage = if (isRussianLang) {
                                         "Неверный пароль или повреждённый сертификат"
@@ -1361,6 +1398,7 @@ fun SetupScreen(
                             } else if (accountType == AccountType.EXCHANGE && onNavigateToVerification != null) {
                                 // Для Exchange — переходим на экран верификации
                                 isLoading = false
+                                accountSaved = true
                                 onNavigateToVerification(
                                     email, displayName, serverUrl, username, password, domain,
                                     acceptAllCerts, selectedColor,
@@ -1417,6 +1455,7 @@ fun SetupScreen(
                                         }
                                     }
                                     
+                                    accountSaved = true
                                     onSetupComplete()
                                 }
                                 is EasResult.Error -> errorMessage = result.message

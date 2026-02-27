@@ -23,6 +23,7 @@ import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,78 +54,14 @@ import com.dedovmosol.iwomail.ui.components.NetworkBanner
 import com.dedovmosol.iwomail.ui.utils.rememberRotation
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import com.dedovmosol.iwomail.ui.utils.rememberShake
+import com.dedovmosol.iwomail.ui.utils.getAvatarColor
+import com.dedovmosol.iwomail.ui.utils.formatRelativeDate
 import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Locale
-
-// ThreadLocal гарантирует thread-safety для SimpleDateFormat (каждый поток — свой экземпляр)
-private val timeFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-private val dayFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("EEE", Locale.getDefault()) }
-private val dateFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("d MMM", Locale.getDefault()) }
-private val fullDateFormat = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yy", Locale.getDefault()) }
-
-// Цвета для аватаров как в Gmail — стабильные для каждой буквы
-private val avatarColors = listOf(
-    // Красные/розовые
-    Color(0xFFE53935), // Red
-    Color(0xFFD81B60), // Pink
-    Color(0xFFC2185B), // Pink Dark
-    // Фиолетовые
-    Color(0xFF8E24AA), // Purple
-    Color(0xFF7B1FA2), // Purple Dark
-    Color(0xFF5E35B1), // Deep Purple
-    Color(0xFF512DA8), // Deep Purple Dark
-    // Синие
-    Color(0xFF3949AB), // Indigo
-    Color(0xFF303F9F), // Indigo Dark
-    Color(0xFF1E88E5), // Blue
-    Color(0xFF1976D2), // Blue Dark
-    Color(0xFF039BE5), // Light Blue
-    Color(0xFF0288D1), // Light Blue Dark
-    // Голубые/бирюзовые
-    Color(0xFF00ACC1), // Cyan
-    Color(0xFF0097A7), // Cyan Dark
-    Color(0xFF00897B), // Teal
-    Color(0xFF00796B), // Teal Dark
-    // Зелёные
-    Color(0xFF43A047), // Green
-    Color(0xFF388E3C), // Green Dark
-    Color(0xFF7CB342), // Light Green
-    Color(0xFF689F38), // Light Green Dark
-    // Жёлтые/оранжевые
-    Color(0xFFC0CA33), // Lime
-    Color(0xFFAFB42B), // Lime Dark
-    Color(0xFFFDD835), // Yellow
-    Color(0xFFFBC02D), // Yellow Dark
-    Color(0xFFFFB300), // Amber
-    Color(0xFFFFA000), // Amber Dark
-    Color(0xFFFB8C00), // Orange
-    Color(0xFFF57C00), // Orange Dark
-    Color(0xFFF4511E), // Deep Orange
-    Color(0xFFE64A19), // Deep Orange Dark
-    // Коричневые/серые
-    Color(0xFF6D4C41), // Brown
-    Color(0xFF5D4037), // Brown Dark
-    Color(0xFF546E7A), // Blue Grey
-    Color(0xFF455A64)  // Blue Grey Dark
-)
-
-/**
- * Генерирует стабильный цвет для аватара на основе имени/email
- * Одинаковые имена всегда получают одинаковый цвет
- */
-private fun getAvatarColor(name: String): Color {
-    if (name.isBlank()) return avatarColors[0]
-    // Используем хэш от имени для стабильного цвета
-    val hash = name.lowercase().hashCode()
-    val index = (hash and 0x7FFFFFFF) % avatarColors.size
-    return avatarColors[index]
-}
 
 // Фильтры
 enum class MailFilter {
@@ -209,21 +146,24 @@ fun EmailListScreen(
     var dateFilter by rememberSaveable { mutableStateOf(initialDateFilter) }
     
     // Режим выбора
-    var selectedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+    var selectedIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
     var showMoveDialog by rememberSaveable { mutableStateOf(false) }
-    var showMoreMenu by remember { mutableStateOf(false) }
+    var showMoreMenu by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<FolderEntity>>(emptyList()) }
     val deletingSelectedMessage = Strings.deletingEmails(selectedIds.size)
 
-    // Используем Flow для всех папок включая Черновики (теперь они серверные)
-    val displayEmails = when {
-        isFavorites -> favoriteEmails
-        isTodayAll -> emails  // Уже отфильтровано SQL-запросом
-        else -> emails
+    val displayEmails = remember(isFavorites, isTodayAll, favoriteEmails, emails) {
+        when {
+            isFavorites -> favoriteEmails
+            isTodayAll -> emails
+            else -> emails
+        }
     }
 
     // Применяем фильтры
@@ -262,10 +202,9 @@ fun EmailListScreen(
     }
     
     // Количество активных фильтров
-    val activeFiltersCount = listOf(
-        mailFilter != MailFilter.ALL,
-        dateFilter != EmailDateFilter.ALL
-    ).count { it }
+    val activeFiltersCount by remember { derivedStateOf {
+        listOf(mailFilter != MailFilter.ALL, dateFilter != EmailDateFilter.ALL).count { it }
+    } }
     
     // Загружаем папки для перемещения
     LaunchedEffect(activeAccount?.id) {
@@ -275,8 +214,6 @@ fun EmailListScreen(
         }
     }
     
-    var folderSynced by rememberSaveable { mutableStateOf(false) }
-    
     // Флаг: начальная синхронизация черновиков уже выполнена.
     // rememberSaveable — переживает поворот экрана и process death.
     // Без этого: LaunchedEffect перезапускается при повороте (recomposition
@@ -285,11 +222,18 @@ fun EmailListScreen(
     // (2) потенциальная гонка с PushService → INVALID_SYNCKEY → full resync → потеря данных.
     var draftsSynced by rememberSaveable { mutableStateOf(false) }
     
-    // Загружаем папку
+    // Загружаем папку + отменяем уведомление при входе во Входящие
     LaunchedEffect(folderId, activeAccount?.id) {
         if (!isFavorites && !isTodayAll) {
             val loadedFolder = withContext(Dispatchers.IO) { database.folderDao().getFolder(folderId) }
             folder = loadedFolder
+            
+            // Отменяем уведомление о новых письмах при входе в папку Входящие
+            val accId = activeAccount?.id
+            if (accId != null && loadedFolder?.type == FolderType.INBOX) {
+                val nm = context.getSystemService(android.app.NotificationManager::class.java)
+                nm?.cancel(3000 + accId.toInt())
+            }
             
             // Автоматическая синхронизация для черновиков при входе в папку
             // (только один раз — не при повороте экрана)
@@ -947,7 +891,6 @@ fun EmailListScreen(
                     }
                 },
                 onLongClick = { email ->
-                    hapticScreen.performHapticFeedback(HapticFeedbackType.LongPress)
                     selectedIds = selectedIds + email.id
                 },
                 onStarClick = { email -> scope.launch { mailRepo.toggleFlag(email.id) } },
@@ -1366,6 +1309,10 @@ private fun EmailListContent(
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
     
+    val stableOnEmailClick by rememberUpdatedState(onEmailClick)
+    val stableOnLongClick by rememberUpdatedState(onLongClick)
+    val stableOnStarClick by rememberUpdatedState(onStarClick)
+    
     // Кэш превью изображений для писем с вложениями
     var imagePreviewCache by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
     
@@ -1428,6 +1375,7 @@ private fun EmailListContent(
         }
         
         items(emails, key = { it.id }) { email ->
+            val latestEmail by rememberUpdatedState(email)
             EmailListItem(
                 email = email,
                 mailRepo = mailRepo,
@@ -1438,9 +1386,9 @@ private fun EmailListContent(
                 isSent = isSent,
                 isDrafts = isDrafts,
                 imagePreviewPath = imagePreviewCache[email.id],
-                onClick = { onEmailClick(email) },
-                onLongClick = { onLongClick(email) },
-                onStarClick = { onStarClick(email) }
+                onClick = remember { { stableOnEmailClick(latestEmail) } },
+                onLongClick = remember { { stableOnLongClick(latestEmail) } },
+                onStarClick = remember { { stableOnStarClick(latestEmail) } }
             )
         }
     }
@@ -1463,6 +1411,12 @@ private fun EmailListItem(
     onStarClick: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
+    val longClickHandler = remember(onLongClick) {
+        {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            onLongClick()
+        }
+    }
 
     val backgroundColor by animateColorAsState(
         targetValue = when {
@@ -1476,17 +1430,11 @@ private fun EmailListItem(
     Surface(
         modifier = Modifier.fillMaxWidth().then(
             if (isSelectionMode) {
-                // В режиме выбора — только клик (без long press),
-                // чтобы drag selection на LazyColumn работал
                 Modifier.clickable(onClick = onClick)
             } else {
-                // Обычный режим — long press входит в режим выбора
                 Modifier.combinedClickable(
                     onClick = onClick,
-                    onLongClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onLongClick()
-                    }
+                    onLongClick = longClickHandler
                 )
             }
         ),
@@ -1571,15 +1519,8 @@ private fun EmailListItem(
                     .clip(CircleShape)
                     .background(if (isSelected) MaterialTheme.colorScheme.primary else avatarColor)
                     .combinedClickable(
-                        onClick = { 
-                            // Клик на аватар = клик на письмо (открыть или выделить/снять в режиме выделения)
-                            onClick()
-                        },
-                        onLongClick = {
-                            // Долгий клик = выделение
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onLongClick()
-                        }
+                        onClick = onClick,
+                        onLongClick = longClickHandler
                     ),
                 contentAlignment = Alignment.Center
             ) {
@@ -1630,7 +1571,7 @@ private fun EmailListItem(
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     Text(
-                        text = formatDate(email.dateReceived),
+                        text = formatRelativeDate(email.dateReceived),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (email.read) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
                     )
@@ -1651,12 +1592,15 @@ private fun EmailListItem(
                     // Миниатюра изображения (если есть скачанная картинка)
                     if (imagePreviewPath != null) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
+                        val imageModel = remember(imagePreviewPath) {
+                            ImageRequest.Builder(context)
                                 .data(java.io.File(imagePreviewPath))
                                 .crossfade(true)
                                 .size(48)
-                                .build(),
+                                .build()
+                        }
+                        AsyncImage(
+                            model = imageModel,
                             contentDescription = null,
                             modifier = Modifier
                                 .size(36.dp)
@@ -1740,38 +1684,4 @@ private fun getFolderIcon(type: Int) = when (type) {
     4 -> AppIcons.Delete
     5 -> AppIcons.Send
     else -> AppIcons.Folder
-}
-
-// PERF: Кэшируем "сегодня" чтобы не создавать Calendar.getInstance() на каждый вызов formatDate
-// @Volatile — formatDate может вызываться из разных потоков (ThreadLocal Calendar)
-@Volatile private var cachedTodayDayOfYear = -1
-@Volatile private var cachedTodayYear = -1
-@Volatile private var cachedTodayTimestamp = 0L
-
-private fun ensureTodayCached() {
-    val now = System.currentTimeMillis()
-    // Обновляем кэш раз в минуту (достаточно для определения "сегодня")
-    if (now - cachedTodayTimestamp > 60_000) {
-        val today = Calendar.getInstance()
-        cachedTodayDayOfYear = today.get(Calendar.DAY_OF_YEAR)
-        cachedTodayYear = today.get(Calendar.YEAR)
-        cachedTodayTimestamp = now
-    }
-}
-
-// PERF: Один переиспользуемый Calendar для formatDate (ThreadLocal для thread-safety)
-private val reusableCalendar = java.lang.ThreadLocal.withInitial { Calendar.getInstance() }
-
-private fun formatDate(timestamp: Long): String {
-    ensureTodayCached()
-    val now = cachedTodayTimestamp
-    val diff = now - timestamp
-    val calendar = reusableCalendar.get().apply { timeInMillis = timestamp }
-    
-    return when {
-        diff < 24 * 60 * 60 * 1000 && calendar.get(Calendar.DAY_OF_YEAR) == cachedTodayDayOfYear && calendar.get(Calendar.YEAR) == cachedTodayYear -> timeFormat.get().format(timestamp)
-        diff < 7 * 24 * 60 * 60 * 1000 -> dayFormat.get().format(timestamp)
-        calendar.get(Calendar.YEAR) == cachedTodayYear -> dateFormat.get().format(timestamp)
-        else -> fullDateFormat.get().format(timestamp)
-    }
 }

@@ -24,9 +24,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -50,6 +54,8 @@ import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.ui.components.EasterEggPlayer
 import com.dedovmosol.iwomail.ui.components.EasterEggOverlay
+import com.dedovmosol.iwomail.ui.utils.getAvatarColor
+import com.dedovmosol.iwomail.ui.utils.formatRelativeDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,63 +73,6 @@ enum class DateFilter(val days: Int?) {
     ALL(null), TODAY(1), WEEK(7), MONTH(30), YEAR(365)
 }
 
-// Цвета для аватаров как в Gmail — стабильные для каждой буквы
-private val avatarColors = listOf(
-    // Красные/розовые
-    Color(0xFFE53935), // Red
-    Color(0xFFD81B60), // Pink
-    Color(0xFFC2185B), // Pink Dark
-    // Фиолетовые
-    Color(0xFF8E24AA), // Purple
-    Color(0xFF7B1FA2), // Purple Dark
-    Color(0xFF5E35B1), // Deep Purple
-    Color(0xFF512DA8), // Deep Purple Dark
-    // Синие
-    Color(0xFF3949AB), // Indigo
-    Color(0xFF303F9F), // Indigo Dark
-    Color(0xFF1E88E5), // Blue
-    Color(0xFF1976D2), // Blue Dark
-    Color(0xFF039BE5), // Light Blue
-    Color(0xFF0288D1), // Light Blue Dark
-    // Голубые/бирюзовые
-    Color(0xFF00ACC1), // Cyan
-    Color(0xFF0097A7), // Cyan Dark
-    Color(0xFF00897B), // Teal
-    Color(0xFF00796B), // Teal Dark
-    // Зелёные
-    Color(0xFF43A047), // Green
-    Color(0xFF388E3C), // Green Dark
-    Color(0xFF7CB342), // Light Green
-    Color(0xFF689F38), // Light Green Dark
-    // Жёлтые/оранжевые
-    Color(0xFFC0CA33), // Lime
-    Color(0xFFAFB42B), // Lime Dark
-    Color(0xFFFDD835), // Yellow
-    Color(0xFFFBC02D), // Yellow Dark
-    Color(0xFFFFB300), // Amber
-    Color(0xFFFFA000), // Amber Dark
-    Color(0xFFFB8C00), // Orange
-    Color(0xFFF57C00), // Orange Dark
-    Color(0xFFF4511E), // Deep Orange
-    Color(0xFFE64A19), // Deep Orange Dark
-    // Коричневые/серые
-    Color(0xFF6D4C41), // Brown
-    Color(0xFF5D4037), // Brown Dark
-    Color(0xFF546E7A), // Blue Grey
-    Color(0xFF455A64)  // Blue Grey Dark
-)
-
-/**
- * Генерирует стабильный цвет для аватара на основе имени/email
- * Одинаковые имена всегда получают одинаковый цвет
- */
-private fun getAvatarColor(name: String): Color {
-    if (name.isBlank()) return avatarColors[0]
-    // Используем хэш от имени для стабильного цвета
-    val hash = name.lowercase().hashCode()
-    val index = (hash and 0x7FFFFFFF) % avatarColors.size
-    return avatarColors[index]
-}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
@@ -144,12 +93,24 @@ fun SearchScreen(
     var dateFilter by rememberSaveable { mutableStateOf(DateFilter.ALL) }
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
     
+    // Сохранение фокуса при повороте экрана
+    val searchFocusRequester = remember { FocusRequester() }
+    var isSearchFocused by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(isSearchFocused) {
+        if (isSearchFocused) {
+            kotlinx.coroutines.delay(100)
+            try { searchFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
+    }
+    
     var searchResultIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var allResults by remember { mutableStateOf<List<EmailEntity>>(emptyList()) }
     var isSearching by rememberSaveable { mutableStateOf(false) }
     
     // Режим выбора
-    var selectedIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+    var selectedIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     
@@ -190,6 +151,13 @@ fun SearchScreen(
         }
     }
     
+    LaunchedEffect(query) {
+        if (query.length >= 2) {
+            kotlinx.coroutines.delay(300)
+            search()
+        }
+    }
+
     fun deleteSelected() {
         scope.launch {
             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
@@ -299,10 +267,7 @@ fun SearchScreen(
                     title = {
                         TextField(
                             value = query,
-                            onValueChange = { 
-                                query = it
-                                if (it.length >= 2) search()
-                            },
+                            onValueChange = { query = it },
                             placeholder = { Text(Strings.searchInMail, color = Color.White.copy(alpha = 0.7f)) },
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
@@ -328,7 +293,10 @@ fun SearchScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocusRequester)
+                                .onFocusChanged { isSearchFocused = it.isFocused }
                         )
                     },
                     navigationIcon = {
@@ -596,27 +564,26 @@ private fun SearchResultItem(
                 overflow = TextOverflow.Ellipsis
             )
         } else {
-            val annotatedString = buildAnnotatedString {
-                var currentIndex = 0
-                val lowerText = text.lowercase()
-                val lowerQuery = query.lowercase()
-                
-                while (currentIndex < text.length) {
-                    val matchIndex = lowerText.indexOf(lowerQuery, currentIndex)
-                    if (matchIndex == -1) {
-                        // Нет больше совпадений - добавляем остаток текста
-                        append(text.substring(currentIndex))
-                        break
-                    } else {
-                        // Добавляем текст до совпадения
-                        if (matchIndex > currentIndex) {
-                            append(text.substring(currentIndex, matchIndex))
+            val annotatedString = remember(text, query) {
+                buildAnnotatedString {
+                    var currentIndex = 0
+                    val lowerText = text.lowercase()
+                    val lowerQuery = query.lowercase()
+                    
+                    while (currentIndex < text.length) {
+                        val matchIndex = lowerText.indexOf(lowerQuery, currentIndex)
+                        if (matchIndex == -1) {
+                            append(text.substring(currentIndex))
+                            break
+                        } else {
+                            if (matchIndex > currentIndex) {
+                                append(text.substring(currentIndex, matchIndex))
+                            }
+                            withStyle(SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) {
+                                append(text.substring(matchIndex, matchIndex + query.length))
+                            }
+                            currentIndex = matchIndex + query.length
                         }
-                        // Добавляем подсвеченное совпадение с цветом аватара
-                        withStyle(SpanStyle(color = highlightColor, fontWeight = FontWeight.Bold)) {
-                            append(text.substring(matchIndex, matchIndex + query.length))
-                        }
-                        currentIndex = matchIndex + query.length
                     }
                 }
             }
@@ -701,7 +668,7 @@ private fun SearchResultItem(
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     Text(
-                        text = formatSearchDate(email.dateReceived),
+                        text = formatRelativeDate(email.dateReceived),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (email.read) MaterialTheme.colorScheme.onSurfaceVariant 
                                else MaterialTheme.colorScheme.primary
@@ -738,31 +705,3 @@ private fun SearchResultItem(
     HorizontalDivider(modifier = Modifier.padding(start = 68.dp))
 }
 
-// ThreadLocal кэш для SimpleDateFormat — избегаем аллокации на каждый элемент списка
-private val searchTimeFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
-private val searchDayFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()) }
-private val searchDateFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()) }
-private val searchFullDateFormat = java.lang.ThreadLocal.withInitial { java.text.SimpleDateFormat("dd.MM.yy", java.util.Locale.getDefault()) }
-
-private fun formatSearchDate(timestamp: Long): String {
-    val now = System.currentTimeMillis()
-    val diff = now - timestamp
-    val calendar = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
-    val today = java.util.Calendar.getInstance()
-    
-    return when {
-        diff < 24 * 60 * 60 * 1000 && 
-        calendar.get(java.util.Calendar.DAY_OF_YEAR) == today.get(java.util.Calendar.DAY_OF_YEAR) -> {
-            searchTimeFormat.get()?.format(timestamp) ?: ""
-        }
-        diff < 7 * 24 * 60 * 60 * 1000 -> {
-            searchDayFormat.get()?.format(timestamp) ?: ""
-        }
-        calendar.get(java.util.Calendar.YEAR) == today.get(java.util.Calendar.YEAR) -> {
-            searchDateFormat.get()?.format(timestamp) ?: ""
-        }
-        else -> {
-            searchFullDateFormat.get()?.format(timestamp) ?: ""
-        }
-    }
-}
