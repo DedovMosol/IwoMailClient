@@ -31,24 +31,11 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 - ✅ **Tasks** — create, edit, sync
 - ✅ **Notifications** — Push (Direct Push), background sync, night mode
 - ✅ **Auto-cleanup** — configurable Trash/Drafts/Spam cleanup per account (interval-based or disabled via “Never”)
-- ✅ **Interface** — dark/light theme, 7 color schemes, personalization
+- ✅ **Interface** — dark/light theme, 4 color schemes, personalization
 - ✅ **Multiple accounts** — with individual signatures and settings
 - ✅ **MDN/DSN** — read and delivery receipt requests
 
-## 🆕 What's New in v1.6.2
-
-- Redesigned UI: new elements, custom file icons, extra scrollbars, updated widget
-- Full "Save" and "Save as" actions for all attachments
-- Improved multi-select: drag selection and batch operations
-- Stronger email validation before sending
-- Calendar: attachments, recurring events, and local trash
-- Contacts: group support when composing + duplicate warnings
-- Drafts: local save mode (switchable in settings)
-- Exchange 2007 SP1: deeper EAS/EWS compatibility — more stable task, attachment, and folder sync
-- Significant performance improvements
-- Bug fixes, reduced memory leaks and battery usage, improved stability and security
-
-📋 Full changelog: [CHANGELOG_EN.md](docs/CHANGELOG_EN.md)
+📋 Changelog: [CHANGELOG_EN.md](docs/CHANGELOG_EN.md)
 
 ---
 
@@ -102,7 +89,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 ## 📊 Tech Stack
 
 **Language & Frameworks:**
-- Kotlin 1.9.24
+- Kotlin 1.9.22
 - Jetpack Compose — UI
 - Coroutines + Flow — async
 - Material Design 3 — design
@@ -110,14 +97,13 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 **Storage:**
 - Room Database — local DB
 - DataStore — settings
-- SQLCipher — encryption (optional)
 
 **Network & Protocols:**
 - OkHttp 4.12.0 — HTTP client
 - Conscrypt — TLS 1.0-1.3 (Exchange 2007 support)
 - EAS 12.0-14.1 — ActiveSync
 - EWS (NTLM) — Exchange Web Services
-- JavaMail — IMAP/POP3/SMTP
+- JavaMail (com.sun.mail) — IMAP/POP3/SMTP
 
 **Security:**
 - Certificate Pinning (Public Key Pinning)
@@ -140,7 +126,6 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 - [Changelog](docs/CHANGELOG_EN.md)
 - [Project Architecture](docs/ARCHITECTURE.md)
-- [XmlPullParser Migration Plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 - [Privacy Policy](docs/PRIVACY_POLICY.md)
 
 ## 🤝 Contributing
@@ -171,7 +156,7 @@ This project is open for improvements! Here's how you can help:
 
 ```
 UI Layer
-  Jetpack Compose — 22 screens, 8 components
+  Jetpack Compose — 21 screens, 8 components
   Navigation, Theme, Localization
     ↓
 Repository Layer
