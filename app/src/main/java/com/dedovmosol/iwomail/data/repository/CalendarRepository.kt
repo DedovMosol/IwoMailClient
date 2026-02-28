@@ -174,8 +174,27 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Error -> return@withContext r
                 }
                 
-                // КРИТИЧНО: НЕ используем withRetry для создания!
-                // Create НЕ идемпотентен — retry создаст ВТОРОЕ событие на сервере.
+                // AllDayEvent: нормализуем к midnight UTC той же даты (как это сделает EasCalendarService).
+                // Используем эти же значения для temp event → matching после sync не создаст дубль.
+                val effectiveStartTime: Long
+                val effectiveEndTime: Long
+                if (allDayEvent) {
+                    val local = java.util.Calendar.getInstance()
+                    val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+                    local.timeInMillis = startTime
+                    utc.clear()
+                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+                    effectiveStartTime = utc.timeInMillis
+                    local.timeInMillis = endTime
+                    utc.clear()
+                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+                    utc.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                    effectiveEndTime = utc.timeInMillis
+                } else {
+                    effectiveStartTime = startTime
+                    effectiveEndTime = endTime
+                }
+
                 val result = easClient.createCalendarEvent(
                     subject = subject,
                     startTime = startTime,
@@ -191,10 +210,9 @@ class CalendarRepository(private val context: Context) {
                     attachments = attachments
                 )
                 
-                // Формируем recurrenceRule JSON для локальной записи
                 val isRecurring = recurrenceType >= 0
                 val recurrenceRule = if (isRecurring) {
-                    RecurrenceHelper.buildRuleJson(recurrenceType, startTime)
+                    RecurrenceHelper.buildRuleJson(recurrenceType, effectiveStartTime)
                 } else ""
                 
                 when (result) {
@@ -236,8 +254,8 @@ class CalendarRepository(private val context: Context) {
                                 subject = subject,
                                 location = location,
                                 body = body,
-                                startTime = startTime,
-                                endTime = endTime,
+                                startTime = effectiveStartTime,
+                                endTime = effectiveEndTime,
                                 allDayEvent = allDayEvent,
                                 reminder = reminder,
                                 busyStatus = busyStatus,
@@ -272,7 +290,7 @@ class CalendarRepository(private val context: Context) {
                                 }
                                 
                                 val allMatching = calendarEventDao.getEventsByAccountList(accountId)
-                                    .filter { it.subject == subject && it.startTime == startTime && !it.isDeleted }
+                                    .filter { it.subject == subject && it.startTime == effectiveStartTime && !it.isDeleted }
                                 val createdEvent = allMatching.find { it.id != tempEvent.id }
                                     ?: allMatching.firstOrNull()
                                 
@@ -298,12 +316,11 @@ class CalendarRepository(private val context: Context) {
                             }
                             
                             val finalEvent = calendarEventDao.getEventsByAccountList(accountId)
-                                .filter { it.subject == subject && it.startTime == startTime && !it.isDeleted }
+                                .filter { it.subject == subject && it.startTime == effectiveStartTime && !it.isDeleted }
                                 .firstOrNull()
                             return@withContext EasResult.Success(finalEvent ?: tempEvent)
                         }
                         
-                        // Обычный путь: serverId — настоящий EAS ServerId (короткий, с ":")
                         val event = CalendarEventEntity(
                             id = "${accountId}_${serverId}",
                             accountId = accountId,
@@ -311,8 +328,8 @@ class CalendarRepository(private val context: Context) {
                             subject = subject,
                             location = location,
                             body = body,
-                            startTime = startTime,
-                            endTime = endTime,
+                            startTime = effectiveStartTime,
+                            endTime = effectiveEndTime,
                             allDayEvent = allDayEvent,
                             reminder = reminder,
                             busyStatus = busyStatus,
@@ -397,8 +414,26 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Success -> r.data
                     is EasResult.Error -> return@withContext r
                 }
-                
-                // Удаляем открепленные вложения с сервера через EWS DeleteAttachment
+
+                val effectiveStartTime: Long
+                val effectiveEndTime: Long
+                if (allDayEvent) {
+                    val local = java.util.Calendar.getInstance()
+                    val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+                    local.timeInMillis = startTime
+                    utc.clear()
+                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+                    effectiveStartTime = utc.timeInMillis
+                    local.timeInMillis = endTime
+                    utc.clear()
+                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+                    utc.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                    effectiveEndTime = utc.timeInMillis
+                } else {
+                    effectiveStartTime = startTime
+                    effectiveEndTime = endTime
+                }
+
                 if (removedAttachmentIds.isNotEmpty()) {
                     val deleteResult = easClient.deleteCalendarAttachments(removedAttachmentIds)
                     if (deleteResult is EasResult.Error) {
@@ -457,12 +492,12 @@ class CalendarRepository(private val context: Context) {
                         val newLastModified = System.currentTimeMillis()
                         val isRecurringNew = recurrenceType >= 0
                         val recurrenceRuleNew = if (isRecurringNew) {
-                            RecurrenceHelper.buildRuleJson(recurrenceType, startTime)
+                            RecurrenceHelper.buildRuleJson(recurrenceType, effectiveStartTime)
                         } else ""
                         val updatedEvent = event.copy(
                             subject = subject,
-                            startTime = startTime,
-                            endTime = endTime,
+                            startTime = effectiveStartTime,
+                            endTime = effectiveEndTime,
                             location = location,
                             body = body,
                             allDayEvent = allDayEvent,
@@ -524,42 +559,11 @@ class CalendarRepository(private val context: Context) {
      * Удаление события календаря
      */
     suspend fun deleteEvent(event: CalendarEventEntity): EasResult<Boolean> {
-        initFromPrefs(context)
         return withContext(Dispatchers.IO) {
             try {
-                val easClient = when (val r = requireExchangeClient(event.accountId)) {
-                    is EasResult.Success -> r.data
-                    is EasResult.Error -> return@withContext r
-                }
-                
-                // КРИТИЧНО: Для meetings определяем роль пользователя.
-                // Без этого CRA (Calendar Repair Assistant) воскрешает удалённые встречи.
-                val account = accountRepo.getAccount(event.accountId)
-                val currentEmail = account?.email?.lowercase() ?: ""
-                val isOrganizer = event.organizer.lowercase() == currentEmail
-                
-                val result = easClient.deleteCalendarEvent(
-                    serverId = event.serverId,
-                    isMeeting = event.isMeeting,
-                    isOrganizer = isOrganizer
-                )
-                
-                when (result) {
-                    is EasResult.Success -> {
-                        // Отменяем напоминание
-                        CalendarReminderReceiver.cancelReminder(context, event.id)
-                        // Мягкое удаление (в корзину) вместо жёсткого
-                        calendarEventDao.softDelete(event.id)
-                        
-                        // КРИТИЧНО: Помечаем serverId как удалённый пользователем.
-                        // Защита НЕ имеет TTL — запись удалится только когда syncCalendar()
-                        // подтвердит, что сервер больше не возвращает это событие.
-                        markAsDeleted(event.serverId, context)
-                        
-                        EasResult.Success(true)
-                    }
-                    is EasResult.Error -> result
-                }
+                CalendarReminderReceiver.cancelReminder(context, event.id)
+                calendarEventDao.softDelete(event.id)
+                EasResult.Success(true)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.EVENT_DELETE_ERROR)
@@ -578,102 +582,25 @@ class CalendarRepository(private val context: Context) {
     }
     
     /**
-     * Удаление нескольких событий с прогрессом.
-     * Использует batch-удаление (один EWS DeleteItem на группу)
-     * для надёжности — аналог deleteEmailsBatchViaEWS.
+     * Мягкое удаление нескольких событий (перемещение в локальную корзину).
+     * Серверное удаление происходит только при окончательном удалении (deleteEventPermanently/emptyCalendarTrash).
      */
     suspend fun deleteEventsWithProgress(
         events: List<CalendarEventEntity>,
         onProgress: (deleted: Int, total: Int) -> Unit
     ): EasResult<Int> {
-        initFromPrefs(context)
         return withContext(Dispatchers.IO) {
             if (events.isEmpty()) return@withContext EasResult.Success(0)
-            
             try {
-                val eventsByAccount = events.groupBy { it.accountId }
-                var totalDeleted = 0
                 val totalCount = events.size
-                
-                for ((accountId, accountEvents) in eventsByAccount) {
-                    val account = accountRepo.getAccount(accountId)
-                    if (account == null) continue
-                    
-                    if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) continue
-                    
-                    val easClient = accountRepo.createEasClient(accountId) ?: continue
-                    val currentEmail = account.email?.lowercase() ?: ""
-
-                    // Batch: собираем все запросы и отправляем одним DeleteItem
-                    val batchRequests = accountEvents.map { event ->
-                        val isOrganizer = event.organizer.lowercase() == currentEmail
-                        Triple(event.serverId, event.isMeeting, isOrganizer)
-                    }
-
-                    val batchResult = easClient.deleteCalendarEventsBatch(batchRequests)
-                    val batchDeletedCount = (batchResult as? EasResult.Success)?.data ?: 0
-                    val batchOk = batchDeletedCount == accountEvents.size
-
-                    if (batchOk) {
-                        for (event in accountEvents) {
-                            CalendarReminderReceiver.cancelReminder(context, event.id)
-                            calendarEventDao.softDelete(event.id)
-                            markAsDeleted(event.serverId, context)
-                        }
-                        totalDeleted += batchDeletedCount
-                        onProgress(totalDeleted, totalCount)
-                    } else if (batchDeletedCount > 0) {
-                        android.util.Log.w("CalendarRepository",
-                            "deleteEventsWithProgress: partial batch ($batchDeletedCount/${accountEvents.size}), falling back to sequential")
-                        for (event in accountEvents) {
-                            try {
-                                val isOrganizer = event.organizer.lowercase() == currentEmail
-                                val result = easClient.deleteCalendarEvent(
-                                    serverId = event.serverId,
-                                    isMeeting = event.isMeeting,
-                                    isOrganizer = isOrganizer
-                                )
-                                if (result is EasResult.Success) {
-                                    CalendarReminderReceiver.cancelReminder(context, event.id)
-                                    calendarEventDao.softDelete(event.id)
-                                    markAsDeleted(event.serverId, context)
-                                    totalDeleted++
-                                    onProgress(totalDeleted, totalCount)
-                                }
-                                kotlinx.coroutines.delay(200)
-                            } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e
-                            }
-                        }
-                    } else {
-                        val errMsg = (batchResult as? EasResult.Error)?.message ?: "batch returned 0"
-                        android.util.Log.w("CalendarRepository",
-                            "deleteEventsWithProgress: batch failed ($errMsg), falling back to sequential")
-                        for (event in accountEvents) {
-                            try {
-                                val isOrganizer = event.organizer.lowercase() == currentEmail
-                                val result = easClient.deleteCalendarEvent(
-                                    serverId = event.serverId,
-                                    isMeeting = event.isMeeting,
-                                    isOrganizer = isOrganizer
-                                )
-                                if (result is EasResult.Success) {
-                                    CalendarReminderReceiver.cancelReminder(context, event.id)
-                                    calendarEventDao.softDelete(event.id)
-                                    markAsDeleted(event.serverId, context)
-                                    totalDeleted++
-                                    onProgress(totalDeleted, totalCount)
-                                }
-                                kotlinx.coroutines.delay(200)
-                            } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e
-                            }
-                        }
-                    }
+                var totalDeleted = 0
+                for (event in events) {
+                    CalendarReminderReceiver.cancelReminder(context, event.id)
+                    calendarEventDao.softDelete(event.id)
+                    totalDeleted++
+                    onProgress(totalDeleted, totalCount)
                 }
-                
                 EasResult.Success(totalDeleted)
-                
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.EVENT_DELETE_ERROR)
@@ -684,69 +611,16 @@ class CalendarRepository(private val context: Context) {
     // === Корзина событий ===
     
     /**
-     * Восстановление события из корзины.
-     * Пересоздаёт событие на сервере (получает новый serverId) и снимает флаг isDeleted.
+     * Восстановление события из локальной корзины.
+     * Событие остаётся на сервере с тем же serverId — снимаем только флаг isDeleted.
      */
     suspend fun restoreEvent(event: CalendarEventEntity): EasResult<Boolean> {
-        initFromPrefs(context)
         return withContext(Dispatchers.IO) {
             try {
-                val account = accountRepo.getAccount(event.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                val easClient = accountRepo.createEasClient(event.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
-                // Парсим участников из JSON для пересоздания на сервере
-                val attendeeEmails = parseAttendeesFromJson(event.attendees).map { it.email }
-                
-                // Восстанавливаем тип повторения из recurrenceRule
-                val recurrenceType = if (event.isRecurring && event.recurrenceRule.isNotBlank()) {
-                    RecurrenceHelper.parseRule(event.recurrenceRule)?.type ?: -1
-                } else -1
-                
-                // Пересоздаём событие на сервере напрямую (без createEvent, который вызывает syncCalendar)
-                val result = easClient.createCalendarEvent(
-                    subject = event.subject,
-                    startTime = event.startTime,
-                    endTime = event.endTime,
-                    location = event.location,
-                    body = event.body,
-                    allDayEvent = event.allDayEvent,
-                    reminder = event.reminder,
-                    busyStatus = event.busyStatus,
-                    sensitivity = event.sensitivity,
-                    attendees = attendeeEmails,
-                    recurrenceType = recurrenceType
-                )
-                
-                when (result) {
-                    is EasResult.Success -> {
-                        val newServerId = result.data
-                        
-                        // Убираем старый serverId из защитного множества
-                        removeFromDeleted(event.serverId, context)
-                        
-                        // Удаляем старую запись
-                        calendarEventDao.delete(event.id)
-                        
-                        // Вставляем обновлённую запись с новым serverId и isDeleted=0
-                        val restoredEvent = event.copy(
-                            id = "${event.accountId}_${newServerId}",
-                            serverId = newServerId,
-                            isDeleted = false,
-                            lastModified = System.currentTimeMillis()
-                        )
-                        calendarEventDao.insert(restoredEvent)
-                        
-                        // Планируем напоминание
-                        CalendarReminderReceiver.scheduleReminder(context, restoredEvent)
-                        
-                        android.util.Log.d("CalendarRepository", "Event restored: old=${event.serverId}, new=$newServerId")
-                        EasResult.Success(true)
-                    }
-                    is EasResult.Error -> result
-                }
+                calendarEventDao.restore(event.id)
+                CalendarReminderReceiver.scheduleReminder(context, event)
+                android.util.Log.d("CalendarRepository", "Event restored locally: serverId=${event.serverId}")
+                EasResult.Success(true)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: "Ошибка восстановления события")
@@ -756,12 +630,7 @@ class CalendarRepository(private val context: Context) {
     
     /**
      * Окончательное удаление события из корзины.
-     * КРИТИЧНО: Делаем best-effort серверное удаление перед локальным!
-     * Soft-delete (deleteEvent) уже должен был удалить с сервера, но если тот вызов
-     * фейлил незаметно (ErrorItemNotFound из-за устаревшего ItemId, CRA-воскрешение
-     * для meetings, или сетевой сбой при NTLM) — событие осталось на сервере.
-     * Без этой страховки пользователь "окончательно" удалял из корзины, а событие
-     * оставалось на Exchange и воскресало при следующей синхронизации.
+     * Удаляет с сервера (best-effort) + из локальной БД + markAsDeleted от воскрешения при sync.
      */
     suspend fun deleteEventPermanently(event: CalendarEventEntity): EasResult<Boolean> {
         initFromPrefs(context)

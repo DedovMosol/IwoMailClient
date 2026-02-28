@@ -5,6 +5,7 @@ import androidx.work.*
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.NotificationStrings
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -25,15 +26,41 @@ class ScheduledEmailWorker(
         val requestReadReceipt = inputData.getBoolean("requestReadReceipt", false)
         val requestDeliveryReceipt = inputData.getBoolean("requestDeliveryReceipt", false)
         val importance = inputData.getInt("importance", 1)
+        val attachmentDirPath = inputData.getString("attachmentDir") ?: ""
         
         val accountRepo = AccountRepository(applicationContext)
         val account = accountRepo.getAccount(accountId) ?: return Result.failure()
         
         val client = accountRepo.createEasClient(accountId) ?: return Result.failure()
         
-        return when (client.sendMail(to, subject, body, cc, bcc, importance = importance, requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt)) {
+        val attachmentDir = if (attachmentDirPath.isNotBlank()) File(attachmentDirPath) else null
+        val sendResult = if (attachmentDir != null) {
+            val attachments = readPersistedAttachments(attachmentDir)
+            if (attachments.isNotEmpty()) {
+                client.sendMailWithAttachments(
+                    to, subject, body, cc, bcc, attachments,
+                    requestReadReceipt, requestDeliveryReceipt, importance
+                )
+            } else {
+                client.sendMail(
+                    to, subject, body, cc, bcc,
+                    importance = importance,
+                    requestReadReceipt = requestReadReceipt,
+                    requestDeliveryReceipt = requestDeliveryReceipt
+                )
+            }
+        } else {
+            client.sendMail(
+                to, subject, body, cc, bcc,
+                importance = importance,
+                requestReadReceipt = requestReadReceipt,
+                requestDeliveryReceipt = requestDeliveryReceipt
+            )
+        }
+        
+        return when (sendResult) {
             is EasResult.Success -> {
-                // Показываем уведомление об успешной отправке
+                attachmentDir?.deleteRecursively()
                 val isRu = java.util.Locale.getDefault().language == "ru"
                 val title = NotificationStrings.getEmailSent(isRu)
                 val text = NotificationStrings.getScheduledEmailSent(to, isRu)
@@ -41,6 +68,23 @@ class ScheduledEmailWorker(
                 Result.success()
             }
             is EasResult.Error -> Result.retry()
+        }
+    }
+    
+    private fun readPersistedAttachments(dir: File): List<Triple<String, String, ByteArray>> {
+        val manifestFile = File(dir, "manifest.json")
+        if (!manifestFile.exists()) return emptyList()
+        return try {
+            val manifest = org.json.JSONArray(manifestFile.readText())
+            (0 until manifest.length()).mapNotNull { i ->
+                val entry = manifest.getJSONObject(i)
+                val file = File(dir, entry.getString("file"))
+                if (file.exists()) {
+                    Triple(entry.getString("name"), entry.getString("mimeType"), file.readBytes())
+                } else null
+            }
+        } catch (e: Exception) {
+            emptyList()
         }
     }
     
@@ -62,6 +106,32 @@ class ScheduledEmailWorker(
 }
 
 /**
+ * Сохраняет вложения на диск для отложенной отправки.
+ * WorkManager inputData ограничен 10 КБ — байты вложений хранятся в файлах.
+ */
+private fun persistAttachments(
+    context: Context,
+    attachments: List<Triple<String, String, ByteArray>>
+): String? {
+    if (attachments.isEmpty()) return null
+    val dir = File(context.filesDir, "scheduled_attachments/${System.currentTimeMillis()}")
+    dir.mkdirs()
+    val manifest = org.json.JSONArray()
+    for ((index, att) in attachments.withIndex()) {
+        val (name, mimeType, bytes) = att
+        val safeFileName = "${index}_${name.replace(Regex("[^a-zA-Z0-9._-]"), "_")}"
+        File(dir, safeFileName).writeBytes(bytes)
+        manifest.put(org.json.JSONObject().apply {
+            put("name", name)
+            put("mimeType", mimeType)
+            put("file", safeFileName)
+        })
+    }
+    File(dir, "manifest.json").writeText(manifest.toString())
+    return dir.absolutePath
+}
+
+/**
  * Планирует отправку письма через WorkManager
  */
 fun scheduleEmail(
@@ -75,8 +145,11 @@ fun scheduleEmail(
     delayMillis: Long,
     requestReadReceipt: Boolean = false,
     requestDeliveryReceipt: Boolean = false,
-    importance: Int = 1
+    importance: Int = 1,
+    attachments: List<Triple<String, String, ByteArray>> = emptyList()
 ) {
+    val attachmentDir = persistAttachments(context, attachments)
+    
     val data = workDataOf(
         "accountId" to accountId,
         "to" to to,
@@ -86,7 +159,8 @@ fun scheduleEmail(
         "body" to body,
         "requestReadReceipt" to requestReadReceipt,
         "requestDeliveryReceipt" to requestDeliveryReceipt,
-        "importance" to importance
+        "importance" to importance,
+        "attachmentDir" to (attachmentDir ?: "")
     )
     
     val request = OneTimeWorkRequestBuilder<ScheduledEmailWorker>()

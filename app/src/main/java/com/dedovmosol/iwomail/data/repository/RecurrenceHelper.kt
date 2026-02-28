@@ -172,7 +172,7 @@ object RecurrenceHelper {
         rangeStart: Long,
         rangeEnd: Long
     ): List<Long> {
-        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        val cal = Calendar.getInstance()
         cal.timeInMillis = seriesStart
         
         val effectiveEnd = when {
@@ -437,12 +437,12 @@ object RecurrenceHelper {
      * @param startTime Время начала события (для определения дня недели/месяца)
      */
     fun buildRuleJson(type: Int, startTime: Long): String {
-        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        val cal = Calendar.getInstance()
         cal.timeInMillis = startTime
         
         val interval = 1
         val dayOfWeek = when (type) {
-            1 -> 1 shl (cal.get(Calendar.DAY_OF_WEEK) - 1) // bitmask: Sun=1,Mon=2,...
+            1 -> 1 shl (cal.get(Calendar.DAY_OF_WEEK) - 1)
             else -> 0
         }
         val dayOfMonth = when (type) {
@@ -451,7 +451,7 @@ object RecurrenceHelper {
             else -> 0
         }
         val monthOfYear = when (type) {
-            5 -> cal.get(Calendar.MONTH) + 1 // Calendar.JANUARY = 0
+            5 -> cal.get(Calendar.MONTH) + 1
             else -> 0
         }
         

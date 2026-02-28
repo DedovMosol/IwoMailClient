@@ -188,7 +188,10 @@ fun CalendarScreen(
     }
     var selectedEventId by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedEvent = remember(selectedEventId, events, deletedEvents) {
-        selectedEventId?.let { id -> events.find { it.id == id } ?: deletedEvents.find { it.id == id } }
+        selectedEventId?.let { id ->
+            val lookupId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
+            events.find { it.id == lookupId } ?: deletedEvents.find { it.id == lookupId }
+        }
     }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
     var selectedDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
@@ -293,6 +296,20 @@ fun CalendarScreen(
                 event.location.contains(debouncedSearchQuery, ignoreCase = true) ||
                 event.body.contains(debouncedSearchQuery, ignoreCase = true)
             }
+        }
+    }
+    
+    val monthViewBaseEvents = remember(events, deletedEvents, debouncedSearchQuery, dateFilter) {
+        val base = when (dateFilter) {
+            CalendarDateFilter.DELETED -> deletedEvents
+            CalendarDateFilter.ALL -> events + deletedEvents
+            else -> events
+        }
+        if (debouncedSearchQuery.isBlank()) base
+        else base.filter { event ->
+            event.subject.contains(debouncedSearchQuery, ignoreCase = true) ||
+            event.location.contains(debouncedSearchQuery, ignoreCase = true) ||
+            event.body.contains(debouncedSearchQuery, ignoreCase = true)
         }
     }
     
@@ -864,7 +881,7 @@ fun CalendarScreen(
                         onEmptyTrash = { showEmptyTrashDialog = true }
                     )
                     MonthView(
-                        events = filteredEvents,
+                        events = monthViewBaseEvents,
                         selectedDate = selectedDate,
                         onDateSelected = { selectedDateMillis = it.time },
                         onEventClick = { event ->
@@ -1141,8 +1158,17 @@ private fun MonthView(
     var currentYear by remember(selectedDate) { mutableStateOf(calendar.get(Calendar.YEAR)) }
     var showYearView by rememberSaveable { mutableStateOf(false) }
     
-    // События для выбранного дня — фильтруем из уже развёрнутых events (включая occurrences)
-    val dayEvents = remember(events, selectedDate) {
+    val expandedEvents = remember(events, currentMonth, currentYear) {
+        val cal = Calendar.getInstance()
+        cal.set(currentYear, currentMonth, 1, 0, 0, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val monthStart = cal.timeInMillis
+        cal.add(Calendar.MONTH, 1)
+        val monthEnd = cal.timeInMillis
+        expandRecurringForRange(events, monthStart, monthEnd)
+    }
+    
+    val dayEvents = remember(expandedEvents, selectedDate) {
         val cal = Calendar.getInstance()
         cal.time = selectedDate
         cal.set(Calendar.HOUR_OF_DAY, 0)
@@ -1152,7 +1178,7 @@ private fun MonthView(
         val dayStart = cal.timeInMillis
         cal.add(Calendar.DAY_OF_YEAR, 1)
         val dayEnd = cal.timeInMillis
-        events.filter { event ->
+        expandedEvents.filter { event ->
             (event.startTime in dayStart until dayEnd) ||
             (event.startTime < dayEnd && event.endTime > dayStart)
         }.sortedBy { it.startTime }
@@ -1195,7 +1221,7 @@ private fun MonthView(
                 month = currentMonth,
                 year = currentYear,
                 selectedDate = selectedDate,
-                events = events,
+                events = expandedEvents,
                 onDateSelected = onDateSelected
             )
             

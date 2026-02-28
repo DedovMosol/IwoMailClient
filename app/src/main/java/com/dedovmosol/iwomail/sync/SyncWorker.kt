@@ -313,7 +313,7 @@ class SyncWorker(
                 // Проверяем статус через SharedPreferences
                 val prefs = applicationContext.getSharedPreferences("push_service", android.content.Context.MODE_PRIVATE)
                 val lastUpdate = prefs.getLong("last_update", 0)
-                val serviceRunning = (System.currentTimeMillis() - lastUpdate) < 60_000
+                val serviceRunning = (System.currentTimeMillis() - lastUpdate) < 420_000 // heartbeat каждые 5 мин + запас
                 
                 if (!serviceRunning) {
                     android.util.Log.i("SyncWorker", "PushService not running - starting it")

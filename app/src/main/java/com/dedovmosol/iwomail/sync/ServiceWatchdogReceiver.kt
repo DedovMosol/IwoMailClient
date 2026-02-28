@@ -23,14 +23,22 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
     
     companion object {
         private const val TAG = "ServiceWatchdog"
+        private const val DEBOUNCE_MS = 300_000L // 5 минут между проверками
     }
     
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-            Intent.ACTION_USER_PRESENT,    // Пользователь разблокировал устройство
-            Intent.ACTION_SCREEN_ON,       // Экран включен
-            Intent.ACTION_POWER_CONNECTED  // Зарядка подключена
+            Intent.ACTION_USER_PRESENT,
+            Intent.ACTION_SCREEN_ON,
+            Intent.ACTION_POWER_CONNECTED
             -> {
+                // Debounce: не чаще раза в 5 минут
+                val prefs = context.getSharedPreferences("watchdog", Context.MODE_PRIVATE)
+                val lastTrigger = prefs.getLong("last_trigger", 0L)
+                val now = System.currentTimeMillis()
+                if (now - lastTrigger < DEBOUNCE_MS) return
+                prefs.edit().putLong("last_trigger", now).apply()
+                
                 android.util.Log.i(TAG, "Watchdog triggered by ${intent.action}")
                 checkAndRestartService(context)
             }
@@ -93,7 +101,7 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
                 // Проверяем через SharedPreferences когда сервис последний раз обновлял статус
                 val prefs = context.getSharedPreferences("push_service", Context.MODE_PRIVATE)
                 val lastUpdate = prefs.getLong("last_update", 0)
-                val isRunning = (System.currentTimeMillis() - lastUpdate) < 60_000 // Обновление было менее минуты назад
+                val isRunning = (System.currentTimeMillis() - lastUpdate) < 420_000 // Обновление было менее 7 минут назад (heartbeat каждые 5 мин + запас)
                 
                 if (!isRunning) {
                     // Fallback: проверяем через getRunningServices (deprecated но работает)

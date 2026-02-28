@@ -824,18 +824,54 @@ private fun RollbackDialog(
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val scrollContentMaxHeight = (configuration.screenHeightDp * if (isLandscape) 0.42f else 0.56f).dp.coerceAtLeast(220.dp)
     val contentScrollState = rememberScrollState()
-    // НЕ используем getExistingApkFile(): файл update.apk общий для обновления и отката,
-    // resume с чужим APK привёл бы к копированию НЕПРАВИЛЬНОГО файла в Downloads.
     var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
     var downloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var showOverwriteAlert by rememberSaveable { mutableStateOf(false) }
     
-    // Alert: файл уже существует в Downloads/iwomail rollback/
+    val startDownload: () -> Unit = {
+        if (downloadJob == null) {
+            downloadState = DownloadState.Downloading(0, 0f, 0f)
+            downloadJob = scope.launch {
+                updateChecker.downloadUpdate(previousInfo.apkUrl).collect { progress ->
+                    when (progress) {
+                        is DownloadProgress.Starting -> {
+                            downloadState = DownloadState.Downloading(0, 0f, 0f)
+                        }
+                        is DownloadProgress.Downloading -> {
+                            downloadState = DownloadState.Downloading(
+                                progress.progress, progress.downloadedMb, progress.totalMb
+                            )
+                        }
+                        is DownloadProgress.Completed -> {
+                            downloadedFile = progress.file
+                            downloadState = DownloadState.Preparing
+                            val prepared = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                updateChecker.prepareDowngrade(progress.file, previousInfo.versionName)
+                            }
+                            downloadState = if (prepared) {
+                                DownloadState.ReadyToUninstall
+                            } else {
+                                DownloadState.Error(
+                                    if (isRu) "Не удалось сохранить APK в Downloads" else "Failed to save APK to Downloads"
+                                )
+                            }
+                            downloadJob = null
+                        }
+                        is DownloadProgress.Error -> {
+                            downloadState = DownloadState.Error(progress.message)
+                            downloadJob = null
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     if (showOverwriteAlert) {
         AlertDialog(
             onDismissRequest = { showOverwriteAlert = false },
-            icon = { Icon(AppIcons.Warning, null) },
+            icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(if (isRu) "Файл уже существует" else "File already exists") },
             text = {
                 Text(
@@ -846,32 +882,25 @@ private fun RollbackDialog(
                 )
             },
             confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeButton(
-                    onClick = {
-                        showOverwriteAlert = false
-                        downloadState = DownloadState.Preparing
-                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            val prepared = downloadedFile?.let { file ->
-                                updateChecker.prepareDowngrade(file, previousInfo.versionName)
-                            } ?: false
-                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                if (prepared) {
-                                    downloadState = DownloadState.ReadyToUninstall
-                                } else {
-                                    downloadState = DownloadState.Error(
-                                        if (isRu) "Не удалось сохранить APK" else "Failed to save APK"
-                                    )
-                                }
-                            }
-                        }
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(if (isRu) "Перезаписать" else "Overwrite", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showOverwriteAlert = false }) {
-                    Text(Strings.cancel)
+                    com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                        onClick = {
+                            showOverwriteAlert = false
+                            downloadState = DownloadState.ReadyToUninstall
+                        },
+                        text = if (isRu) "Нет" else "No"
+                    )
+                    com.dedovmosol.iwomail.ui.theme.ThemeButton(
+                        onClick = {
+                            showOverwriteAlert = false
+                            startDownload()
+                        }
+                    ) {
+                        Text(if (isRu) "Перезаписать" else "Overwrite", color = Color.White)
+                    }
                 }
             }
         )
@@ -1029,9 +1058,9 @@ private fun RollbackDialog(
                                 }
                                 Text(
                                     if (isRu)
-                                        "Файл iwomail-rollback-v${previousInfo.versionName}.apk сохранён. Нажмите \"См. загрузки\" и убедитесь, затем нажмите \"Удалить\"."
+                                        "Файл iwomail-rollback-v${previousInfo.versionName}.apk сохранён в папку Downloads/iwomail rollback/. Нажмите \"Файлы\" для проверки, затем нажмите \"Удалить\"."
                                     else
-                                        "File iwomail-rollback-v${previousInfo.versionName}.apk saved. Tap \"See downloads\" to verify, then tap \"Uninstall\".",
+                                        "File iwomail-rollback-v${previousInfo.versionName}.apk saved to Downloads/iwomail rollback/. Tap \"Files\" to verify, then tap \"Uninstall\".",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
@@ -1063,14 +1092,14 @@ private fun RollbackDialog(
                                 if (!opened) {
                                     android.widget.Toast.makeText(
                                         context,
-                                        if (isRu) "Не удалось открыть загрузки" else "Failed to open downloads",
+                                        if (isRu) "Не удалось открыть файлы" else "Failed to open files",
                                         android.widget.Toast.LENGTH_LONG
                                     ).show()
                                 }
                             }
                         ) {
                             Text(
-                                if (isRu) "См. загрузки" else "See downloads",
+                                if (isRu) "Файлы" else "Files",
                                 color = Color.White,
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1
@@ -1123,29 +1152,15 @@ private fun RollbackDialog(
                                     )
                                     .clickable {
                                         if (downloadJob != null) return@clickable
-                                        downloadState = DownloadState.Downloading(0, 0f, 0f)
-                                        downloadJob = scope.launch {
-                                            updateChecker.downloadUpdate(previousInfo.apkUrl).collect { progress ->
-                                                when (progress) {
-                                                    is DownloadProgress.Starting -> {
-                                                        downloadState = DownloadState.Downloading(0, 0f, 0f)
-                                                    }
-                                                    is DownloadProgress.Downloading -> {
-                                                        downloadState = DownloadState.Downloading(
-                                                            progress.progress,
-                                                            progress.downloadedMb,
-                                                            progress.totalMb
-                                                        )
-                                                    }
-                                                    is DownloadProgress.Completed -> {
-                                                        downloadedFile = progress.file
-                                                        downloadState = DownloadState.Completed
-                                                        downloadJob = null
-                                                    }
-                                                    is DownloadProgress.Error -> {
-                                                        downloadState = DownloadState.Error(progress.message)
-                                                        downloadJob = null
-                                                    }
+                                        downloadState = DownloadState.Preparing
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            val exists = updateChecker.checkApkExistsInDownloads(previousInfo.versionName)
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                if (exists) {
+                                                    downloadState = DownloadState.Idle
+                                                    showOverwriteAlert = true
+                                                } else {
+                                                    startDownload()
                                                 }
                                             }
                                         }
@@ -1178,57 +1193,7 @@ private fun RollbackDialog(
                                 }
                             }
                         }
-                        is DownloadState.Completed -> {
-                            Box(
-                                modifier = actionBtnModifier
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            colors = listOf(
-                                                MaterialTheme.colorScheme.error,
-                                                MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
-                                            )
-                                        )
-                                    )
-                                    .clickable {
-                                        if (downloadState !is DownloadState.Completed) return@clickable
-                                        downloadState = DownloadState.Preparing
-                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                            val exists = updateChecker.checkApkExistsInDownloads(previousInfo.versionName)
-                                            if (exists) {
-                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                    downloadState = DownloadState.Completed
-                                                    showOverwriteAlert = true
-                                                }
-                                            } else {
-                                                val prepared = downloadedFile?.let { file ->
-                                                    updateChecker.prepareDowngrade(file, previousInfo.versionName)
-                                                } ?: false
-                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                    downloadState = if (prepared) {
-                                                        DownloadState.ReadyToUninstall
-                                                    } else {
-                                                        DownloadState.Error(
-                                                            if (isRu) "Не удалось сохранить APK в Downloads" else "Failed to save APK to Downloads"
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(AppIcons.Install, null, modifier = Modifier.size(14.dp), tint = Color.White)
-                                    Spacer(modifier = Modifier.width(2.dp))
-                                    Text(
-                                        if (isRu) "Подготовить" else "Prepare",
-                                        color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1
-                                    )
-                                }
-                            }
-                        }
-                        is DownloadState.Preparing -> {
+                        is DownloadState.Completed, is DownloadState.Preparing -> {
                             Box(
                                 modifier = actionBtnModifier
                                     .background(MaterialTheme.colorScheme.surfaceVariant)

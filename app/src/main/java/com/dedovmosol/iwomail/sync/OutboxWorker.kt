@@ -208,15 +208,14 @@ class OutboxWorker(
             val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(applicationContext)
             for (accountId in successAccountIds) {
                 try {
-                    delay(3000) // Даём серверу время обработать
                     val sentFolder = database.folderDao().getFoldersByAccountList(accountId)
                         .find { it.type == 5 } // FolderType.SENT_ITEMS
-                    sentFolder?.let { folder ->
-                        mailRepo.syncEmails(accountId, folder.id)
+                    if (sentFolder != null) {
+                        delay(3000) // Даём серверу время обработать (только если есть папка Sent)
+                        mailRepo.syncEmails(accountId, sentFolder.id)
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    // Sync-ошибки не должны блокировать Worker
                 }
             }
         }

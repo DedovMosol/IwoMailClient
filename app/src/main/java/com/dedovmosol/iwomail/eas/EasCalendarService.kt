@@ -43,6 +43,12 @@ class EasCalendarService internal constructor(
     )
     
     companion object {
+        // TIME_ZONE_INFORMATION (172 bytes, all zeros) = UTC, base64-encoded for EAS <calendar:TimeZone>
+        private const val UTC_TIMEZONE_BLOB =
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
         // Предкомпилированные regex для hot paths (sync parsing)
         private val RESPONSES_PATTERN = "<Responses>(.*?)</Responses>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val ADD_PATTERN = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -131,14 +137,26 @@ class EasCalendarService internal constructor(
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         var createdViaEws = false
 
-        // При наличии вложений всегда используем EWS (EAS не поддерживает загрузку вложений в календарь).
-        // КРИТИЧНО: для majorVersion < 14 делаем fallback в EAS, если EWS недоступен,
-        // иначе получаем сценарий "sync приходит, но create не уходит".
+        // AllDayEvent: Exchange требует Start/End = midnight UTC.
+        // formatEwsDate/formatEasDate уже выводят в UTC — если timestamp = midnight UTC,
+        // результат будет "...T00:00:00Z". Нон-midnight UTC сервер сдвигает к ближайшей
+        // полуночи UTC, ломая длительность и дату.
+        // CalendarScreen передаёт local 00:00 / 23:59. Берём дату из local, ставим 00:00 UTC.
+        val actualStartTime: Long
+        val actualEndTime: Long
+        if (allDayEvent) {
+            actualStartTime = normalizeAllDayUtcMidnight(startTime, addDay = false)
+            actualEndTime = normalizeAllDayUtcMidnight(endTime, addDay = true)
+        } else {
+            actualStartTime = startTime
+            actualEndTime = endTime
+        }
+
         val result = if (attachments.isNotEmpty() || majorVersion < 14) {
             val ewsResult = createCalendarEventEws(
                 subject,
-                startTime,
-                endTime,
+                actualStartTime,
+                actualEndTime,
                 location,
                 body,
                 allDayEvent,
@@ -160,8 +178,8 @@ class EasCalendarService internal constructor(
                 )
                 createCalendarEventEas(
                     subject,
-                    startTime,
-                    endTime,
+                    actualStartTime,
+                    actualEndTime,
                     location,
                     body,
                     allDayEvent,
@@ -175,7 +193,7 @@ class EasCalendarService internal constructor(
                 ewsResult
             }
         } else {
-            createCalendarEventEas(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
+            createCalendarEventEas(subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
         }
         
         // Загружаем вложения после успешного создания
@@ -198,7 +216,7 @@ class EasCalendarService internal constructor(
                     // КРИТИЧНО: также вызывается когда CreateItem вернул Success но без ItemId
                     // (pending_sync_) — нужен FindItem для получения EWS ItemId для вложений.
                     android.util.Log.d("EasCalendarService", "createCalendarEvent: FindItem needed (rawId=${rawId.take(30)})")
-                    findItemIdWithRetry(subject, startTime, 2500, 3500, "create")
+                    findItemIdWithRetry(subject, actualStartTime, 2500, 3500, "create")
                 }
 
                 if (ewsItemIdResult is EasResult.Success) {
@@ -248,25 +266,29 @@ class EasCalendarService internal constructor(
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
 
-        // КРИТИЧНО: Определяем формат serverId.
-        // EAS ServerId = короткий, содержит ":" (напр. "5:23")
-        // EWS ItemId = длинный base64 (>50 символов, НЕ содержит ":")
-        // Если serverId — EWS ItemId, ВСЕГДА используем EWS UpdateItem,
-        // т.к. EAS Sync Change НЕ понимает EWS ItemId → Status=6!
+        val actualStartTime: Long
+        val actualEndTime: Long
+        if (allDayEvent) {
+            actualStartTime = normalizeAllDayUtcMidnight(startTime, addDay = false)
+            actualEndTime = normalizeAllDayUtcMidnight(endTime, addDay = true)
+        } else {
+            actualStartTime = startTime
+            actualEndTime = endTime
+        }
+
         val isEwsItemId = serverId.length > 50 && !serverId.contains(":")
         
         val result = if (majorVersion >= 14 && !isEwsItemId) {
-            // EAS путь: только для настоящих EAS ServerId
-            updateCalendarEventEas(serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
+            updateCalendarEventEas(serverId, subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
         } else {
             val ewsResult = updateCalendarEventEws(
                 serverId,
                 subject,
-                startTime,
-                endTime,
+                actualStartTime,
+                actualEndTime,
                 location,
                 body,
                 allDayEvent,
@@ -289,8 +311,8 @@ class EasCalendarService internal constructor(
                 updateCalendarEventEas(
                     serverId,
                     subject,
-                    startTime,
-                    endTime,
+                    actualStartTime,
+                    actualEndTime,
                     location,
                     body,
                     allDayEvent,
@@ -313,7 +335,7 @@ class EasCalendarService internal constructor(
             val ewsUrl = deps.getEwsUrl()
             // КРИТИЧНО: CreateAttachment требует EWS ItemId, не EAS ServerId ни в каком формате.
             // Всегда ищем через FindItem, даем Exchange 2007 SP1 время индексировать обновление.
-            val ewsItemIdResult = findItemIdWithRetry(subject, startTime, 2000, 3000, "update")
+            val ewsItemIdResult = findItemIdWithRetry(subject, actualStartTime, 2000, 3000, "update")
             if (ewsItemIdResult is EasResult.Success) {
                 val rawId = ewsItemIdResult.data
                 val cleanItemId = if (rawId.contains("|")) rawId.substringBefore("|") else rawId
@@ -941,6 +963,9 @@ $itemIdsXml
                 append("</airsyncbase:Body>")
             }
             
+            if (allDayEvent) {
+                append("<calendar:TimeZone>$UTC_TIMEZONE_BLOB</calendar:TimeZone>")
+            }
             append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
@@ -1058,6 +1083,10 @@ $itemIdsXml
                 append("</airsyncbase:Body>")
             }
             
+            // TimeZone в Change поддерживается только EAS 14+ (Exchange 2010+)
+            if (allDayEvent && majorVersion >= 14) {
+                append("<calendar:TimeZone>$UTC_TIMEZONE_BLOB</calendar:TimeZone>")
+            }
             append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
@@ -1545,10 +1574,14 @@ $itemIdsXml
                     if (escapedLocation.isNotBlank()) {
                         append("<Location>$escapedLocation</Location>")
                     }
-                    // Добавляем участников если есть
                     append(attendeesXml)
                     val ewsRecurrenceXml = buildEwsRecurrenceXml(recurrenceType, startTimeStr)
                     if (ewsRecurrenceXml.isNotBlank()) append(ewsRecurrenceXml)
+                    if (allDayEvent) {
+                        append("""<MeetingTimeZone TimeZoneName="UTC">""")
+                        append("<BaseOffset>PT0H</BaseOffset>")
+                        append("</MeetingTimeZone>")
+                    }
                     append("</t:CalendarItem>")
                     append("</Items>")
                     append("</CreateItem>")
@@ -1770,6 +1803,18 @@ $itemIdsXml
                         append("</t:SetItemField>")
                     }
                     
+                    // MeetingTimeZone = UTC для all-day событий (Exchange 2007 SP1)
+                    if (allDayEvent) {
+                        append("<t:SetItemField>")
+                        append("""<t:FieldURI FieldURI="calendar:MeetingTimeZone"/>""")
+                        append("<t:CalendarItem>")
+                        append("""<t:MeetingTimeZone TimeZoneName="UTC">""")
+                        append("<t:BaseOffset>PT0H</t:BaseOffset>")
+                        append("</t:MeetingTimeZone>")
+                        append("</t:CalendarItem>")
+                        append("</t:SetItemField>")
+                    }
+
                     // Recurrence
                     val ewsRecurrenceUpdateXml = buildEwsRecurrenceUpdateXml(recurrenceType, startTimeStr)
                     if (ewsRecurrenceUpdateXml.isNotBlank()) append(ewsRecurrenceUpdateXml)
@@ -2501,7 +2546,7 @@ $itemIdsXml
     private fun buildEasRecurrenceXml(recurrenceType: Int, startTime: Long): String {
         if (recurrenceType < 0) return ""
         
-        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        val cal = java.util.Calendar.getInstance()
         cal.timeInMillis = startTime
         
         return buildString {
@@ -2510,18 +2555,15 @@ $itemIdsXml
             append("<calendar:Interval>1</calendar:Interval>")
             
             when (recurrenceType) {
-                0 -> { /* Daily — только Type и Interval */ }
+                0 -> { /* Daily */ }
                 1 -> {
-                    // Weekly — день недели как bitmask (Sun=1,Mon=2,Tue=4,...)
                     val dayBitmask = 1 shl (cal.get(java.util.Calendar.DAY_OF_WEEK) - 1)
                     append("<calendar:DayOfWeek>$dayBitmask</calendar:DayOfWeek>")
                 }
                 2 -> {
-                    // Monthly absolute — день месяца
                     append("<calendar:DayOfMonth>${cal.get(java.util.Calendar.DAY_OF_MONTH)}</calendar:DayOfMonth>")
                 }
                 5 -> {
-                    // Yearly absolute — день месяца + месяц года
                     append("<calendar:DayOfMonth>${cal.get(java.util.Calendar.DAY_OF_MONTH)}</calendar:DayOfMonth>")
                     append("<calendar:MonthOfYear>${cal.get(java.util.Calendar.MONTH) + 1}</calendar:MonthOfYear>")
                 }
@@ -2538,8 +2580,8 @@ $itemIdsXml
     private fun buildEwsRecurrenceXml(recurrenceType: Int, startTimeStr: String): String {
         if (recurrenceType < 0) return ""
         
-        // Извлекаем дату начала для NoEndRecurrence
-        val startDate = startTimeStr.substringBefore("T")
+        val localCal = localCalFromIso(startTimeStr)
+        val startDate = localDateFromIso(startTimeStr)
         
         return buildString {
             append("<Recurrence>")
@@ -2551,7 +2593,6 @@ $itemIdsXml
                     append("</DailyRecurrence>")
                 }
                 1 -> {
-                    // Определяем день недели из startTimeStr
                     val ewsDayName = ewsDayNameFromIso(startTimeStr)
                     append("<WeeklyRecurrence>")
                     append("<Interval>1</Interval>")
@@ -2559,15 +2600,15 @@ $itemIdsXml
                     append("</WeeklyRecurrence>")
                 }
                 2 -> {
-                    val dayOfMonth = startTimeStr.substring(8, 10).toIntOrNull() ?: 1
+                    val dayOfMonth = localCal?.get(java.util.Calendar.DAY_OF_MONTH) ?: 1
                     append("<AbsoluteMonthlyRecurrence>")
                     append("<Interval>1</Interval>")
                     append("<DayOfMonth>$dayOfMonth</DayOfMonth>")
                     append("</AbsoluteMonthlyRecurrence>")
                 }
                 5 -> {
-                    val dayOfMonth = startTimeStr.substring(8, 10).toIntOrNull() ?: 1
-                    val monthNum = startTimeStr.substring(5, 7).toIntOrNull() ?: 1
+                    val dayOfMonth = localCal?.get(java.util.Calendar.DAY_OF_MONTH) ?: 1
+                    val monthNum = localCal?.let { it.get(java.util.Calendar.MONTH) + 1 } ?: 1
                     val monthName = ewsMonthName(monthNum)
                     append("<AbsoluteYearlyRecurrence>")
                     append("<DayOfMonth>$dayOfMonth</DayOfMonth>")
@@ -2590,7 +2631,8 @@ $itemIdsXml
     private fun buildEwsRecurrenceUpdateXml(recurrenceType: Int, startTimeStr: String): String {
         if (recurrenceType < 0) return ""
         
-        val startDate = startTimeStr.substringBefore("T")
+        val localCal = localCalFromIso(startTimeStr)
+        val startDate = localDateFromIso(startTimeStr)
         
         return buildString {
             append("<t:SetItemField>")
@@ -2612,15 +2654,15 @@ $itemIdsXml
                     append("</t:WeeklyRecurrence>")
                 }
                 2 -> {
-                    val dayOfMonth = startTimeStr.substring(8, 10).toIntOrNull() ?: 1
+                    val dayOfMonth = localCal?.get(java.util.Calendar.DAY_OF_MONTH) ?: 1
                     append("<t:AbsoluteMonthlyRecurrence>")
                     append("<t:Interval>1</t:Interval>")
                     append("<t:DayOfMonth>$dayOfMonth</t:DayOfMonth>")
                     append("</t:AbsoluteMonthlyRecurrence>")
                 }
                 5 -> {
-                    val dayOfMonth = startTimeStr.substring(8, 10).toIntOrNull() ?: 1
-                    val monthNum = startTimeStr.substring(5, 7).toIntOrNull() ?: 1
+                    val dayOfMonth = localCal?.get(java.util.Calendar.DAY_OF_MONTH) ?: 1
+                    val monthNum = localCal?.let { it.get(java.util.Calendar.MONTH) + 1 } ?: 1
                     val monthName = ewsMonthName(monthNum)
                     append("<t:AbsoluteYearlyRecurrence>")
                     append("<t:DayOfMonth>$dayOfMonth</t:DayOfMonth>")
@@ -2644,6 +2686,25 @@ $itemIdsXml
         df.timeZone = java.util.TimeZone.getTimeZone("UTC")
         return df.format(java.util.Date(timestamp))
     }
+
+    /**
+     * Берёт дату (год/месяц/день) из local-timestamp, возвращает midnight UTC этой даты.
+     * [addDay] = true → ещё +1 день (для End всех all-day событий).
+     */
+    private fun normalizeAllDayUtcMidnight(localTimestamp: Long, addDay: Boolean): Long {
+        val local = java.util.Calendar.getInstance()
+        local.timeInMillis = localTimestamp
+        val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        utc.clear()
+        utc.set(
+            local.get(java.util.Calendar.YEAR),
+            local.get(java.util.Calendar.MONTH),
+            local.get(java.util.Calendar.DAY_OF_MONTH),
+            0, 0, 0
+        )
+        if (addDay) utc.add(java.util.Calendar.DAY_OF_MONTH, 1)
+        return utc.timeInMillis
+    }
     
     /** Маппинг EAS busyStatus (Int) → EWS LegacyFreeBusyStatus (String) */
     private fun mapBusyStatusToEws(busyStatus: Int): String = when (busyStatus) {
@@ -2653,25 +2714,35 @@ $itemIdsXml
         else -> "Busy"
     }
     
-    /** Определяет EWS день недели из ISO даты (yyyy-MM-ddTHH:mm:ssZ) */
-    private fun ewsDayNameFromIso(isoDate: String): String {
+    private fun localCalFromIso(isoDate: String): java.util.Calendar? {
         return try {
-            val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-            dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
-            val date = dateFormat.parse(isoDate) ?: return "Monday"
-            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-            cal.time = date
-            when (cal.get(java.util.Calendar.DAY_OF_WEEK)) {
-                java.util.Calendar.SUNDAY -> "Sunday"
-                java.util.Calendar.MONDAY -> "Monday"
-                java.util.Calendar.TUESDAY -> "Tuesday"
-                java.util.Calendar.WEDNESDAY -> "Wednesday"
-                java.util.Calendar.THURSDAY -> "Thursday"
-                java.util.Calendar.FRIDAY -> "Friday"
-                java.util.Calendar.SATURDAY -> "Saturday"
-                else -> "Monday"
-            }
-        } catch (e: Exception) { "Monday" }
+            val df = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+            df.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            val date = df.parse(isoDate) ?: return null
+            java.util.Calendar.getInstance().apply { time = date }
+        } catch (e: Exception) { null }
+    }
+    
+    private fun localDateFromIso(isoDate: String): String {
+        val cal = localCalFromIso(isoDate) ?: return isoDate.substringBefore("T")
+        return String.format("%04d-%02d-%02d",
+            cal.get(java.util.Calendar.YEAR),
+            cal.get(java.util.Calendar.MONTH) + 1,
+            cal.get(java.util.Calendar.DAY_OF_MONTH))
+    }
+    
+    private fun ewsDayNameFromIso(isoDate: String): String {
+        val cal = localCalFromIso(isoDate) ?: return "Monday"
+        return when (cal.get(java.util.Calendar.DAY_OF_WEEK)) {
+            java.util.Calendar.SUNDAY -> "Sunday"
+            java.util.Calendar.MONDAY -> "Monday"
+            java.util.Calendar.TUESDAY -> "Tuesday"
+            java.util.Calendar.WEDNESDAY -> "Wednesday"
+            java.util.Calendar.THURSDAY -> "Thursday"
+            java.util.Calendar.FRIDAY -> "Friday"
+            java.util.Calendar.SATURDAY -> "Saturday"
+            else -> "Monday"
+        }
     }
     
     /** Номер месяца (1-12) → EWS имя месяца */

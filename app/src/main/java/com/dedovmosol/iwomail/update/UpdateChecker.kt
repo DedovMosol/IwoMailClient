@@ -475,9 +475,14 @@ class UpdateChecker(context: Context) {
     fun checkApkExistsInDownloads(versionName: String): Boolean {
         val apkFileName = "iwomail-rollback-v${versionName}.apk"
         return try {
+            // Прямая проверка файла — MediaStore query на Android 10+ ненадёжен:
+            // не видит файлы от предыдущей установки и pending-файлы.
+            @Suppress("DEPRECATION")
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val targetFile = File(File(downloadsDir, ROLLBACK_SUBFOLDER), apkFileName)
+            if (targetFile.exists() && targetFile.length() > 0) return true
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+: проверяем через MediaStore.
-                // ВАЖНО: MediaStore всегда хранит RELATIVE_PATH с trailing slash.
                 val relPath = "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER/"
                 val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
                 val selectionArgs = arrayOf(apkFileName, relPath)
@@ -489,10 +494,7 @@ class UpdateChecker(context: Context) {
                     null
                 )?.use { cursor -> cursor.count > 0 } ?: false
             } else {
-                // Android 9-: проверяем файл напрямую
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetFile = File(File(downloadsDir, ROLLBACK_SUBFOLDER), apkFileName)
-                targetFile.exists() && targetFile.length() > 0
+                false
             }
         } catch (e: Exception) {
             android.util.Log.w("UpdateChecker", "checkApkExistsInDownloads error: ${e.message}")
@@ -541,54 +543,51 @@ class UpdateChecker(context: Context) {
     }
 
     /**
-     * Открывает папку Downloads/iwomail rollback/ в файловом менеджере.
-     * КРИТИЧНО: FLAG_ACTIVITY_NEW_DOCUMENT гарантирует отдельный task —
-     * файловый менеджер НЕ закроется при удалении нашего приложения.
+     * Открывает папку Downloads/iwomail rollback/ в системном файловом менеджере.
+     *
+     * Стратегия (от точной к общей):
+     * 1. ACTION_VIEW с content:// URI подпапки → открывает Files прямо в ней
+     * 2. Fallback: ACTION_VIEW на корень Downloads
+     * 3. Fallback: ACTION_VIEW_DOWNLOADS
+     *
+     * FLAG_ACTIVITY_NEW_TASK без FLAG_ACTIVITY_NEW_DOCUMENT — файловый менеджер
+     * остаётся в фоне при возврате в приложение (не привязан к нашему task).
      */
     fun openDownloads(): Boolean {
+        val subfolderDocId = "primary:${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER"
+        val subfolderUri = android.provider.DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents", subfolderDocId
+        )
+        val folderIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(subfolderUri, "vnd.android.document/directory")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        }
         return try {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val rollbackDir = File(downloadsDir, ROLLBACK_SUBFOLDER)
-            if (!rollbackDir.exists()) rollbackDir.mkdirs()
-
-            val docId = "primary:${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER"
-            val encodedDocId = Uri.encode(docId, ":")
-
-            // 1. ACTION_VIEW с vnd.android.document/directory — стандартный MIME для директорий.
-            //    Файловые менеджеры (Files by Google, Samsung My Files, MIUI Files)
-            //    открывают СОДЕРЖИМОЕ папки, а не показывают её как один элемент.
-            val docUri = Uri.parse(
-                "content://com.android.externalstorage.documents/document/$encodedDocId"
-            )
-            val browseIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(docUri, "vnd.android.document/directory")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT
-            }
-            try {
-                context.startActivity(browseIntent)
-                return true
-            } catch (_: Exception) { }
-
-            // 2. Fallback: file:// URI для сторонних файловых менеджеров (Total Commander и др.)
-            val fileUri = Uri.fromFile(rollbackDir)
-            val fileIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(fileUri, "resource/folder")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT
-            }
-            try {
-                context.startActivity(fileIntent)
-                return true
-            } catch (_: Exception) { }
-
-            // 3. Fallback: системная папка Downloads
-            val downloadsIntent = Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT
-            }
-            context.startActivity(downloadsIntent)
+            context.startActivity(folderIntent)
             true
-        } catch (e: Exception) {
-            android.util.Log.w("UpdateChecker", "openDownloads failed: ${e.message}")
-            false
+        } catch (_: Exception) {
+            val downloadsDocId = "primary:${Environment.DIRECTORY_DOWNLOADS}"
+            val downloadsUri = android.provider.DocumentsContract.buildDocumentUri(
+                "com.android.externalstorage.documents", downloadsDocId
+            )
+            val fallbackIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(downloadsUri, "vnd.android.document/directory")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            }
+            try {
+                context.startActivity(fallbackIntent)
+                true
+            } catch (_: Exception) {
+                try {
+                    context.startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    })
+                    true
+                } catch (e: Exception) {
+                    android.util.Log.w("UpdateChecker", "openDownloads all attempts failed: ${e.message}")
+                    false
+                }
+            }
         }
     }
     
@@ -644,8 +643,17 @@ class UpdateChecker(context: Context) {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // Android 10+ — используем MediaStore, подпапка iwomail rollback
             val resolver = context.contentResolver
-            // КРИТИЧНО: удаляем старую запись в MediaStore перед insert,
-            // иначе MediaStore создаст дубль с именем "iwomail-rollback-vX(1).apk"
+
+            // Удаляем старый файл напрямую (для файлов от предыдущей установки,
+            // невидимых через MediaStore)
+            @Suppress("DEPRECATION")
+            val directFile = File(
+                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), ROLLBACK_SUBFOLDER),
+                apkFileName
+            )
+            try { if (directFile.exists()) directFile.delete() } catch (_: Exception) {}
+
+            // Удаляем запись в MediaStore (для файлов текущей установки)
             val relPath = "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER/"
             val existingSelection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
             resolver.query(

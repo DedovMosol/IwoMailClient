@@ -1546,7 +1546,27 @@ fun ComposeScreen(
                 if (scheduledTime != null) {
                     val delay = scheduledTime - System.currentTimeMillis()
                     if (delay > 0) {
-                        scheduleEmail(context, account.id, expandGroupTokens(to, groupMappings), expandGroupTokens(cc, groupMappings), expandGroupTokens(bcc, groupMappings), subject, body, delay, requestReadReceipt, requestDeliveryReceipt, if (highPriority) 2 else 1)
+                        val scheduledAttachments = withContext(Dispatchers.IO) {
+                            attachments.mapNotNull { att ->
+                                try {
+                                    context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
+                                        ?.let { Triple(att.name, att.mimeType, it) }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    null
+                                }
+                            }
+                        }
+                        scheduleEmail(
+                            context, account.id,
+                            expandGroupTokens(to, groupMappings),
+                            expandGroupTokens(cc, groupMappings),
+                            expandGroupTokens(bcc, groupMappings),
+                            subject, body, delay,
+                            requestReadReceipt, requestDeliveryReceipt,
+                            if (highPriority) 2 else 1,
+                            scheduledAttachments
+                        )
                         Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
                         onSent()
                         return@launch

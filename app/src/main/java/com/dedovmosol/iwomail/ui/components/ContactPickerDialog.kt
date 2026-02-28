@@ -296,10 +296,17 @@ fun ContactPickerDialog(
                         }
                     } else {
                         val groupListState = rememberLazyListState()
+                        val groupKeys = remember(filteredGroups) { filteredGroups.map { it.id } }
+                        val dragSelectGroupModifier = rememberDragSelectModifier(
+                            listState = groupListState,
+                            itemKeys = groupKeys,
+                            selectedIds = selectedGroupIds,
+                            onSelectionChange = { newIds -> selectedGroupIds = newIds }
+                        )
                         Box(modifier = Modifier.fillMaxSize()) {
                             LazyColumn(
                                 state = groupListState,
-                                modifier = Modifier.fillMaxSize(),
+                                modifier = dragSelectGroupModifier.fillMaxSize(),
                                 contentPadding = PaddingValues(vertical = 8.dp)
                             ) {
                                 items(filteredGroups, key = { it.id }) { group ->

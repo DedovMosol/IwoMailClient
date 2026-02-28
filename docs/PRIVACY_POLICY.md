@@ -1,6 +1,6 @@
 # Privacy Policy / Политика конфиденциальности
 
-**Last updated / Последнее обновление:** February 15, 2026
+**Last updated / Последнее обновление:** February 27, 2026
 
 ---
 

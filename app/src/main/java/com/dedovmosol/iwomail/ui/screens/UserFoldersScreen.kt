@@ -82,12 +82,10 @@ fun UserFoldersScreen(
     var folderToRenameId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToRename = folderToRenameId?.let { id -> userFolders.find { it.id == id } }
     var renameNewName by rememberSaveable { mutableStateOf("") }
-    var isRenamingFolder by remember { mutableStateOf(false) }
     
     // Диалог удаления — ID сохраняется при повороте
     var folderToDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToDelete = folderToDeleteId?.let { id -> userFolders.find { it.id == id } }
-    var isDeletingFolder by remember { mutableStateOf(false) }
     
     // Кэш строк для use в корутинах (вне @Composable)
     val foldersSyncedText = Strings.foldersSynced
@@ -385,13 +383,15 @@ fun UserFoldersScreen(
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         val accId = accountId
-                        if (accId > 0 && !isRenamingFolder) {
-                            isRenamingFolder = true
+                        val folderId = folder.id
+                        val newName = renameNewName
+                        folderToRenameId = null
+                        renameNewName = ""
+                        if (accId > 0) {
                             scope.launch {
                                 val result = withContext(Dispatchers.IO) {
-                                    mailRepo.renameFolder(accId, folder.id, renameNewName)
+                                    mailRepo.renameFolder(accId, folderId, newName)
                                 }
-                                isRenamingFolder = false
                                 when (result) {
                                     is EasResult.Success -> {
                                         Toast.makeText(context, folderRenamedText, Toast.LENGTH_SHORT).show()
@@ -402,13 +402,10 @@ fun UserFoldersScreen(
                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                     }
                                 }
-                                folderToRenameId = null
-                                renameNewName = ""
                             }
                         }
                     },
-                    enabled = renameNewName.isNotBlank() && !isRenamingFolder,
-                    isLoading = isRenamingFolder,
+                    enabled = renameNewName.isNotBlank(),
                     text = Strings.save
                 )
             },
@@ -435,14 +432,14 @@ fun UserFoldersScreen(
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         val accId = accountId
-                        if (accId > 0 && !isDeletingFolder) {
-                            isDeletingFolder = true
+                        val folderId = folder.id
+                        folderToDeleteId = null
+                        if (accId > 0) {
                             scope.launch {
                                 com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                                 val result = withContext(Dispatchers.IO) {
-                                    mailRepo.deleteFolder(accId, folder.id)
+                                    mailRepo.deleteFolder(accId, folderId)
                                 }
-                                isDeletingFolder = false
                                 when (result) {
                                     is EasResult.Success -> {
                                         Toast.makeText(context, folderDeletedText, Toast.LENGTH_SHORT).show()
@@ -453,18 +450,11 @@ fun UserFoldersScreen(
                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                     }
                                 }
-                                folderToDeleteId = null
                             }
                         }
                     },
-                    text = if (isDeletingFolder) "" else Strings.yes,
-                    enabled = !isDeletingFolder,
-                    modifier = if (isDeletingFolder) Modifier.width(100.dp) else Modifier
+                    text = Strings.yes
                 )
-                if (isDeletingFolder) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                }
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(

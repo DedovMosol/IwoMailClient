@@ -772,6 +772,7 @@ fun EmailListScreen(
                     onDeletePermanently = { 
                         showDeletePermanentlyDialog = true
                     },
+                    isSentFolder = isSentFolder,
                     isSpamFolder = isSpamFolder,
                     isTrashFolder = isTrashFolder,
                     isDraftsFolder = isDraftsFolder,
@@ -1011,6 +1012,7 @@ private fun SelectionTopBar(
     onSpam: () -> Unit,
     onDeletePermanently: () -> Unit,
     isFavorites: Boolean = false,
+    isSentFolder: Boolean = false,
     isSpamFolder: Boolean,
     isTrashFolder: Boolean,
     isDraftsFolder: Boolean = false,
@@ -1042,9 +1044,7 @@ private fun SelectionTopBar(
                     Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
                 }
                 DropdownMenu(expanded = showMoreMenu, onDismissRequest = { onToggleMoreMenu(false) }) {
-                    // Пометить и Непрочитанное только если НЕ в корзине, НЕ в спаме и НЕ в черновиках
                     if (!isTrashFolder && !isSpamFolder && !isDraftsFolder) {
-                        // В Избранных кнопка "Пометить" не нужна — письма и так помечены
                         if (!isFavorites) {
                             DropdownMenuItem(
                                 text = { Text(Strings.star) },
@@ -1052,16 +1052,18 @@ private fun SelectionTopBar(
                                 leadingIcon = { Icon(AppIcons.Star, null) }
                             )
                         }
-                        DropdownMenuItem(
-                            text = { Text(Strings.read) },
-                            onClick = { onToggleMoreMenu(false); onMarkRead() },
-                            leadingIcon = { Icon(AppIcons.MarkEmailRead, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(Strings.unreadAction) },
-                            onClick = { onToggleMoreMenu(false); onMarkUnread() },
-                            leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
-                        )
+                        if (!isSentFolder) {
+                            DropdownMenuItem(
+                                text = { Text(Strings.read) },
+                                onClick = { onToggleMoreMenu(false); onMarkRead() },
+                                leadingIcon = { Icon(AppIcons.MarkEmailRead, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(Strings.unreadAction) },
+                                onClick = { onToggleMoreMenu(false); onMarkUnread() },
+                                leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
+                            )
+                        }
                     }
                     // В спаме - "Удалить окончательно", в корзине и обычных папках - "В спам"
                     if (isSpamFolder) {

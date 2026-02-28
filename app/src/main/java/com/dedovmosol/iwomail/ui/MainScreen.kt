@@ -49,7 +49,9 @@ import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.eas.FolderType
+import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.network.NetworkMonitor
+import com.dedovmosol.iwomail.sync.syncFolderWithRetry
 import com.dedovmosol.iwomail.ui.components.NetworkBanner
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import com.dedovmosol.iwomail.ui.utils.rememberWobble
@@ -229,11 +231,14 @@ object InitialSyncController {
         settingsRepo: SettingsRepository
     ) {
         val syncResult = withTimeoutOrNull(900_000L) {  // 15 минут — для больших почтовых ящиков (3000+ писем)
-                    withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
+                    val folderSyncResult = withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
+                    if (folderSyncResult is EasResult.Error) {
+                        delay(3_000)
+                        withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
+                    }
                     
                     delay(200)
                     
-                    // Синхронизируем все почтовые папки
                     val emailFolderTypes = listOf(
                         1, FolderType.INBOX, FolderType.DRAFTS, FolderType.DELETED_ITEMS,
                         FolderType.SENT_ITEMS, FolderType.OUTBOX, FolderType.JUNK_EMAIL,
@@ -245,25 +250,52 @@ object InitialSyncController {
                     }
                     val foldersToSync = currentFolders.filter { it.type in emailFolderTypes }
                     
-                    // Ограничиваем параллельность до 2 папок одновременно,
-                    // чтобы не перегружать Exchange сервер запросами
-                    val syncSemaphore = kotlinx.coroutines.sync.Semaphore(2)
+                    val syncSemaphore = kotlinx.coroutines.sync.Semaphore(3)
+                    val failedFolderIds = java.util.concurrent.ConcurrentLinkedQueue<String>()
+                    
                     withContext(Dispatchers.IO) {
                         supervisorScope {
                             foldersToSync.map { folder ->
                                 launch {
                                     syncSemaphore.acquire()
                                     try {
-                                        // Per-folder таймаут: 600 сек (10 мин).
-                                        // Без него одна папка с 3500+ письмами заблокирует
-                                        // семафор и не даст другим папкам синхронизироваться.
-                                        withTimeoutOrNull(600_000L) {
-                                            mailRepo.syncEmails(accountId, folder.id)
-                                        }
+                                        val ok = syncFolderWithRetry(
+                                            mailRepo, accountId, folder.id,
+                                            incrementalTimeoutMs = 120_000L,
+                                            fullResyncTimeoutMs = 480_000L,
+                                            tag = "InitialSync"
+                                        )
+                                        if (!ok) failedFolderIds.add(folder.id)
                                     } catch (e: Exception) {
                                         if (e is kotlinx.coroutines.CancellationException) throw e
+                                        failedFolderIds.add(folder.id)
                                     } finally {
                                         syncSemaphore.release()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (failedFolderIds.isNotEmpty()) {
+                        delay(5_000)
+                        withContext(Dispatchers.IO) {
+                            supervisorScope {
+                                failedFolderIds.map { folderId ->
+                                    launch {
+                                        syncSemaphore.acquire()
+                                        try {
+                                            syncFolderWithRetry(
+                                                mailRepo, accountId, folderId,
+                                                incrementalTimeoutMs = 120_000L,
+                                                fullResyncTimeoutMs = 480_000L,
+                                                tag = "InitialSync-Retry"
+                                            )
+                                        } catch (e: Exception) {
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
+                                        } finally {
+                                            syncSemaphore.release()
+                                        }
                                     }
                                 }
                             }
@@ -604,13 +636,12 @@ fun MainScreen(
     // Диалог удаления папки — ID сохраняется при повороте
     var folderToDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToDelete = folderToDeleteId?.let { id -> folders.find { it.id == id } }
-    var isDeletingFolder by remember { mutableStateOf(false) }
+    
     
     // Диалог переименования папки — ID сохраняется при повороте
     var folderToRenameId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToRename = folderToRenameId?.let { id -> folders.find { it.id == id } }
     var renameNewName by rememberSaveable { mutableStateOf("") }
-    var isRenamingFolder by remember { mutableStateOf(false) }
     
     // Папка для контекстного меню (долгое нажатие)
     var folderForMenu by remember { mutableStateOf<FolderEntity?>(null) }
@@ -968,14 +999,14 @@ fun MainScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
+                        val folderId = folder.id
+                        folderToDeleteId = null
                         activeAccount?.let { account ->
                             scope.launch {
-                                isDeletingFolder = true
                                 com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                                 val result = withContext(Dispatchers.IO) {
-                                    mailRepo.deleteFolder(account.id, folder.id)
+                                    mailRepo.deleteFolder(account.id, folderId)
                                 }
-                                isDeletingFolder = false
                                 when (result) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         android.widget.Toast.makeText(
@@ -983,7 +1014,6 @@ fun MainScreen(
                                             folderDeletedMsg, 
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
-                                        // Синхронизируем папки после удаления
                                         withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
@@ -995,12 +1025,10 @@ fun MainScreen(
                                         ).show()
                                     }
                                 }
-                                folderToDeleteId = null
                             }
                         }
                     },
-                    text = Strings.yes,
-                    enabled = !isDeletingFolder
+                    text = Strings.yes
                 )
             },
             dismissButton = {
@@ -1086,13 +1114,15 @@ fun MainScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
+                        val folderId = folder.id
+                        val newName = renameNewName
+                        folderToRenameId = null
+                        renameNewName = ""
                         activeAccount?.let { account ->
                             scope.launch {
-                                isRenamingFolder = true
                                 val result = withContext(Dispatchers.IO) {
-                                    mailRepo.renameFolder(account.id, folder.id, renameNewName)
+                                    mailRepo.renameFolder(account.id, folderId, newName)
                                 }
-                                isRenamingFolder = false
                                 when (result) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         android.widget.Toast.makeText(
@@ -1100,7 +1130,6 @@ fun MainScreen(
                                             folderRenamedMsg, 
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
-                                        // Синхронизируем папки после переименования
                                         withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
@@ -1112,13 +1141,10 @@ fun MainScreen(
                                         ).show()
                                     }
                                 }
-                                folderToRenameId = null
-                                renameNewName = ""
                             }
                         }
                     },
-                    enabled = renameNewName.isNotBlank() && renameNewName != folder.displayName && !isRenamingFolder,
-                    isLoading = isRenamingFolder,
+                    enabled = renameNewName.isNotBlank() && renameNewName != folder.displayName,
                     text = Strings.rename
                 )
             },

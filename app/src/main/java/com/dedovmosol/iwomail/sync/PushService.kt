@@ -254,7 +254,7 @@ class PushService : Service() {
                 try {
                     getSharedPreferences("push_service", Context.MODE_PRIVATE)
                         .edit().putLong("last_update", System.currentTimeMillis()).apply()
-                    delay(120_000) // Обновляем каждые 2 минуты (достаточно для watchdog)
+                    delay(300_000) // Обновляем каждые 5 минут (watchdog проверяет с порогом 15 мин)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -575,6 +575,11 @@ class PushService : Service() {
             
             var quickPingCount = 0
             
+            // Кэш аккаунта: обновляем из БД раз в 5 минут (а не каждую итерацию)
+            var cachedAccount: AccountEntity? = account
+            var lastAccountRefreshTime = System.currentTimeMillis()
+            val accountCacheTtl = 300_000L // 5 минут
+            
             while (isActive) {
                 try {
                     // Если сети нет — выходим из цикла
@@ -583,10 +588,14 @@ class PushService : Service() {
                         break
                     }
                     
-                    // Перечитываем настройки аккаунта из БД (могли измениться в UI)
-                    val currentAccount = database.accountDao().getAccount(accountId)
+                    // Обновляем кэш аккаунта по TTL (настройки могли измениться в UI)
+                    val now = System.currentTimeMillis()
+                    if (cachedAccount == null || now - lastAccountRefreshTime > accountCacheTtl) {
+                        cachedAccount = database.accountDao().getAccount(accountId)
+                        lastAccountRefreshTime = now
+                    }
+                    val currentAccount = cachedAccount
                     if (currentAccount == null) {
-                        // Аккаунт удалён — выходим из цикла
                         break
                     }
                     
@@ -629,10 +638,10 @@ class PushService : Service() {
                     
                     if (elapsed >= 10_000) quickPingCount = 0
                     
-                    // Минимальная пауза 2 секунды между ping'ами для экономии батареи
+                    // Минимальная пауза 5 секунд между ping'ами для экономии батареи
                     // (если ping завершился быстро, например при потоке новых писем)
-                    if (elapsed < 2_000) {
-                        delay(2_000 - elapsed)
+                    if (elapsed < 5_000) {
+                        delay(5_000 - elapsed)
                     }
                     
                     when (result) {
@@ -648,6 +657,9 @@ class PushService : Service() {
                         }
                         STATUS_CHANGES_FOUND -> {
                             syncAccount(currentAccount)
+                            // После sync принудительно обновляем кэш аккаунта
+                            cachedAccount = database.accountDao().getAccount(accountId)
+                            lastAccountRefreshTime = System.currentTimeMillis()
                             consecutiveErrors = 0
                             consecutiveSuccesses++
                             // Тоже увеличиваем — это успешный Ping
@@ -679,7 +691,6 @@ class PushService : Service() {
                         else -> {
                             consecutiveErrors++
                             consecutiveSuccesses = 0
-                            // При ошибке уменьшаем heartbeat
                             if (heartbeat > MIN_HEARTBEAT) {
                                 heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
                                 saveHeartbeat(accountId, heartbeat)
@@ -689,18 +700,18 @@ class PushService : Service() {
                                 savePingNotSupported(accountId)
                                 consecutiveErrors = 0
                             } else {
-                                delay(60 * 1000L)
+                                // Backoff: 10с → 30с (быстрое восстановление при transient-ошибках)
+                                val backoffMs = if (consecutiveErrors == 1) 10_000L else 30_000L
+                                delay(backoffMs)
                             }
                         }
                     }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    // Ловим ВСЕ исключения включая OutOfMemoryError, StackOverflowError
                     android.util.Log.e("PushService", "ERROR in ping loop for account $accountId", e)
                     consecutiveErrors++
                     consecutiveSuccesses = 0
-                    // При исключении тоже уменьшаем heartbeat
                     if (heartbeat > MIN_HEARTBEAT) {
                         heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
                         saveHeartbeat(accountId, heartbeat)
@@ -710,7 +721,8 @@ class PushService : Service() {
                         savePingNotSupported(accountId)
                         consecutiveErrors = 0
                     } else {
-                        delay(60 * 1000L)
+                        val backoffMs = if (consecutiveErrors == 1) 10_000L else 30_000L
+                        delay(backoffMs)
                     }
                 }
             }

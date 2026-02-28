@@ -734,22 +734,23 @@ fun EmailDetailScreen(
                                     leadingIcon = { Icon(AppIcons.DriveFileMove, null) }
                                 )
                             }
-                            // Отметить непрочитанным
-                            DropdownMenuItem(
-                                text = { Text(Strings.markUnread) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    scope.launch {
-                                        when (val result = mailRepo.markAsRead(emailId, false)) {
-                                            is EasResult.Success -> { /* OK */ }
-                                            is EasResult.Error -> {
-                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            if (!isInSent) {
+                                DropdownMenuItem(
+                                    text = { Text(Strings.markUnread) },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        scope.launch {
+                                            when (val result = mailRepo.markAsRead(emailId, false)) {
+                                                is EasResult.Success -> { /* OK */ }
+                                                is EasResult.Error -> {
+                                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
-                                    }
-                                },
-                                leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
-                            )
+                                    },
+                                    leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
+                                )
+                            }
                             // Удалить
                             DropdownMenuItem(
                                 text = { Text(Strings.delete) },
