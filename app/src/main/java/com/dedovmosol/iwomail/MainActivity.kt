@@ -455,10 +455,14 @@ class MainActivity : ComponentActivity() {
         }
         
         val emailId = intent.getStringExtra(EXTRA_OPEN_EMAIL_ID)
+            ?: intent.data?.let { uri ->
+                if (uri.scheme == "iwomail" && uri.host == "email") uri.lastPathSegment else null
+            }
         if (emailId != null) {
             openEmailId.value = emailId
             openEmailIntentId.value++
             intent.removeExtra(EXTRA_OPEN_EMAIL_ID)
+            intent.data = null
             return
         }
         
@@ -474,35 +478,28 @@ class MainActivity : ComponentActivity() {
             return
         }
         
-        // Widget actions (Glance передаёт параметры как Boolean extras)
-        if (intent.getBooleanExtra("compose", false)) {
-            shortcutCompose.value = true
-            intent.removeExtra("compose")
-            return
-        }
-        if (intent.getBooleanExtra("inbox", false)) {
-            shortcutInbox.value = true
-            intent.removeExtra("inbox")
-            return
-        }
-        if (intent.getBooleanExtra("search", false)) {
-            shortcutSearch.value = true
-            intent.removeExtra("search")
-            return
-        }
-        if (intent.getBooleanExtra("calendar", false)) {
-            shortcutCalendar.value = true
-            intent.removeExtra("calendar")
-            return
-        }
-        if (intent.getBooleanExtra("tasks", false)) {
-            shortcutTasks.value = true
-            intent.removeExtra("tasks")
-            return
-        }
-        if (intent.getBooleanExtra("notes", false)) {
-            shortcutNotes.value = true
-            intent.removeExtra("notes")
+        // Widget actions: extras + data URI fallback (iwomail://widget/{action})
+        val widgetAction = intent.getBooleanExtra("compose", false).let { if (it) "compose" else null }
+            ?: intent.getBooleanExtra("inbox", false).let { if (it) "inbox" else null }
+            ?: intent.getBooleanExtra("search", false).let { if (it) "search" else null }
+            ?: intent.getBooleanExtra("calendar", false).let { if (it) "calendar" else null }
+            ?: intent.getBooleanExtra("tasks", false).let { if (it) "tasks" else null }
+            ?: intent.getBooleanExtra("notes", false).let { if (it) "notes" else null }
+            ?: intent.data?.let { uri ->
+                if (uri.scheme == "iwomail" && uri.host == "widget") uri.lastPathSegment else null
+            }
+        
+        if (widgetAction != null) {
+            when (widgetAction) {
+                "compose" -> shortcutCompose.value = true
+                "inbox" -> shortcutInbox.value = true
+                "search" -> shortcutSearch.value = true
+                "calendar" -> shortcutCalendar.value = true
+                "tasks" -> shortcutTasks.value = true
+                "notes" -> shortcutNotes.value = true
+            }
+            intent.removeExtra(widgetAction)
+            intent.data = null
             return
         }
         

@@ -563,9 +563,11 @@ class EmailOperationsService(
                 }
             }
             
-            // Очищаем ghost-записи (письма, которых нет на сервере)
+            // Очищаем ghost-записи локально.
+            // НЕ вызываем registerDeletedEmail — status=1 означает лишь устаревший serverId,
+            // само письмо может существовать на сервере с другим serverId.
+            // Следующий sync вернёт актуальную версию.
             for (ghostId in ghostEmailIds) {
-                EmailSyncService.registerDeletedEmail(ghostId, context)
                 attachmentDao.deleteByEmail(ghostId)
                 emailDao.delete(ghostId)
             }

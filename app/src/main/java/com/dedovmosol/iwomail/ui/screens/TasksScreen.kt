@@ -1205,10 +1205,11 @@ private fun TaskCard(
                     )
                 }
                 
-                if (task.body.isNotBlank()) {
+                val previewBody = remember(task.body) { com.dedovmosol.iwomail.util.stripHtmlIfNeeded(task.body) }
+                if (previewBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = task.body.take(100),
+                        text = previewBody.take(100),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -1216,6 +1217,27 @@ private fun TaskCard(
                     )
                 }
                 
+                val assignee = task.assignTo.ifBlank { task.owner }
+                if (assignee.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            AppIcons.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = assignee,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
                 if (task.dueDate > 0) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1341,9 +1363,9 @@ private fun TaskDetailDialog(
                     )
                 }
                 
-                // Описание
-                             val cleanBody = remember(task.body) {
-                    val normalized = task.body
+                val cleanBody = remember(task.body) {
+                    val stripped = com.dedovmosol.iwomail.util.stripHtmlIfNeeded(task.body)
+                    val normalized = stripped
                         .replace(TASK_BR_REGEX, "\n")
                         .replace(TASK_P_CLOSE_OPEN_REGEX, "\n")
                         .replace(TASK_P_TAG_REGEX, "\n")
@@ -1502,13 +1524,13 @@ private fun DeletedTaskDetailDialog(
                     )
                 }
                 
-                // Описание задачи
-                if (task.body.isNotBlank()) {
+                val trashBody = remember(task.body) { com.dedovmosol.iwomail.util.stripHtmlIfNeeded(task.body) }
+                if (trashBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     HorizontalDivider()
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = task.body,
+                        text = trashBody,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 10,
@@ -1574,13 +1596,13 @@ private fun CreateTaskDialog(
     onSave: (subject: String, body: String, startDate: Long, dueDate: Long, importance: Int, reminderSet: Boolean, reminderTime: Long, assignTo: String?) -> Unit
 ) {
     var subject by rememberSaveable { mutableStateOf(task?.subject ?: "") }
-    var body by rememberSaveable { mutableStateOf(task?.body ?: "") }
+    var body by rememberSaveable { mutableStateOf(task?.body?.let { com.dedovmosol.iwomail.util.stripHtmlIfNeeded(it) } ?: "") }
     var startDate by rememberSaveable { mutableStateOf(task?.startDate ?: 0L) }
     var dueDate by rememberSaveable { mutableStateOf(task?.dueDate ?: 0L) }
     var importance by rememberSaveable { mutableStateOf(task?.importance ?: TaskImportance.NORMAL.value) }
     var reminderSet by rememberSaveable { mutableStateOf(task?.reminderSet ?: false) }
     var reminderTime by rememberSaveable { mutableStateOf(task?.reminderTime ?: 0L) }
-    var assignTo by rememberSaveable { mutableStateOf("") }
+    var assignTo by rememberSaveable { mutableStateOf(task?.assignTo ?: "") }
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
     
     // Текстовые поля для дат и времени

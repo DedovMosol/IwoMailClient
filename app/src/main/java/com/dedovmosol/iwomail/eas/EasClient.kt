@@ -1765,6 +1765,12 @@ $foldersXml
         val flagXml = "<Flag>(.*?)</Flag>".toRegex(RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.get(1)
         val flagged = flagXml?.let { extractValue(it, "FlagStatus") == "2" } ?: false
         
+        // MS-ASEMAIL 2.2.2.58: Read — optional. "1" = read, "0" = unread.
+        // Exchange 2007 SP1 may omit <Read> for some emails (old system entries).
+        // Default to true (read) when absent: server sends <Read>0</Read> explicitly for unread.
+        val readValue = extractValue(xml, "Read")
+        val isRead = if (readValue != null) readValue == "1" else true
+
         // КРИТИЧНО: Расэкранируем текстовые поля.
         // WBXML-парсер кодирует спецсимволы: & → &amp;, ' → &apos; и т.д.
         // Без этого имена типа "AT&T" отображаются как "AT&amp;T",
@@ -1776,7 +1782,7 @@ $foldersXml
             cc = unescapeXml(extractValue(xml, "Cc") ?: ""),
             subject = unescapeXml(extractValue(xml, "Subject") ?: "(No subject)"),
             dateReceived = extractValue(xml, "DateReceived") ?: "",
-            read = extractValue(xml, "Read") == "1",
+            read = isRead,
             importance = extractValue(xml, "Importance")?.toIntOrNull() ?: 1,
             body = body,
             bodyType = bodyType,
@@ -1957,6 +1963,12 @@ $SOAP_ENVELOPE_END"""
         requests: List<Triple<String, Boolean, Boolean>>
     ): EasResult<Int> =
         calendarService.deleteCalendarEventsBatch(requests)
+
+    suspend fun deleteSingleOccurrence(
+        searchSubject: String,
+        occurrenceStartTime: Long
+    ): EasResult<Boolean> =
+        calendarService.deleteSingleOccurrenceEws(searchSubject, occurrenceStartTime)
     
     /**
      * Обновление события календаря на сервере Exchange
@@ -1976,11 +1988,35 @@ $SOAP_ENVELOPE_END"""
         attendees: List<String> = emptyList(),
         oldSubject: String? = null,
         recurrenceType: Int = -1,
-        attachments: List<DraftAttachmentData> = emptyList()
+        attachments: List<DraftAttachmentData> = emptyList(),
+        newAttendeesToAppend: List<String> = emptyList()
     ): EasResult<String> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, oldSubject, recurrenceType, attachments
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, oldSubject, recurrenceType, attachments, newAttendeesToAppend
     )
     
+    /**
+     * Обновление одного вхождения повторяющегося события (MS-ASCAL Exception).
+     */
+    suspend fun updateSingleOccurrence(
+        serverId: String,
+        existingExceptionsJson: String,
+        occurrenceOriginalStartTime: Long,
+        masterSubject: String,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        allDayEvent: Boolean,
+        reminder: Int,
+        busyStatus: Int,
+        sensitivity: Int
+    ): EasResult<Boolean> = calendarService.updateSingleOccurrence(
+        serverId, existingExceptionsJson, occurrenceOriginalStartTime,
+        masterSubject, subject, startTime, endTime, location, body,
+        allDayEvent, reminder, busyStatus, sensitivity
+    )
+
     /**
      * Удаление вложений события календаря через EWS DeleteAttachment
      */
@@ -2231,7 +2267,7 @@ $SOAP_ENVELOPE_END"""
      * Синхронизация календаря из папки Calendar на сервере Exchange
      * Делегирует в CalendarService
      */
-    suspend fun syncCalendar(): EasResult<List<EasCalendarEvent>> = calendarService.syncCalendar()
+    suspend fun syncCalendar(): EasResult<EasCalendarService.CalendarSyncResult> = calendarService.syncCalendar()
     
     private fun parseCalendarDate(dateStr: String?): Long {
         if (dateStr.isNullOrBlank()) return 0L
@@ -3238,7 +3274,8 @@ data class EasTask(
     val reminderTime: Long = 0,
     val categories: List<String> = emptyList(),
     val lastModified: Long = System.currentTimeMillis(),
-    val isDeleted: Boolean = false // Флаг удалённой задачи (из Deleted Items)
+    val isDeleted: Boolean = false,
+    val owner: String = ""
 )
 
 /**

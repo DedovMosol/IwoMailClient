@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.ContactEntity
@@ -171,7 +172,11 @@ fun ContactsScreen(
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
     var showMoreMenu by rememberSaveable { mutableStateOf(false) }
     var showExportDialog by rememberSaveable { mutableStateOf(false) }
-    var bulkDuplicateAlertCount by rememberSaveable { mutableStateOf(0) }
+    var bulkDuplicateTotalCount by remember { mutableStateOf(0) }
+    var bulkNewCount by remember { mutableStateOf(0) }
+    var showBulkDuplicateChoiceDialog by remember { mutableStateOf(false) }
+    var pendingBulkContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
+    var pendingBulkDuplicatePairs by remember { mutableStateOf<List<Pair<ContactEntity, ContactEntity>>>(emptyList()) }
     var addToContactsConfirmId by rememberSaveable { mutableStateOf<String?>(null) }
     val addToContactsConfirmContact = addToContactsConfirmId?.let { id -> exchangeContacts.find { it.id == id } }
     var duplicateCheckContactId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -318,28 +323,106 @@ fun ContactsScreen(
         )
     }
 
-    if (bulkDuplicateAlertCount > 0) {
+    if (showBulkDuplicateChoiceDialog && bulkDuplicateTotalCount > 0) {
+        val dupCount = bulkDuplicateTotalCount
+        val newCount = bulkNewCount
+        val dupPairs = pendingBulkDuplicatePairs
+        val newContacts = pendingBulkContacts
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { bulkDuplicateAlertCount = 0 },
+            onDismissRequest = {
+                showBulkDuplicateChoiceDialog = false
+                pendingBulkContacts = emptyList()
+                pendingBulkDuplicatePairs = emptyList()
+            },
             icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
             title = {
                 Text(if (isRussian) "Найдены дубликаты" else "Duplicates found")
             },
             text = {
-                Text(
-                    if (isRussian)
-                        "Пропущено дубликатов: $bulkDuplicateAlertCount"
-                    else
-                        "Duplicates skipped: $bulkDuplicateAlertCount"
-                )
+                Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        if (isRussian)
+                            "Из выбранных контактов $dupCount уже существуют в личных контактах."
+                        else
+                            "$dupCount of selected contacts already exist in personal contacts.",
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                    if (newCount > 0) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            if (isRussian)
+                                "Новых контактов (будут добавлены): $newCount"
+                            else
+                                "New contacts (will be added): $newCount",
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        if (isRussian)
+                            "Что сделать с дубликатами?"
+                        else
+                            "What to do with duplicates?",
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { bulkDuplicateAlertCount = 0 },
-                    text = Strings.ok
+                    onClick = {
+                        showBulkDuplicateChoiceDialog = false
+                        scope.launch {
+                            var count = 0
+                            newContacts.forEach { c ->
+                                try {
+                                    contactRepo.addContact(accountId, c.displayName, c.email, c.firstName, c.lastName, c.phone, c.mobilePhone, c.workPhone, c.company, c.department, c.jobTitle)
+                                    count++
+                                } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
+                            }
+                            dupPairs.forEach { (galContact, existing) ->
+                                try {
+                                    contactRepo.deleteContact(existing.id)
+                                    contactRepo.addContact(accountId, galContact.displayName, galContact.email, galContact.firstName, galContact.lastName, galContact.phone, galContact.mobilePhone, galContact.workPhone, galContact.company, galContact.department, galContact.jobTitle)
+                                    count++
+                                } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
+                            }
+                            val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
+                            Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
+                            pendingBulkContacts = emptyList()
+                            pendingBulkDuplicatePairs = emptyList()
+                        }
+                    },
+                    text = if (isRussian) "Заменить все" else "Replace all"
                 )
             },
-            dismissButton = {}
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showBulkDuplicateChoiceDialog = false
+                        scope.launch {
+                            var count = 0
+                            newContacts.forEach { c ->
+                                try {
+                                    contactRepo.addContact(accountId, c.displayName, c.email, c.firstName, c.lastName, c.phone, c.mobilePhone, c.workPhone, c.company, c.department, c.jobTitle)
+                                    count++
+                                } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
+                            }
+                            val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
+                            Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
+                            pendingBulkContacts = emptyList()
+                            pendingBulkDuplicatePairs = emptyList()
+                        }
+                    },
+                    text = if (isRussian) "Пропустить" else "Skip"
+                )
+            }
         )
     }
     
@@ -414,7 +497,8 @@ fun ContactsScreen(
                         } else {
                             addToContactsConfirmId = contact.id
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         Toast.makeText(context, if (isRussian) "Ошибка проверки контакта" else "Failed to check contact", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -516,7 +600,8 @@ fun ContactsScreen(
                                     jobTitle = galContact.jobTitle
                                 )
                                 Toast.makeText(context, contactReplacedMsg, Toast.LENGTH_SHORT).show()
-                            } catch (_: Exception) {
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
                                 Toast.makeText(context, if (isRussian) "Ошибка замены контакта" else "Failed to replace contact", Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -590,7 +675,8 @@ fun ContactsScreen(
                                     jobTitle = contactToAdd.jobTitle
                                 )
                                 Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
-                            } catch (_: Exception) {
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
                                 Toast.makeText(context, if (isRussian) "Ошибка сохранения контакта" else "Failed to save contact", Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -1027,39 +1113,35 @@ fun ContactsScreen(
                             IconButton(
                                 onClick = {
                                     val contactsToCopy = selectedContacts.toList()
+                                    isSelectionMode = false
+                                    selectedContactIds = emptySet()
                                     scope.launch {
-                                        var copied = 0
-                                        var skipped = 0
+                                        val newOnes = mutableListOf<ContactEntity>()
+                                        val duplicates = mutableListOf<Pair<ContactEntity, ContactEntity>>()
                                         contactsToCopy.forEach { contact ->
                                             try {
                                                 val existing = contactRepo.findLocalDuplicate(accountId, contact.email)
-                                                if (existing != null) {
-                                                    skipped++
-                                                } else {
-                                                    contactRepo.addContact(
-                                                        accountId = accountId,
-                                                        displayName = contact.displayName,
-                                                        email = contact.email,
-                                                        firstName = contact.firstName,
-                                                        lastName = contact.lastName,
-                                                        phone = contact.phone,
-                                                        mobilePhone = contact.mobilePhone,
-                                                        workPhone = contact.workPhone,
-                                                        company = contact.company,
-                                                        department = contact.department,
-                                                        jobTitle = contact.jobTitle
-                                                    )
-                                                    copied++
-                                                }
-                                            } catch (_: Exception) { /* skip failed contact */ }
+                                                if (existing != null) duplicates.add(contact to existing)
+                                                else newOnes.add(contact)
+                                            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
                                         }
-                                        val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
-                                        Toast.makeText(context, "$msg: $copied", Toast.LENGTH_SHORT).show()
-                                        if (skipped > 0) {
-                                            bulkDuplicateAlertCount = skipped
+                                        if (duplicates.isEmpty()) {
+                                            var count = 0
+                                            newOnes.forEach { c ->
+                                                try {
+                                                    contactRepo.addContact(accountId, c.displayName, c.email, c.firstName, c.lastName, c.phone, c.mobilePhone, c.workPhone, c.company, c.department, c.jobTitle)
+                                                    count++
+                                                } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
+                                            }
+                                            val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
+                                            Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            pendingBulkContacts = newOnes
+                                            pendingBulkDuplicatePairs = duplicates
+                                            bulkDuplicateTotalCount = duplicates.size
+                                            bulkNewCount = newOnes.size
+                                            showBulkDuplicateChoiceDialog = true
                                         }
-                                        isSelectionMode = false
-                                        selectedContactIds = emptySet()
                                     }
                                 }
                             ) {

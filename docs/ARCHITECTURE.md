@@ -1,6 +1,6 @@
-﻿# Архитектура проекта / Project Architecture
+# Архитектура проекта / Project Architecture
 
-**iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS), IMAP, POP3.  
+**iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS), IMAP, POP3.
 **iwo Mail Client** — Android client for Microsoft Exchange (EAS/EWS), IMAP, POP3.
 
 **Версия / Version:** 1.6.2  
@@ -126,9 +126,6 @@ com.dedovmosol.iwomail/
 ├── pop3/
 │   └── Pop3Client.kt                 # POP3 client (JavaMail) — beta
 │
-├── smtp/
-│   └── SmtpClient.kt                 # SMTP client (JavaMail)
-│
 ├── shared/                            # Cross-protocol shared code
 │   ├── MailClient.kt                  # Mail client interface
 │   ├── MailMessageParser.kt           # MIME message parser
@@ -136,8 +133,7 @@ com.dedovmosol.iwomail/
 │
 ├── network/                           # Network Layer
 │   ├── HttpClientProvider.kt          # OkHttpClient factory (SSL, mTLS, cert pinning)
-│   ├── NetworkMonitor.kt              # Connection monitor
-│   └── RetryUtils.kt                 # Retry with exponential backoff
+│   └── NetworkMonitor.kt              # Connection monitor
 │
 ├── sync/                              # Background Services
 │   ├── PushService.kt                 # Direct Push (Foreground Service, EAS Ping)
@@ -163,7 +159,7 @@ com.dedovmosol.iwomail/
 │   └── SoundPlayer.kt                # Sound effects (send/receive/delete)
 │
 └── widget/                            # Home-screen widget
-    ├── MailWidget.kt                  # AppWidgetProvider (Glance)
+    ├── MailWidget.kt                  # GlanceAppWidget (deep link navigation via iwomail:// URIs)
     └── WidgetConfigActivity.kt        # Widget configuration
 `
 
@@ -191,14 +187,13 @@ com.dedovmosol.iwomail/
 ┌────────────────────────▼────────────────────────────────┐
 │  Protocol Layer                                          │
 │  EAS/EWS: EasClient → 7 services + EwsClient            │
-│  IMAP: ImapClient  │  POP3: Pop3Client  │  SMTP: SmtpClient │
+│  IMAP: ImapClient  │  POP3: Pop3Client                   │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────┐
 │  Database Layer              │  Network Layer            │
-│  Room — 10 DAO, 10 Entity   │  HttpClientProvider       │
+│  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
 │  MailDatabase (v34)          │  NetworkMonitor           │
-│                              │  RetryUtils               │
 │                              │  NtlmAuthenticator        │
 └──────────────────────────────┴──────────────────────────┘
                          │
@@ -225,7 +220,7 @@ com.dedovmosol.iwomail/
 | Settings | DataStore | — |
 | HTTP | OkHttp | 4.12.0 |
 | TLS | Conscrypt | 2.5.2 |
-| Protocols | EAS 12.0-14.1, EWS (NTLM), IMAP, POP3, SMTP | — |
+| Protocols | EAS 12.0-14.1, EWS (NTLM), IMAP, POP3 | — |
 | Mail | JavaMail (com.sun.mail) | — |
 | DI | Manual (RepositoryProvider) | — |
 | Background | WorkManager, AlarmManager, Foreground Service | — |
@@ -247,6 +242,7 @@ Exchange 2007 SP1 supports EAS 12.0 only. Limitations and fallback mechanisms:
 | Direct Push (Ping) | ✅ | — |
 | Notes: create/update | Limited | EWS CreateItem/UpdateItem (NTLMv2) |
 | Tasks: create/delete | Limited | EWS CreateItem/DeleteItem (NTLMv2) |
+| Calendar: single occurrence edit | ❌ | EWS FindItem(CalendarView) + UpdateItem |
 | Calendar invitations (iCalendar) | ❌ | EWS CreateItem (MeetingRequest) |
 | Server drafts | Limited | EWS CreateItem (MimeContent) + 4-step delete fallback |
 
@@ -437,9 +433,6 @@ com.dedovmosol.iwomail/
 ├── pop3/
 │   └── Pop3Client.kt                 # POP3 клиент (JavaMail) — beta
 │
-├── smtp/
-│   └── SmtpClient.kt                 # SMTP клиент (JavaMail)
-│
 ├── shared/                            # Общий код для протоколов
 │   ├── MailClient.kt                  # Интерфейс почтового клиента
 │   ├── MailMessageParser.kt           # Парсинг MIME-сообщений
@@ -447,8 +440,7 @@ com.dedovmosol.iwomail/
 │
 ├── network/                           # Сетевой слой
 │   ├── HttpClientProvider.kt          # OkHttpClient factory (SSL, mTLS, cert pinning)
-│   ├── NetworkMonitor.kt              # Мониторинг подключения
-│   └── RetryUtils.kt                 # Retry с exponential backoff
+│   └── NetworkMonitor.kt              # Мониторинг подключения
 │
 ├── sync/                              # Background Services
 │   ├── PushService.kt                 # Direct Push (Foreground Service, EAS Ping)
@@ -474,7 +466,7 @@ com.dedovmosol.iwomail/
 │   └── SoundPlayer.kt                # Звуковые эффекты (send/receive/delete)
 │
 └── widget/                            # Виджет на домашнем экране
-    ├── MailWidget.kt                  # AppWidgetProvider (Glance)
+    ├── MailWidget.kt                  # GlanceAppWidget (deep link навигация через iwomail:// URI)
     └── WidgetConfigActivity.kt        # Настройка виджета
 `
 
@@ -502,14 +494,13 @@ com.dedovmosol.iwomail/
 ┌────────────────────────▼────────────────────────────────┐
 │  Protocol Layer                                          │
 │  EAS/EWS: EasClient → 7 сервисов + EwsClient            │
-│  IMAP: ImapClient  │  POP3: Pop3Client  │  SMTP: SmtpClient │
+│  IMAP: ImapClient  │  POP3: Pop3Client                   │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────┐
 │  Database Layer              │  Network Layer            │
-│  Room — 10 DAO, 10 Entity   │  HttpClientProvider       │
+│  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
 │  MailDatabase (v34)          │  NetworkMonitor           │
-│                              │  RetryUtils               │
 │                              │  NtlmAuthenticator        │
 └──────────────────────────────┴──────────────────────────┘
                          │
@@ -536,7 +527,7 @@ com.dedovmosol.iwomail/
 | Настройки | DataStore | — |
 | HTTP | OkHttp | 4.12.0 |
 | TLS | Conscrypt | 2.5.2 |
-| Протоколы | EAS 12.0-14.1, EWS (NTLM), IMAP, POP3, SMTP | — |
+| Протоколы | EAS 12.0-14.1, EWS (NTLM), IMAP, POP3 | — |
 | JavaMail | JavaMail (com.sun.mail) | — |
 | DI | Manual (RepositoryProvider) | — |
 | Background | WorkManager, AlarmManager, Foreground Service | — |
@@ -558,6 +549,7 @@ Exchange 2007 SP1 поддерживает только EAS 12.0. Огранич
 | Direct Push (Ping) | ✅ | — |
 | Заметки: создание и редактирование | Ограничено | EWS CreateItem/UpdateItem с NTLMv2 |
 | Задачи: создание и удаление | Ограничено | EWS CreateItem/DeleteItem с NTLMv2 |
+| Календарь: редактирование одного вхождения | ❌ | EWS FindItem(CalendarView) + UpdateItem |
 | Приглашения в календарь (iCalendar) | ❌ | EWS CreateItem (MeetingRequest) |
 | Черновики на сервере | Ограничено | EWS CreateItem (MimeContent) + 4-шаговый fallback удаления |
 

@@ -443,13 +443,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     if (result.data.emails.isNotEmpty()) {
                         val emailEntities = result.data.emails.mapNotNull { email ->
                             val parsedDate = parseDate(email.dateReceived)
-                            // Если сервер не вернул дату — ставим 1L вместо текущего времени,
-                            // чтобы старые письма не всплывали как «только что отправленные»
-                            // (insertAllIgnore не перезапишет существующие письма)
                             val effectiveDate = if (parsedDate > 0L) parsedDate else 0L
-                            // Фильтруем ghost-записи: нет даты и нет отправителя
-                            if (effectiveDate <= 0L && email.from.isBlank()) return@mapNotNull null
-                            val safeDate = if (effectiveDate > 0L) effectiveDate else 1L
+                            // MS-ASEMAIL: DateReceived обязателен для валидных писем.
+                            // Ghost-записи без даты пропускаем целиком (вместо fallback на epoch).
+                            if (effectiveDate <= 0L) return@mapNotNull null
                             EmailEntity(
                                 id = "${accountId}_${email.serverId}",
                                 accountId = accountId,
@@ -463,7 +460,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 preview = stripHtml(email.body).take(150).replace("\n", " ").trim(),
                                 body = "",
                                 bodyType = email.bodyType,
-                                dateReceived = safeDate,
+                                dateReceived = effectiveDate,
                                 read = email.read,
                                 flagged = email.flagged,
                                 importance = email.importance,
@@ -520,12 +517,13 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (removedCount > 0) {
                 android.util.Log.d("EmailSyncService", "syncSentFull: Removed $removedCount orphaned emails")
             }
-        } else if (serverEmailIds.isNotEmpty()) {
+            folderDao.updateSyncKey(folderId, syncKey)
+        } else {
             android.util.Log.w("EmailSyncService", 
-                "syncSentFull: Partial sync (${serverEmailIds.size} emails). Skipping orphan deletion.")
+                "syncSentFull: Incomplete sync (${serverEmailIds.size} emails). Skipping orphan deletion and syncKey save.")
         }
         
-        folderDao.updateSyncKey(folderId, syncKey)
+        emailDao.deleteGhostEmails(folderId)
         
         val totalCount = emailDao.getCountByFolder(folderId)
         val unreadCount = emailDao.getUnreadCount(folderId)
@@ -875,6 +873,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 reconcileSentAfterFullResync(serverSentIdsInFullResync, folderId)
             }
             
+            // Удаляем phantom-записи (dateReceived <= 1L), оставшиеся от предыдущих версий.
+            // Такие записи появлялись когда Exchange 2007 SP1 не возвращал DateReceived,
+            // и parseDate() ставил fallback 0L → safeDate 1L (01.01.1970).
+            // Теперь такие записи фильтруются при вставке; здесь чистим legacy-данные.
+            // НЕ трогаем черновики: EWS-мигрированные могут иметь dateReceived=1L как fallback.
+            if (folder.type != FolderType.DRAFTS) {
+                emailDao.deleteGhostEmails(folderId)
+            }
+            
             val totalCount = emailDao.getCountByFolder(folderId)
             val unreadCount = emailDao.getUnreadCount(folderId)
             folderDao.updateCounts(folderId, unreadCount, totalCount)
@@ -917,17 +924,23 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val existingEmail = existingEmailsMap[emailId]
             val parsedDate = parseDate(email.dateReceived)
             // Если сервер не вернул DateReceived (parsedDate=0), сохраняем существующую дату.
-            // Если и существующей нет — это ghost-запись (Exchange 2007 SP1 может отдавать
-            // служебные записи без даты). Пропускаем такие, если нет ни даты, ни отправителя.
             // КРИТИЧНО: не доверяем existingEmail.dateReceived <= 1L — это fallback
             // от предыдущего неудачного парсинга (epoch). Даём шанс перепарсить.
             val effectiveDate = if (parsedDate > 0L) parsedDate
                 else existingEmail?.dateReceived?.takeIf { it > 1L }
                 ?: 0L
-            // Фильтруем ghost-записи: нет реальной даты и нет отправителя
-            if (effectiveDate <= 0L && email.from.isBlank()) return@mapNotNull null
-            // Для оставшихся без даты — ставим 1L чтобы не путать с новыми
-            val safeDate = if (effectiveDate > 0L) effectiveDate else 1L
+            // MS-ASEMAIL: DateReceived обязателен для валидных писем.
+            // Exchange 2007 SP1 может отдавать служебные/phantom записи без даты.
+            // Пропускаем ВСЕ записи без реальной даты — это ghost-записи,
+            // которые не должны отображаться пользователю (включая дату 01.01.1970).
+            if (effectiveDate <= 0L) {
+                if (email.dateReceived.isNotBlank()) {
+                    android.util.Log.w("EmailSync",
+                        "Skipping email with unparseable date: serverId=${email.serverId}, " +
+                        "dateReceived='${email.dateReceived}', from='${email.from}'")
+                }
+                return@mapNotNull null
+            }
             EmailEntity(
                 id = emailId,
                 accountId = accountId,
@@ -942,7 +955,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 body = existingEmail?.body?.takeIf { it.isNotBlank() }
                     ?: if (folder.type == FolderType.DRAFTS && email.body.isNotBlank()) email.body else "",
                 bodyType = email.bodyType,
-                dateReceived = safeDate,
+                dateReceived = effectiveDate,
                 read = email.read,
                 flagged = email.flagged,
                 importance = email.importance,
@@ -1493,10 +1506,19 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     ) {
         val localSentEmails = emailDao.getEmailsByFolderList(folderId)
         val orphanSent = localSentEmails.filter { it.id !in serverSentIds }
+        if (orphanSent.isEmpty()) return
+        // Safety guard: если orphans > 30% от локальных, сервер мог вернуть
+        // неполные данные — НЕ удаляем чтобы не потерять письма.
+        if (localSentEmails.isNotEmpty() && orphanSent.size.toFloat() / localSentEmails.size >= 0.3f) {
+            android.util.Log.w("EmailSyncService",
+                "reconcileSent: ${orphanSent.size}/${localSentEmails.size} orphaned (>30%). Skipping cleanup.")
+            return
+        }
         for (orphan in orphanSent) {
             attachmentDao.deleteByEmail(orphan.id)
             emailDao.delete(orphan.id)
         }
+        android.util.Log.d("EmailSyncService", "reconcileSent: Removed ${orphanSent.size} orphaned sent emails")
     }
     
     /**

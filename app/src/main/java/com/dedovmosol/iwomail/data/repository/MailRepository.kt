@@ -6,7 +6,6 @@ import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
-import com.dedovmosol.iwomail.eas.getResultOrElse
 import com.dedovmosol.iwomail.util.HtmlRegex
 import kotlinx.coroutines.flow.Flow
 

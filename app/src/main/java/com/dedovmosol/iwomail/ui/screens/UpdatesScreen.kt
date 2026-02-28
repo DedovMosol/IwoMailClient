@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.BuildConfig
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
@@ -878,7 +879,8 @@ private fun RollbackDialog(
                     if (isRu)
                         "Файл iwomail-rollback-v${previousInfo.versionName}.apk уже есть в папке Downloads/iwomail rollback/. Перезаписать?"
                     else
-                        "File iwomail-rollback-v${previousInfo.versionName}.apk already exists in Downloads/iwomail rollback/. Overwrite?"
+                        "File iwomail-rollback-v${previousInfo.versionName}.apk already exists in Downloads/iwomail rollback/. Overwrite?",
+                    textAlign = TextAlign.Justify
                 )
             },
             confirmButton = {

@@ -67,6 +67,7 @@ object Strings {
     val outbox: String @Composable get() = if (isRussian()) "Исходящие" else "Outbox"
     val spam: String @Composable get() = if (isRussian()) "Спам" else "Spam"
     val toPrefix: String @Composable get() = if (isRussian()) "Кому:" else "To:"
+    val unknownSender: String @Composable get() = if (isRussian()) "(Без отправителя)" else "(No sender)"
     val userFolders: String @Composable get() = if (isRussian()) "Папки" else "Folders"
     val userFoldersEmpty: String @Composable get() = if (isRussian()) "Нет пользовательских папок" else "No user folders"
     val foldersSynced: String @Composable get() = if (isRussian()) "Папки синхронизированы" else "Folders synced"
@@ -843,6 +844,12 @@ object Strings {
     val eventAttachmentsMayNotUpload: String @Composable get() = if (isRussian())
         "Событие отправлено, но вложения могли не загрузиться"
         else "Event was sent, but attachments may not have uploaded"
+    val editRecurringEventTitle: String @Composable get() = if (isRussian()) "Повторяющееся событие" else "Recurring event"
+    val editRecurringEventMessage: String @Composable get() = if (isRussian())
+        "Изменить только это вхождение или всю серию?"
+        else "Edit only this occurrence or the entire series?"
+    val editThisOccurrence: String @Composable get() = if (isRussian()) "Это вхождение" else "This occurrence"
+    val editEntireSeries: String @Composable get() = if (isRussian()) "Всю серию" else "Entire series"
     val eventDeleted: String @Composable get() = if (isRussian()) "Событие перемещено в корзину" else "Event moved to trash"
     val eventsDeletedPermanently: String @Composable get() = if (isRussian()) "Событий удалено навсегда" else "Events permanently deleted"
     val eventsRestored: String @Composable get() = if (isRussian()) "События восстановлены" else "Events restored"

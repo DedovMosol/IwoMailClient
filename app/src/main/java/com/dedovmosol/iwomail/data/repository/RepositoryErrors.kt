@@ -16,7 +16,6 @@ object RepositoryErrors {
     const val TASKS_EXCHANGE_ONLY = "Задачи поддерживаются только для Exchange"
     const val NOTES_EXCHANGE_ONLY = "Заметки поддерживаются только для Exchange"
     const val CALENDAR_EXCHANGE_ONLY = "Календарь поддерживается только для Exchange"
-    const val CONTACTS_EXCHANGE_ONLY = "Контакты поддерживаются только для Exchange"
     const val MEETING_RESPONSE_EXCHANGE_ONLY = "Ответ на приглашения поддерживается только для Exchange"
     
     // Operation errors

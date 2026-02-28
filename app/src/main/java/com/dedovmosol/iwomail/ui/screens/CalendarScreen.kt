@@ -28,6 +28,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -99,11 +100,12 @@ private fun expandRecurringForRange(
             if (occurrences.isNotEmpty()) {
                 for (occ in occurrences) {
                     result.add(event.copy(
-                        id = "${event.id}_occ_${occ.startTime}",
+                        id = "${event.id}_occ_${occ.originalStartTime}",
                         startTime = occ.startTime,
                         endTime = occ.endTime,
                         subject = occ.subject,
-                        location = occ.location
+                        location = occ.location,
+                        body = occ.body
                     ))
                 }
             } else {
@@ -187,12 +189,6 @@ fun CalendarScreen(
         }
     }
     var selectedEventId by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedEvent = remember(selectedEventId, events, deletedEvents) {
-        selectedEventId?.let { id ->
-            val lookupId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
-            events.find { it.id == lookupId } ?: deletedEvents.find { it.id == lookupId }
-        }
-    }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
     var selectedDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
     val selectedDate = remember(selectedDateMillis) { Date(selectedDateMillis) }
@@ -202,6 +198,12 @@ fun CalendarScreen(
         editingEventId?.let { id -> events.find { it.id == id } }
     }
     var isCreating by rememberSaveable { mutableStateOf(false) }
+
+    // Редактирование одного вхождения повторяющегося события
+    var editingOccurrenceStartTime by rememberSaveable { mutableStateOf<Long?>(null) }
+    var cachedOccurrenceEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
+    var showEditChoiceDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingEditOccurrenceId by rememberSaveable { mutableStateOf<String?>(null) }
     
     // Множественный выбор
     val haptic = LocalHapticFeedback.current
@@ -235,6 +237,11 @@ fun CalendarScreen(
         )
     ) { mutableStateOf(setOf<String>()) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
+    // Диалог выбора: удалить вхождение или серию
+    var showOccurrenceDeleteChoice by rememberSaveable { mutableStateOf(false) }
+    var pendingOccurrenceIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
     
     // Состояние списка для автоскролла
     val listState = rememberLazyListState()
@@ -252,7 +259,23 @@ fun CalendarScreen(
         // Сначала фильтруем по дате
         val dateFiltered = when (dateFilter) {
             CalendarDateFilter.DELETED -> deletedEvents
-            CalendarDateFilter.ALL -> events + deletedEvents
+            CalendarDateFilter.ALL -> {
+                val cal = Calendar.getInstance()
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                cal.add(Calendar.DAY_OF_YEAR, -90)
+                val rangeStart = cal.timeInMillis
+                cal.timeInMillis = System.currentTimeMillis()
+                cal.set(Calendar.HOUR_OF_DAY, 0)
+                cal.set(Calendar.MINUTE, 0)
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                cal.add(Calendar.DAY_OF_YEAR, 365)
+                val rangeEnd = cal.timeInMillis
+                expandRecurringForRange(events, rangeStart, rangeEnd) + deletedEvents
+            }
             CalendarDateFilter.TODAY -> {
                 val cal = Calendar.getInstance()
                 cal.set(Calendar.HOUR_OF_DAY, 0)
@@ -302,7 +325,7 @@ fun CalendarScreen(
     val monthViewBaseEvents = remember(events, deletedEvents, debouncedSearchQuery, dateFilter) {
         val base = when (dateFilter) {
             CalendarDateFilter.DELETED -> deletedEvents
-            CalendarDateFilter.ALL -> events + deletedEvents
+            CalendarDateFilter.ALL -> events
             else -> events
         }
         if (debouncedSearchQuery.isBlank()) base
@@ -313,6 +336,18 @@ fun CalendarScreen(
         }
     }
     
+    // Виртуальные occurrence (_occ_) ищутся в filteredEvents (содержит развёрнутые повторения),
+    // чтобы показать корректное время occurrence, а не базового события.
+    val selectedEvent = remember(selectedEventId, filteredEvents, events, deletedEvents) {
+        selectedEventId?.let { id ->
+            filteredEvents.find { it.id == id }
+                ?: run {
+                    val lookupId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
+                    events.find { it.id == lookupId } ?: deletedEvents.find { it.id == lookupId }
+                }
+        }
+    }
+
     // Диалог просмотра события
     selectedEvent?.let { event ->
         val eventDeletedText = Strings.eventDeleted
@@ -392,10 +427,20 @@ fun CalendarScreen(
                 currentUserEmail = activeAccount?.email ?: "",
                 onDismiss = { selectedEventId = null },
                 onComposeClick = onComposeClick,
-                onEditClick = { 
-                    editingEventId = originalEvent.id
-                    selectedEventId = null
-                    showCreateDialog = true
+                onEditClick = {
+                    val sid = selectedEventId ?: ""
+                    val isOccurrence = event.id.contains("_occ_") || sid.contains("_occ_")
+                    if (isOccurrence && originalEvent.isRecurring) {
+                        pendingEditOccurrenceId = if (event.id.contains("_occ_")) event.id else sid
+                        selectedEventId = null
+                        showEditChoiceDialog = true
+                    } else {
+                        editingEventId = originalEvent.id
+                        editingOccurrenceStartTime = null
+                        cachedOccurrenceEvent = null
+                        selectedEventId = null
+                        showCreateDialog = true
+                    }
                 },
                 onDeleteClick = {
                     selectedEventId = null  // Закрываем диалог СРАЗУ
@@ -519,6 +564,79 @@ fun CalendarScreen(
         )
     }
     
+    // Диалог выбора: удалить конкретное вхождение или всю серию
+    if (showOccurrenceDeleteChoice) {
+        val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { showOccurrenceDeleteChoice = false },
+            title = { Text(if (isRussian) "Удаление повторяющегося события" else "Delete Recurring Event") },
+            text = {
+                Text(
+                    if (isRussian) "Удалить только выбранные вхождения или всю серию целиком?"
+                    else "Delete only selected occurrences or the entire series?",
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
+                    onClick = {
+                        showOccurrenceDeleteChoice = false
+                        pendingOccurrenceIds = emptySet()
+                        deleteConfirmCount = deleteConfirmTargetIds.size
+                        deleteConfirmIsPermanent = false
+                        showDeleteConfirmDialog = true
+                    },
+                    text = if (isRussian) "Всю серию" else "Entire series"
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeButton(
+                    onClick = {
+                        showOccurrenceDeleteChoice = false
+                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                        val idsToProcess = pendingOccurrenceIds.toList()
+                        val nonOccurrenceResolvedIds = deleteConfirmTargetIds -
+                            pendingOccurrenceIds.map { it.substringBefore("_occ_") }.toSet()
+                        selectedEventIds = emptySet()
+                        pendingOccurrenceIds = emptySet()
+                        scope.launch {
+                            var successCount = 0
+                            var errorMsg: String? = null
+                            for (occId in idsToProcess) {
+                                val masterId = occId.substringBefore("_occ_")
+                                val occStartStr = occId.substringAfter("_occ_")
+                                val occStart = occStartStr.toLongOrNull() ?: continue
+                                val master = events.find { it.id == masterId } ?: continue
+                                val result = withContext(Dispatchers.IO) {
+                                    calendarRepo.deleteOccurrence(master, occStart)
+                                }
+                                if (result is EasResult.Success) successCount++
+                                else if (result is EasResult.Error) errorMsg = result.message
+                            }
+                            if (nonOccurrenceResolvedIds.isNotEmpty()) {
+                                val regularToDelete = events.filter { it.id in nonOccurrenceResolvedIds }
+                                if (regularToDelete.isNotEmpty()) {
+                                    withContext(Dispatchers.IO) {
+                                        calendarRepo.deleteEvents(regularToDelete)
+                                    }
+                                }
+                            }
+                            withContext(Dispatchers.Main) {
+                                if (successCount > 0 || nonOccurrenceResolvedIds.isNotEmpty()) {
+                                    Toast.makeText(context, if (isRussian) "Удалено" else "Deleted", Toast.LENGTH_SHORT).show()
+                                } else if (errorMsg != null) {
+                                    Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    },
+                    text = if (isRussian) "Только вхождения" else "Only occurrences"
+                )
+            }
+        )
+    }
+
     // Диалог очистки корзины календаря
     if (showEmptyTrashDialog) {
         val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
@@ -565,15 +683,80 @@ fun CalendarScreen(
         )
     }
     
+    // Диалог выбора: «Изменить это вхождение» или «Изменить всю серию»
+    if (showEditChoiceDialog) {
+        val occId = pendingEditOccurrenceId
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = {
+                showEditChoiceDialog = false
+                pendingEditOccurrenceId = null
+            },
+            icon = { Icon(AppIcons.EditCalendar, null) },
+            title = { Text(Strings.editRecurringEventTitle) },
+            text = { Text(Strings.editRecurringEventMessage) },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showEditChoiceDialog = false
+                        if (occId != null) {
+                            val masterId = occId.substringBefore("_occ_")
+                            val occStart = occId.substringAfter("_occ_").toLongOrNull()
+                            editingEventId = masterId
+                            editingOccurrenceStartTime = if (occStart != null && occStart > 0) occStart else null
+                            cachedOccurrenceEvent = filteredEvents.find { it.id == occId }
+                            selectedEventId = null
+                            showCreateDialog = true
+                        }
+                        pendingEditOccurrenceId = null
+                    },
+                    text = Strings.editThisOccurrence
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showEditChoiceDialog = false
+                        if (occId != null) {
+                            val masterId = occId.substringBefore("_occ_")
+                            editingEventId = masterId
+                            editingOccurrenceStartTime = null
+                            cachedOccurrenceEvent = null
+                            selectedEventId = null
+                            showCreateDialog = true
+                        }
+                        pendingEditOccurrenceId = null
+                    },
+                    text = Strings.editEntireSeries
+                )
+            }
+        )
+    }
+
     // Диалог создания/редактирования события
     if (showCreateDialog) {
         val eventUpdatedText = Strings.eventUpdated
         val eventCreatedText = Strings.eventCreated
         val invitationSentText = Strings.invitationSent
+        val eventDeletedText = Strings.error
         val eventAttachmentsMayNotUploadText = Strings.eventAttachmentsMayNotUpload
         val isEditing = editingEvent != null
+        val dialogEvent = if (editingOccurrenceStartTime != null && editingEventId != null) {
+            cachedOccurrenceEvent ?: editingEvent?.let { master ->
+                val exceptions = RecurrenceHelper.parseExceptions(master.exceptions)
+                val exc = exceptions.find { it.exceptionStartTime == editingOccurrenceStartTime && !it.deleted }
+                val duration = master.endTime - master.startTime
+                master.copy(
+                    id = "${master.id}_occ_${editingOccurrenceStartTime}",
+                    subject = exc?.subject?.ifBlank { master.subject } ?: master.subject,
+                    startTime = exc?.startTime?.takeIf { it > 0 } ?: editingOccurrenceStartTime!!,
+                    endTime = exc?.endTime?.takeIf { it > 0 } ?: (editingOccurrenceStartTime!! + duration),
+                    location = exc?.location?.ifBlank { master.location } ?: master.location,
+                    body = exc?.body?.ifBlank { master.body } ?: master.body
+                )
+            }
+        } else editingEvent
         CreateEventDialog(
-            event = editingEvent,
+            event = dialogEvent,
             initialDate = selectedDate,
             isCreating = isCreating,
             accountId = accountId,
@@ -581,6 +764,8 @@ fun CalendarScreen(
             onDismiss = { 
                 showCreateDialog = false
                 editingEventId = null
+                editingOccurrenceStartTime = null
+                cachedOccurrenceEvent = null
             },
             onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, attachments, removedAttachmentIds ->
                 // Защита от double-tap: если уже создаём — игнорируем
@@ -593,9 +778,25 @@ fun CalendarScreen(
                             .map { it.trim() }
                             .filter { it.contains("@") }
                         
-                        // Захватываем editingEvent в локальную переменную для безопасного доступа
                         val eventToEdit = editingEvent
-                        val result = if (eventToEdit != null) {
+                        val occStartTime = editingOccurrenceStartTime
+                        val result = if (eventToEdit != null && occStartTime != null) {
+                            withContext(Dispatchers.IO) {
+                                calendarRepo.updateSingleOccurrence(
+                                    masterEvent = eventToEdit,
+                                    occurrenceOriginalStart = occStartTime,
+                                    subject = subject,
+                                    startTime = startTime,
+                                    endTime = endTime,
+                                    location = location,
+                                    body = body,
+                                    allDayEvent = allDayEvent,
+                                    reminder = reminder,
+                                    busyStatus = busyStatus,
+                                    sensitivity = eventToEdit.sensitivity
+                                )
+                            }
+                        } else if (eventToEdit != null) {
                             withContext(Dispatchers.IO) {
                                 calendarRepo.updateEvent(
                                     event = eventToEdit,
@@ -613,9 +814,10 @@ fun CalendarScreen(
                                     removedAttachmentIds = removedAttachmentIds
                                 )
                             }
+                        } else if (editingEventId != null) {
+                            EasResult.Error(eventDeletedText)
                         } else {
                             withContext(Dispatchers.IO) {
-                                // Создаём событие с участниками - Exchange сам отправит приглашения
                                 calendarRepo.createEvent(
                                     accountId = accountId,
                                     subject = subject,
@@ -664,6 +866,8 @@ fun CalendarScreen(
                                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                 showCreateDialog = false
                                 editingEventId = null
+                                editingOccurrenceStartTime = null
+                                cachedOccurrenceEvent = null
                                 // Автоскролл вверх после создания (с задержкой для обновления списка)
                                 if (!isEditing) {
                                     kotlinx.coroutines.delay(100)
@@ -730,11 +934,18 @@ fun CalendarScreen(
                     onDelete = {
                         val deleteTargetIds = if (deletePermanently) selectedDeletedResolvedIds else selectedActiveResolvedIds
                         if (deleteTargetIds.isEmpty()) return@CalendarSelectionTopBar
-                        deleteConfirmCount = deleteTargetIds.size
-                        // КРИТИЧНО: окончательное удаление только если выбраны ТОЛЬКО удалённые события
-                        deleteConfirmIsPermanent = deletePermanently
-                        deleteConfirmTargetIds = deleteTargetIds
-                        showDeleteConfirmDialog = true
+
+                        val occurrenceOriginals = selectedEventIds.filter { it.contains("_occ_") }
+                        if (!deletePermanently && occurrenceOriginals.isNotEmpty()) {
+                            pendingOccurrenceIds = occurrenceOriginals
+                            deleteConfirmTargetIds = deleteTargetIds
+                            showOccurrenceDeleteChoice = true
+                        } else {
+                            deleteConfirmCount = deleteTargetIds.size
+                            deleteConfirmIsPermanent = deletePermanently
+                            deleteConfirmTargetIds = deleteTargetIds
+                            showDeleteConfirmDialog = true
+                        }
                     }
                 )
             } else {
@@ -821,9 +1032,11 @@ fun CalendarScreen(
         floatingActionButton = {
             if (dateFilter != CalendarDateFilter.DELETED) {
                 com.dedovmosol.iwomail.ui.theme.AnimatedFab(
-                    onClick = { 
+                    onClick = {
                         editingEventId = null
-                        showCreateDialog = true 
+                        editingOccurrenceStartTime = null
+                        cachedOccurrenceEvent = null
+                        showCreateDialog = true
                     },
                     containerColor = LocalColorTheme.current.gradientStart
                 ) {
@@ -999,6 +1212,7 @@ private fun AgendaView(
     onEmptyTrash: () -> Unit = {}
 ) {
     val isSelectionMode = selectedEventIds.isNotEmpty()
+    val haptic = LocalHapticFeedback.current
     Column {
         // Поле поиска (на всю ширину)
         OutlinedTextField(
@@ -1069,21 +1283,61 @@ private fun AgendaView(
                 ScrollColumnScrollbar(emptyScrollState)
             }
         } else {
-            // Группировка по датам (новые сверху)
-            val groupedEvents = remember(events) {
-                events.groupBy { event ->
-                    val calendar = Calendar.getInstance()
-                    calendar.timeInMillis = event.startTime
-                    calendar.set(Calendar.HOUR_OF_DAY, 0)
-                    calendar.set(Calendar.MINUTE, 0)
-                    calendar.set(Calendar.SECOND, 0)
-                    calendar.set(Calendar.MILLISECOND, 0)
-                    calendar.time
+            var expandedSeriesIds by rememberSaveable(
+                stateSaver = listSaver<Set<String>, String>(
+                    save = { it.toList() },
+                    restore = { it.toSet() }
+                )
+            ) { mutableStateOf(emptySet()) }
+
+            val seriesMap = remember(events) {
+                val map = mutableMapOf<String, MutableList<CalendarEventEntity>>()
+                events.forEach { event ->
+                    if (event.isDeleted) return@forEach
+                    if (event.id.contains("_occ_")) {
+                        val masterId = event.id.substringBefore("_occ_")
+                        map.getOrPut(masterId) { mutableListOf() }.add(event)
+                    } else if (event.isRecurring) {
+                        map.getOrPut(event.id) { mutableListOf() }.add(event)
+                    }
+                }
+                map.values.forEach { list -> list.sortBy { it.startTime } }
+                map.toMap()
+            }
+
+            val standaloneEvents = remember(events, seriesMap) {
+                val recurringIds = seriesMap.keys
+                events.filter { e ->
+                    e.isDeleted || (!e.id.contains("_occ_") && !e.isRecurring && e.id !in recurringIds)
+                }
+            }
+
+            val groupedStandalone = remember(standaloneEvents) {
+                standaloneEvents.groupBy { event ->
+                    val cal = Calendar.getInstance()
+                    cal.timeInMillis = event.startTime
+                    cal.set(Calendar.HOUR_OF_DAY, 0)
+                    cal.set(Calendar.MINUTE, 0)
+                    cal.set(Calendar.SECOND, 0)
+                    cal.set(Calendar.MILLISECOND, 0)
+                    cal.time
                 }.toSortedMap(compareByDescending { it })
             }
-            
-            // Drag selection — ключи в том же порядке что items в LazyColumn (по группам дат)
-            val eventKeys = remember(groupedEvents) { groupedEvents.values.flatten().map { it.id } }
+
+            val sortedSeries = remember(seriesMap) {
+                seriesMap.entries.sortedByDescending { it.value.maxOfOrNull { e -> e.startTime } ?: 0L }
+            }
+
+            val eventKeys = remember(sortedSeries, expandedSeriesIds, groupedStandalone) {
+                val keys = mutableListOf<String>()
+                sortedSeries.forEach { (masterId, occurrences) ->
+                    if (masterId in expandedSeriesIds) {
+                        keys.addAll(occurrences.map { it.id })
+                    }
+                }
+                groupedStandalone.values.forEach { dayEvents -> keys.addAll(dayEvents.map { it.id }) }
+                keys
+            }
             val dragModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
                 listState = listState,
                 itemKeys = eventKeys,
@@ -1107,7 +1361,63 @@ private fun AgendaView(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                groupedEvents.forEach { (date, dayEvents) ->
+                if (sortedSeries.isNotEmpty()) {
+                    sortedSeries.forEach { (masterId, occurrences) ->
+                        val representative = occurrences.first()
+                        val isExpanded = masterId in expandedSeriesIds
+                        val allOccurrenceIds = occurrences.map { it.id }.toSet()
+                        val selectedInSeries = allOccurrenceIds.count { it in selectedEventIds }
+                        val seriesSelectionState = when {
+                            selectedInSeries == allOccurrenceIds.size -> ToggleableState.On
+                            selectedInSeries > 0 -> ToggleableState.Indeterminate
+                            else -> ToggleableState.Off
+                        }
+
+                        item(key = "series_$masterId") {
+                            RecurringSeriesFolder(
+                                event = representative,
+                                count = occurrences.size,
+                                isExpanded = isExpanded,
+                                isSelectionMode = isSelectionMode,
+                                selectionState = seriesSelectionState,
+                                onClick = {
+                                    expandedSeriesIds = if (isExpanded) expandedSeriesIds - masterId
+                                    else expandedSeriesIds + masterId
+                                },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onDragSelect(selectedEventIds + allOccurrenceIds)
+                                },
+                                onSelectionToggle = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    if (seriesSelectionState == ToggleableState.On) {
+                                        onDragSelect(selectedEventIds - allOccurrenceIds)
+                                    } else {
+                                        onDragSelect(selectedEventIds + allOccurrenceIds)
+                                    }
+                                }
+                            )
+                        }
+
+                        if (isExpanded) {
+                            items(occurrences, key = { it.id }) { event ->
+                                EventCard(
+                                    event = event,
+                                    isSelected = event.id in selectedEventIds,
+                                    isSelectionMode = isSelectionMode,
+                                    onClick = {
+                                        if (isSelectionMode) onEventSelectionChange(event.id, event.id !in selectedEventIds)
+                                        else onEventClick(event)
+                                    },
+                                    onLongClick = { if (!isSelectionMode) onEventLongClick(event.id) },
+                                    showDate = true
+                                )
+                            }
+                        }
+                    }
+                }
+
+                groupedStandalone.forEach { (date, dayEvents) ->
                     item(key = "header_${date.time}") {
                         DateHeader(date = date)
                     }
@@ -1118,17 +1428,10 @@ private fun AgendaView(
                             isSelected = event.id in selectedEventIds,
                             isSelectionMode = isSelectionMode,
                             onClick = {
-                                if (isSelectionMode) {
-                                    onEventSelectionChange(event.id, event.id !in selectedEventIds)
-                                } else {
-                                    onEventClick(event)
-                                }
+                                if (isSelectionMode) onEventSelectionChange(event.id, event.id !in selectedEventIds)
+                                else onEventClick(event)
                             },
-                            onLongClick = {
-                                if (!isSelectionMode) {
-                                    onEventLongClick(event.id)
-                                }
-                            }
+                            onLongClick = { if (!isSelectionMode) onEventLongClick(event.id) }
                         )
                     }
                 }
@@ -1306,6 +1609,92 @@ private fun MonthView(
 
 
 @Composable
+private fun RecurringSeriesFolder(
+    event: CalendarEventEntity,
+    count: Int,
+    isExpanded: Boolean,
+    isSelectionMode: Boolean = false,
+    selectionState: ToggleableState = ToggleableState.Off,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
+    onSelectionToggle: () -> Unit = {}
+) {
+    val backgroundColor by animateColorAsState(
+        targetValue = if (selectionState != ToggleableState.Off)
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+        label = "seriesBg"
+    )
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = { if (isSelectionMode) onSelectionToggle() else onClick() },
+                onLongClick = { if (!isSelectionMode) onLongClick() }
+            ),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = backgroundColor)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isSelectionMode) {
+                TriStateCheckbox(
+                    state = selectionState,
+                    onClick = onSelectionToggle,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Icon(
+                AppIcons.Refresh,
+                contentDescription = Strings.recurringEvent,
+                modifier = Modifier.size(22.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = event.subject.ifBlank { Strings.noTitle },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "$count ${Strings.pluralEvents(count)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Text(
+                        text = count.toString(),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                if (isExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
 private fun DateHeader(date: Date) {
     val dateFormat = remember { SimpleDateFormat("EEEE, d MMMM yyyy", Locale.getDefault()) }
     val today = remember { Date() }
@@ -1331,9 +1720,11 @@ private fun EventCard(
     isSelected: Boolean = false,
     isSelectionMode: Boolean = false,
     onClick: () -> Unit,
-    onLongClick: () -> Unit = {}
+    onLongClick: () -> Unit = {},
+    showDate: Boolean = false
 ) {
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val shortDateFormat = remember { SimpleDateFormat("d MMM", Locale.getDefault()) }
     val isPastEvent = remember(event.endTime) { event.endTime < System.currentTimeMillis() }
     val backgroundColor by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
@@ -1416,10 +1807,11 @@ private fun EventCard(
                 Spacer(modifier = Modifier.height(4.dp))
                 
                 Text(
-                    text = if (event.allDayEvent) {
-                        Strings.allDay
-                    } else {
-                        "${timeFormat.format(Date(event.startTime))} - ${timeFormat.format(Date(event.endTime))}"
+                    text = when {
+                        event.allDayEvent && showDate -> "${shortDateFormat.format(Date(event.startTime))} — ${Strings.allDay}"
+                        event.allDayEvent -> Strings.allDay
+                        showDate -> "${shortDateFormat.format(Date(event.startTime))}  ${timeFormat.format(Date(event.startTime))} - ${timeFormat.format(Date(event.endTime))}"
+                        else -> "${timeFormat.format(Date(event.startTime))} - ${timeFormat.format(Date(event.endTime))}"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (isPastEvent) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.primary
@@ -3584,7 +3976,8 @@ private fun CalendarAttachmentsList(
                                             pendingPreviewFile = null
                                         }
                                     }
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     withContext(Dispatchers.IO) { tempFile.delete() }
                                     pendingPreviewFile = null
                                     Toast.makeText(

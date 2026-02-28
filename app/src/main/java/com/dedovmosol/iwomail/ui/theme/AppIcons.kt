@@ -63,7 +63,6 @@ object AppIcons {
     val Image: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_image)
     val Inbox: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_inbox)
     val Info: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_info)
-    val InsertDriveFile: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_insert_drive_file)
     val KeyboardArrowDown: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_keyboard_arrow_down)
     val KeyboardArrowUp: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_keyboard_arrow_up)
     val Language: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_language)

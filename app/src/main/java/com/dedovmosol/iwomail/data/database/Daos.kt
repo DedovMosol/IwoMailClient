@@ -315,6 +315,9 @@ interface EmailDao {
     @Query("DELETE FROM emails WHERE folderId = :folderId")
     suspend fun deleteByFolder(folderId: String)
     
+    @Query("DELETE FROM emails WHERE folderId = :folderId AND dateReceived <= 1")
+    suspend fun deleteGhostEmails(folderId: String)
+    
     @Query("SELECT COUNT(*) FROM emails WHERE folderId = :folderId AND read = 0")
     suspend fun getUnreadCount(folderId: String): Int
     

@@ -1471,7 +1471,6 @@ private fun EmailListItem(
             
             // Для папки Отправленные показываем получателя, иначе отправителя
             val displayName = if (isSent) {
-                // Извлекаем имя получателя из поля to
                 val toField = email.to
                 val recipientName = when {
                     toField.contains("<") -> toField.substringBefore("<").trim().trim('"')
@@ -1480,18 +1479,16 @@ private fun EmailListItem(
                 }.ifEmpty { toField }
                 "${Strings.toPrefix} $recipientName"
             } else {
-                // КРИТИЧНО: Если cleanFromName это email - не используем его, берём только из кэша или from
                 val finalName = if (cleanFromName != null && !cleanFromName.contains("@")) {
                     cleanFromName
                 } else {
-                    // Очищаем email.from от возможного дублирования (формат "email <email>")
                     val cleanFrom = email.from
-                        .substringBefore("<").trim()  // Убираем всё после <
-                        .trim('"')  // Убираем кавычки
+                        .substringBefore("<").trim()
+                        .trim('"')
                         .trim()
                     cachedSenderName ?: cleanFrom
                 }
-                finalName
+                finalName.ifBlank { Strings.unknownSender }
             }
             
             // Аватар с цветом на основе имени (получателя для Отправленных, отправителя для остальных)

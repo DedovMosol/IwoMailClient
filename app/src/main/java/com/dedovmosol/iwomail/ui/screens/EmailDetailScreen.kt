@@ -410,6 +410,7 @@ fun EmailDetailScreen(
                     null -> bodyLoadError = if (isRussian) "Таймаут загрузки" else "Loading timeout"
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 bodyLoadError = e.message
             } finally {
                 isLoadingBody = false

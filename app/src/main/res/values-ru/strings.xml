@@ -17,8 +17,6 @@
     <string name="shortcut_compose_long">Написать письмо</string>
     <string name="shortcut_inbox">Входящие</string>
     <string name="shortcut_inbox_long">Открыть Входящие</string>
-    <string name="shortcut_search">Поиск</string>
-    <string name="shortcut_search_long">Поиск писем</string>
     <string name="shortcut_sync">Синхронизация</string>
     <string name="shortcut_sync_long">Синхронизировать</string>
     
@@ -31,7 +29,6 @@
     <string name="widget_no_new_mail">Нет новых писем</string>
     <string name="widget_notes">Заметки</string>
     <string name="widget_unread">непрочитанных</string>
-    <string name="widget_synced_ago">Обновлено %s назад</string>
     <string name="widget_synced_just_now">Только что</string>
     <string name="widget_no_events_today">Нет событий на сегодня</string>
     <string name="widget_no_tasks">Нет задач на сегодня</string>

@@ -1880,6 +1880,7 @@ $itemIdsXml
         val reminderSet = XmlValueExtractor.extractTask(dataXml, "ReminderSet") == "1"
         val reminderTime = parseDate(XmlValueExtractor.extractTask(dataXml, "ReminderTime"))
         val categories = extractTaskCategories(dataXml)
+        val owner = XmlValueExtractor.extractTask(dataXml, "OwnerId") ?: ""
         
         return EasTask(
             serverId = serverId,
@@ -1893,7 +1894,8 @@ $itemIdsXml
             sensitivity = sensitivity,
             reminderSet = reminderSet,
             reminderTime = reminderTime,
-            categories = categories
+            categories = categories,
+            owner = owner
         )
     }
     
@@ -1973,6 +1975,7 @@ $itemIdsXml
             else -> 0
         }
         val categories = extractEwsCategories(itemXml)
+        val owner = XmlValueExtractor.extractEws(itemXml, "Owner") ?: ""
 
         return EasTask(
             serverId = serverId,
@@ -1986,7 +1989,8 @@ $itemIdsXml
             sensitivity = sensitivity,
             reminderSet = false,
             reminderTime = 0,
-            categories = categories
+            categories = categories,
+            owner = owner
         )
     }
     

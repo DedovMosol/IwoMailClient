@@ -327,20 +327,61 @@ fun DrawerContent(
                         }
                     }
                 }
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .clickable(onClick = onCreateFolder),
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(AppIcons.CreateNewFolder, null, tint = AppColors.createFolder)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = Strings.createFolder,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
                 } // Column
             }
         }
-        
-        // Создать папку
+
+        if (otherFolders.isEmpty()) {
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .clickable(onClick = onCreateFolder),
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(AppIcons.CreateNewFolder, null, tint = AppColors.createFolder)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = Strings.createFolder,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            ListItem(
-                headlineContent = { Text(Strings.createFolder) },
-                leadingContent = { Icon(AppIcons.CreateNewFolder, null, tint = AppColors.createFolder) },
-                modifier = Modifier.clickable(onClick = onCreateFolder)
-            )
         }
-        
+
         // Настройки
         item {
             ListItem(

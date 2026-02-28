@@ -26,11 +26,12 @@
 
 - ✅ **Почта** — синхронизация, отправка с вложениями, поиск, фильтры, избранное, управление папками, черновики, отложенная отправка, отправка группе пользователей
 - ✅ **Контакты** — личные и GAL, группы, импорт/экспорт (vCard, CSV)
-- ✅ **Календарь** — поддержка повторяющихся событий, вложений и ссылок на онлайн-встречи
+- ✅ **Календарь** — повторяющиеся события, назначение участников, вложения, ссылки на онлайн-встречи
 - ✅ **Заметки** — создание, редактирование, синхронизация
-- ✅ **Задачи** — создание, редактирование, синхронизация
+- ✅ **Задачи** — создание, редактирование, назначение, напоминания, синхронизация
 - ✅ **Уведомления** — Push (Direct Push), фоновая синхронизация, ночной режим
 - ✅ **Автоочистка** — настраиваемая очистка Trash/Drafts/Spam для каждого аккаунта (по интервалу или отключение через «Никогда»)
+- ✅ **Виджет** — виджет на домашнем экране с быстрым доступом к письмам, поиску, календарю, задачам и написанию
 - ✅ **Интерфейс** — тёмная/светлая тема, 4 цветовые схемы, персонализация
 - ✅ **Несколько аккаунтов** — с индивидуальными подписями и настройками
 - ✅ **MDN/DSN** — запрос отчёта о прочтении и доставке
@@ -103,7 +104,7 @@
 - Conscrypt — TLS 1.0-1.3 (Exchange 2007 support)
 - EAS 12.0-14.1 — ActiveSync
 - EWS (NTLM) — Exchange Web Services
-- JavaMail (com.sun.mail) — IMAP/POP3/SMTP
+- JavaMail (com.sun.mail) — IMAP/POP3
 
 **Безопасность:**
 - Certificate Pinning (Public Key Pinning)
@@ -166,11 +167,11 @@ Repository Layer
     ↓
 Protocol Layer
   EAS/EWS — EasClient (Email, Calendar, Tasks, Notes, Drafts, Contacts, Attachment)
-  IMAP — ImapClient  |  POP3 — Pop3Client  |  SMTP — SmtpClient
+  IMAP — ImapClient  |  POP3 — Pop3Client
     ↓
 Database Layer                    Network Layer
-  Room — 10 DAO, 10 Entity         HttpClientProvider, NetworkMonitor
-  MailDatabase (v34)                RetryUtils, NtlmAuthenticator
+  Room — 11 DAO, 10 Entity         HttpClientProvider, NetworkMonitor
+  MailDatabase (v34)                NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker

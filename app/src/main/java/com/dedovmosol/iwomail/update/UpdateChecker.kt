@@ -641,11 +641,50 @@ class UpdateChecker(context: Context) {
         val apkFileName = "iwomail-rollback-v${versionName}.apk"
         
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10+ — используем MediaStore, подпапка iwomail rollback
             val resolver = context.contentResolver
+            val relPath = "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER/"
+            val existingSelection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
+            val selectionArgs = arrayOf(apkFileName, relPath)
 
-            // Удаляем старый файл напрямую (для файлов от предыдущей установки,
-            // невидимых через MediaStore)
+            // Ищем существующую запись в MediaStore (файл от текущей установки)
+            var existingUri: Uri? = null
+            try {
+                resolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Downloads._ID),
+                    existingSelection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
+                        existingUri = android.content.ContentUris.withAppendedId(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, id
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // Путь 1: Перезапись существующего файла через его MediaStore URI ("wt" = write-truncate).
+            // Это гарантирует перезапись без авто-переименования со стороны MediaStore.
+            if (existingUri != null) {
+                try {
+                    val copiedBytes = resolver.openOutputStream(existingUri!!, "wt")?.use { output ->
+                        apkFile.inputStream().use { input -> input.copyTo(output) }
+                    } ?: throw IllegalStateException("Failed to open output stream for existing URI")
+
+                    if (copiedBytes <= 0L) {
+                        throw IllegalStateException("Copied APK is empty")
+                    }
+                    return existingUri
+                } catch (e: Exception) {
+                    android.util.Log.w("UpdateChecker",
+                        "Failed to overwrite existing MediaStore entry, falling back to delete+insert: ${e.message}")
+                    try { resolver.delete(existingUri!!, null, null) } catch (_: Exception) {}
+                }
+            }
+
+            // Путь 2: Файл от предыдущей установки (невидим в MediaStore) — удаляем напрямую
             @Suppress("DEPRECATION")
             val directFile = File(
                 File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), ROLLBACK_SUBFOLDER),
@@ -653,29 +692,10 @@ class UpdateChecker(context: Context) {
             )
             try { if (directFile.exists()) directFile.delete() } catch (_: Exception) {}
 
-            // Удаляем запись в MediaStore (для файлов текущей установки)
-            val relPath = "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER/"
-            val existingSelection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?"
-            resolver.query(
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Downloads._ID),
-                existingSelection,
-                arrayOf(apkFileName, relPath),
-                null
-            )?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
-                    val deleteUri = android.content.ContentUris.withAppendedId(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, id
-                    )
-                    try { resolver.delete(deleteUri, null, null) } catch (_: Exception) {}
-                }
-            }
-
+            // Путь 3: Вставляем новую запись
             val contentValues = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, apkFileName)
                 put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
-                // При insert trailing slash необязателен — MediaStore добавит сам
                 put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/$ROLLBACK_SUBFOLDER")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
@@ -694,14 +714,12 @@ class UpdateChecker(context: Context) {
                     throw IllegalStateException("Copied APK is empty")
                 }
                 
-                // Снимаем флаг IS_PENDING — файл становится видимым
                 contentValues.clear()
                 contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
                 resolver.update(uri, contentValues, null, null)
                 
                 uri
             } catch (e: Exception) {
-                // Удаляем частично записанный файл
                 try { resolver.delete(uri, null, null) } catch (_: Exception) {}
                 android.util.Log.e("UpdateChecker", "Failed to write APK to Downloads: ${e.message}")
                 null

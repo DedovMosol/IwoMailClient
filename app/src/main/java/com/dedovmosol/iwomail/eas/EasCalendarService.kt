@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.eas
 
 import android.util.Base64
+import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -43,11 +44,7 @@ class EasCalendarService internal constructor(
     )
     
     companion object {
-        // TIME_ZONE_INFORMATION (172 bytes, all zeros) = UTC, base64-encoded for EAS <calendar:TimeZone>
-        private const val UTC_TIMEZONE_BLOB =
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        private val DELETE_SERVER_ID_PATTERN = "<(?:Delete|SoftDelete)>\\s*<ServerId>(.*?)</ServerId>\\s*</(?:Delete|SoftDelete)>".toRegex(RegexOption.DOT_MATCHES_ALL)
 
         // Предкомпилированные regex для hot paths (sync parsing)
         private val RESPONSES_PATTERN = "<Responses>(.*?)</Responses>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -82,7 +79,7 @@ class EasCalendarService internal constructor(
      * EAS 14+ — стандартный Calendar sync
      * EAS 12.x — fallback через EWS
      */
-    suspend fun syncCalendar(): EasResult<List<EasCalendarEvent>> {
+    suspend fun syncCalendar(): EasResult<CalendarSyncResult> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
@@ -95,20 +92,17 @@ class EasCalendarService internal constructor(
             is EasResult.Error -> return EasResult.Error(foldersResult.message)
         }
         
-        // EAS Sync для всех версий Exchange.
         val easResult = syncCalendarEasFromFolders(folders)
         
-        // Exchange 2007 SP1: EAS Sync может не возвращать <airsyncbase:Attachments>.
-        // Дополняем вложения через EWS GetItem для событий без attachment data.
-        if (easResult is EasResult.Success && easResult.data.isNotEmpty()) {
+        if (easResult is EasResult.Success && easResult.data.events.isNotEmpty()) {
             val withAttFix = try {
-                supplementAttachmentsViaEws(easResult.data)
+                supplementAttachmentsViaEws(easResult.data.events)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.w("EasCalendarService", "supplementAttachmentsViaEws failed: ${e.message}")
-                easResult.data
+                easResult.data.events
             }
-            return EasResult.Success(withAttFix)
+            return EasResult.Success(CalendarSyncResult(withAttFix, easResult.data.deletedServerIds))
         }
         return easResult
     }
@@ -261,7 +255,8 @@ class EasCalendarService internal constructor(
         attendees: List<String> = emptyList(),
         oldSubject: String? = null,
         recurrenceType: Int = -1,
-        attachments: List<DraftAttachmentData> = emptyList()
+        attachments: List<DraftAttachmentData> = emptyList(),
+        newAttendeesToAppend: List<String> = emptyList()
     ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -297,7 +292,8 @@ class EasCalendarService internal constructor(
                 sensitivity,
                 attendees,
                 oldSubject,
-                recurrenceType
+                recurrenceType,
+                newAttendeesToAppend
             )
 
             // КРИТИЧНО: если sync идёт через EAS legacy (короткий ServerId),
@@ -359,6 +355,385 @@ class EasCalendarService internal constructor(
         return EasResult.Success("")
     }
     
+    /**
+     * Обновление одного вхождения (occurrence) повторяющегося события.
+     *
+     * MS-ASCAL §2.2.2.21: Exception — контейнер изменений для конкретного occurrence.
+     * ExceptionStartTime (§2.2.2.23) — ОРИГИНАЛЬНОЕ время начала occurrence, идентифицирует его.
+     * Compact DateTime формат (yyyyMMdd'T'HHmmss'Z').
+     *
+     * Отправляем Sync Change для мастер-события, включая ВСЕ существующие exceptions +
+     * новое/изменённое. Это безопасно для всех версий EAS (2.5, 12.x, 14.x).
+     */
+    suspend fun updateSingleOccurrence(
+        serverId: String,
+        existingExceptionsJson: String,
+        occurrenceOriginalStartTime: Long,
+        masterSubject: String,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        allDayEvent: Boolean,
+        reminder: Int,
+        busyStatus: Int,
+        sensitivity: Int
+    ): EasResult<Boolean> {
+        if (!deps.isVersionDetected()) {
+            deps.detectEasVersion()
+        }
+
+        val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
+
+        // Exchange 2007 SP1 (EAS 12.x): EWS путь — FindItem(CalendarView) → UpdateItem.
+        // CalendarView раскрывает повторяющиеся события, каждый occurrence получает свой ItemId.
+        // UpdateItem на этот ItemId автоматически создаёт exception на сервере.
+        // Body полностью поддерживается в EWS (в отличие от EAS 12.x).
+        if (majorVersion < 14) {
+            val existingExceptions = RecurrenceHelper.parseExceptions(existingExceptionsJson)
+            val existingException = existingExceptions.find {
+                it.exceptionStartTime == occurrenceOriginalStartTime && !it.deleted
+            }
+            val searchSubject = existingException?.subject?.ifBlank { masterSubject } ?: masterSubject
+            val searchStartTime = if (existingException != null && existingException.startTime > 0) {
+                existingException.startTime
+            } else {
+                occurrenceOriginalStartTime
+            }
+            return updateSingleOccurrenceEws(
+                searchSubject, searchStartTime,
+                subject, startTime, endTime, location, body,
+                allDayEvent, reminder, busyStatus, sensitivity
+            )
+        }
+
+        // Exchange 2010+ (EAS 14+): EAS Exceptions (Body через airsyncbase:Body)
+        val calendarFolderId = getCalendarFolderId()
+            ?: return EasResult.Error("Папка календаря не найдена")
+
+        val syncKeyResult = getAdvancedSyncKey(calendarFolderId)
+        val syncKey = when (syncKeyResult) {
+            is EasResult.Success -> syncKeyResult.data
+            is EasResult.Error -> return syncKeyResult
+        }
+
+        val existingExceptions = RecurrenceHelper.parseExceptions(existingExceptionsJson)
+
+        val xml = buildExceptionSyncXml(
+            syncKey, calendarFolderId, serverId, majorVersion,
+            existingExceptions, occurrenceOriginalStartTime,
+            subject, startTime, endTime, location, body,
+            allDayEvent, reminder, busyStatus, sensitivity
+        )
+
+        return deps.executeEasCommand("Sync", xml) { responseXml ->
+            val collectionStatus = deps.extractValue(responseXml, "Status")
+            if (collectionStatus != "1") {
+                throw Exception("Collection Status=$collectionStatus")
+            }
+            if (responseXml.contains("<Responses>") && responseXml.contains("<Change>")) {
+                val changeStatusMatch = CHANGE_STATUS_PATTERN.find(responseXml)
+                if (changeStatusMatch != null) {
+                    val changeStatus = changeStatusMatch.groupValues[1]
+                    if (changeStatus != "1") {
+                        throw Exception("Change Status=$changeStatus")
+                    }
+                }
+            }
+            true
+        }
+    }
+
+    /**
+     * EWS-путь для изменения одного occurrence на Exchange 2007 SP1.
+     *
+     * 1) FindItem + CalendarView (раскрывает повторения) → находим ItemId+ChangeKey occurrence
+     * 2) UpdateItem с SetItemField для каждого поля (Subject, Body, Start, End, Location, ...)
+     *
+     * CalendarView возвращает каждый occurrence с собственным ItemId.
+     * UpdateItem на этот ItemId автоматически создаёт exception.
+     */
+    private suspend fun updateSingleOccurrenceEws(
+        searchSubject: String,
+        searchStartTime: Long,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        allDayEvent: Boolean,
+        reminder: Int,
+        busyStatus: Int,
+        sensitivity: Int
+    ): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val ewsUrl = deps.getEwsUrl()
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+                sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+
+                val oneDayMs = 24L * 60 * 60 * 1000
+                val viewStart = sdf.format(java.util.Date(searchStartTime - oneDayMs))
+                val viewEnd = sdf.format(java.util.Date(searchStartTime + oneDayMs))
+
+                val findXml = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header><t:RequestServerVersion Version="Exchange2007_SP1"/></soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">
+            <m:ItemShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURI FieldURI="calendar:Start"/>
+                </t:AdditionalProperties>
+            </m:ItemShape>
+            <m:CalendarView MaxEntriesReturned="100" StartDate="$viewStart" EndDate="$viewEnd"/>
+            <m:ParentFolderIds><t:DistinguishedFolderId Id="calendar"/></m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+                val findResult = ewsRequest(ewsUrl, findXml, "FindItem")
+                if (findResult is EasResult.Error) return@withContext findResult
+                val findResponse = (findResult as EasResult.Success).data
+
+                val itemPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                val idPattern = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\"".toRegex()
+                val subjectPat = "<(?:t:)?Subject>(.*?)</(?:t:)?Subject>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                val startPat = "<(?:t:)?Start>(.*?)</(?:t:)?Start>".toRegex(RegexOption.DOT_MATCHES_ALL)
+
+                var bestItemId: String? = null
+                var bestChangeKey: String? = null
+                var bestTimeDiff = Long.MAX_VALUE
+
+                for (itemMatch in itemPattern.findAll(findResponse)) {
+                    val itemXml = itemMatch.groupValues[1]
+                    val idMatch = idPattern.find(itemXml) ?: continue
+                    val itemSubject = subjectPat.find(itemXml)?.groupValues?.get(1) ?: ""
+                    val itemStartStr = startPat.find(itemXml)?.groupValues?.get(1)
+                    val itemStartMs = parseEwsDateTime(itemStartStr) ?: continue
+
+                    val timeDiff = kotlin.math.abs(itemStartMs - searchStartTime)
+                    if (timeDiff > oneDayMs) continue
+
+                    if (itemSubject.equals(searchSubject, ignoreCase = true) && timeDiff < bestTimeDiff) {
+                        bestItemId = idMatch.groupValues[1]
+                        bestChangeKey = idMatch.groupValues[2]
+                        bestTimeDiff = timeDiff
+                    }
+                }
+
+                if (bestItemId == null) {
+                    return@withContext EasResult.Error("Occurrence not found via EWS (subject=$searchSubject)")
+                }
+
+                val escapedSubject = deps.escapeXml(subject)
+                val escapedLocation = deps.escapeXml(location)
+                val escapedBody = deps.escapeXml(body)
+                val startStr = if (allDayEvent) formatEwsAllDayDate(startTime) else formatEwsDate(startTime)
+                val endStr = if (allDayEvent) formatEwsAllDayDate(endTime) else formatEwsDate(endTime)
+                val ewsBusyStatus = mapBusyStatusToEws(busyStatus)
+
+                val updateXml = buildString {
+                    append("""<?xml version="1.0" encoding="utf-8"?>""")
+                    append("""<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" """)
+                    append("""xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages" """)
+                    append("""xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" """)
+                    append("""xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">""")
+                    append("""<soap:Header><t:RequestServerVersion Version="Exchange2007_SP1"/></soap:Header>""")
+                    append("<soap:Body>")
+                    append("""<m:UpdateItem ConflictResolution="AlwaysOverwrite" SendMeetingInvitationsOrCancellations="SendToNone">""")
+                    append("<m:ItemChanges><t:ItemChange>")
+                    append("""<t:ItemId Id="$bestItemId" ChangeKey="$bestChangeKey"/>""")
+                    append("<t:Updates>")
+
+                    append("<t:SetItemField>")
+                    append("""<t:FieldURI FieldURI="item:Subject"/>""")
+                    append("<t:CalendarItem><t:Subject>$escapedSubject</t:Subject></t:CalendarItem>")
+                    append("</t:SetItemField>")
+
+                    append("<t:SetItemField>")
+                    append("""<t:FieldURI FieldURI="calendar:Start"/>""")
+                    append("<t:CalendarItem><t:Start>$startStr</t:Start></t:CalendarItem>")
+                    append("</t:SetItemField>")
+
+                    append("<t:SetItemField>")
+                    append("""<t:FieldURI FieldURI="calendar:End"/>""")
+                    append("<t:CalendarItem><t:End>$endStr</t:End></t:CalendarItem>")
+                    append("</t:SetItemField>")
+
+                    if (escapedLocation.isNotBlank()) {
+                        append("<t:SetItemField>")
+                        append("""<t:FieldURI FieldURI="calendar:Location"/>""")
+                        append("<t:CalendarItem><t:Location>$escapedLocation</t:Location></t:CalendarItem>")
+                        append("</t:SetItemField>")
+                    } else {
+                        append("""<t:DeleteItemField><t:FieldURI FieldURI="calendar:Location"/></t:DeleteItemField>""")
+                    }
+
+                    if (escapedBody.isNotBlank()) {
+                        append("<t:SetItemField>")
+                        append("""<t:FieldURI FieldURI="item:Body"/>""")
+                        append("""<t:CalendarItem><t:Body BodyType="Text">$escapedBody</t:Body></t:CalendarItem>""")
+                        append("</t:SetItemField>")
+                    } else {
+                        append("""<t:DeleteItemField><t:FieldURI FieldURI="item:Body"/></t:DeleteItemField>""")
+                    }
+
+                    append("<t:SetItemField>")
+                    append("""<t:FieldURI FieldURI="calendar:IsAllDayEvent"/>""")
+                    append("<t:CalendarItem><t:IsAllDayEvent>$allDayEvent</t:IsAllDayEvent></t:CalendarItem>")
+                    append("</t:SetItemField>")
+
+                    append("<t:SetItemField>")
+                    append("""<t:FieldURI FieldURI="calendar:LegacyFreeBusyStatus"/>""")
+                    append("<t:CalendarItem><t:LegacyFreeBusyStatus>$ewsBusyStatus</t:LegacyFreeBusyStatus></t:CalendarItem>")
+                    append("</t:SetItemField>")
+
+                    if (reminder > 0) {
+                        append("<t:SetItemField>")
+                        append("""<t:FieldURI FieldURI="item:ReminderIsSet"/>""")
+                        append("<t:CalendarItem><t:ReminderIsSet>true</t:ReminderIsSet></t:CalendarItem>")
+                        append("</t:SetItemField>")
+                        append("<t:SetItemField>")
+                        append("""<t:FieldURI FieldURI="item:ReminderMinutesBeforeStart"/>""")
+                        append("<t:CalendarItem><t:ReminderMinutesBeforeStart>$reminder</t:ReminderMinutesBeforeStart></t:CalendarItem>")
+                        append("</t:SetItemField>")
+                    } else {
+                        append("<t:SetItemField>")
+                        append("""<t:FieldURI FieldURI="item:ReminderIsSet"/>""")
+                        append("<t:CalendarItem><t:ReminderIsSet>false</t:ReminderIsSet></t:CalendarItem>")
+                        append("</t:SetItemField>")
+                    }
+
+                    val ewsSensitivity = when (sensitivity) {
+                        1 -> "Personal"; 2 -> "Private"; 3 -> "Confidential"; else -> "Normal"
+                    }
+                    append("<t:SetItemField>")
+                    append("""<t:FieldURI FieldURI="item:Sensitivity"/>""")
+                    append("<t:CalendarItem><t:Sensitivity>$ewsSensitivity</t:Sensitivity></t:CalendarItem>")
+                    append("</t:SetItemField>")
+
+                    append("</t:Updates>")
+                    append("</t:ItemChange></m:ItemChanges>")
+                    append("</m:UpdateItem></soap:Body></soap:Envelope>")
+                }
+
+                val updateResult = ewsRequest(ewsUrl, updateXml, "UpdateItem")
+                if (updateResult is EasResult.Error) return@withContext updateResult
+                val responseXml = (updateResult as EasResult.Success).data
+
+                val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
+                val responseCode = EWS_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)?.trim()
+
+                if (hasSuccess && (responseCode == "NoError" || responseCode == null)) {
+                    EasResult.Success(true)
+                } else {
+                    EasResult.Error("EWS UpdateItem occurrence error: $responseCode")
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error(e.message ?: "EWS occurrence update failed")
+            }
+        }
+    }
+
+    private fun buildExceptionSyncXml(
+        syncKey: String,
+        collectionId: String,
+        serverId: String,
+        majorVersion: Int,
+        existingExceptions: List<RecurrenceHelper.RecurrenceException>,
+        occurrenceOriginalStart: Long,
+        subject: String,
+        startTime: Long,
+        endTime: Long,
+        location: String,
+        body: String,
+        allDayEvent: Boolean,
+        reminder: Int,
+        busyStatus: Int,
+        sensitivity: Int
+    ): String {
+        val escapedSubject = deps.escapeXml(subject)
+        val escapedLocation = deps.escapeXml(location)
+        val escapedBody = deps.escapeXml(body)
+
+        return buildString {
+            append("""<?xml version="1.0" encoding="UTF-8"?>""")
+            if (majorVersion >= 14) {
+                append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:calendar="Calendar">""")
+            } else {
+                append("""<Sync xmlns="AirSync" xmlns:calendar="Calendar">""")
+            }
+            append("<Collections><Collection>")
+            append("<SyncKey>$syncKey</SyncKey>")
+            append("<CollectionId>$collectionId</CollectionId>")
+            append("<Commands><Change>")
+            append("<ServerId>$serverId</ServerId>")
+            append("<ApplicationData>")
+
+            append("<calendar:Exceptions>")
+
+            for (ex in existingExceptions) {
+                if (ex.exceptionStartTime == occurrenceOriginalStart) continue
+                appendExceptionXml(ex, majorVersion)
+            }
+
+            append("<calendar:Exception>")
+            append("<calendar:ExceptionStartTime>${formatEasDate(occurrenceOriginalStart)}</calendar:ExceptionStartTime>")
+            append("<calendar:Subject>$escapedSubject</calendar:Subject>")
+            append("<calendar:StartTime>${formatEasDate(startTime)}</calendar:StartTime>")
+            append("<calendar:EndTime>${formatEasDate(endTime)}</calendar:EndTime>")
+            append("<calendar:Location>$escapedLocation</calendar:Location>")
+            if (majorVersion >= 14) {
+                append("<airsyncbase:Body>")
+                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
+                append("</airsyncbase:Body>")
+            }
+            append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
+            append("<calendar:Reminder>$reminder</calendar:Reminder>")
+            append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
+            append("<calendar:Sensitivity>$sensitivity</calendar:Sensitivity>")
+            append("</calendar:Exception>")
+
+            append("</calendar:Exceptions>")
+
+            append("</ApplicationData>")
+            append("</Change></Commands>")
+            append("</Collection></Collections>")
+            append("</Sync>")
+        }
+    }
+
+    private fun StringBuilder.appendExceptionXml(
+        ex: RecurrenceHelper.RecurrenceException,
+        majorVersion: Int
+    ) {
+        append("<calendar:Exception>")
+        append("<calendar:ExceptionStartTime>${formatEasDate(ex.exceptionStartTime)}</calendar:ExceptionStartTime>")
+        if (ex.deleted) {
+            append("<calendar:Deleted>1</calendar:Deleted>")
+        } else {
+            if (ex.subject.isNotBlank()) append("<calendar:Subject>${deps.escapeXml(ex.subject)}</calendar:Subject>")
+            if (ex.startTime > 0) append("<calendar:StartTime>${formatEasDate(ex.startTime)}</calendar:StartTime>")
+            if (ex.endTime > 0) append("<calendar:EndTime>${formatEasDate(ex.endTime)}</calendar:EndTime>")
+            if (ex.location.isNotBlank()) append("<calendar:Location>${deps.escapeXml(ex.location)}</calendar:Location>")
+            if (ex.body.isNotBlank() && majorVersion >= 14) {
+                append("<airsyncbase:Body>")
+                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Data>${deps.escapeXml(ex.body)}</airsyncbase:Data>")
+                append("</airsyncbase:Body>")
+            }
+        }
+        append("</calendar:Exception>")
+    }
+
     /**
      * Удаление события календаря.
      * КРИТИЧНО: Для meetings (встреч с участниками) простой DeleteItem с SendToNone
@@ -718,13 +1093,12 @@ $itemIdsXml
      * DRY: Единый метод EAS-синхронизации календаря из списка папок.
      * Используется и для Standard (v14+), и для Legacy (v12.x) путей.
      */
-    private suspend fun syncCalendarEasFromFolders(folders: List<EasFolder>): EasResult<List<EasCalendarEvent>> {
+    private suspend fun syncCalendarEasFromFolders(folders: List<EasFolder>): EasResult<CalendarSyncResult> {
         val calendarFolderId = folders.find { it.type == 8 }?.serverId
             ?: return EasResult.Error("Папка календаря не найдена")
         
         cachedCalendarFolderId = calendarFolderId
         
-        // Начальный запрос для получения SyncKey (без FilterType — как в рабочей v1.6.1)
         val initialXml = calendarSyncInitialXml(calendarFolderId)
         var syncKey = "0"
         
@@ -738,9 +1112,7 @@ $itemIdsXml
         }
         
         if (syncKey == "0") {
-            // КРИТИЧНО: Как в рабочей v1.6.1 — пустой syncKey означает пустой календарь,
-            // а НЕ ошибку. Error здесь блокировал всю цепочку и приводил к 0 событий.
-            return EasResult.Success(emptyList())
+            return EasResult.Success(CalendarSyncResult(emptyList()))
         }
         
         return syncCalendarEasLoop(calendarFolderId, syncKey)
@@ -751,12 +1123,18 @@ $itemIdsXml
      * Используется из syncCalendarEasFromFolders.
      * Robustness: timeout, sameKey loop detection, consecutiveErrors, empty data detection.
      */
+    data class CalendarSyncResult(
+        val events: List<EasCalendarEvent>,
+        val deletedServerIds: Set<String> = emptySet()
+    )
+
     private suspend fun syncCalendarEasLoop(
         calendarFolderId: String,
         initialSyncKey: String
-    ): EasResult<List<EasCalendarEvent>> {
+    ): EasResult<CalendarSyncResult> {
         var syncKey = initialSyncKey
         val allEvents = mutableListOf<EasCalendarEvent>()
+        val allDeletedIds = mutableSetOf<String>()
         var moreAvailable = true
         var iterations = 0
         val maxIterations = 100
@@ -798,14 +1176,20 @@ $itemIdsXml
     </Collections>
 </Sync>""".trimIndent()
             
-            // [0]=syncKey, [1]=hasMore, [2]=events, [3]=hasAnyCommands, [4]=status
+            // [0]=syncKey, [1]=hasMore, [2]=events, [3]=hasAnyCommands, [4]=status, [5]=deletedIds
             val result = deps.executeEasCommand("Sync", syncXml) { responseXml ->
                 val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
                 val newSyncKey = deps.extractValue(responseXml, "SyncKey")
                 val hasMore = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
                 val events = if (status == 1) parseCalendarEvents(responseXml) else emptyList<EasCalendarEvent>()
+                val deletedIds = mutableSetOf<String>()
+                if (status == 1) {
+                    DELETE_SERVER_ID_PATTERN.findAll(responseXml).forEach { m ->
+                        m.groupValues[1].trim().takeIf { it.isNotBlank() }?.let { deletedIds.add(it) }
+                    }
+                }
                 val hasAnyCommands = responseXml.contains("<Commands>")
-                arrayOf<Any?>(newSyncKey, hasMore, events, hasAnyCommands, status)
+                arrayOf<Any?>(newSyncKey, hasMore, events, hasAnyCommands, status, deletedIds)
             }
             
             when (result) {
@@ -844,7 +1228,7 @@ $itemIdsXml
                             android.util.Log.w("EasCalendarService", "Calendar Sync Status=$status")
                             consecutiveErrors++
                             if (consecutiveErrors >= maxConsecutiveErrors) {
-                                return if (allEvents.isNotEmpty()) EasResult.Success(allEvents)
+                                return if (allEvents.isNotEmpty()) EasResult.Success(CalendarSyncResult(allEvents, allDeletedIds))
                                 else EasResult.Error("Calendar Sync failed: Status=$status")
                             }
                             kotlinx.coroutines.delay(500L * consecutiveErrors)
@@ -860,7 +1244,10 @@ $itemIdsXml
                     @Suppress("UNCHECKED_CAST")
                     val events = arr[2] as List<EasCalendarEvent>
                     val hasAnyCommands = arr[3] as Boolean
+                    @Suppress("UNCHECKED_CAST")
+                    val deletedIds = arr[5] as Set<String>
                     allEvents.addAll(events)
+                    allDeletedIds.addAll(deletedIds)
                     
                     android.util.Log.d("EasCalendarService", 
                         "syncCalendarEasLoop: iteration=$iterations, parsed=${events.size}, total=${allEvents.size}, hasMore=$moreAvailable, hasCommands=$hasAnyCommands")
@@ -892,7 +1279,7 @@ $itemIdsXml
                     android.util.Log.w("EasCalendarService", "Calendar sync batch error #$consecutiveErrors: ${result.message}")
                     if (consecutiveErrors >= maxConsecutiveErrors) {
                         return if (allEvents.isNotEmpty()) {
-                            EasResult.Success(allEvents)
+                            EasResult.Success(CalendarSyncResult(allEvents, allDeletedIds))
                         } else {
                             result
                         }
@@ -902,9 +1289,9 @@ $itemIdsXml
             }
         }
         
-        return EasResult.Success(allEvents)
+        return EasResult.Success(CalendarSyncResult(allEvents, allDeletedIds))
     }
-    
+
     private suspend fun createCalendarEventEas(
         subject: String,
         startTime: Long,
@@ -963,9 +1350,8 @@ $itemIdsXml
                 append("</airsyncbase:Body>")
             }
             
-            if (allDayEvent) {
-                append("<calendar:TimeZone>$UTC_TIMEZONE_BLOB</calendar:TimeZone>")
-            }
+            val tzBlob = if (allDayEvent) android.util.Base64.encodeToString(ByteArray(172), android.util.Base64.NO_WRAP) else buildDeviceTimezoneBlob()
+            append("<calendar:TimeZone>$tzBlob</calendar:TimeZone>")
             append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
@@ -1083,9 +1469,9 @@ $itemIdsXml
                 append("</airsyncbase:Body>")
             }
             
-            // TimeZone в Change поддерживается только EAS 14+ (Exchange 2010+)
-            if (allDayEvent && majorVersion >= 14) {
-                append("<calendar:TimeZone>$UTC_TIMEZONE_BLOB</calendar:TimeZone>")
+            if (majorVersion >= 14) {
+                val tzBlob = if (allDayEvent) android.util.Base64.encodeToString(ByteArray(172), android.util.Base64.NO_WRAP) else buildDeviceTimezoneBlob()
+                append("<calendar:TimeZone>$tzBlob</calendar:TimeZone>")
             }
             append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
@@ -1512,8 +1898,8 @@ $itemIdsXml
                 val escapedLocation = deps.escapeXml(location)
                 val escapedBody = deps.escapeXml(body)
                 
-                val startTimeStr = formatEwsDate(startTime)
-                val endTimeStr = formatEwsDate(endTime)
+                val startTimeStr = if (allDayEvent) formatEwsAllDayDate(startTime) else formatEwsDate(startTime)
+                val endTimeStr = if (allDayEvent) formatEwsAllDayDate(endTime) else formatEwsDate(endTime)
                 
                 val ewsBusyStatus = mapBusyStatusToEws(busyStatus)
                 
@@ -1577,11 +1963,7 @@ $itemIdsXml
                     append(attendeesXml)
                     val ewsRecurrenceXml = buildEwsRecurrenceXml(recurrenceType, startTimeStr)
                     if (ewsRecurrenceXml.isNotBlank()) append(ewsRecurrenceXml)
-                    if (allDayEvent) {
-                        append("""<MeetingTimeZone TimeZoneName="UTC">""")
-                        append("<BaseOffset>PT0H</BaseOffset>")
-                        append("</MeetingTimeZone>")
-                    }
+                    if (!allDayEvent) append(buildMeetingTimeZoneXml())
                     append("</t:CalendarItem>")
                     append("</Items>")
                     append("</CreateItem>")
@@ -1640,7 +2022,8 @@ $itemIdsXml
         sensitivity: Int,
         attendees: List<String>,
         oldSubject: String? = null,
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        newAttendeesToAppend: List<String> = emptyList()
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
@@ -1672,8 +2055,8 @@ $itemIdsXml
                 val escapedLocation = deps.escapeXml(location)
                 val escapedBody = deps.escapeXml(body)
                 
-                val startTimeStr = formatEwsDate(startTime)
-                val endTimeStr = formatEwsDate(endTime)
+                val startTimeStr = if (allDayEvent) formatEwsAllDayDate(startTime) else formatEwsDate(startTime)
+                val endTimeStr = if (allDayEvent) formatEwsAllDayDate(endTime) else formatEwsDate(endTime)
                 
                 val ewsBusyStatus = mapBusyStatusToEws(busyStatus)
                 
@@ -1719,7 +2102,6 @@ $itemIdsXml
                     append("</t:CalendarItem>")
                     append("</t:SetItemField>")
                     
-                    // Start - КРИТИЧНО: отправляем в UTC с 'Z'!
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="calendar:Start"/>""")
                     append("<t:CalendarItem>")
@@ -1727,7 +2109,6 @@ $itemIdsXml
                     append("</t:CalendarItem>")
                     append("</t:SetItemField>")
                     
-                    // End - КРИТИЧНО: отправляем в UTC с 'Z'!
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="calendar:End"/>""")
                     append("<t:CalendarItem>")
@@ -1803,21 +2184,27 @@ $itemIdsXml
                         append("</t:SetItemField>")
                     }
                     
-                    // MeetingTimeZone = UTC для all-day событий (Exchange 2007 SP1)
-                    if (allDayEvent) {
-                        append("<t:SetItemField>")
-                        append("""<t:FieldURI FieldURI="calendar:MeetingTimeZone"/>""")
-                        append("<t:CalendarItem>")
-                        append("""<t:MeetingTimeZone TimeZoneName="UTC">""")
-                        append("<t:BaseOffset>PT0H</t:BaseOffset>")
-                        append("</t:MeetingTimeZone>")
-                        append("</t:CalendarItem>")
-                        append("</t:SetItemField>")
-                    }
-
                     // Recurrence
                     val ewsRecurrenceUpdateXml = buildEwsRecurrenceUpdateXml(recurrenceType, startTimeStr)
                     if (ewsRecurrenceUpdateXml.isNotBlank()) append(ewsRecurrenceUpdateXml)
+                    
+                    // Exchange 2007 SP1: SetItemField NOT supported for RequiredAttendees.
+                    // Only APPEND truly new attendees (diff computed by CalendarRepository).
+                    if (newAttendeesToAppend.isNotEmpty()) {
+                        for (email in newAttendeesToAppend) {
+                            val escapedEmail = deps.escapeXml(email.trim())
+                            append("<t:AppendToItemField>")
+                            append("""<t:FieldURI FieldURI="calendar:RequiredAttendees"/>""")
+                            append("<t:CalendarItem>")
+                            append("<t:RequiredAttendees>")
+                            append("<t:Attendee><t:Mailbox>")
+                            append("<t:EmailAddress>$escapedEmail</t:EmailAddress>")
+                            append("</t:Mailbox></t:Attendee>")
+                            append("</t:RequiredAttendees>")
+                            append("</t:CalendarItem>")
+                            append("</t:AppendToItemField>")
+                        }
+                    }
                     
                     append("</t:Updates>")
                     append("</t:ItemChange>")
@@ -1964,9 +2351,9 @@ $itemIdsXml
 </MeetingResponse>""".trimIndent()
         
         return try {
-            // Best-effort: результат не блокирует последующий Delete
             deps.executeEasCommand("MeetingResponse", meetingResponseXml) { true }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Success(true)
         }
     }
@@ -2688,6 +3075,23 @@ $itemIdsXml
     }
 
     /**
+     * Для all-day событий EWS: извлекает дату из UTC-midnight timestamp
+     * и форматирует как "YYYY-MM-DDT00:00:00" БЕЗ суффикса Z.
+     * Exchange интерпретирует время без Z в таймзоне почтового ящика,
+     * корректно распознавая midnight→midnight как all-day.
+     */
+    private fun formatEwsAllDayDate(utcMidnightTimestamp: Long): String {
+        val utcCal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        utcCal.timeInMillis = utcMidnightTimestamp
+        return String.format(
+            java.util.Locale.US, "%04d-%02d-%02dT00:00:00",
+            utcCal.get(java.util.Calendar.YEAR),
+            utcCal.get(java.util.Calendar.MONTH) + 1,
+            utcCal.get(java.util.Calendar.DAY_OF_MONTH)
+        )
+    }
+
+    /**
      * Берёт дату (год/месяц/день) из local-timestamp, возвращает midnight UTC этой даты.
      * [addDay] = true → ещё +1 день (для End всех all-day событий).
      */
@@ -2713,11 +3117,195 @@ $itemIdsXml
         3 -> "OOF"
         else -> "Busy"
     }
+
+    /**
+     * EAS <calendar:TimeZone> blob from device timezone.
+     * TIME_ZONE_INFORMATION struct (172 bytes): Bias + StandardName + StandardDate +
+     * StandardBias + DaylightName + DaylightDate + DaylightBias.
+     */
+    private fun buildDeviceTimezoneBlob(): String {
+        val tz = java.util.TimeZone.getDefault()
+        val biasMinutes = -(tz.rawOffset / 60_000)
+        val buf = java.nio.ByteBuffer.allocate(172).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        buf.putInt(biasMinutes)
+        repeat(32) { buf.putShort(0) } // StandardName (64 bytes)
+        if (tz.useDaylightTime()) {
+            try {
+                val rules = java.time.ZoneId.systemDefault().rules
+                val trRules = rules.transitionRules
+                val toStd = trRules.firstOrNull { it.offsetAfter.totalSeconds < it.offsetBefore.totalSeconds }
+                val toDst = trRules.firstOrNull { it.offsetAfter.totalSeconds > it.offsetBefore.totalSeconds }
+                fun writeSystemTime(r: java.time.zone.ZoneOffsetTransitionRule?) {
+                    if (r != null) {
+                        buf.putShort(0)
+                        buf.putShort(r.month.value.toShort())
+                        buf.putShort((r.dayOfWeek.value % 7).toShort())
+                        val week = if (r.dayOfMonthIndicator < 0) 5 else ((r.dayOfMonthIndicator - 1) / 7 + 1)
+                        buf.putShort(week.toShort())
+                        buf.putShort(r.localTime.hour.toShort())
+                        buf.putShort(r.localTime.minute.toShort())
+                        buf.putShort(0); buf.putShort(0)
+                    } else repeat(8) { buf.putShort(0) }
+                }
+                writeSystemTime(toStd)
+                buf.putInt(0) // StandardBias
+                repeat(32) { buf.putShort(0) } // DaylightName
+                writeSystemTime(toDst)
+                buf.putInt(-(tz.dstSavings / 60_000)) // DaylightBias
+            } catch (_: Exception) {
+                while (buf.hasRemaining()) buf.put(0)
+            }
+        } else {
+            repeat(8) { buf.putShort(0) } // StandardDate
+            buf.putInt(0) // StandardBias
+            repeat(32) { buf.putShort(0) } // DaylightName
+            repeat(8) { buf.putShort(0) } // DaylightDate
+            buf.putInt(0) // DaylightBias
+        }
+        return android.util.Base64.encodeToString(buf.array(), android.util.Base64.NO_WRAP)
+    }
+
+    /**
+     * EWS <MeetingTimeZone> XML for Exchange 2007 SP1.
+     * Uses full BaseOffset + Standard/Daylight elements (works on both RTM and SP1).
+     */
+    private fun buildMeetingTimeZoneXml(): String {
+        val tz = java.util.TimeZone.getDefault()
+        val rawMinutes = tz.rawOffset / 60_000
+        val biasMinutes = -rawMinutes
+        val absH = kotlin.math.abs(rawMinutes) / 60
+        val absM = kotlin.math.abs(rawMinutes) % 60
+        val sign = if (rawMinutes >= 0) "+" else "-"
+        val displayName = "(UTC${sign}${String.format(java.util.Locale.US, "%02d:%02d", absH, absM)})"
+
+        fun durationStr(min: Int): String {
+            val s = if (min < 0) "-" else ""
+            val a = kotlin.math.abs(min)
+            return "${s}P0DT${a / 60}H${a % 60}M0.0S"
+        }
+
+        val sb = StringBuilder()
+        sb.append("<MeetingTimeZone TimeZoneName=\"$displayName\">")
+        sb.append("<BaseOffset>${durationStr(biasMinutes)}</BaseOffset>")
+        if (tz.useDaylightTime()) {
+            try {
+                val rules = java.time.ZoneId.systemDefault().rules
+                val trRules = rules.transitionRules
+                val toStd = trRules.firstOrNull { it.offsetAfter.totalSeconds < it.offsetBefore.totalSeconds }
+                val toDst = trRules.firstOrNull { it.offsetAfter.totalSeconds > it.offsetBefore.totalSeconds }
+                fun weekIndex(day: Int) = when {
+                    day < 0 -> "Last"; day <= 7 -> "First"; day <= 14 -> "Second"
+                    day <= 21 -> "Third"; day <= 28 -> "Fourth"; else -> "Last"
+                }
+                fun dayName(d: java.time.DayOfWeek) = d.name.lowercase().replaceFirstChar { it.uppercase() }
+                fun monthName(m: java.time.Month) = m.name.lowercase().replaceFirstChar { it.uppercase() }
+                if (toStd != null) {
+                    sb.append("<Standard><Offset>P0DT0H0M0.0S</Offset>")
+                    sb.append("<RelativeYearlyRecurrence>")
+                    sb.append("<DaysOfWeek>${dayName(toStd.dayOfWeek)}</DaysOfWeek>")
+                    sb.append("<DayOfWeekIndex>${weekIndex(toStd.dayOfMonthIndicator)}</DayOfWeekIndex>")
+                    sb.append("<Month>${monthName(toStd.month)}</Month>")
+                    sb.append("</RelativeYearlyRecurrence>")
+                    sb.append("<Time>${toStd.localTime}:00.0000000</Time></Standard>")
+                }
+                if (toDst != null) {
+                    sb.append("<Daylight><Offset>${durationStr(-(tz.dstSavings / 60_000))}</Offset>")
+                    sb.append("<RelativeYearlyRecurrence>")
+                    sb.append("<DaysOfWeek>${dayName(toDst.dayOfWeek)}</DaysOfWeek>")
+                    sb.append("<DayOfWeekIndex>${weekIndex(toDst.dayOfMonthIndicator)}</DayOfWeekIndex>")
+                    sb.append("<Month>${monthName(toDst.month)}</Month>")
+                    sb.append("</RelativeYearlyRecurrence>")
+                    sb.append("<Time>${toDst.localTime}:00.0000000</Time></Daylight>")
+                }
+            } catch (_: Exception) { /* omit Standard/Daylight on error */ }
+        }
+        sb.append("</MeetingTimeZone>")
+        return sb.toString()
+    }
+
+    /**
+     * Удаление одного вхождения повторяющегося события через EWS.
+     * Находит occurrence по CalendarView, затем DeleteItem.
+     */
+    suspend fun deleteSingleOccurrenceEws(
+        searchSubject: String,
+        occurrenceStartTime: Long
+    ): EasResult<Boolean> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val ewsUrl = deps.getEwsUrl()
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+                sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                val oneDayMs = 24L * 60 * 60 * 1000
+                val viewStart = sdf.format(java.util.Date(occurrenceStartTime - oneDayMs))
+                val viewEnd = sdf.format(java.util.Date(occurrenceStartTime + oneDayMs))
+
+                val findXml = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header><t:RequestServerVersion Version="Exchange2007_SP1"/></soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">
+            <m:ItemShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURI FieldURI="calendar:Start"/>
+                </t:AdditionalProperties>
+            </m:ItemShape>
+            <m:CalendarView MaxEntriesReturned="100" StartDate="$viewStart" EndDate="$viewEnd"/>
+            <m:ParentFolderIds><t:DistinguishedFolderId Id="calendar"/></m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+                val findResult = ewsRequest(ewsUrl, findXml, "FindItem")
+                if (findResult is EasResult.Error) return@withContext findResult
+                val findResponse = (findResult as EasResult.Success).data
+
+                val itemPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                val idPattern = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"".toRegex()
+                val subjectPat = "<(?:t:)?Subject>(.*?)</(?:t:)?Subject>".toRegex(RegexOption.DOT_MATCHES_ALL)
+                val startPat = "<(?:t:)?Start>(.*?)</(?:t:)?Start>".toRegex(RegexOption.DOT_MATCHES_ALL)
+
+                var bestItemId: String? = null
+                var bestTimeDiff = Long.MAX_VALUE
+
+                for (itemMatch in itemPattern.findAll(findResponse)) {
+                    val itemXml = itemMatch.groupValues[1]
+                    val id = idPattern.find(itemXml)?.groupValues?.get(1) ?: continue
+                    val subj = subjectPat.find(itemXml)?.groupValues?.get(1) ?: ""
+                    val startMs = parseEwsDateTime(startPat.find(itemXml)?.groupValues?.get(1)) ?: continue
+                    val diff = kotlin.math.abs(startMs - occurrenceStartTime)
+                    if (diff > oneDayMs) continue
+                    if (subj.equals(searchSubject, ignoreCase = true) && diff < bestTimeDiff) {
+                        bestItemId = id
+                        bestTimeDiff = diff
+                    }
+                }
+
+                if (bestItemId == null) {
+                    return@withContext EasResult.Error("Occurrence not found via EWS CalendarView")
+                }
+
+                deleteCalendarEventEws(bestItemId)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error(e.message ?: "Error deleting occurrence")
+            }
+        }
+    }
     
     private fun localCalFromIso(isoDate: String): java.util.Calendar? {
         return try {
-            val df = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-            df.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            val df: java.text.SimpleDateFormat
+            if (isoDate.endsWith("Z")) {
+                df = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+                df.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            } else {
+                df = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+            }
             val date = df.parse(isoDate) ?: return null
             java.util.Calendar.getInstance().apply { time = date }
         } catch (e: Exception) { null }
@@ -2873,11 +3461,25 @@ $itemIdsXml
             val location = escapeJsonString(extractCalendarValue(exXml, "Location") ?: "")
             val startTime = deps.parseEasDate(extractCalendarValue(exXml, "StartTime")) ?: 0L
             val endTime = deps.parseEasDate(extractCalendarValue(exXml, "EndTime")) ?: 0L
+            val body = escapeJsonString(extractExceptionBody(exXml))
             
-            exceptions.add("""{"exceptionStartTime":$exStartTime,"deleted":$deleted,"subject":"$subject","location":"$location","startTime":$startTime,"endTime":$endTime}""")
+            exceptions.add("""{"exceptionStartTime":$exStartTime,"deleted":$deleted,"subject":"$subject","location":"$location","startTime":$startTime,"endTime":$endTime,"body":"$body"}""")
         }
         
         return if (exceptions.isEmpty()) "" else "[${exceptions.joinToString(",")}]"
+    }
+
+    private fun extractExceptionBody(exXml: String): String {
+        val patterns = listOf(
+            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
+            "<calendar:Body>(.*?)</calendar:Body>",
+            "<Body>(.*?)</Body>"
+        )
+        for (pattern in patterns) {
+            val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(exXml)
+            if (match != null && match.groupValues[1].isNotBlank()) return match.groupValues[1].trim()
+        }
+        return ""
     }
     
     /**

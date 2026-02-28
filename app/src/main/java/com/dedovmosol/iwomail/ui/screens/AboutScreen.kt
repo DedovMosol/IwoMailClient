@@ -63,6 +63,7 @@ fun AboutScreen(
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
     var protocolTapCount by rememberSaveable { mutableStateOf(0) }
     var base64Revealed by rememberSaveable { mutableStateOf(persistedHintRevealed) }
+    val hintToastRef = remember { mutableStateOf<Toast?>(null) }
 
     Scaffold(
         topBar = {
@@ -125,11 +126,14 @@ fun AboutScreen(
                             protocolTapCount++
                             val remaining = 7 - protocolTapCount
                             if (remaining in 1..3) {
-                                Toast.makeText(
+                                hintToastRef.value?.cancel()
+                                val toast = Toast.makeText(
                                     context,
                                     if (isRu) "iwo — подсказка близко" else "iwo — hint is near",
                                     Toast.LENGTH_SHORT
-                                ).show()
+                                )
+                                toast.show()
+                                hintToastRef.value = toast
                             }
                             if (protocolTapCount >= 7) {
                                 base64Revealed = true

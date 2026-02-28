@@ -40,5 +40,7 @@ data class TaskEntity(
     val reminderTime: Long = 0,  // Timestamp напоминания
     val categories: String = "", // Категории через запятую
     val lastModified: Long = System.currentTimeMillis(),
-    val isDeleted: Boolean = false  // Задача в корзине
+    val isDeleted: Boolean = false,  // Задача в корзине
+    @ColumnInfo(defaultValue = "") val owner: String = "",
+    @ColumnInfo(defaultValue = "") val assignTo: String = ""
 )

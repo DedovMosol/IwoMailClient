@@ -1,6 +1,6 @@
 # Privacy Policy / Политика конфиденциальности
 
-**Last updated / Последнее обновление:** February 27, 2026
+**Last updated / Последнее обновление:** February 28, 2026
 
 ---
 
@@ -71,6 +71,7 @@ The App requests the following permissions:
 The App can receive data from other applications via Android's standard sharing mechanism:
 - **mailto: links** — the App can be selected as the default email client to handle mailto: links from browsers and other apps
 - **Share intent** — other apps can share text, files, and attachments to compose a new email
+- **iwomail:// URIs** — internal URI scheme used only by the home screen widget for in-app navigation (search, calendar, email, compose); no external data is involved
 - No data received from other apps is transmitted anywhere except to the mail server you configured when sending the email
 
 ### Updates
@@ -162,6 +163,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 Приложение может получать данные от других приложений через стандартный механизм Android:
 - **Ссылки mailto:** — приложение может быть выбрано почтовым клиентом по умолчанию для обработки ссылок mailto: из браузеров и других приложений
 - **Отправка через «Поделиться»** — другие приложения могут отправлять текст, файлы и вложения для создания нового письма
+- **Ссылки iwomail://** — внутренняя URI-схема, используемая только виджетом домашнего экрана для навигации в приложении (поиск, календарь, письма, написание); внешние данные не задействованы
 - Данные, полученные от других приложений, не передаются никуда, кроме почтового сервера, настроенного вами, при отправке письма
 
 ### Обновления

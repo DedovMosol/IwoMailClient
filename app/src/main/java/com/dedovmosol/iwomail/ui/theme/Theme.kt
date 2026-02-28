@@ -713,7 +713,7 @@ object AppColors {
     val inbox = Color(0xFF1565C0)           // Входящие — синий
     val drafts = Color(0xFFE6A800)          // Черновики — янтарный
     val trash = Color(0xFFE53935)           // Удалённые — красный
-    val sent = Color(0xFF5E35B1)            // Отправленные — фиолетовый
+    val sent = Color(0xFF9C27B0)            // Отправленные — пурпурный
     val outbox = Color(0xFF00897B)          // Исходящие — бирюзовый
     val spam = Color(0xFFE53935)            // Спам — красный
     
@@ -721,7 +721,7 @@ object AppColors {
     val contacts = Color(0xFF1565C0)        // Контакты — синий
     val notes = Color(0xFFFF9800)           // Заметки — оранжевый
     val calendar = Color(0xFF4CAF50)        // Календарь — зелёный
-    val tasks = Color(0xFF9C27B0)           // Задачи — фиолетовый
+    val tasks = Color(0xFFE91E63)           // Задачи — насыщенный розовый
     val favorites = Color(0xFFFFB300)       // Избранные — золотой
     
     // Утилиты

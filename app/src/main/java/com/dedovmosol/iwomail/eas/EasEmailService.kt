@@ -1458,6 +1458,18 @@ $deleteCommands
         // HTML будет извлечен при отображении в EmailDetailScreen
         val body = rawBody
         
+        // MS-ASEMAIL 2.2.2.58: Read — optional. "1" = read, "0" = unread.
+        // Exchange 2007 SP1 may omit <Read> for some emails (old system entries).
+        // Per spec, omission ≠ "0". Default to true (read) when absent:
+        // the server explicitly sends <Read>0</Read> for genuinely unread messages.
+        val readValue = deps.extractValue(xml, "Read")
+        val isRead = if (readValue != null) readValue == "1" else true
+
+        // MS-ASEMAIL: FlagStatus inside <Flag>. "2" = flagged.
+        val flagSection = "<Flag>(.*?)</Flag>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.get(1)
+        val isFlagged = flagSection?.let { deps.extractValue(it, "FlagStatus") == "2" } ?: false
+
         return EasEmail(
             serverId = serverId,
             from = deps.extractValue(xml, "From") ?: "",
@@ -1465,11 +1477,12 @@ $deleteCommands
             cc = deps.extractValue(xml, "Cc") ?: "",
             subject = deps.extractValue(xml, "Subject") ?: "(No subject)",
             dateReceived = deps.extractValue(xml, "DateReceived") ?: "",
-            read = deps.extractValue(xml, "Read") == "1",
+            read = isRead,
             importance = deps.extractValue(xml, "Importance")?.toIntOrNull() ?: 1,
             body = body,
             bodyType = bodyType,
-            attachments = attachments
+            attachments = attachments,
+            flagged = isFlagged
         )
     }
     

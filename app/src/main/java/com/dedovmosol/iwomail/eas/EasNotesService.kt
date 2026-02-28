@@ -1231,7 +1231,7 @@ $itemIdsXml
             val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
             val match = regex.find(xml)
             if (match != null && match.groupValues[1].isNotBlank()) {
-                return unescapeXml(match.groupValues[1].trim())
+                return stripHtmlIfNeeded(unescapeXml(match.groupValues[1].trim()))
             }
         }
         return null
@@ -1247,11 +1247,14 @@ $itemIdsXml
             val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
             val match = regex.find(xml)
             if (match != null) {
-                return unescapeXml(match.groupValues[1].trim())
+                return stripHtmlIfNeeded(unescapeXml(match.groupValues[1].trim()))
             }
         }
         return ""
     }
+
+    private fun stripHtmlIfNeeded(text: String): String =
+        com.dedovmosol.iwomail.util.stripHtmlIfNeeded(text)
 
     /**
      * Декодирует XML entities (&lt;, &gt;, &quot;, &amp;, &apos;)

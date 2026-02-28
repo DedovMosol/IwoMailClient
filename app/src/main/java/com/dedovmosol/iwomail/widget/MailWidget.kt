@@ -247,11 +247,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
     val iconGap = (4 * scale).dp
     val btnColor = Color(data.themeColor)
     
-    Column(modifier = GlanceModifier.fillMaxSize().clickable(actionStartActivity(
-        Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-    ))) {
+    Column(modifier = GlanceModifier.fillMaxSize()) {
         // ═══════════════════════════════════════════════
         // ВЕРХНЯЯ ЧАСТЬ — градиентный фон (растягивается при ресайзе)
         // ═══════════════════════════════════════════════
@@ -271,6 +267,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            setData(android.net.Uri.parse("iwomail://widget/search"))
                             putExtra("search", true)
                         }
                     ))
@@ -331,6 +328,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            setData(android.net.Uri.parse("iwomail://widget/calendar"))
                             putExtra("calendar", true)
                         }
                     )),
@@ -372,6 +370,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            setData(android.net.Uri.parse("iwomail://widget/tasks"))
                             putExtra("tasks", true)
                         }
                     )),
@@ -414,6 +413,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            setData(android.net.Uri.parse("iwomail://widget/notes"))
                             putExtra("notes", true)
                         }
                     )),
@@ -543,6 +543,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                         .clickable(actionStartActivity(
                             Intent(context, MainActivity::class.java).apply {
                                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                setData(android.net.Uri.parse("iwomail://widget/compose"))
                                 putExtra("compose", true)
                             }
                         )),

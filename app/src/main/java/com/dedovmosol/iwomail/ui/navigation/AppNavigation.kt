@@ -491,26 +491,20 @@ fun AppNavigation(
         }
     }
     
-    // Обработка App Shortcuts
-    var shortcutHandled by rememberSaveable { mutableStateOf(false) }
+    // Обработка App Shortcuts / Widget actions
+    val hasAnyShortcut = shortcutCompose || shortcutInbox || shortcutSearch || shortcutCalendar || shortcutTasks || shortcutNotes
     
     LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, shortcutCalendar, shortcutTasks, shortcutNotes, hasCheckedAccounts, startDestination) {
-        if (!shortcutHandled && hasCheckedAccounts && startDestination == Screen.Main.route) {
-            when {
-                shortcutCompose -> {
-                    shortcutHandled = true
-                    kotlinx.coroutines.delay(300)
-                    try {
+        if (hasAnyShortcut && hasCheckedAccounts && startDestination == Screen.Main.route) {
+            kotlinx.coroutines.delay(300)
+            try {
+                when {
+                    shortcutCompose -> {
                         navController.navigate(Screen.Compose.createRoute()) {
                             launchSingleTop = true
                         }
-                        onShortcutHandled()
-                    } catch (_: Exception) { }
-                }
-                shortcutInbox -> {
-                    shortcutHandled = true
-                    kotlinx.coroutines.delay(300)
-                    try {
+                    }
+                    shortcutInbox -> {
                         val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
                         if (account != null) {
                             val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
@@ -523,50 +517,30 @@ fun AppNavigation(
                                 }
                             }
                         }
-                        onShortcutHandled()
-                    } catch (_: Exception) { }
-                }
-                shortcutSearch -> {
-                    shortcutHandled = true
-                    kotlinx.coroutines.delay(300)
-                    try {
+                    }
+                    shortcutSearch -> {
                         navController.navigate(Screen.Search.route) {
                             launchSingleTop = true
                         }
-                        onShortcutHandled()
-                    } catch (_: Exception) { }
-                }
-                shortcutCalendar -> {
-                    shortcutHandled = true
-                    kotlinx.coroutines.delay(300)
-                    try {
+                    }
+                    shortcutCalendar -> {
                         navController.navigate(Screen.Calendar.createRoute()) {
                             launchSingleTop = true
                         }
-                        onShortcutHandled()
-                    } catch (_: Exception) { }
-                }
-                shortcutTasks -> {
-                    shortcutHandled = true
-                    kotlinx.coroutines.delay(300)
-                    try {
+                    }
+                    shortcutTasks -> {
                         navController.navigate(Screen.Tasks.createRoute()) {
                             launchSingleTop = true
                         }
-                        onShortcutHandled()
-                    } catch (_: Exception) { }
-                }
-                shortcutNotes -> {
-                    shortcutHandled = true
-                    kotlinx.coroutines.delay(300)
-                    try {
+                    }
+                    shortcutNotes -> {
                         navController.navigate(Screen.Notes.route) {
                             launchSingleTop = true
                         }
-                        onShortcutHandled()
-                    } catch (_: Exception) { }
+                    }
                 }
-            }
+            } catch (_: Exception) { }
+            onShortcutHandled()
         }
     }
     
@@ -633,6 +607,9 @@ fun AppNavigation(
                 },
                 onNavigateToCompose = {
                     navController.navigate(Screen.Compose.createRoute())
+                },
+                onComposeToEmail = { toEmail ->
+                    navController.navigate(Screen.Compose.createRoute(toEmail = toEmail))
                 },
                 onNavigateToSettings = {
                     navController.navigate(Screen.Settings.route)

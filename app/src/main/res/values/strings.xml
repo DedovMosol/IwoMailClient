@@ -17,8 +17,6 @@
     <string name="shortcut_compose_long">Write new email</string>
     <string name="shortcut_inbox">Inbox</string>
     <string name="shortcut_inbox_long">Open Inbox</string>
-    <string name="shortcut_search">Search</string>
-    <string name="shortcut_search_long">Search emails</string>
     <string name="shortcut_sync">Sync</string>
     <string name="shortcut_sync_long">Synchronize</string>
     
@@ -31,7 +29,6 @@
     <string name="widget_tasks">Tasks</string>
     <string name="widget_no_new_mail">No new mail</string>
     <string name="widget_notes">Notes</string>
-    <string name="widget_synced_ago">Updated %s ago</string>
     <string name="widget_synced_just_now">Just now</string>
     <string name="widget_no_events_today">No events today</string>
     <string name="widget_no_tasks">No tasks today</string>

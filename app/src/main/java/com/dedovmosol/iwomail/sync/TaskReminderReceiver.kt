@@ -109,7 +109,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             .setContentTitle(task.subject.ifBlank { context.getString(R.string.task) })
             .setContentText(contentText.ifBlank { context.getString(R.string.task_reminder) })
             .setStyle(NotificationCompat.BigTextStyle().bigText(
-                if (task.body.isNotBlank()) task.body else contentText
+                if (task.body.isNotBlank()) com.dedovmosol.iwomail.util.stripHtmlIfNeeded(task.body) else contentText
             ))
             .setPriority(
                 if (task.importance == TaskImportance.HIGH.value) 

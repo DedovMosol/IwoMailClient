@@ -47,7 +47,8 @@ object RecurrenceHelper {
         val subject: String = "",
         val location: String = "",
         val startTime: Long = 0,
-        val endTime: Long = 0
+        val endTime: Long = 0,
+        val body: String = ""
     )
     
     /**
@@ -59,7 +60,11 @@ object RecurrenceHelper {
         val endTime: Long,
         val subject: String,
         val location: String,
-        val isException: Boolean = false
+        val isException: Boolean = false,
+        val body: String = "",
+        /** Оригинальное время из паттерна повторения (до применения exception).
+         *  Именно это время используется как ключ exception (ExceptionStartTime в MS-ASCAL). */
+        val originalStartTime: Long = startTime
     )
     
     /**
@@ -100,7 +105,8 @@ object RecurrenceHelper {
                     subject = obj.optString("subject", ""),
                     location = obj.optString("location", ""),
                     startTime = obj.optLong("startTime", 0),
-                    endTime = obj.optLong("endTime", 0)
+                    endTime = obj.optLong("endTime", 0),
+                    body = obj.optString("body", "")
                 )
             }
         } catch (e: Exception) {
@@ -108,6 +114,37 @@ object RecurrenceHelper {
         }
     }
     
+    /**
+     * Вставляет или заменяет исключение в JSON-массиве исключений.
+     * Возвращает обновлённый JSON.
+     */
+    fun mergeException(existingJson: String, exception: RecurrenceException): String {
+        val existing = parseExceptions(existingJson).toMutableList()
+        val idx = existing.indexOfFirst { it.exceptionStartTime == exception.exceptionStartTime }
+        if (idx >= 0) existing[idx] = exception else existing.add(exception)
+        return exceptionsToJson(existing)
+    }
+
+    fun exceptionsToJson(exceptions: List<RecurrenceException>): String {
+        if (exceptions.isEmpty()) return ""
+        val parts = exceptions.map { ex ->
+            buildString {
+                append("{\"exceptionStartTime\":${ex.exceptionStartTime}")
+                append(",\"deleted\":${ex.deleted}")
+                append(",\"subject\":\"${escapeJson(ex.subject)}\"")
+                append(",\"location\":\"${escapeJson(ex.location)}\"")
+                append(",\"startTime\":${ex.startTime}")
+                append(",\"endTime\":${ex.endTime}")
+                append(",\"body\":\"${escapeJson(ex.body)}\"")
+                append("}")
+            }
+        }
+        return "[${parts.joinToString(",")}]"
+    }
+
+    private fun escapeJson(s: String): String =
+        s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
     /**
      * Генерирует экземпляры повторяющегося события для заданного диапазона дат.
      * 
@@ -148,7 +185,9 @@ object RecurrenceHelper {
                     endTime = actualEnd,
                     subject = exception.subject.ifBlank { event.subject },
                     location = exception.location.ifBlank { event.location },
-                    isException = true
+                    isException = true,
+                    body = exception.body.ifBlank { event.body },
+                    originalStartTime = occurrenceStart
                 )
             } else {
                 OccurrenceInstance(
@@ -157,7 +196,9 @@ object RecurrenceHelper {
                     endTime = occurrenceEnd,
                     subject = event.subject,
                     location = event.location,
-                    isException = false
+                    isException = false,
+                    body = event.body,
+                    originalStartTime = occurrenceStart
                 )
             }
         }

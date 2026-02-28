@@ -26,11 +26,12 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 - ✅ **Mail** — sync, send with attachments, search, filters, favorites, folder management, drafts, scheduled send, send group users
 - ✅ **Contacts** — personal and GAL, groups, import/export (vCard, CSV)
-- ✅ **Calendar** — support for recurring events, attachments, and online meeting links
+- ✅ **Calendar** — recurring events, attendee management, attachments, online meeting links
 - ✅ **Notes** — create, edit, sync
-- ✅ **Tasks** — create, edit, sync
+- ✅ **Tasks** — create, edit, assign, reminders, sync
 - ✅ **Notifications** — Push (Direct Push), background sync, night mode
 - ✅ **Auto-cleanup** — configurable Trash/Drafts/Spam cleanup per account (interval-based or disabled via “Never”)
+- ✅ **Widget** — home screen widget with quick access to emails, search, calendar, tasks, and compose
 - ✅ **Interface** — dark/light theme, 4 color schemes, personalization
 - ✅ **Multiple accounts** — with individual signatures and settings
 - ✅ **MDN/DSN** — read and delivery receipt requests
@@ -103,7 +104,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 - Conscrypt — TLS 1.0-1.3 (Exchange 2007 support)
 - EAS 12.0-14.1 — ActiveSync
 - EWS (NTLM) — Exchange Web Services
-- JavaMail (com.sun.mail) — IMAP/POP3/SMTP
+- JavaMail (com.sun.mail) — IMAP/POP3
 
 **Security:**
 - Certificate Pinning (Public Key Pinning)
@@ -166,11 +167,11 @@ Repository Layer
     ↓
 Protocol Layer
   EAS/EWS — EasClient (Email, Calendar, Tasks, Notes, Drafts, Contacts, Attachment)
-  IMAP — ImapClient  |  POP3 — Pop3Client  |  SMTP — SmtpClient
+  IMAP — ImapClient  |  POP3 — Pop3Client
     ↓
 Database Layer                    Network Layer
-  Room — 10 DAOs, 10 Entities      HttpClientProvider, NetworkMonitor
-  MailDatabase (v34)                RetryUtils, NtlmAuthenticator
+  Room — 11 DAOs, 10 Entities      HttpClientProvider, NetworkMonitor
+  MailDatabase (v34)                NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker

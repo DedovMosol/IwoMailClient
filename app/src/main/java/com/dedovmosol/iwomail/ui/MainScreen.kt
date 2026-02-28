@@ -567,6 +567,7 @@ fun MainScreen(
     onNavigateToSetup: () -> Unit,
     onNavigateToEmailList: (String) -> Unit,
     onNavigateToCompose: () -> Unit,
+    onComposeToEmail: (String) -> Unit = {},
     onNavigateToSettings: () -> Unit,
     onNavigateToAccountSettings: (Long) -> Unit,
     onNavigateToOnboarding: () -> Unit = {},
@@ -1337,6 +1338,7 @@ fun MainScreen(
                 onEmailsTodayClick = onNavigateToEmailListWithDateFilter,
                 onEventsTodayClick = onNavigateToCalendarToday,
                 onTasksTodayClick = onNavigateToTasksToday,
+                onComposeToEmail = onComposeToEmail,
                 modifier = Modifier.padding(padding)
             )
         }
@@ -1370,6 +1372,7 @@ private fun HomeContent(
     onEmailsTodayClick: (String, String) -> Unit = { _, _ -> },
     onEventsTodayClick: () -> Unit = {},
     onTasksTodayClick: () -> Unit = {},
+    onComposeToEmail: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1983,21 +1986,8 @@ private fun HomeContent(
                         
                         Button(
                             onClick = {
-                                val baseIntent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
-                                    data = android.net.Uri.parse("mailto:andreyid@outlook.com")
-                                }
-                                val initialIntents = arrayOf(
-                                    android.content.Intent(baseIntent).apply {
-                                        component = android.content.ComponentName(
-                                            context,
-                                            com.dedovmosol.iwomail.MainActivity::class.java
-                                        )
-                                    }
-                                )
-                                val chooser = android.content.Intent.createChooser(baseIntent, null).apply {
-                                    putExtra(android.content.Intent.EXTRA_INITIAL_INTENTS, initialIntents)
-                                }
-                                try { context.startActivity(chooser) } catch (_: Exception) { }
+                                showDonateDialog = false
+                                onComposeToEmail("andreyid@outlook.com")
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -2523,13 +2513,13 @@ private fun FolderCardDisplay(
         2 -> FolderColorsData(AppIcons.Email, listOf(Color(0xFF3949AB), Color(0xFF3444A0)))
         3 -> FolderColorsData(AppIcons.Edit, listOf(Color(0xFF546E7A), Color(0xFF4E6672)))
         4 -> FolderColorsData(AppIcons.Delete, listOf(Color(0xFFC62828), Color(0xFFBF2424)))
-        5 -> FolderColorsData(AppIcons.Send, listOf(Color(0xFF5E35B1), Color(0xFF5630A8)))
+        5 -> FolderColorsData(AppIcons.Send, listOf(Color(0xFF7B1FA2), Color(0xFF731D98)))
         6 -> FolderColorsData(AppIcons.Outbox, listOf(Color(0xFF00897B), Color(0xFF008073)))
         -1 -> FolderColorsData(AppIcons.Star, listOf(Color(0xFFC77700), Color(0xFFBF7000)))
         -2 -> FolderColorsData(AppIcons.People, listOf(Color(0xFF1565C0), Color(0xFF1260B8)))
         -3 -> FolderColorsData(AppIcons.StickyNote, listOf(Color(0xFF2E7D32), Color(0xFF28742D)))
         -4 -> FolderColorsData(AppIcons.CalendarMonth, listOf(Color(0xFF1E88E5), Color(0xFF1A7FDB)))
-        -5 -> FolderColorsData(AppIcons.Task, listOf(Color(0xFF7B1FA2), Color(0xFF731D98)))
+        -5 -> FolderColorsData(AppIcons.Task, listOf(Color(0xFFE91E63), Color(0xFFD81B60)))
         -6 -> FolderColorsData(AppIcons.Folder, listOf(Color(0xFFD84315), Color(0xFFCF3E12)))
         else -> FolderColorsData(AppIcons.Folder, listOf(Color(0xFF546E7A), Color(0xFF4E6672)))
     }

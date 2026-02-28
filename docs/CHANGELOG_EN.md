@@ -9,10 +9,10 @@
 - Calendar: event attachments, recurring events, local trash
 - Contacts: group support when composing + duplicate warnings
 - Drafts: local save mode (switchable in settings)
-- Exchange 2007 SP1: fixed loading of all tasks, calendar attachments, and folder sync
+- Exchange 2007 SP1: fixed loading of all tasks, calendar events, and folder sync
 - Smoother onboarding slide transitions
 - Significant performance improvements
-- Bug fixes, reduced memory leaks and battery usage, improved stability and security
+- Bug fixes, reduced memory leaks and battery usage, improved stability, security level
 
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 
@@ -28,7 +28,7 @@
 - Email suggestions with partial match search
 - Multi-select — bulk delete in trash, notes, calendar
 - Material3 DatePicker/TimePicker, unified scrollbars (Outlook-style)
-- Calendar/tasks/notes — updated filters and full-width search
+- Calendar/tasks — updated filters and full-width search
 - Full error localization (EN/RU)
 
 ### Fixes

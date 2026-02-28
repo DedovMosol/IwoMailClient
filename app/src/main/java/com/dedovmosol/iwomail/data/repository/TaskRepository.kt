@@ -170,7 +170,8 @@ class TaskRepository(private val context: Context) {
                             reminderSet = reminderSet,
                             reminderTime = reminderTime,
                             categories = "",
-                            lastModified = System.currentTimeMillis()
+                            lastModified = System.currentTimeMillis(),
+                            assignTo = assignTo?.trim() ?: ""
                         )
                         taskDao.insert(task)
                         // Планируем напоминание
@@ -276,7 +277,8 @@ class TaskRepository(private val context: Context) {
                             importance = importance,
                             reminderSet = reminderSet,
                             reminderTime = reminderTime,
-                            lastModified = newLastModified
+                            lastModified = newLastModified,
+                            assignTo = assignTo?.trim() ?: task.assignTo
                         )
                         
                         taskDao.update(updatedTask)
@@ -761,11 +763,10 @@ class TaskRepository(private val context: Context) {
                                 reminderSet = task.reminderSet,
                                 reminderTime = if (task.reminderTime > 0) task.reminderTime else (existingTask?.reminderTime ?: 0),
                                 categories = task.categories.joinToString(","),
-                                // КРИТИЧНО: Если обновляем существующую задачу - ставим текущее время
-                                // Если новая задача - используем время с сервера
                                 lastModified = if (existingTask != null) syncTime else task.lastModified,
-                                // Используем флаг isDeleted с сервера (из Deleted Items)
-                                isDeleted = task.isDeleted
+                                isDeleted = task.isDeleted,
+                                owner = task.owner.ifBlank { existingTask?.owner ?: "" },
+                                assignTo = existingTask?.assignTo ?: ""
                             )
                         }
                         
