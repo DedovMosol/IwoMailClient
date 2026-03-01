@@ -494,7 +494,10 @@ fun CalendarScreen(
         val eventsRestoredText = Strings.eventsRestored
         
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { showDeleteConfirmDialog = false },
+            onDismissRequest = {
+                showDeleteConfirmDialog = false
+                deleteConfirmTargetIds = emptySet()
+            },
             icon = { Icon(if (deleteConfirmIsPermanent) AppIcons.DeleteForever else AppIcons.Delete, null) },
             title = { 
                 Text(
@@ -589,7 +592,11 @@ fun CalendarScreen(
     if (showOccurrenceDeleteChoice) {
         val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { showOccurrenceDeleteChoice = false },
+            onDismissRequest = {
+                showOccurrenceDeleteChoice = false
+                pendingOccurrenceIds = emptySet()
+                deleteConfirmTargetIds = emptySet()
+            },
             title = { Text(if (isRussian) "Удаление повторяющегося события" else "Delete Recurring Event") },
             text = {
                 Text(
@@ -618,8 +625,10 @@ fun CalendarScreen(
                         val idsToProcess = pendingOccurrenceIds.toList()
                         val nonOccurrenceResolvedIds = deleteConfirmTargetIds -
                             pendingOccurrenceIds.map { it.substringBefore("_occ_") }.toSet()
+                        val eventsSnapshot = events.toList()
                         selectedEventIds = emptySet()
                         pendingOccurrenceIds = emptySet()
+                        deleteConfirmTargetIds = emptySet()
                         scope.launch {
                             var successCount = 0
                             var errorMsg: String? = null
@@ -627,7 +636,7 @@ fun CalendarScreen(
                                 val masterId = occId.substringBefore("_occ_")
                                 val occStartStr = occId.substringAfter("_occ_")
                                 val occStart = occStartStr.toLongOrNull() ?: continue
-                                val master = events.find { it.id == masterId } ?: continue
+                                val master = eventsSnapshot.find { it.id == masterId } ?: continue
                                 val result = withContext(Dispatchers.IO) {
                                     calendarRepo.deleteOccurrence(master, occStart)
                                 }
@@ -635,7 +644,7 @@ fun CalendarScreen(
                                 else if (result is EasResult.Error) errorMsg = result.message
                             }
                             if (nonOccurrenceResolvedIds.isNotEmpty()) {
-                                val regularToDelete = events.filter { it.id in nonOccurrenceResolvedIds }
+                                val regularToDelete = eventsSnapshot.filter { it.id in nonOccurrenceResolvedIds }
                                 if (regularToDelete.isNotEmpty()) {
                                     withContext(Dispatchers.IO) {
                                         calendarRepo.deleteEvents(regularToDelete)
@@ -958,17 +967,19 @@ fun CalendarScreen(
                         val renamedSelected = allOccIds.filter { it in renamedOccurrenceIds }.toSet()
                         val seriesOccurrences = allOccIds - renamedSelected
 
+                        val renamedOnlyMasterIds = renamedSelected.map { it.substringBefore("_occ_") }.toSet() -
+                            seriesOccurrences.map { it.substringBefore("_occ_") }.toSet()
+
                         if (renamedSelected.isNotEmpty()) {
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                             val renamedToProcess = renamedSelected.toList()
-                            val remainingTargetIds = deleteTargetIds -
-                                renamedSelected.map { it.substringBefore("_occ_") }.toSet()
+                            val eventsSnapshot = events + deletedEvents
                             selectedEventIds = selectedEventIds - renamedSelected
                             scope.launch {
                                 for (occId in renamedToProcess) {
                                     val masterId = occId.substringBefore("_occ_")
                                     val occStart = occId.substringAfter("_occ_").toLongOrNull() ?: continue
-                                    val master = filteredEvents.find { it.id == masterId } ?: continue
+                                    val master = eventsSnapshot.find { it.id == masterId } ?: continue
                                     withContext(Dispatchers.IO) {
                                         calendarRepo.deleteOccurrence(master, occStart)
                                     }
@@ -979,6 +990,7 @@ fun CalendarScreen(
                                         Toast.LENGTH_SHORT).show()
                                 }
                             }
+                            val remainingTargetIds = deleteTargetIds - renamedOnlyMasterIds
                             if (seriesOccurrences.isEmpty() && remainingTargetIds.isEmpty()) {
                                 return@CalendarSelectionTopBar
                             }
@@ -986,12 +998,10 @@ fun CalendarScreen(
 
                         if (!deletePermanently && seriesOccurrences.isNotEmpty()) {
                             pendingOccurrenceIds = seriesOccurrences
-                            deleteConfirmTargetIds = deleteTargetIds -
-                                renamedSelected.map { it.substringBefore("_occ_") }.toSet()
+                            deleteConfirmTargetIds = deleteTargetIds - renamedOnlyMasterIds
                             showOccurrenceDeleteChoice = true
                         } else {
-                            val finalTargets = deleteTargetIds -
-                                renamedSelected.map { it.substringBefore("_occ_") }.toSet()
+                            val finalTargets = deleteTargetIds - renamedOnlyMasterIds
                             if (finalTargets.isNotEmpty()) {
                                 deleteConfirmCount = finalTargets.size
                                 deleteConfirmIsPermanent = deletePermanently
