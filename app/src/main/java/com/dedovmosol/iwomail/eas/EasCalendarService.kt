@@ -3187,8 +3187,8 @@ $itemIdsXml
         }
 
         val sb = StringBuilder()
-        sb.append("<MeetingTimeZone TimeZoneName=\"$displayName\">")
-        sb.append("<BaseOffset>${durationStr(biasMinutes)}</BaseOffset>")
+        sb.append("<t:MeetingTimeZone TimeZoneName=\"$displayName\">")
+        sb.append("<t:BaseOffset>${durationStr(biasMinutes)}</t:BaseOffset>")
         if (tz.useDaylightTime()) {
             try {
                 val rules = java.time.ZoneId.systemDefault().rules
@@ -3202,26 +3202,26 @@ $itemIdsXml
                 fun dayName(d: java.time.DayOfWeek) = d.name.lowercase().replaceFirstChar { it.uppercase() }
                 fun monthName(m: java.time.Month) = m.name.lowercase().replaceFirstChar { it.uppercase() }
                 if (toStd != null) {
-                    sb.append("<Standard><Offset>P0DT0H0M0.0S</Offset>")
-                    sb.append("<RelativeYearlyRecurrence>")
-                    sb.append("<DaysOfWeek>${dayName(toStd.dayOfWeek)}</DaysOfWeek>")
-                    sb.append("<DayOfWeekIndex>${weekIndex(toStd.dayOfMonthIndicator)}</DayOfWeekIndex>")
-                    sb.append("<Month>${monthName(toStd.month)}</Month>")
-                    sb.append("</RelativeYearlyRecurrence>")
-                    sb.append("<Time>${toStd.localTime}:00.0000000</Time></Standard>")
+                    sb.append("<t:Standard><t:Offset>P0DT0H0M0.0S</t:Offset>")
+                    sb.append("<t:RelativeYearlyRecurrence>")
+                    sb.append("<t:DaysOfWeek>${dayName(toStd.dayOfWeek)}</t:DaysOfWeek>")
+                    sb.append("<t:DayOfWeekIndex>${weekIndex(toStd.dayOfMonthIndicator)}</t:DayOfWeekIndex>")
+                    sb.append("<t:Month>${monthName(toStd.month)}</t:Month>")
+                    sb.append("</t:RelativeYearlyRecurrence>")
+                    sb.append("<t:Time>${toStd.localTime}:00.0000000</t:Time></t:Standard>")
                 }
                 if (toDst != null) {
-                    sb.append("<Daylight><Offset>${durationStr(-(tz.dstSavings / 60_000))}</Offset>")
-                    sb.append("<RelativeYearlyRecurrence>")
-                    sb.append("<DaysOfWeek>${dayName(toDst.dayOfWeek)}</DaysOfWeek>")
-                    sb.append("<DayOfWeekIndex>${weekIndex(toDst.dayOfMonthIndicator)}</DayOfWeekIndex>")
-                    sb.append("<Month>${monthName(toDst.month)}</Month>")
-                    sb.append("</RelativeYearlyRecurrence>")
-                    sb.append("<Time>${toDst.localTime}:00.0000000</Time></Daylight>")
+                    sb.append("<t:Daylight><t:Offset>${durationStr(-(tz.dstSavings / 60_000))}</t:Offset>")
+                    sb.append("<t:RelativeYearlyRecurrence>")
+                    sb.append("<t:DaysOfWeek>${dayName(toDst.dayOfWeek)}</t:DaysOfWeek>")
+                    sb.append("<t:DayOfWeekIndex>${weekIndex(toDst.dayOfMonthIndicator)}</t:DayOfWeekIndex>")
+                    sb.append("<t:Month>${monthName(toDst.month)}</t:Month>")
+                    sb.append("</t:RelativeYearlyRecurrence>")
+                    sb.append("<t:Time>${toDst.localTime}:00.0000000</t:Time></t:Daylight>")
                 }
             } catch (_: Exception) { /* omit Standard/Daylight on error */ }
         }
-        sb.append("</MeetingTimeZone>")
+        sb.append("</t:MeetingTimeZone>")
         return sb.toString()
     }
 
