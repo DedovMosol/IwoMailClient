@@ -920,6 +920,7 @@ fun CalendarScreen(
             if (isSelectionMode) {
                 val eventsRestoredText = Strings.eventsRestored
                 val restoringEventsMessage = Strings.restoringEvents(selectedDeletedResolvedIds.size)
+                val renamedDeletedText = Strings.eventDeleted
                 val deletePermanently = hasDeletedSelected && !hasActiveSelected
                 CalendarSelectionTopBar(
                     selectedCount = resolvedSelectedIds.size,
@@ -974,6 +975,7 @@ fun CalendarScreen(
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                             val renamedToProcess = renamedSelected.toList()
                             val eventsSnapshot = events + deletedEvents
+                            val deletedText = renamedDeletedText
                             selectedEventIds = selectedEventIds - renamedSelected
                             scope.launch {
                                 for (occId in renamedToProcess) {
@@ -985,9 +987,7 @@ fun CalendarScreen(
                                     }
                                 }
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context,
-                                        if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Удалено" else "Deleted",
-                                        Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, deletedText, Toast.LENGTH_SHORT).show()
                                 }
                             }
                             val remainingTargetIds = deleteTargetIds - renamedOnlyMasterIds
