@@ -631,8 +631,7 @@ fun CalendarScreen(
                             }
                         }
                     },
-                    text = if (isRussian) "Только вхождения" else "Only occurrences"
-                )
+                ) { Text(if (isRussian) "Только вхождения" else "Only occurrences") }
             }
         )
     }
@@ -935,7 +934,7 @@ fun CalendarScreen(
                         val deleteTargetIds = if (deletePermanently) selectedDeletedResolvedIds else selectedActiveResolvedIds
                         if (deleteTargetIds.isEmpty()) return@CalendarSelectionTopBar
 
-                        val occurrenceOriginals = selectedEventIds.filter { it.contains("_occ_") }
+                        val occurrenceOriginals = selectedEventIds.filter { it.contains("_occ_") }.toSet()
                         if (!deletePermanently && occurrenceOriginals.isNotEmpty()) {
                             pendingOccurrenceIds = occurrenceOriginals
                             deleteConfirmTargetIds = deleteTargetIds
