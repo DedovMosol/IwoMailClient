@@ -593,7 +593,11 @@ class SyncWorker(
             val intervalMs = account.contactsSyncIntervalDays * ONE_DAY_MS
             if (System.currentTimeMillis() - lastSync < intervalMs) continue
             
-            // Синхронизируем контакты
+            try {
+                contactRepo.syncExchangeContacts(account.id)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            }
             try {
                 val result = contactRepo.syncGalContactsToDb(account.id)
                 if (result is EasResult.Success) {
@@ -601,7 +605,6 @@ class SyncWorker(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                // Игнорируем ошибки синхронизации контактов
             }
         }
     }

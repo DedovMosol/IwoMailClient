@@ -214,8 +214,10 @@ fun CalendarScreen(
     
     // Определяем, есть ли среди выделенных удалённые события (для корректного TopBar/диалога)
     val deletedEventIdSet = remember(deletedEvents) { deletedEvents.map { it.id }.toSet() }
-    val resolvedSelectedIds = remember(selectedEventIds) {
-        selectedEventIds.map { id -> if (id.contains("_occ_")) id.substringBefore("_occ_") else id }.toSet()
+    val resolvedSelectedIds = remember(selectedEventIds, deletedEventIdSet) {
+        selectedEventIds.map { id ->
+            if (id.contains("_occ_") && id !in deletedEventIdSet) id.substringBefore("_occ_") else id
+        }.toSet()
     }
     val selectedDeletedResolvedIds = remember(resolvedSelectedIds, deletedEventIdSet) {
         resolvedSelectedIds.filter { it in deletedEventIdSet }.toSet()
@@ -362,6 +364,7 @@ fun CalendarScreen(
     val selectedEvent = remember(selectedEventId, filteredEvents, events, deletedEvents) {
         selectedEventId?.let { id ->
             filteredEvents.find { it.id == id }
+                ?: deletedEvents.find { it.id == id }
                 ?: run {
                     val lookupId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
                     events.find { it.id == lookupId } ?: deletedEvents.find { it.id == lookupId }
@@ -464,20 +467,26 @@ fun CalendarScreen(
                     }
                 },
                 onDeleteClick = {
-                    selectedEventId = null  // Закрываем диалог СРАЗУ
-                    com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                    
-                    // Soft-delete (в корзину) — без прогрессбара, просто удаляем
-                    scope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            calendarRepo.deleteEvent(originalEvent)
-                        }
-                        when (result) {
-                            is EasResult.Success -> {
-                                Toast.makeText(context, eventDeletedText, Toast.LENGTH_SHORT).show()
+                    val isOccurrence = event.id.contains("_occ_") && originalEvent.isRecurring
+                    if (isOccurrence) {
+                        pendingOccurrenceIds = setOf(event.id)
+                        deleteConfirmTargetIds = setOf(originalEvent.id)
+                        selectedEventId = null
+                        showOccurrenceDeleteChoice = true
+                    } else {
+                        selectedEventId = null
+                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                calendarRepo.deleteEvent(originalEvent)
                             }
-                            is EasResult.Error -> {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            when (result) {
+                                is EasResult.Success -> {
+                                    Toast.makeText(context, eventDeletedText, Toast.LENGTH_SHORT).show()
+                                }
+                                is EasResult.Error -> {
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
                             }
                         }
                     }
@@ -527,8 +536,8 @@ fun CalendarScreen(
                         val eventsToDelete = (events + deletedEvents).filter { it.id in deleteConfirmTargetIds }
                         val eventIds = eventsToDelete.map { it.id }
                         selectedEventIds = selectedEventIds.filterNot { id ->
-                            val resolvedId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
-                            resolvedId in deleteConfirmTargetIds
+                            id in deleteConfirmTargetIds ||
+                                (id.contains("_occ_") && id.substringBefore("_occ_") in deleteConfirmTargetIds)
                         }.toSet()
                         
                         if (eventIds.isNotEmpty()) {
@@ -626,6 +635,7 @@ fun CalendarScreen(
                         val nonOccurrenceResolvedIds = deleteConfirmTargetIds -
                             pendingOccurrenceIds.map { it.substringBefore("_occ_") }.toSet()
                         val eventsSnapshot = events.toList()
+                        val filteredSnapshot = filteredEvents.toList()
                         selectedEventIds = emptySet()
                         pendingOccurrenceIds = emptySet()
                         deleteConfirmTargetIds = emptySet()
@@ -637,8 +647,10 @@ fun CalendarScreen(
                                 val occStartStr = occId.substringAfter("_occ_")
                                 val occStart = occStartStr.toLongOrNull() ?: continue
                                 val master = eventsSnapshot.find { it.id == masterId } ?: continue
+                                val occEntity = filteredSnapshot.find { it.id == occId }
+                                    ?: eventsSnapshot.find { it.id == occId }
                                 val result = withContext(Dispatchers.IO) {
-                                    calendarRepo.deleteOccurrence(master, occStart)
+                                    calendarRepo.deleteOccurrence(master, occStart, occEntity)
                                 }
                                 if (result is EasResult.Success) successCount++
                                 else if (result is EasResult.Error) errorMsg = result.message
@@ -932,8 +944,8 @@ fun CalendarScreen(
                             val eventsToRestore = deletedEvents.filter { it.id in selectedDeletedResolvedIds }
                             val eventIds = eventsToRestore.map { it.id }
                             selectedEventIds = selectedEventIds.filterNot { id ->
-                                val resolvedId = if (id.contains("_occ_")) id.substringBefore("_occ_") else id
-                                resolvedId in selectedDeletedResolvedIds
+                                id in selectedDeletedResolvedIds ||
+                                    (id.contains("_occ_") && id.substringBefore("_occ_") in selectedDeletedResolvedIds)
                             }.toSet()
                             
                             if (eventIds.isNotEmpty()) {
@@ -944,16 +956,21 @@ fun CalendarScreen(
                                     isRestore = true
                                 ) { _, onProgress ->
                                     var restored = 0
+                                    var lastError: String? = null
                                     for (event in eventsToRestore) {
                                         val result = withContext(Dispatchers.IO) {
                                             calendarRepo.restoreEvent(event)
                                         }
                                         if (result is EasResult.Success) restored++
+                                        else if (result is EasResult.Error) lastError = result.message
                                         onProgress(restored, eventsToRestore.size)
                                     }
-                                    if (restored > 0) {
-                                        withContext(Dispatchers.Main) {
+                                    withContext(Dispatchers.Main) {
+                                        if (restored > 0) {
                                             Toast.makeText(context, "$eventsRestoredText: $restored", Toast.LENGTH_SHORT).show()
+                                        }
+                                        if (lastError != null) {
+                                            Toast.makeText(context, lastError, Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 }
@@ -975,19 +992,30 @@ fun CalendarScreen(
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                             val renamedToProcess = renamedSelected.toList()
                             val eventsSnapshot = events + deletedEvents
+                            val filteredSnapshot = filteredEvents.toList()
                             val deletedText = renamedDeletedText
                             selectedEventIds = selectedEventIds - renamedSelected
                             scope.launch {
+                                var successCount = 0
+                                var lastError: String? = null
                                 for (occId in renamedToProcess) {
                                     val masterId = occId.substringBefore("_occ_")
                                     val occStart = occId.substringAfter("_occ_").toLongOrNull() ?: continue
                                     val master = eventsSnapshot.find { it.id == masterId } ?: continue
-                                    withContext(Dispatchers.IO) {
-                                        calendarRepo.deleteOccurrence(master, occStart)
+                                    val occEntity = filteredSnapshot.find { it.id == occId }
+                                        ?: eventsSnapshot.find { it.id == occId }
+                                    val result = withContext(Dispatchers.IO) {
+                                        calendarRepo.deleteOccurrence(master, occStart, occEntity)
                                     }
+                                    if (result is com.dedovmosol.iwomail.eas.EasResult.Success) successCount++
+                                    else if (result is com.dedovmosol.iwomail.eas.EasResult.Error) lastError = result.message
                                 }
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, deletedText, Toast.LENGTH_SHORT).show()
+                                    if (successCount > 0) {
+                                        Toast.makeText(context, deletedText, Toast.LENGTH_SHORT).show()
+                                    } else if (lastError != null) {
+                                        Toast.makeText(context, lastError, Toast.LENGTH_LONG).show()
+                                    }
                                 }
                             }
                             val remainingTargetIds = deleteTargetIds - renamedOnlyMasterIds

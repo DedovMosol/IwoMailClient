@@ -439,10 +439,9 @@ fun AppNavigation(
                     }
                     
                     if (!emailExists) {
-                        // Письмо не найдено — возможно ещё не синхронизировано
-                        // Открываем Входящие с фильтром Непрочитанные
                         if (inboxFolder != null) {
                             navController.navigate(Screen.EmailList.createRoute(inboxFolder.id, "UNREAD")) {
+                                popUpTo(Screen.Main.route) { inclusive = false }
                                 launchSingleTop = true
                             }
                         }
@@ -450,8 +449,8 @@ fun AppNavigation(
                     }
                     
                     if (inboxFolder != null) {
-                        // Сначала открываем Входящие (чтобы при нажатии "назад" вернуться туда)
                         navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
+                            popUpTo(Screen.Main.route) { inclusive = false }
                             launchSingleTop = true
                         }
                         // Ждём пока навигация завершится перед вторым переходом
@@ -501,6 +500,7 @@ fun AppNavigation(
                 when {
                     shortcutCompose -> {
                         navController.navigate(Screen.Compose.createRoute()) {
+                            popUpTo(Screen.Main.route) { inclusive = false }
                             launchSingleTop = true
                         }
                     }
@@ -513,6 +513,7 @@ fun AppNavigation(
                             }
                             if (inboxFolder != null) {
                                 navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
+                                    popUpTo(Screen.Main.route) { inclusive = false }
                                     launchSingleTop = true
                                 }
                             }
@@ -520,21 +521,25 @@ fun AppNavigation(
                     }
                     shortcutSearch -> {
                         navController.navigate(Screen.Search.route) {
+                            popUpTo(Screen.Main.route) { inclusive = false }
                             launchSingleTop = true
                         }
                     }
                     shortcutCalendar -> {
                         navController.navigate(Screen.Calendar.createRoute()) {
+                            popUpTo(Screen.Main.route) { inclusive = false }
                             launchSingleTop = true
                         }
                     }
                     shortcutTasks -> {
                         navController.navigate(Screen.Tasks.createRoute()) {
+                            popUpTo(Screen.Main.route) { inclusive = false }
                             launchSingleTop = true
                         }
                     }
                     shortcutNotes -> {
                         navController.navigate(Screen.Notes.route) {
+                            popUpTo(Screen.Main.route) { inclusive = false }
                             launchSingleTop = true
                         }
                     }

@@ -2241,13 +2241,14 @@ $itemIdsXml
      */
     private suspend fun deleteCalendarEventEws(
         serverId: String,
-        sendCancellations: String = "SendToNone"
+        sendCancellations: String = "SendToNone",
+        deleteType: String = "HardDelete"
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
                 val deleteBody = """
-                    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="$sendCancellations">
+                    <m:DeleteItem DeleteType="$deleteType" SendMeetingCancellations="$sendCancellations">
                         <m:ItemIds>
                             <t:ItemId Id="${deps.escapeXml(serverId)}"/>
                         </m:ItemIds>
@@ -2273,6 +2274,7 @@ $itemIdsXml
                     else -> EasResult.Error("EWS DeleteItem: $responseCode")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка удаления события: ${e.message}")
             }
         }
@@ -2326,6 +2328,7 @@ $itemIdsXml
                     else -> EasResult.Error("EWS DeleteItem: $responseCode")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка отклонения встречи: ${e.message}")
             }
         }
@@ -3231,7 +3234,9 @@ $itemIdsXml
      */
     suspend fun deleteSingleOccurrenceEws(
         searchSubject: String,
-        occurrenceStartTime: Long
+        occurrenceStartTime: Long,
+        isMeeting: Boolean = false,
+        isOrganizer: Boolean = false
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
@@ -3273,6 +3278,7 @@ $itemIdsXml
 
                 var bestItemId: String? = null
                 var bestTimeDiff = Long.MAX_VALUE
+                val fallbackCandidates = mutableListOf<Pair<String, Long>>()
 
                 for (itemMatch in itemPattern.findAll(findResponse)) {
                     val itemXml = itemMatch.groupValues[1]
@@ -3285,13 +3291,22 @@ $itemIdsXml
                         bestItemId = id
                         bestTimeDiff = diff
                     }
+                    val fiveMinMs = 5L * 60 * 1000
+                    if (diff <= fiveMinMs) {
+                        fallbackCandidates.add(id to diff)
+                    }
                 }
 
-                if (bestItemId == null) {
+                val fallbackItemId = if (bestItemId == null && fallbackCandidates.size == 1) {
+                    fallbackCandidates[0].first
+                } else null
+                val targetId = bestItemId ?: fallbackItemId
+                if (targetId == null) {
                     return@withContext EasResult.Error("Occurrence not found via EWS CalendarView")
                 }
 
-                deleteCalendarEventEws(bestItemId)
+                val cancellations = if (isMeeting && isOrganizer) "SendToAllAndSaveCopy" else "SendToNone"
+                deleteCalendarEventEws(targetId, sendCancellations = cancellations, deleteType = "MoveToDeletedItems")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: "Error deleting occurrence")

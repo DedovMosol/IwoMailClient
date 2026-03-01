@@ -23,7 +23,8 @@ class EmailSyncService(
     private val emailDao: EmailDao,
     private val attachmentDao: AttachmentDao,
     private val accountDao: AccountDao,
-    private val accountRepo: AccountRepository
+    private val accountRepo: AccountRepository,
+    private val onNameResolved: ((email: String, name: String) -> Unit)? = null
 ) {
     // Данные сохранённых тел черновиков (для восстановления при full resync)
     private data class SavedDraftBody(
@@ -447,13 +448,17 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             // MS-ASEMAIL: DateReceived обязателен для валидных писем.
                             // Ghost-записи без даты пропускаем целиком (вместо fallback на epoch).
                             if (effectiveDate <= 0L) return@mapNotNull null
+                            val resolvedName = extractName(email.from)
+                            if (resolvedName.isNotBlank() && !resolvedName.contains("@")) {
+                                onNameResolved?.invoke(email.from, resolvedName)
+                            }
                             EmailEntity(
                                 id = "${accountId}_${email.serverId}",
                                 accountId = accountId,
                                 folderId = folderId,
                                 serverId = email.serverId,
                                 from = email.from,
-                                fromName = extractName(email.from),
+                                fromName = resolvedName,
                                 to = email.to,
                                 cc = email.cc,
                                 subject = email.subject,
@@ -941,13 +946,17 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 }
                 return@mapNotNull null
             }
+            val resolvedName2 = extractName(email.from)
+            if (resolvedName2.isNotBlank() && !resolvedName2.contains("@")) {
+                onNameResolved?.invoke(email.from, resolvedName2)
+            }
             EmailEntity(
                 id = emailId,
                 accountId = accountId,
                 folderId = folderId,
                 serverId = email.serverId,
                 from = email.from,
-                fromName = extractName(email.from),
+                fromName = resolvedName2,
                 to = email.to,
                 cc = email.cc,
                 subject = email.subject,

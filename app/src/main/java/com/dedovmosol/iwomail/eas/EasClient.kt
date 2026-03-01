@@ -1966,9 +1966,11 @@ $SOAP_ENVELOPE_END"""
 
     suspend fun deleteSingleOccurrence(
         searchSubject: String,
-        occurrenceStartTime: Long
+        occurrenceStartTime: Long,
+        isMeeting: Boolean = false,
+        isOrganizer: Boolean = false
     ): EasResult<Boolean> =
-        calendarService.deleteSingleOccurrenceEws(searchSubject, occurrenceStartTime)
+        calendarService.deleteSingleOccurrenceEws(searchSubject, occurrenceStartTime, isMeeting, isOrganizer)
     
     /**
      * Обновление события календаря на сервере Exchange

@@ -125,6 +125,12 @@ object RecurrenceHelper {
         return exceptionsToJson(existing)
     }
 
+    fun removeException(existingJson: String, exceptionStartTime: Long): String {
+        val existing = parseExceptions(existingJson).toMutableList()
+        existing.removeAll { it.exceptionStartTime == exceptionStartTime }
+        return exceptionsToJson(existing)
+    }
+
     fun exceptionsToJson(exceptions: List<RecurrenceException>): String {
         if (exceptions.isEmpty()) return ""
         val parts = exceptions.map { ex ->

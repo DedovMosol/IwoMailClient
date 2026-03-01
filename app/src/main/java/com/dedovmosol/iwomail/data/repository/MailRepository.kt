@@ -62,8 +62,7 @@ class MailRepository(private val context: Context) {
     
     fun cacheName(email: String, name: String) {
         if (email.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
-            val key = email.lowercase()
-            // LruCache автоматически вытесняет старые записи при достижении лимита
+            val key = extractEmail(email)
             if (emailNameCache.get(key) == null) {
                 emailNameCache.put(key, name)
             }
@@ -82,15 +81,15 @@ class MailRepository(private val context: Context) {
                 val contacts = database.contactDao().getContactsByAccountList(account.id)
                 for (contact in contacts) {
                     if (contact.email.isNotBlank() && contact.displayName.isNotBlank() && !contact.displayName.contains("@")) {
-                        emailNameCache.put(contact.email.lowercase(), contact.displayName)
+                        emailNameCache.put(extractEmail(contact.email), contact.displayName)
                     }
                 }
             }
             
             val senderPairs = database.emailDao().getAllSenderNames()
-            for ((email, name) in senderPairs) {
-                if (email.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
-                    val key = email.lowercase()
+            for ((rawEmail, name) in senderPairs) {
+                if (rawEmail.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
+                    val key = extractEmail(rawEmail)
                     if (emailNameCache.get(key) == null) {
                         emailNameCache.put(key, name)
                     }
@@ -105,7 +104,9 @@ class MailRepository(private val context: Context) {
     }
     
     private val emailSyncService by lazy {
-        EmailSyncService(context, folderDao, emailDao, attachmentDao, accountDao, accountRepo)
+        EmailSyncService(context, folderDao, emailDao, attachmentDao, accountDao, accountRepo) { email, name ->
+            cacheName(email, name)
+        }
     }
     
     private val emailOperationsService by lazy {

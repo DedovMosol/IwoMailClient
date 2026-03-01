@@ -203,10 +203,7 @@ object InitialSyncController {
                     syncedAccounts.add(accountId)
                     updateState()
                     
-                    // Запускаем лёгкую фоновую синхронизацию
-                    launch(Dispatchers.IO) {
-                        performBackgroundSync(context, accountId, mailRepo, settingsRepo)
-                    }
+                    performBackgroundSync(context, accountId, mailRepo, settingsRepo)
                 }
             } catch (_: CancellationException) {
                 updateState()
@@ -311,52 +308,7 @@ object InitialSyncController {
                         }
                     }
                     
-                    // Синхронизируем контакты, заметки, календарь, задачи параллельно
-                    withContext(Dispatchers.IO) {
-                        supervisorScope {
-                            launch {
-                                try {
-                                    withTimeoutOrNull(120_000L) {
-                                        val contactRepo = com.dedovmosol.iwomail.data.repository.ContactRepository(context)
-                                        contactRepo.syncExchangeContacts(accountId)
-                                        contactRepo.syncGalContactsToDb(accountId)
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                }
-                            }
-                            launch {
-                                try {
-                                    withTimeoutOrNull(60_000L) {
-                                        val noteRepo = com.dedovmosol.iwomail.data.repository.NoteRepository(context)
-                                        noteRepo.syncNotes(accountId)
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                }
-                            }
-                            launch {
-                                try {
-                                    withTimeoutOrNull(60_000L) {
-                                        val calendarRepo = com.dedovmosol.iwomail.data.repository.CalendarRepository(context)
-                                        calendarRepo.syncCalendar(accountId)
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                }
-                            }
-                            launch {
-                                try {
-                                    withTimeoutOrNull(60_000L) {
-                                        val taskRepo = com.dedovmosol.iwomail.data.repository.TaskRepository(context)
-                                        taskRepo.syncTasks(accountId)
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                }
-                            }
-                        }
-                    }
+                    syncNonEmailData(context, accountId, includeGal = true)
                     
                     settingsRepo.setLastSyncTime(System.currentTimeMillis())
                     
@@ -389,7 +341,7 @@ object InitialSyncController {
         settingsRepo: SettingsRepository
     ) {
         try {
-            withTimeoutOrNull(300_000L) {  // 5 минут — для больших почтовых ящиков
+            withTimeoutOrNull(420_000L) {  // 7 минут — email (до 3 мин) + contacts/notes/calendar/tasks (до 2 мин) + запас
                 // КРИТИЧНО: Всегда синхронизируем папки первым делом.
                 // Без этого, если БД была пересоздана (destructive migration),
                 // таблица folders будет пустой и синхронизация писем не запустится.
@@ -414,7 +366,7 @@ object InitialSyncController {
                         foldersToSync.forEach { folder ->
                             launch {
                                 try {
-                                    withTimeoutOrNull(180_000L) {  // 3 минуты на папку
+                                    withTimeoutOrNull(180_000L) {
                                         mailRepo.syncEmails(accountId, folder.id, forceFullSync = false)
                                     }
                                 } catch (e: Exception) {
@@ -424,6 +376,8 @@ object InitialSyncController {
                         }
                     }
                 }
+
+                syncNonEmailData(context, accountId, includeGal = false)
                 
                 settingsRepo.setLastSyncTime(System.currentTimeMillis())
                 com.dedovmosol.iwomail.widget.updateMailWidget(context)
@@ -451,7 +405,55 @@ object InitialSyncController {
         noNetwork = false
         updateState()
     }
-    
+
+    private suspend fun syncNonEmailData(context: Context, accountId: Long, includeGal: Boolean = true) {
+        withContext(Dispatchers.IO) {
+            supervisorScope {
+                launch {
+                    try {
+                        withTimeoutOrNull(120_000L) {
+                            val contactRepo = com.dedovmosol.iwomail.data.repository.ContactRepository(context)
+                            contactRepo.syncExchangeContacts(accountId)
+                            if (includeGal) contactRepo.syncGalContactsToDb(accountId)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
+                }
+                launch {
+                    try {
+                        withTimeoutOrNull(60_000L) {
+                            val noteRepo = com.dedovmosol.iwomail.data.repository.NoteRepository(context)
+                            noteRepo.syncNotes(accountId)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
+                }
+                launch {
+                    try {
+                        withTimeoutOrNull(60_000L) {
+                            val calendarRepo = com.dedovmosol.iwomail.data.repository.CalendarRepository(context)
+                            calendarRepo.syncCalendar(accountId)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
+                }
+                launch {
+                    try {
+                        withTimeoutOrNull(60_000L) {
+                            val taskRepo = com.dedovmosol.iwomail.data.repository.TaskRepository(context)
+                            taskRepo.syncTasks(accountId)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * Ручная синхронизация (pull-to-refresh)
      * Не прерывается при повороте экрана
@@ -473,6 +475,7 @@ object InitialSyncController {
         
         // Если уже синхронизируется — не запускаем повторно
         if (accountId in syncingAccounts || syncJobs[accountId]?.isActive == true) {
+            onComplete()
             return
         }
         
@@ -542,6 +545,8 @@ object InitialSyncController {
                         }
                     }
                     
+                    syncNonEmailData(context, accountId, includeGal = true)
+
                     // Обновляем время синхронизации
                     settingsRepo.setLastSyncTime(System.currentTimeMillis())
                     

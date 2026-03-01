@@ -526,14 +526,15 @@ private fun SearchResultItem(
     val context = LocalContext.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     
-    // Получаем имя из кэша если fromName пустой
     val cachedSenderName = remember(email.from) {
         if (email.fromName.isBlank() || email.fromName.contains("@")) {
             mailRepo.getCachedName(email.from)
-        } else null
+        } else {
+            mailRepo.cacheName(email.from, email.fromName)
+            null
+        }
     }
     
-    // Цвет аватара на основе имени отправителя
     val senderName = cachedSenderName ?: email.fromName.ifEmpty { email.from }
     val avatarColor = getAvatarColor(senderName)
     // Используем цвет аватара для подсветки найденного текста

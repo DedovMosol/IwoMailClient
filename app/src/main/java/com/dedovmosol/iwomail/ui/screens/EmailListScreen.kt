@@ -1446,11 +1446,13 @@ private fun EmailListItem(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // Получаем имя из кэша если fromName пустой или содержит email
             val cachedSenderName = remember(email.from) {
                 if (email.fromName.isBlank() || email.fromName.contains("@")) {
                     mailRepo.getCachedName(email.from)
-                } else null
+                } else {
+                    mailRepo.cacheName(email.from, email.fromName)
+                    null
+                }
             }
             
             // Очищаем fromName от email части (формат "Имя <email>" или "Имя/email")

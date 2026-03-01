@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.data.repository
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.eas.EasClient
@@ -688,7 +689,8 @@ class CalendarRepository(private val context: Context) {
      */
     suspend fun deleteOccurrence(
         masterEvent: CalendarEventEntity,
-        occurrenceStartTime: Long
+        occurrenceStartTime: Long,
+        occurrenceSnapshot: CalendarEventEntity? = null
     ): EasResult<Boolean> {
         initFromPrefs(context)
         return withContext(Dispatchers.IO) {
@@ -697,37 +699,70 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Success -> r.data
                     is EasResult.Error -> return@withContext r
                 }
-                val result = withRetry {
-                    easClient.deleteSingleOccurrence(masterEvent.subject, occurrenceStartTime)
-                }
-                if (result is EasResult.Success) {
-                    try {
-                        val deletedException = RecurrenceHelper.RecurrenceException(
-                            exceptionStartTime = occurrenceStartTime,
-                            deleted = true
-                        )
-                        val updatedJson = RecurrenceHelper.mergeException(
-                            masterEvent.exceptions, deletedException
-                        )
-                        calendarEventDao.update(masterEvent.copy(
-                            exceptions = updatedJson,
-                            lastModified = System.currentTimeMillis()
-                        ))
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                    }
 
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                        kotlinx.coroutines.delay(2000)
-                        try {
-                            syncCalendar(masterEvent.accountId)
-                        } catch (e: Exception) {
-                            android.util.Log.w("CalendarRepository",
-                                "deleteOccurrence: post-delete sync failed: ${e.message}")
-                        }
-                    }
+                val searchSubject = occurrenceSnapshot?.subject ?: masterEvent.subject
+                val account = accountRepo.getAccount(masterEvent.accountId)
+                val currentEmail = account?.email?.lowercase() ?: ""
+                val isOrganizer = masterEvent.organizer.lowercase() == currentEmail
+                val serverResult = withRetry {
+                    easClient.deleteSingleOccurrence(
+                        searchSubject, occurrenceStartTime,
+                        isMeeting = masterEvent.isMeeting, isOrganizer = isOrganizer
+                    )
                 }
-                result
+                if (serverResult is EasResult.Error) {
+                    return@withContext serverResult
+                }
+
+                val duration = masterEvent.endTime - masterEvent.startTime
+                val occId = "${masterEvent.id}_occ_$occurrenceStartTime"
+                val snapshot = occurrenceSnapshot?.copy(
+                    isDeleted = true,
+                    isRecurring = false,
+                    recurrenceRule = "",
+                    exceptions = "",
+                    serverId = "",
+                    lastModified = System.currentTimeMillis()
+                ) ?: CalendarEventEntity(
+                    id = occId,
+                    accountId = masterEvent.accountId,
+                    serverId = "",
+                    subject = masterEvent.subject,
+                    location = masterEvent.location,
+                    body = masterEvent.body,
+                    startTime = occurrenceStartTime,
+                    endTime = occurrenceStartTime + duration,
+                    allDayEvent = masterEvent.allDayEvent,
+                    reminder = masterEvent.reminder,
+                    busyStatus = masterEvent.busyStatus,
+                    sensitivity = masterEvent.sensitivity,
+                    organizer = masterEvent.organizer,
+                    organizerName = masterEvent.organizerName,
+                    attendees = masterEvent.attendees,
+                    isRecurring = false,
+                    categories = masterEvent.categories,
+                    isMeeting = masterEvent.isMeeting,
+                    isDeleted = true,
+                    lastModified = System.currentTimeMillis()
+                )
+                database.withTransaction {
+                    calendarEventDao.insert(snapshot)
+
+                    val freshMaster = calendarEventDao.getEvent(masterEvent.id) ?: masterEvent
+                    val deletedException = RecurrenceHelper.RecurrenceException(
+                        exceptionStartTime = occurrenceStartTime,
+                        deleted = true
+                    )
+                    val updatedJson = RecurrenceHelper.mergeException(
+                        freshMaster.exceptions, deletedException
+                    )
+                    calendarEventDao.update(freshMaster.copy(
+                        exceptions = updatedJson,
+                        lastModified = System.currentTimeMillis()
+                    ))
+                }
+
+                EasResult.Success(true)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.EVENT_DELETE_ERROR)
@@ -797,6 +832,12 @@ class CalendarRepository(private val context: Context) {
     suspend fun restoreEvent(event: CalendarEventEntity): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
+                if (event.id.contains("_occ_")) {
+                    return@withContext EasResult.Error(
+                        "Восстановление вхождения повторяющегося события невозможно. Удалите его навсегда или создайте заново."
+                    )
+                }
+
                 calendarEventDao.restore(event.id)
                 CalendarReminderReceiver.scheduleReminder(context, event)
                 android.util.Log.d("CalendarRepository", "Event restored locally: serverId=${event.serverId}")
@@ -816,6 +857,11 @@ class CalendarRepository(private val context: Context) {
         initFromPrefs(context)
         return withContext(Dispatchers.IO) {
             try {
+                if (event.id.contains("_occ_")) {
+                    calendarEventDao.delete(event.id)
+                    return@withContext EasResult.Success(true)
+                }
+
                 if (event.serverId.isNotBlank()) {
                     try {
                         val easClient = accountRepo.createEasClient(event.accountId)
@@ -865,7 +911,9 @@ class CalendarRepository(private val context: Context) {
                 val deletedEvents = calendarEventDao.getDeletedEventsList(accountId)
                 if (deletedEvents.isEmpty()) return@withContext EasResult.Success(0)
 
-                val eventsWithServerId = deletedEvents.filter { it.serverId.isNotBlank() }
+                val regularEvents = deletedEvents.filter { !it.id.contains("_occ_") }
+
+                val eventsWithServerId = regularEvents.filter { it.serverId.isNotBlank() }
                 if (eventsWithServerId.isNotEmpty()) {
                     try {
                         val easClient = accountRepo.createEasClient(accountId)
@@ -886,7 +934,7 @@ class CalendarRepository(private val context: Context) {
                     }
                 }
 
-                for (event in deletedEvents) {
+                for (event in regularEvents) {
                     if (event.serverId.isNotBlank()) {
                         markAsDeleted(event.serverId, context)
                     }
@@ -1373,6 +1421,7 @@ class CalendarRepository(private val context: Context) {
                 
                 EasResult.Success(true)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.ATTENDEE_UPDATE_ERROR)
             }
         }

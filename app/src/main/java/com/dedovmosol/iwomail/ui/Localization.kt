@@ -1137,9 +1137,9 @@ object OnboardingStrings {
     
     fun mailTitle(isRussian: Boolean): String = if (isRussian) "Почта" else "Mail"
     fun mailDescription(isRussian: Boolean): String = if (isRussian)
-        "Exchange 2007 SP1 (протестировано)"
+        "Exchange 2007 SP1, поиск, вложения"
     else
-        "Exchange 2007 SP1 (tested)"
+        "Exchange 2007 SP1, search, attachments"
     fun notificationsTitle(isRussian: Boolean): String = if (isRussian) "Уведомления" else "Notifications"
     fun notificationsDescription(isRussian: Boolean): String = if (isRussian)
         "Push-уведомления о новых письмах"
@@ -1155,22 +1155,22 @@ object OnboardingStrings {
     fun contactsDescription(isRussian: Boolean): String = if (isRussian)
         "Личные и корпоративные (GAL), локальные группы контактов"
     else
-        "Personal and corporate (GAL), contact groups"
+        "Personal and corporate (GAL), local contact groups"
     fun calendarTitle(isRussian: Boolean): String = if (isRussian) "Календарь" else "Calendar"
     fun calendarDescription(isRussian: Boolean): String = if (isRussian)
-        "События, напоминания, приглашения"
+        "События, повторяющиеся события, напоминания, приглашения"
     else
-        "Events, reminders, invitations"
+        "Events, recurring events, reminders, invitations"
     fun tasksTitle(isRussian: Boolean): String = if (isRussian) "Задачи" else "Tasks"
     fun tasksDescription(isRussian: Boolean): String = if (isRussian)
-        "Приоритеты, сроки, напоминания"
+        "Приоритеты, сроки, напоминания, постановка задач, локальная корзина"
     else
-        "Priorities, due dates, reminders"
+        "Priorities, due dates, reminders, task assignment, local trash"
     fun notesTitle(isRussian: Boolean): String = if (isRussian) "Заметки" else "Notes"
     fun notesDescription(isRussian: Boolean): String = if (isRussian)
-        "Синхронизация с сервером"
+        "Синхронизация с сервером, локальная корзина"
     else
-        "Server synchronization"
+        "Server synchronization, local trash"
     
     fun draftModeTitle(isRussian: Boolean): String = if (isRussian) "Режим черновиков (бета)" else "Draft mode (beta)"
     fun draftModeDescription(isRussian: Boolean): String = if (isRussian)
@@ -1190,9 +1190,9 @@ object OnboardingStrings {
     
     fun personalizationTitle(isRussian: Boolean): String = if (isRussian) "Персонализация" else "Personalization"
     fun personalizationDescription(isRussian: Boolean): String = if (isRussian)
-        "Темы, мультиаккаунт, подписи"
+        "Темы, мультиаккаунт, подписи, виджет"
     else
-        "Themes, multi-account, signatures"
+        "Themes, multi-account, signatures, widget"
     fun updatesTitle(isRussian: Boolean): String = if (isRussian) "Обновления" else "Updates"
     fun updatesDescription(isRussian: Boolean): String = if (isRussian)
         "OTA-обновления с возможностью отката к предыдущей версии"
