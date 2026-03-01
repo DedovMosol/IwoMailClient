@@ -39,7 +39,6 @@ class MailRepository(private val context: Context) {
     private val emailNameCache = android.util.LruCache<String, String>(5000)
     private var cacheInitialized = false
     private var contactsDatabase: MailDatabase? = null
-    private val maxEmailNameCacheSize = 5000
     
     private val emailExtractRegex = Regex("<([^>]+)>")
     
