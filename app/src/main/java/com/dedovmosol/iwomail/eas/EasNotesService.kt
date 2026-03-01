@@ -1241,12 +1241,13 @@ $itemIdsXml
         val bodyPatterns = listOf(
             "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
             "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
+            "<notes:Body>.*?<Data>(.*?)</Data>.*?</notes:Body>",
             "<notes:Body>(.*?)</notes:Body>"
         )
         for (pattern in bodyPatterns) {
             val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
             val match = regex.find(xml)
-            if (match != null) {
+            if (match != null && match.groupValues[1].isNotBlank()) {
                 return stripHtmlIfNeeded(unescapeXml(match.groupValues[1].trim()))
             }
         }

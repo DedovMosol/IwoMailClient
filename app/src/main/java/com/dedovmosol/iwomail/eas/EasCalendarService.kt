@@ -2569,8 +2569,9 @@ $itemIdsXml
                 .find(itemXml)
                 ?.groupValues
                 ?.getOrNull(1)
+                ?.trim()
                 ?: ""
-            val body = removeDuplicateLines(rawBody)
+            val body = removeDuplicateLines(unescapeXml(rawBody))
             
             val startStr = "<(?:t:)?Start>(.*?)</(?:t:)?Start>"
                 .toRegex(RegexOption.DOT_MATCHES_ALL)

@@ -1124,7 +1124,8 @@ class CalendarRepository(private val context: Context) {
                                                      existingEvent.location != event.location ||
                                                      existingEvent.body != event.body ||
                                                      existingEvent.startTime != event.startTime ||
-                                                     existingEvent.endTime != event.endTime
+                                                     existingEvent.endTime != event.endTime ||
+                                                     existingEvent.exceptions != event.exceptions
                                 
                                 if (hasLocalChanges) {
                                     val timeSinceLocalEdit = syncTime - existingEvent.lastModified
