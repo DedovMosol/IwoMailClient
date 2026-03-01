@@ -1302,7 +1302,8 @@ private fun AgendaView(
                 val result = mutableMapOf<String, MutableList<CalendarEventEntity>>()
                 for ((masterId, occs) in tempMap) {
                     val masterSubject = occs.firstOrNull { !it.id.contains("_occ_") }?.subject
-                        ?: occs.firstOrNull()?.subject ?: ""
+                        ?: occs.groupingBy { it.subject }.eachCount().maxByOrNull { it.value }?.key
+                        ?: ""
                     val matching = mutableListOf<CalendarEventEntity>()
                     for (occ in occs) {
                         if (occ.subject != masterSubject && occ.id.contains("_occ_")) {

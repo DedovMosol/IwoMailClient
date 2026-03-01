@@ -702,15 +702,20 @@ class CalendarRepository(private val context: Context) {
                 }
                 if (result is EasResult.Success) {
                     try {
-                        val oldExceptions = masterEvent.exceptions
-                        val arr = if (oldExceptions.isNotBlank() && oldExceptions.startsWith("["))
-                            JSONArray(oldExceptions) else JSONArray()
-                        val exc = JSONObject()
-                        exc.put("startTime", occurrenceStartTime)
-                        exc.put("deleted", true)
-                        arr.put(exc)
-                        calendarEventDao.update(masterEvent.copy(exceptions = arr.toString()))
-                    } catch (_: Exception) { }
+                        val deletedException = RecurrenceHelper.RecurrenceException(
+                            exceptionStartTime = occurrenceStartTime,
+                            deleted = true
+                        )
+                        val updatedJson = RecurrenceHelper.mergeException(
+                            masterEvent.exceptions, deletedException
+                        )
+                        calendarEventDao.update(masterEvent.copy(
+                            exceptions = updatedJson,
+                            lastModified = System.currentTimeMillis()
+                        ))
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
 
                     kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                         kotlinx.coroutines.delay(2000)

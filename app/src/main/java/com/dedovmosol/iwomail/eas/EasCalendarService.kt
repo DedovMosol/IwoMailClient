@@ -3479,7 +3479,7 @@ $itemIdsXml
         )
         for (pattern in patterns) {
             val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(exXml)
-            if (match != null && match.groupValues[1].isNotBlank()) return unescapeXml(match.groupValues[1].trim())
+            if (match != null && match.groupValues[1].isNotBlank()) return removeDuplicateLines(unescapeXml(match.groupValues[1].trim()))
         }
         return ""
     }
