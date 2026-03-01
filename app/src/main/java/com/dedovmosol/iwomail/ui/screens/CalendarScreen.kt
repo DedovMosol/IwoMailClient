@@ -322,6 +322,27 @@ fun CalendarScreen(
         }
     }
     
+    val renamedOccurrenceIds = remember(filteredEvents) {
+        val occsByMaster = mutableMapOf<String, MutableList<CalendarEventEntity>>()
+        filteredEvents.forEach { evt ->
+            if (evt.isDeleted) return@forEach
+            if (evt.id.contains("_occ_")) {
+                occsByMaster.getOrPut(evt.id.substringBefore("_occ_")) { mutableListOf() }.add(evt)
+            }
+        }
+        val masters = filteredEvents.filter { it.isRecurring && !it.id.contains("_occ_") && !it.isDeleted }
+            .associateBy { it.id }
+        val renamed = mutableSetOf<String>()
+        for ((masterId, occs) in occsByMaster) {
+            val majoritySubject = masters[masterId]?.subject
+                ?: occs.groupingBy { it.subject }.eachCount().maxByOrNull { it.value }?.key ?: ""
+            for (occ in occs) {
+                if (occ.subject != majoritySubject) renamed.add(occ.id)
+            }
+        }
+        renamed.toSet()
+    }
+
     val monthViewBaseEvents = remember(events, deletedEvents, debouncedSearchQuery, dateFilter) {
         val base = when (dateFilter) {
             CalendarDateFilter.DELETED -> deletedEvents
@@ -933,16 +954,50 @@ fun CalendarScreen(
                         val deleteTargetIds = if (deletePermanently) selectedDeletedResolvedIds else selectedActiveResolvedIds
                         if (deleteTargetIds.isEmpty()) return@CalendarSelectionTopBar
 
-                        val occurrenceOriginals = selectedEventIds.filter { it.contains("_occ_") }.toSet()
-                        if (!deletePermanently && occurrenceOriginals.isNotEmpty()) {
-                            pendingOccurrenceIds = occurrenceOriginals
-                            deleteConfirmTargetIds = deleteTargetIds
+                        val allOccIds = selectedEventIds.filter { it.contains("_occ_") }.toSet()
+                        val renamedSelected = allOccIds.filter { it in renamedOccurrenceIds }.toSet()
+                        val seriesOccurrences = allOccIds - renamedSelected
+
+                        if (renamedSelected.isNotEmpty()) {
+                            com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                            val renamedToProcess = renamedSelected.toList()
+                            val remainingTargetIds = deleteTargetIds -
+                                renamedSelected.map { it.substringBefore("_occ_") }.toSet()
+                            selectedEventIds = selectedEventIds - renamedSelected
+                            scope.launch {
+                                for (occId in renamedToProcess) {
+                                    val masterId = occId.substringBefore("_occ_")
+                                    val occStart = occId.substringAfter("_occ_").toLongOrNull() ?: continue
+                                    val master = filteredEvents.find { it.id == masterId } ?: continue
+                                    withContext(Dispatchers.IO) {
+                                        calendarRepo.deleteOccurrence(master, occStart)
+                                    }
+                                }
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context,
+                                        if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Удалено" else "Deleted",
+                                        Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            if (seriesOccurrences.isEmpty() && remainingTargetIds.isEmpty()) {
+                                return@CalendarSelectionTopBar
+                            }
+                        }
+
+                        if (!deletePermanently && seriesOccurrences.isNotEmpty()) {
+                            pendingOccurrenceIds = seriesOccurrences
+                            deleteConfirmTargetIds = deleteTargetIds -
+                                renamedSelected.map { it.substringBefore("_occ_") }.toSet()
                             showOccurrenceDeleteChoice = true
                         } else {
-                            deleteConfirmCount = deleteTargetIds.size
-                            deleteConfirmIsPermanent = deletePermanently
-                            deleteConfirmTargetIds = deleteTargetIds
-                            showDeleteConfirmDialog = true
+                            val finalTargets = deleteTargetIds -
+                                renamedSelected.map { it.substringBefore("_occ_") }.toSet()
+                            if (finalTargets.isNotEmpty()) {
+                                deleteConfirmCount = finalTargets.size
+                                deleteConfirmIsPermanent = deletePermanently
+                                deleteConfirmTargetIds = finalTargets
+                                showDeleteConfirmDialog = true
+                            }
                         }
                     }
                 )
