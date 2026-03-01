@@ -587,8 +587,7 @@ fun CalendarScreen(
                         deleteConfirmIsPermanent = false
                         showDeleteConfirmDialog = true
                     },
-                    text = if (isRussian) "Всю серию" else "Entire series"
-                )
+                ) { Text(if (isRussian) "Всю серию" else "Entire series", fontSize = 13.sp, maxLines = 1) }
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeButton(
@@ -631,7 +630,7 @@ fun CalendarScreen(
                             }
                         }
                     },
-                ) { Text(if (isRussian) "Только вхождения" else "Only occurrences") }
+                ) { Text(if (isRussian) "Только вхождения" else "Only occurrences", fontSize = 13.sp, maxLines = 1) }
             }
         )
     }
@@ -1290,25 +1289,44 @@ private fun AgendaView(
             ) { mutableStateOf(emptySet()) }
 
             val seriesMap = remember(events) {
-                val map = mutableMapOf<String, MutableList<CalendarEventEntity>>()
+                val tempMap = mutableMapOf<String, MutableList<CalendarEventEntity>>()
                 events.forEach { event ->
                     if (event.isDeleted) return@forEach
                     if (event.id.contains("_occ_")) {
                         val masterId = event.id.substringBefore("_occ_")
-                        map.getOrPut(masterId) { mutableListOf() }.add(event)
+                        tempMap.getOrPut(masterId) { mutableListOf() }.add(event)
                     } else if (event.isRecurring) {
-                        map.getOrPut(event.id) { mutableListOf() }.add(event)
+                        tempMap.getOrPut(event.id) { mutableListOf() }.add(event)
                     }
                 }
-                map.values.forEach { list -> list.sortBy { it.startTime } }
-                map.toMap()
+                val result = mutableMapOf<String, MutableList<CalendarEventEntity>>()
+                for ((masterId, occs) in tempMap) {
+                    val masterSubject = occs.firstOrNull { !it.id.contains("_occ_") }?.subject
+                        ?: occs.firstOrNull()?.subject ?: ""
+                    val matching = mutableListOf<CalendarEventEntity>()
+                    for (occ in occs) {
+                        if (occ.subject != masterSubject && occ.id.contains("_occ_")) {
+                            result.getOrPut("_renamed_${occ.id}") { mutableListOf() }.add(occ)
+                        } else {
+                            matching.add(occ)
+                        }
+                    }
+                    if (matching.isNotEmpty()) {
+                        result[masterId] = matching
+                    }
+                }
+                result.values.forEach { list -> list.sortBy { it.startTime } }
+                result.toMap()
             }
 
             val standaloneEvents = remember(events, seriesMap) {
                 val recurringIds = seriesMap.keys
+                val renamedStandalone = seriesMap.entries
+                    .filter { it.key.startsWith("_renamed_") }
+                    .flatMap { it.value }
                 events.filter { e ->
                     e.isDeleted || (!e.id.contains("_occ_") && !e.isRecurring && e.id !in recurringIds)
-                }
+                } + renamedStandalone
             }
 
             val groupedStandalone = remember(standaloneEvents) {
@@ -1324,7 +1342,9 @@ private fun AgendaView(
             }
 
             val sortedSeries = remember(seriesMap) {
-                seriesMap.entries.sortedByDescending { it.value.maxOfOrNull { e -> e.startTime } ?: 0L }
+                seriesMap.entries
+                    .filter { !it.key.startsWith("_renamed_") }
+                    .sortedByDescending { it.value.maxOfOrNull { e -> e.startTime } ?: 0L }
             }
 
             val eventKeys = remember(sortedSeries, expandedSeriesIds, groupedStandalone) {

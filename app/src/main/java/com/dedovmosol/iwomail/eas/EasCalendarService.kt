@@ -2790,6 +2790,7 @@ $itemIdsXml
         val bodyPatterns = listOf(
             "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
             "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
+            "<calendar:Body>.*?<Data>(.*?)</Data>.*?</calendar:Body>",
             "<calendar:Body>(.*?)</calendar:Body>"
         )
         for (pattern in bodyPatterns) {
@@ -2797,7 +2798,7 @@ $itemIdsXml
             val match = regex.find(xml)
             if (match != null) {
                 val rawBody = unescapeXml(match.groupValues[1].trim())
-                return removeDuplicateLines(rawBody)
+                if (rawBody.isNotBlank()) return removeDuplicateLines(rawBody)
             }
         }
         return ""
@@ -3472,12 +3473,13 @@ $itemIdsXml
     private fun extractExceptionBody(exXml: String): String {
         val patterns = listOf(
             "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
-            "<calendar:Body>(.*?)</calendar:Body>",
-            "<Body>(.*?)</Body>"
+            "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
+            "<calendar:Body>.*?<Data>(.*?)</Data>.*?</calendar:Body>",
+            "<calendar:Body>(.*?)</calendar:Body>"
         )
         for (pattern in patterns) {
             val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(exXml)
-            if (match != null && match.groupValues[1].isNotBlank()) return match.groupValues[1].trim()
+            if (match != null && match.groupValues[1].isNotBlank()) return unescapeXml(match.groupValues[1].trim())
         }
         return ""
     }

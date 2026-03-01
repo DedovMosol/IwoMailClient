@@ -1998,6 +1998,7 @@ $itemIdsXml
         val bodyPatterns = listOf(
             "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
             "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
+            "<tasks:Body>.*?<Data>(.*?)</Data>.*?</tasks:Body>",
             "<tasks:Body>(.*?)</tasks:Body>"
         )
         for (pattern in bodyPatterns) {
