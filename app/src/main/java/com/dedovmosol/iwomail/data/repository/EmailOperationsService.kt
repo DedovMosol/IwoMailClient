@@ -481,6 +481,11 @@ class EmailOperationsService(
         val firstEmail = emailDao.getEmail(emailIds.first()) 
             ?: return EasResult.Error("Email not found")
         
+        val allEmails = emailIds.mapNotNull { emailDao.getEmail(it) }
+        require(allEmails.all { it.accountId == firstEmail.accountId }) {
+            "All emails must belong to the same account"
+        }
+        
         val account = accountRepo.getAccount(firstEmail.accountId)
             ?: return EasResult.Error("Account not found")
         

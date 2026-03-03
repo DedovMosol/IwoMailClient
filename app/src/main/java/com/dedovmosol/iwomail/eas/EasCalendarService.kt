@@ -4,6 +4,7 @@ import android.util.Base64
 import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -67,12 +68,12 @@ class EasCalendarService internal constructor(
     }
     
     // Кэш ID папки календаря
-    private var cachedCalendarFolderId: String? = null
+    @Volatile private var cachedCalendarFolderId: String? = null
     
-    // Формат даты EAS
-    private val easDateFormat = SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
-    }
+    private fun createEasDateFormat(): SimpleDateFormat =
+        SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
     
     /**
      * Синхронизация календаря
@@ -202,13 +203,22 @@ class EasCalendarService internal constructor(
                 // Во всех остальных случаях (EAS ServerId, pending_sync_) — ищем через FindItem.
                 val alreadyEwsId = !rawId.startsWith("pending_sync_") && 
                     (rawId.contains("|") || (createdViaEws && !rawId.contains(":")))
-                val ewsItemIdResult = if (alreadyEwsId) {
+                val isRecurring = recurrenceType >= 0
+                val ewsItemIdResult = if (alreadyEwsId && (!isRecurring || rawId.contains("|"))) {
+                    // CreateItem для recurring возвращает master ItemId → безопасно использовать
                     android.util.Log.d("EasCalendarService", "createCalendarEvent: using rawId directly as EWS ItemId")
                     EasResult.Success(rawId)
+                } else if (isRecurring) {
+                    // Exchange 2007 SP1: для recurring серии вложения хранятся на master.
+                    // FindItem + CalendarView вернёт occurrence → ищем master БЕЗ CalendarView.
+                    android.util.Log.d("EasCalendarService", "createCalendarEvent: recurring, FindItem for master (rawId=${rawId.take(30)})")
+                    kotlinx.coroutines.delay(2500)
+                    val masterResult = findRecurringMasterItemId(subject)
+                    if (masterResult is EasResult.Error) {
+                        kotlinx.coroutines.delay(3500)
+                        findRecurringMasterItemId(subject)
+                    } else masterResult
                 } else {
-                    // Exchange 2007 SP1 медленно индексирует новое событие в EWS.
-                    // КРИТИЧНО: также вызывается когда CreateItem вернул Success но без ItemId
-                    // (pending_sync_) — нужен FindItem для получения EWS ItemId для вложений.
                     android.util.Log.d("EasCalendarService", "createCalendarEvent: FindItem needed (rawId=${rawId.take(30)})")
                     findItemIdWithRetry(subject, actualStartTime, 2500, 3500, "create")
                 }
@@ -327,11 +337,26 @@ class EasCalendarService internal constructor(
         
         // Загружаем новые вложения после успешного обновления
         if (attachments.isNotEmpty()) {
-            android.util.Log.d("EasCalendarService", "updateCalendarEvent: uploading ${attachments.size} attachments, subject=$subject")
+            android.util.Log.d("EasCalendarService", "updateCalendarEvent: uploading ${attachments.size} attachments, subject=$subject, recurrenceType=$recurrenceType")
             val ewsUrl = deps.getEwsUrl()
-            // КРИТИЧНО: CreateAttachment требует EWS ItemId, не EAS ServerId ни в каком формате.
-            // Всегда ищем через FindItem, даем Exchange 2007 SP1 время индексировать обновление.
-            val ewsItemIdResult = findItemIdWithRetry(subject, actualStartTime, 2000, 3000, "update")
+            // КРИТИЧНО для Exchange 2007 SP1:
+            // Вложения recurring-серии хранятся на recurring master.
+            // FindItem + CalendarView возвращает occurrence ItemId → CreateAttachment
+            // прикрепляет к вхождению, а не к мастеру → вложение не видно в серии.
+            // Для recurring событий ищем master ItemId БЕЗ CalendarView.
+            val isRecurring = recurrenceType >= 0
+            val ewsItemIdResult = if (isRecurring) {
+                kotlinx.coroutines.delay(2000)
+                val masterResult = findRecurringMasterItemId(subject)
+                if (masterResult is EasResult.Error) {
+                    android.util.Log.w("EasCalendarService",
+                        "updateCalendarEvent: master not found, retry in 3s: ${masterResult.message}")
+                    kotlinx.coroutines.delay(3000)
+                    findRecurringMasterItemId(subject)
+                } else masterResult
+            } else {
+                findItemIdWithRetry(subject, actualStartTime, 2000, 3000, "update")
+            }
             if (ewsItemIdResult is EasResult.Success) {
                 val rawId = ewsItemIdResult.data
                 val cleanItemId = if (rawId.contains("|")) rawId.substringBefore("|") else rawId
@@ -378,8 +403,10 @@ class EasCalendarService internal constructor(
         allDayEvent: Boolean,
         reminder: Int,
         busyStatus: Int,
-        sensitivity: Int
-    ): EasResult<Boolean> {
+        sensitivity: Int,
+        attachments: List<DraftAttachmentData> = emptyList(),
+        removedAttachmentIds: List<String> = emptyList()
+    ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
@@ -392,9 +419,9 @@ class EasCalendarService internal constructor(
         // Body полностью поддерживается в EWS (в отличие от EAS 12.x).
         if (majorVersion < 14) {
             val existingExceptions = RecurrenceHelper.parseExceptions(existingExceptionsJson)
-            val existingException = existingExceptions.find {
-                it.exceptionStartTime == occurrenceOriginalStartTime && !it.deleted
-            }
+            val existingException = RecurrenceHelper.fuzzyMatchException(
+                existingExceptions.filter { !it.deleted }, occurrenceOriginalStartTime
+            )
             val searchSubject = existingException?.subject?.ifBlank { masterSubject } ?: masterSubject
             val searchStartTime = if (existingException != null && existingException.startTime > 0) {
                 existingException.startTime
@@ -404,7 +431,8 @@ class EasCalendarService internal constructor(
             return updateSingleOccurrenceEws(
                 searchSubject, searchStartTime,
                 subject, startTime, endTime, location, body,
-                allDayEvent, reminder, busyStatus, sensitivity
+                allDayEvent, reminder, busyStatus, sensitivity,
+                attachments, removedAttachmentIds
             )
         }
 
@@ -442,6 +470,11 @@ class EasCalendarService internal constructor(
                 }
             }
             true
+        }.let { result ->
+            when (result) {
+                is EasResult.Success -> EasResult.Success("")
+                is EasResult.Error -> EasResult.Error(result.message)
+            }
         }
     }
 
@@ -465,8 +498,10 @@ class EasCalendarService internal constructor(
         allDayEvent: Boolean,
         reminder: Int,
         busyStatus: Int,
-        sensitivity: Int
-    ): EasResult<Boolean> {
+        sensitivity: Int,
+        attachments: List<DraftAttachmentData>,
+        removedAttachmentIds: List<String>
+    ): EasResult<String> {
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
@@ -631,7 +666,63 @@ class EasCalendarService internal constructor(
                 val responseCode = EWS_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)?.trim()
 
                 if (hasSuccess && (responseCode == "NoError" || responseCode == null)) {
-                    EasResult.Success(true)
+                    // IMPORTANT: attachments on single occurrence must target occurrence ItemId.
+                    // Do NOT resolve recurring master here, otherwise changes leak to whole series.
+                    val changedAttachments = removedAttachmentIds.isNotEmpty() || attachments.isNotEmpty()
+                    val occurrenceAttachmentMap = if (changedAttachments) {
+                        fetchCalendarAttachmentsEws(ewsUrl, listOf(bestItemId))
+                    } else {
+                        emptyMap()
+                    }
+                    val currentOccurrenceAttachmentsJson = occurrenceAttachmentMap[bestItemId] ?: ""
+
+                    if (removedAttachmentIds.isNotEmpty()) {
+                        // Удаляем только те AttachmentId, которые реально принадлежат этому occurrence.
+                        // Это защищает серию от случайного удаления master-вложений.
+                        val idsOnOccurrence = try {
+                            val arr = JSONArray(currentOccurrenceAttachmentsJson)
+                            (0 until arr.length()).mapNotNull { idx ->
+                                arr.getJSONObject(idx).optString("fileReference", "").takeIf { it.isNotBlank() }
+                            }.toSet()
+                        } catch (_: Exception) {
+                            emptySet()
+                        }
+                        val safeIdsToDelete = removedAttachmentIds.filter { it in idsOnOccurrence }
+                        if (safeIdsToDelete.isNotEmpty()) {
+                            val deleteResult = deleteCalendarAttachments(safeIdsToDelete)
+                            if (deleteResult is EasResult.Error) {
+                                android.util.Log.w(
+                                    "EasCalendarService",
+                                    "updateSingleOccurrenceEws: failed to delete some occurrence attachments: ${deleteResult.message}"
+                                )
+                            }
+                        }
+                    }
+
+                    var currentChangeKey = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "ChangeKey")
+                    if (currentChangeKey.isNullOrBlank()) {
+                        currentChangeKey = bestChangeKey
+                    }
+
+                    if (attachments.isNotEmpty()) {
+                        val attachResult = attachFilesEws(
+                            ewsUrl = ewsUrl,
+                            itemId = bestItemId,
+                            changeKey = currentChangeKey,
+                            attachments = attachments,
+                            exchangeVersion = "Exchange2007_SP1"
+                        )
+                        if (attachResult is EasResult.Error) {
+                            return@withContext EasResult.Error(attachResult.message)
+                        }
+                    }
+
+                    if (changedAttachments) {
+                        val currentAttachments = fetchCalendarAttachmentsEws(ewsUrl, listOf(bestItemId))
+                        EasResult.Success(currentAttachments[bestItemId] ?: "")
+                    } else {
+                        EasResult.Success("")
+                    }
                 } else {
                     EasResult.Error("EWS UpdateItem occurrence error: $responseCode")
                 }
@@ -671,16 +762,16 @@ class EasCalendarService internal constructor(
                 append("""<Sync xmlns="AirSync" xmlns:calendar="Calendar">""")
             }
             append("<Collections><Collection>")
-            append("<SyncKey>$syncKey</SyncKey>")
-            append("<CollectionId>$collectionId</CollectionId>")
+            append("<SyncKey>${deps.escapeXml(syncKey)}</SyncKey>")
+            append("<CollectionId>${deps.escapeXml(collectionId)}</CollectionId>")
             append("<Commands><Change>")
-            append("<ServerId>$serverId</ServerId>")
+            append("<ServerId>${deps.escapeXml(serverId)}</ServerId>")
             append("<ApplicationData>")
 
             append("<calendar:Exceptions>")
 
             for (ex in existingExceptions) {
-                if (ex.exceptionStartTime == occurrenceOriginalStart) continue
+                if (kotlin.math.abs(ex.exceptionStartTime - occurrenceOriginalStart) <= RecurrenceHelper.DST_TOLERANCE_MS) continue
                 appendExceptionXml(ex, majorVersion)
             }
 
@@ -747,7 +838,8 @@ class EasCalendarService internal constructor(
     suspend fun deleteCalendarEvent(
         serverId: String,
         isMeeting: Boolean = false,
-        isOrganizer: Boolean = false
+        isOrganizer: Boolean = false,
+        isRecurringSeries: Boolean = false
     ): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -765,13 +857,13 @@ class EasCalendarService internal constructor(
         
         return if (isEwsItemId) {
             val ewsItemId = if (serverId.contains("|")) serverId.substringBefore("|") else serverId
-            android.util.Log.d("EasCalendarService", "deleteCalendarEvent: using EWS path for EWS ItemId (len=${serverId.length})")
+            android.util.Log.d("EasCalendarService", "deleteCalendarEvent: using EWS path for EWS ItemId (len=${serverId.length}), isRecurringSeries=$isRecurringSeries")
             if (isMeeting && !isOrganizer) {
-                declineCalendarEventEws(ewsItemId)
+                declineCalendarEventEws(ewsItemId, isRecurringSeries = isRecurringSeries)
             } else if (isMeeting && isOrganizer) {
-                deleteCalendarEventEws(ewsItemId, sendCancellations = "SendToAllAndSaveCopy")
+                deleteCalendarEventEws(ewsItemId, sendCancellations = "SendToAllAndSaveCopy", isRecurringSeries = isRecurringSeries)
             } else {
-                deleteCalendarEventEws(ewsItemId)
+                deleteCalendarEventEws(ewsItemId, isRecurringSeries = isRecurringSeries)
             }
         } else if (isEasServerId) {
             val calendarFolderId = getCalendarFolderId()
@@ -782,7 +874,7 @@ class EasCalendarService internal constructor(
             deleteCalendarEventEas(serverId, calendarFolderId)
         } else {
             android.util.Log.w("EasCalendarService", "deleteCalendarEvent: unknown serverId format (len=${serverId.length}), trying EWS")
-            deleteCalendarEventEws(serverId)
+            deleteCalendarEventEws(serverId, isRecurringSeries = isRecurringSeries)
         }
     }
 
@@ -799,8 +891,15 @@ class EasCalendarService internal constructor(
      *
      * @return количество успешно удалённых
      */
+    data class DeleteRequest(
+        val serverId: String,
+        val isMeeting: Boolean,
+        val isOrganizer: Boolean,
+        val isRecurringSeries: Boolean = false
+    )
+
     suspend fun deleteCalendarEventsBatch(
-        requests: List<Triple<String, Boolean, Boolean>> // (serverId, isMeeting, isOrganizer)
+        requests: List<DeleteRequest>
     ): EasResult<Int> {
         if (requests.isEmpty()) return EasResult.Success(0)
         if (!deps.isVersionDetected()) deps.detectEasVersion()
@@ -809,42 +908,43 @@ class EasCalendarService internal constructor(
             try {
                 val ewsUrl = deps.getEwsUrl()
 
-                // Категоризация: EWS vs EAS, decline vs regular/organizer
-                val ewsRegular = mutableListOf<Pair<String, String>>()    // (itemId, sendCancellations)
-                val ewsDecline = mutableListOf<String>()                   // attendee decline
-                val easEvents = mutableListOf<Triple<String, Boolean, Boolean>>()
+                data class EwsItem(val itemId: String, val sendCancellations: String, val isRecurringSeries: Boolean)
 
-                for ((serverId, isMeeting, isOrganizer) in requests) {
-                    val isEwsItemId = (serverId.length > 50 && !serverId.contains(":")) || serverId.contains("|")
-                    val isEasServerId = serverId.contains(":") && serverId.length < 20
+                val ewsRegular = mutableListOf<EwsItem>()
+                val ewsDecline = mutableListOf<String>()
+                val easEvents = mutableListOf<DeleteRequest>()
 
-                    val ewsItemId = if (serverId.contains("|")) serverId.substringBefore("|") else serverId
+                for (req in requests) {
+                    val isEwsItemId = (req.serverId.length > 50 && !req.serverId.contains(":")) || req.serverId.contains("|")
+                    val isEasServerId = req.serverId.contains(":") && req.serverId.length < 20
+                    val ewsItemId = if (req.serverId.contains("|")) req.serverId.substringBefore("|") else req.serverId
 
                     when {
-                        isEwsItemId && isMeeting && !isOrganizer ->
+                        isEwsItemId && req.isMeeting && !req.isOrganizer ->
                             ewsDecline.add(ewsItemId)
-                        isEwsItemId && isMeeting && isOrganizer ->
-                            ewsRegular.add(ewsItemId to "SendToAllAndSaveCopy")
+                        isEwsItemId && req.isMeeting && req.isOrganizer ->
+                            ewsRegular.add(EwsItem(ewsItemId, "SendToAllAndSaveCopy", req.isRecurringSeries))
                         isEwsItemId ->
-                            ewsRegular.add(ewsItemId to "SendToNone")
+                            ewsRegular.add(EwsItem(ewsItemId, "SendToNone", req.isRecurringSeries))
                         isEasServerId ->
-                            easEvents.add(Triple(serverId, isMeeting, isOrganizer))
+                            easEvents.add(req)
                         else ->
-                            ewsRegular.add(serverId to "SendToNone")
+                            ewsRegular.add(EwsItem(req.serverId, "SendToNone", req.isRecurringSeries))
                     }
                 }
 
                 var deleted = 0
 
-                // 1. Batch EWS: группируем по sendCancellations, один DeleteItem на группу
-                val grouped = ewsRegular.groupBy({ it.second }, { it.first })
-                for ((sendCancel, itemIds) in grouped) {
-                    val batchResult = deleteCalendarEventsBatchEws(itemIds, sendCancel)
+                // 1. Batch EWS: группируем по (sendCancellations, isRecurringSeries)
+                val grouped = ewsRegular.groupBy({ it.sendCancellations to it.isRecurringSeries }, { it.itemId })
+                for ((key, itemIds) in grouped) {
+                    val (sendCancel, isRecurring) = key
+                    val batchResult = deleteCalendarEventsBatchEws(itemIds, sendCancel, isRecurring)
                     if (batchResult is EasResult.Success) {
                         deleted += batchResult.data
                     } else {
                         android.util.Log.w("EasCalendarService",
-                            "deleteCalendarEventsBatch: batch EWS ($sendCancel) failed for ${itemIds.size} items: ${(batchResult as? EasResult.Error)?.message}")
+                            "deleteCalendarEventsBatch: batch EWS ($sendCancel, recurring=$isRecurring) failed for ${itemIds.size} items: ${(batchResult as? EasResult.Error)?.message}")
                     }
                 }
 
@@ -874,8 +974,8 @@ class EasCalendarService internal constructor(
                 }
 
                 // 3. EAS: по одному (EAS Sync Delete не поддерживает batch)
-                for ((serverId, isMeeting, isOrganizer) in easEvents) {
-                    val result = deleteCalendarEvent(serverId, isMeeting, isOrganizer)
+                for (req in easEvents) {
+                    val result = deleteCalendarEvent(req.serverId, req.isMeeting, req.isOrganizer, req.isRecurringSeries)
                     if (result is EasResult.Success && result.data) deleted++
                 }
 
@@ -883,6 +983,7 @@ class EasCalendarService internal constructor(
                     "deleteCalendarEventsBatch: deleted $deleted/${requests.size}")
                 EasResult.Success(deleted)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e("EasCalendarService",
                     "deleteCalendarEventsBatch: exception: ${e.message}")
                 EasResult.Error("Batch delete error: ${e.message}")
@@ -896,12 +997,17 @@ class EasCalendarService internal constructor(
      */
     private suspend fun deleteCalendarEventsBatchEws(
         itemIds: List<String>,
-        sendCancellations: String = "SendToNone"
+        sendCancellations: String = "SendToNone",
+        isRecurringSeries: Boolean = false
     ): EasResult<Int> {
         if (itemIds.isEmpty()) return EasResult.Success(0)
         val ewsUrl = deps.getEwsUrl()
-        val itemIdsXml = itemIds.joinToString("\n") {
-            """        <t:ItemId Id="${deps.escapeXml(it)}"/>"""
+        val itemIdsXml = itemIds.joinToString("\n") { id ->
+            if (isRecurringSeries) {
+                """        <t:RecurringMasterItemId OccurrenceId="${deps.escapeXml(id)}"/>"""
+            } else {
+                """        <t:ItemId Id="${deps.escapeXml(id)}"/>"""
+            }
         }
         val deleteBody = """
     <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="$sendCancellations">
@@ -1016,8 +1122,8 @@ $itemIdsXml
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(calendarFolderId)}</CollectionId>
             <GetChanges>1</GetChanges>
             <WindowSize>512</WindowSize>
         </Collection>
@@ -1074,7 +1180,7 @@ $itemIdsXml
     
     @Synchronized
     private fun formatEasDate(timestamp: Long): String {
-        return easDateFormat.format(Date(timestamp))
+        return createEasDateFormat().format(Date(timestamp))
     }
     
     private fun calendarSyncInitialXml(calendarFolderId: String): String = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1082,7 +1188,7 @@ $itemIdsXml
     <Collections>
         <Collection>
             <SyncKey>0</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
+            <CollectionId>${deps.escapeXml(calendarFolderId)}</CollectionId>
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
@@ -1160,8 +1266,8 @@ $itemIdsXml
 <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(calendarFolderId)}</CollectionId>
             <DeletesAsMoves/>
             <GetChanges/>
             <WindowSize>100</WindowSize>
@@ -1333,10 +1439,10 @@ $itemIdsXml
                 append("""<Sync xmlns="AirSync" xmlns:calendar="Calendar">""")
             }
             append("<Collections><Collection>")
-            append("<SyncKey>$syncKey</SyncKey>")
-            append("<CollectionId>$calendarFolderId</CollectionId>")
+            append("<SyncKey>${deps.escapeXml(syncKey)}</SyncKey>")
+            append("<CollectionId>${deps.escapeXml(calendarFolderId)}</CollectionId>")
             append("<Commands><Add>")
-            append("<ClientId>$clientId</ClientId>")
+            append("<ClientId>${deps.escapeXml(clientId)}</ClientId>")
             append("<ApplicationData>")
             append("<calendar:Subject>$escapedSubject</calendar:Subject>")
             append("<calendar:StartTime>$startTimeStr</calendar:StartTime>")
@@ -1451,10 +1557,10 @@ $itemIdsXml
                 append("""<Sync xmlns="AirSync" xmlns:calendar="Calendar">""")
             }
             append("<Collections><Collection>")
-            append("<SyncKey>$syncKey</SyncKey>")
-            append("<CollectionId>$calendarFolderId</CollectionId>")
+            append("<SyncKey>${deps.escapeXml(syncKey)}</SyncKey>")
+            append("<CollectionId>${deps.escapeXml(calendarFolderId)}</CollectionId>")
             append("<Commands><Change>")
-            append("<ServerId>$serverId</ServerId>")
+            append("<ServerId>${deps.escapeXml(serverId)}</ServerId>")
             append("<ApplicationData>")
             append("<calendar:Subject>$escapedSubject</calendar:Subject>")
             append("<calendar:StartTime>$startTimeStr</calendar:StartTime>")
@@ -1594,12 +1700,12 @@ $itemIdsXml
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$calendarFolderId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(calendarFolderId)}</CollectionId>
             <DeletesAsMoves>0</DeletesAsMoves>
             <Commands>
                 <Delete>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
                 </Delete>
             </Commands>
         </Collection>
@@ -1639,6 +1745,7 @@ $itemIdsXml
                 val ewsUrl = deps.getEwsUrl()
                 syncCalendarEwsNtlm(ewsUrl)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка синхронизации календаря: ${e.message}")
             }
         }
@@ -1691,6 +1798,7 @@ $itemIdsXml
                 EasResult.Success(events)
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка парсинга календаря: ${e.message}")
         }
     }
@@ -1861,7 +1969,7 @@ $itemIdsXml
         }
 
         var supplemented = 0
-        val result = events.map { event ->
+        val intermediateResult = events.map { event ->
             if (event.attachments.isNotBlank()) return@map event
             val key = matchKey(event.subject, event.startTime)
             val att = keyToAtt[key]
@@ -1872,9 +1980,367 @@ $itemIdsXml
             } else event
         }
 
+        // Exchange 2007 SP1: CalendarView возвращает развёрнутые вхождения.
+        // Для recurring-серий HasAttachments живёт на master, а не на occurrence.
+        // Нужен второй проход: FindItem БЕЗ CalendarView → получаем masters с вложениями.
+        val recurringNoAtt = intermediateResult.filter {
+            it.isRecurring && it.attachments.isBlank()
+        }
+        if (recurringNoAtt.isNotEmpty()) {
+            val masterAtt = try {
+                supplementRecurringMasterAttachments(ewsUrl, recurringNoAtt)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.w("EasCalendarService",
+                    "supplementRecurringMasterAttachments failed: ${e.message}")
+                emptyMap()
+            }
+            if (masterAtt.isNotEmpty()) {
+                val finalResult = intermediateResult.map { event ->
+                    if (event.isRecurring && event.attachments.isBlank()) {
+                        val att = masterAtt[event.subject.trim().lowercase()]
+                        if (att != null) {
+                            supplemented++
+                            event.copy(attachments = att)
+                        } else event
+                    } else event
+                }
+                android.util.Log.d("EasCalendarService",
+                    "supplementAttachmentsViaEws: supplemented $supplemented/${noAttach.size} events (incl. recurring masters)")
+                return finalResult
+            }
+        }
+
         android.util.Log.d("EasCalendarService",
             "supplementAttachmentsViaEws: supplemented $supplemented/${noAttach.size} events with attachments")
+        return intermediateResult
+    }
+
+    /**
+     * Ищет recurring masters с вложениями через FindItem БЕЗ CalendarView,
+     * затем загружает метаданные вложений через GetItem.
+     * Возвращает Map<subjectLowerCase, attachmentsJson>.
+     */
+    private suspend fun supplementRecurringMasterAttachments(
+        ewsUrl: String,
+        recurringEvents: List<EasCalendarEvent>
+    ): Map<String, String> {
+        // FindItem БЕЗ CalendarView → возвращает RecurringMaster + Single.
+        // Restriction HasAttachments=true отсекает элементы без вложений.
+        val findRequest = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">
+            <m:ItemShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURI FieldURI="item:HasAttachments"/>
+                    <t:FieldURI FieldURI="calendar:CalendarItemType"/>
+                </t:AdditionalProperties>
+            </m:ItemShape>
+            <m:IndexedPageItemView MaxEntriesReturned="200" Offset="0" BasePoint="Beginning"/>
+            <m:Restriction>
+                <t:IsEqualTo>
+                    <t:FieldURI FieldURI="item:HasAttachments"/>
+                    <t:FieldURIOrConstant>
+                        <t:Constant Value="true"/>
+                    </t:FieldURIOrConstant>
+                </t:IsEqualTo>
+            </m:Restriction>
+            <m:ParentFolderIds>
+                <t:DistinguishedFolderId Id="calendar"/>
+            </m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+        val findResult = ewsRequest(ewsUrl, findRequest, "FindItem")
+        if (findResult is EasResult.Error) return emptyMap()
+        val findXml = (findResult as EasResult.Success).data
+
+        val ciPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
+            .toRegex(setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+
+        val recurringSubjects = recurringEvents.map { it.subject.trim().lowercase() }.toSet()
+        val masterItemIds = mutableListOf<String>()
+        val masterIdToSubject = mutableMapOf<String, String>()
+
+        for (m in ciPattern.findAll(findXml)) {
+            val xml = m.groupValues[1]
+            val calType = XmlValueExtractor.extractEws(xml, "CalendarItemType") ?: ""
+            if (calType != "RecurringMaster") continue
+
+            val subj = (XmlValueExtractor.extractEws(xml, "Subject") ?: "").trim().lowercase()
+            if (subj !in recurringSubjects) continue
+
+            val id = XmlValueExtractor.extractAttribute(xml, "ItemId", "Id") ?: continue
+            masterItemIds.add(id)
+            masterIdToSubject[id] = subj
+        }
+
+        if (masterItemIds.isEmpty()) return emptyMap()
+
+        android.util.Log.d("EasCalendarService",
+            "supplementRecurringMasterAttachments: found ${masterItemIds.size} recurring masters with attachments")
+
+        val attMap = fetchCalendarAttachmentsEws(ewsUrl, masterItemIds)
+        val result = mutableMapOf<String, String>()
+        for ((itemId, attJson) in attMap) {
+            val subj = masterIdToSubject[itemId] ?: continue
+            result[subj] = attJson
+        }
         return result
+    }
+
+    /**
+     * Информация о локальном повторяющемся событии для EWS-дополнения exceptions.
+     */
+    data class RecurringEventInfo(
+        val uid: String,
+        val serverId: String,
+        val currentExceptions: String
+    )
+
+    private data class EwsExceptionOccurrence(
+        val uid: String,
+        val subject: String,
+        val body: String,
+        val startMs: Long,
+        val endMs: Long,
+        val location: String,
+        val originalStartMs: Long
+    )
+
+    /**
+     * Дополняет exceptions для повторяющихся событий через EWS.
+     *
+     * Exchange 2007 SP1 EAS Sync (GetChanges) может НЕ пометить recurring master
+     * как изменённый, если на ПК в Outlook модифицировано только отдельное вхождение.
+     * В результате приложение не видит изменения.
+     *
+     * Решение: EWS FindItem + CalendarView возвращает все развёрнутые вхождения,
+     * включая модифицированные (CalendarItemType = "Exception").
+     * Сопоставляем их с локальными мастерами по UID и обновляем exceptions JSON.
+     *
+     * @param localRecurringEvents список локальных повторяющихся событий
+     * @return Map<uid, updatedExceptionsJson> — только для событий с изменениями
+     */
+    suspend fun supplementRecurringExceptionsViaEws(
+        localRecurringEvents: List<RecurringEventInfo>
+    ): Map<String, String> {
+        if (localRecurringEvents.isEmpty()) return emptyMap()
+
+        val ewsUrl = try {
+            deps.getEwsUrl()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return emptyMap()
+        }
+
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        cal.timeInMillis = System.currentTimeMillis() - (90L * 24 * 60 * 60 * 1000)
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        val windowStartMs = cal.timeInMillis
+        val startStr = String.format(
+            "%04d-%02d-%02dT00:00:00Z",
+            cal.get(java.util.Calendar.YEAR),
+            cal.get(java.util.Calendar.MONTH) + 1,
+            cal.get(java.util.Calendar.DAY_OF_MONTH)
+        )
+        cal.timeInMillis = System.currentTimeMillis() + (365L * 24 * 60 * 60 * 1000)
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+        cal.set(java.util.Calendar.MINUTE, 59)
+        cal.set(java.util.Calendar.SECOND, 59)
+        cal.set(java.util.Calendar.MILLISECOND, 999)
+        val windowEndMs = cal.timeInMillis
+        val endStr = String.format(
+            "%04d-%02d-%02dT23:59:59Z",
+            cal.get(java.util.Calendar.YEAR),
+            cal.get(java.util.Calendar.MONTH) + 1,
+            cal.get(java.util.Calendar.DAY_OF_MONTH)
+        )
+
+        val findRequest = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">
+            <m:ItemShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURI FieldURI="item:Body"/>
+                    <t:FieldURI FieldURI="calendar:Start"/>
+                    <t:FieldURI FieldURI="calendar:End"/>
+                    <t:FieldURI FieldURI="calendar:Location"/>
+                    <t:FieldURI FieldURI="calendar:CalendarItemType"/>
+                    <t:FieldURI FieldURI="calendar:UID"/>
+                    <t:FieldURI FieldURI="calendar:OriginalStart"/>
+                </t:AdditionalProperties>
+            </m:ItemShape>
+            <m:CalendarView StartDate="$startStr" EndDate="$endStr" MaxEntriesReturned="2000"/>
+            <m:ParentFolderIds>
+                <t:DistinguishedFolderId Id="calendar"/>
+            </m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+        val findResult = ewsRequest(ewsUrl, findRequest, "FindItem")
+        if (findResult is EasResult.Error) {
+            android.util.Log.w(
+                "EasCalendarService",
+                "supplementRecurringExceptionsViaEws: FindItem failed: ${findResult.message}"
+            )
+            return emptyMap()
+        }
+        val findXml = (findResult as EasResult.Success).data
+
+        val localUids = localRecurringEvents.map { it.uid }.toSet()
+
+        val exceptions = mutableListOf<EwsExceptionOccurrence>()
+        val ciPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
+            .toRegex(setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+
+        for (m in ciPattern.findAll(findXml)) {
+            val xml = m.groupValues[1]
+            val itemType = XmlValueExtractor.extractEws(xml, "CalendarItemType") ?: continue
+            if (itemType != "Exception") continue
+
+            val uid = XmlValueExtractor.extractEws(xml, "UID") ?: continue
+            if (uid !in localUids) continue
+
+            val subject = XmlValueExtractor.extractEws(xml, "Subject") ?: ""
+            val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>"
+                .toRegex(RegexOption.DOT_MATCHES_ALL)
+                .find(xml)?.groupValues?.getOrNull(1)?.trim() ?: ""
+            val body = removeDuplicateLines(unescapeXml(rawBody))
+            val startMs = parseEwsDateTime(XmlValueExtractor.extractEws(xml, "Start")) ?: 0L
+            val endMs = parseEwsDateTime(XmlValueExtractor.extractEws(xml, "End")) ?: 0L
+            val location = XmlValueExtractor.extractEws(xml, "Location") ?: ""
+            val originalStartMs = parseEwsDateTime(
+                XmlValueExtractor.extractEws(xml, "OriginalStart")
+            ) ?: startMs
+
+            exceptions.add(
+                EwsExceptionOccurrence(uid, subject, body, startMs, endMs, location, originalStartMs)
+            )
+        }
+
+        if (exceptions.isEmpty()) {
+            android.util.Log.d(
+                "EasCalendarService",
+                "supplementRecurringExceptionsViaEws: no EWS exceptions found for ${localRecurringEvents.size} recurring events"
+            )
+            return emptyMap()
+        }
+
+        val grouped = exceptions.groupBy { it.uid }
+
+        android.util.Log.d(
+            "EasCalendarService",
+            "supplementRecurringExceptionsViaEws: found ${exceptions.size} exception occurrences for ${grouped.size} recurring series"
+        )
+
+        val result = mutableMapOf<String, String>()
+        val processedUids = mutableSetOf<String>()
+        for ((uid, occurrences) in grouped) {
+            val local = localRecurringEvents.find { it.uid == uid } ?: continue
+            processedUids.add(uid)
+            val newExceptionsJson = buildExceptionsJsonFromEws(
+                occurrences, local.currentExceptions, windowStartMs, windowEndMs
+            )
+            if (newExceptionsJson != local.currentExceptions) {
+                result[uid] = newExceptionsJson
+            }
+        }
+        
+        // Events with local exceptions but no EWS exceptions:
+        // all non-deleted exceptions within window were "undone" on server
+        for (local in localRecurringEvents) {
+            if (local.uid in processedUids) continue
+            if (local.currentExceptions.isBlank()) continue
+            val cleaned = buildExceptionsJsonFromEws(
+                emptyList(), local.currentExceptions, windowStartMs, windowEndMs
+            )
+            if (cleaned != local.currentExceptions) {
+                result[local.uid] = cleaned
+            }
+        }
+
+        android.util.Log.d(
+            "EasCalendarService",
+            "supplementRecurringExceptionsViaEws: ${result.size} recurring events have updated exceptions"
+        )
+        return result
+    }
+
+    /**
+     * Собирает exceptions JSON из EWS-вхождений.
+     * Логика сохранения локальных exceptions:
+     *  - deleted → всегда сохранять (CalendarView не возвращает deleted occurrences)
+     *  - non-deleted, вне окна CalendarView → сохранять (нет данных для проверки)
+     *  - non-deleted, внутри окна, есть в EWS → будет перезаписан актуальными данными
+     *  - non-deleted, внутри окна, НЕТ в EWS → exception "undone" на сервере → удалить
+     */
+    private fun buildExceptionsJsonFromEws(
+        ewsOccurrences: List<EwsExceptionOccurrence>,
+        currentExceptionsJson: String,
+        windowStartMs: Long,
+        windowEndMs: Long
+    ): String {
+        val entries = mutableListOf<String>()
+        val ewsOriginalStartTimes = ewsOccurrences.map { it.originalStartMs }.toSet()
+        val currentByOriginalStart = mutableMapOf<Long, org.json.JSONObject>()
+
+        if (currentExceptionsJson.isNotBlank()) {
+            try {
+                val arr = org.json.JSONArray(currentExceptionsJson)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val isDeleted = obj.optBoolean("deleted", false)
+                    val exStartTime = obj.optLong("exceptionStartTime", 0L)
+                    if (exStartTime > 0L) {
+                        currentByOriginalStart[exStartTime] = obj
+                    }
+                    val isOutsideWindow = exStartTime < windowStartMs || exStartTime > windowEndMs
+                    if (isDeleted || isOutsideWindow) {
+                        entries.add(obj.toString())
+                    }
+                    // non-deleted inside window but NOT in ewsOriginalStartTimes → undone, drop
+                }
+            } catch (_: Exception) { }
+        }
+
+        for (occ in ewsOccurrences) {
+            val subject = escapeJsonString(occ.subject)
+            val body = escapeJsonString(occ.body)
+            val location = escapeJsonString(occ.location)
+            val existing = currentByOriginalStart[occ.originalStartMs]
+            val attachments = if (existing?.optBoolean("attachmentsOverridden", false) == true) {
+                escapeJsonString(existing.optString("attachments", ""))
+            } else ""
+            val attachmentsOverridden = existing?.optBoolean("attachmentsOverridden", false) == true
+
+            entries.add(
+                """{"exceptionStartTime":${occ.originalStartMs},"deleted":false,"subject":"$subject","location":"$location","startTime":${occ.startMs},"endTime":${occ.endMs},"body":"$body","attachments":"$attachments","attachmentsOverridden":$attachmentsOverridden}"""
+            )
+        }
+
+        return if (entries.isEmpty()) "" else "[${entries.joinToString(",")}]"
     }
 
     private suspend fun createCalendarEventEws(
@@ -2004,6 +2470,7 @@ $itemIdsXml
                     EasResult.Error("Не удалось создать событие через EWS")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: "Ошибка создания события через EWS")
             }
         }
@@ -2228,6 +2695,7 @@ $itemIdsXml
                     EasResult.Error("Ошибка обновления события: $responseCode")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: "Ошибка обновления события через EWS")
             }
         }
@@ -2242,41 +2710,74 @@ $itemIdsXml
     private suspend fun deleteCalendarEventEws(
         serverId: String,
         sendCancellations: String = "SendToNone",
-        deleteType: String = "HardDelete"
+        deleteType: String = "HardDelete",
+        isRecurringSeries: Boolean = false
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
-                val deleteBody = """
-                    <m:DeleteItem DeleteType="$deleteType" SendMeetingCancellations="$sendCancellations">
-                        <m:ItemIds>
-                            <t:ItemId Id="${deps.escapeXml(serverId)}"/>
-                        </m:ItemIds>
-                    </m:DeleteItem>
-                """.trimIndent()
-                val request = EasXmlTemplates.ewsSoapRequest(deleteBody)
-                
-                val deleteResult = ewsRequest(ewsUrl, request, "DeleteItem")
-                if (deleteResult is EasResult.Error) return@withContext deleteResult
-                val response = (deleteResult as EasResult.Success).data
-                
-                val responseCode = EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)?.trim()
-                val hasSuccess = response.contains("ResponseClass=\"Success\"")
-                when {
-                    responseCode == "NoError" -> EasResult.Success(true)
-                    responseCode == "ErrorItemNotFound" -> {
-                        android.util.Log.w("EasCalendarService",
-                            "deleteCalendarEventEws: ErrorItemNotFound for serverId (len=${serverId.length}). " +
-                            "Event may have been already deleted or ItemId is stale.")
-                        EasResult.Success(true)
-                    }
-                    hasSuccess && responseCode == null -> EasResult.Success(true)
-                    else -> EasResult.Error("EWS DeleteItem: $responseCode")
+                val escapedId = deps.escapeXml(serverId)
+
+                // Exchange 2007 SP1: CalendarView returns expanded occurrences with unique
+                // ItemIds. To delete the ENTIRE series, RecurringMasterItemId resolves the
+                // master from any occurrence's ItemId (MS Learn: RecurringMasterItemId).
+                // If the stored ID happens to be a master ItemId already (e.g. just after
+                // CreateItem, before the next sync), RecurringMasterItemId may fail — we
+                // fall back to a plain ItemId which directly targets the master.
+                val primaryItemIdXml = if (isRecurringSeries) {
+                    """<t:RecurringMasterItemId OccurrenceId="$escapedId"/>"""
+                } else {
+                    """<t:ItemId Id="$escapedId"/>"""
                 }
+
+                val result = executeDeleteItem(ewsUrl, primaryItemIdXml, deleteType, sendCancellations)
+                if (result is EasResult.Success) return@withContext result
+
+                if (isRecurringSeries) {
+                    android.util.Log.w("EasCalendarService",
+                        "deleteCalendarEventEws: RecurringMasterItemId failed (${(result as EasResult.Error).message}), " +
+                        "retrying with plain ItemId (serverId may already be master)")
+                    val fallbackXml = """<t:ItemId Id="$escapedId"/>"""
+                    return@withContext executeDeleteItem(ewsUrl, fallbackXml, deleteType, sendCancellations)
+                }
+
+                result
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка удаления события: ${e.message}")
             }
+        }
+    }
+
+    private suspend fun executeDeleteItem(
+        ewsUrl: String,
+        itemIdXml: String,
+        deleteType: String,
+        sendCancellations: String
+    ): EasResult<Boolean> {
+        val deleteBody = """
+            <m:DeleteItem DeleteType="$deleteType" SendMeetingCancellations="$sendCancellations">
+                <m:ItemIds>
+                    $itemIdXml
+                </m:ItemIds>
+            </m:DeleteItem>
+        """.trimIndent()
+        val request = EasXmlTemplates.ewsSoapRequest(deleteBody)
+        val deleteResult = ewsRequest(ewsUrl, request, "DeleteItem")
+        if (deleteResult is EasResult.Error) return deleteResult
+        val response = (deleteResult as EasResult.Success).data
+
+        val responseCode = EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)?.trim()
+        val hasSuccess = response.contains("ResponseClass=\"Success\"")
+        return when {
+            responseCode == "NoError" -> EasResult.Success(true)
+            responseCode == "ErrorItemNotFound" -> {
+                android.util.Log.w("EasCalendarService",
+                    "executeDeleteItem: ErrorItemNotFound. Event may have been already deleted or ItemId is stale.")
+                EasResult.Success(true)
+            }
+            hasSuccess && responseCode == null -> EasResult.Success(true)
+            else -> EasResult.Error("EWS DeleteItem: $responseCode")
         }
     }
     
@@ -2290,43 +2791,46 @@ $itemIdsXml
      * (некоторые конфигурации Exchange оставляют declined meetings в календаре).
      * Per MS docs: CreateItem + DeclineItem, Exchange 2007 SP1+
      */
-    private suspend fun declineCalendarEventEws(serverId: String): EasResult<Boolean> {
+    private suspend fun declineCalendarEventEws(
+        serverId: String,
+        isRecurringSeries: Boolean = false
+    ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
-                // Шаг 1: DeclineItem — уведомляем организатора (предотвращает CRA resurrection)
+                val escapedId = deps.escapeXml(serverId)
+                // Шаг 1: DeclineItem — уведомляем организатора (предотвращает CRA resurrection).
+                // ReferenceItemId принимает только Id/ChangeKey; RecurringMasterItemId
+                // в ReferenceItemId не поддерживается. Для серии decline отправится
+                // по конкретному occurrence, а HardDelete ниже удалит всю серию.
                 val declineBody = """
                     <m:CreateItem MessageDisposition="SendAndSaveCopy">
                         <m:Items>
                             <t:DeclineItem>
-                                <t:ReferenceItemId Id="${deps.escapeXml(serverId)}"/>
+                                <t:ReferenceItemId Id="$escapedId"/>
                             </t:DeclineItem>
                         </m:Items>
                     </m:CreateItem>
                 """.trimIndent()
                 val request = EasXmlTemplates.ewsSoapRequest(declineBody)
-                // DeclineItem — best-effort: ошибка не блокирует HardDelete
                 runCatching { ewsRequest(ewsUrl, request, "CreateItem") }
                 
-                // Шаг 2: HardDelete — гарантируем физическое удаление из календаря
-                val deleteBody = """
-                    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="SendToNone">
-                        <m:ItemIds>
-                            <t:ItemId Id="${deps.escapeXml(serverId)}"/>
-                        </m:ItemIds>
-                    </m:DeleteItem>
-                """.trimIndent()
-                val deleteRequest = EasXmlTemplates.ewsSoapRequest(deleteBody)
-                val delResult = ewsRequest(ewsUrl, deleteRequest, "DeleteItem")
-                if (delResult is EasResult.Error) return@withContext delResult
-                val deleteResponse = (delResult as EasResult.Success).data
-                val responseCode = EWS_RESPONSE_CODE.find(deleteResponse)?.groupValues?.get(1)?.trim()
-                val delHasSuccess = deleteResponse.contains("ResponseClass=\"Success\"")
-                when {
-                    responseCode == "NoError" || responseCode == "ErrorItemNotFound" -> EasResult.Success(true)
-                    delHasSuccess && responseCode == null -> EasResult.Success(true)
-                    else -> EasResult.Error("EWS DeleteItem: $responseCode")
+                // Шаг 2: HardDelete — гарантируем физическое удаление из календаря.
+                // Для recurring series используем RecurringMasterItemId → удаляет всю серию.
+                val itemIdXml = if (isRecurringSeries) {
+                    """<t:RecurringMasterItemId OccurrenceId="$escapedId"/>"""
+                } else {
+                    """<t:ItemId Id="$escapedId"/>"""
                 }
+                val result = executeDeleteItem(ewsUrl, itemIdXml, "HardDelete", "SendToNone")
+                if (result is EasResult.Success) return@withContext result
+
+                if (isRecurringSeries) {
+                    android.util.Log.w("EasCalendarService",
+                        "declineCalendarEventEws: RecurringMasterItemId failed, fallback to ItemId")
+                    return@withContext executeDeleteItem(ewsUrl, """<t:ItemId Id="$escapedId"/>""", "HardDelete", "SendToNone")
+                }
+                result
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка отклонения встречи: ${e.message}")
@@ -2348,8 +2852,8 @@ $itemIdsXml
 <MeetingResponse xmlns="MeetingResponse">
     <Request>
         <UserResponse>$userResponse</UserResponse>
-        <CollectionId>$calendarFolderId</CollectionId>
-        <RequestId>$serverId</RequestId>
+        <CollectionId>${deps.escapeXml(calendarFolderId)}</CollectionId>
+        <RequestId>${deps.escapeXml(serverId)}</RequestId>
     </Request>
 </MeetingResponse>""".trimIndent()
         
@@ -2447,11 +2951,93 @@ $itemIdsXml
                 // прикрепить вложение к СЛУЧАЙНОМУ событию в случае промаха.
                 EasResult.Error("ItemId not found for subject=$subject")
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Failed to find ItemId: ${e.message}")
             }
         }
     }
-    
+
+    /**
+     * Находит EWS ItemId recurring master по Subject.
+     *
+     * КРИТИЧНО для Exchange 2007 SP1:
+     * FindItem + CalendarView возвращает развёрнутые вхождения (occurrence ItemId).
+     * FindItem БЕЗ CalendarView возвращает recurring masters (master ItemId).
+     * Вложения серии хранятся на master → CreateAttachment/GetAttachment
+     * должны использовать именно master ItemId.
+     */
+    private suspend fun findRecurringMasterItemId(
+        subject: String
+    ): EasResult<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val ewsUrl = deps.getEwsUrl()
+
+                val findRequest = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">
+            <m:ItemShape>
+                <t:BaseShape>IdOnly</t:BaseShape>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURI FieldURI="calendar:CalendarItemType"/>
+                </t:AdditionalProperties>
+            </m:ItemShape>
+            <m:Restriction>
+                <t:IsEqualTo>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURIOrConstant>
+                        <t:Constant Value="${deps.escapeXml(subject)}"/>
+                    </t:FieldURIOrConstant>
+                </t:IsEqualTo>
+            </m:Restriction>
+            <m:ParentFolderIds>
+                <t:DistinguishedFolderId Id="calendar"/>
+            </m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+
+                val responseResult = ewsRequest(ewsUrl, findRequest, "FindItem")
+                if (responseResult is EasResult.Error) return@withContext responseResult
+                val response = (responseResult as EasResult.Success).data
+
+                val itemPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
+                    .toRegex(RegexOption.DOT_MATCHES_ALL)
+                val idPattern = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\""
+                    .toRegex()
+
+                for (itemMatch in itemPattern.findAll(response)) {
+                    val itemXml = itemMatch.groupValues[1]
+                    val calItemType = XmlValueExtractor.extractEws(itemXml, "CalendarItemType") ?: ""
+                    val itemSubject = XmlValueExtractor.extractEws(itemXml, "Subject") ?: ""
+
+                    if (calItemType == "RecurringMaster" &&
+                        itemSubject.equals(subject, ignoreCase = true)
+                    ) {
+                        val idMatch = idPattern.find(itemXml)
+                        if (idMatch != null) {
+                            return@withContext EasResult.Success(
+                                "${idMatch.groupValues[1]}|${idMatch.groupValues[2]}"
+                            )
+                        }
+                    }
+                }
+
+                EasResult.Error("RecurringMaster ItemId not found for subject=$subject")
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error("Failed to find RecurringMaster ItemId: ${e.message}")
+            }
+        }
+    }
+
     // === Парсинг ===
     
     private fun parseCalendarEvents(xml: String): List<EasCalendarEvent> {
@@ -3598,6 +4184,7 @@ $itemIdsXml
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.w("EasCalendarService", "DeleteAttachment exception for ${attId.take(30)}: ${e.message}")
                 lastError = e.message
             }

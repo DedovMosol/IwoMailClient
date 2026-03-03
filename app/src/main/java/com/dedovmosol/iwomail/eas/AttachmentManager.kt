@@ -86,6 +86,13 @@ class AttachmentManager(
         }
     }
     
+    private fun escapeXml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
+
     private fun getAuthHeader(): String {
         val credentials = if (domain.isNotEmpty()) {
             "$domain\\$username:$password"
@@ -110,6 +117,7 @@ class AttachmentManager(
         } catch (e: Exception) {
             fileReference
         }
+        val safeRef = escapeXml(decodedRef)
         // Пробуем разные варианты XML
         val variants = listOf(
             // Вариант 1: FileReference в namespace AirSyncBase
@@ -118,7 +126,7 @@ class AttachmentManager(
                 <ItemOperations xmlns="ItemOperations">
                     <Fetch>
                         <Store>Mailbox</Store>
-                        <FileReference xmlns="AirSyncBase">$decodedRef</FileReference>
+                        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
                     </Fetch>
                 </ItemOperations>
             """.trimIndent(),
@@ -128,7 +136,7 @@ class AttachmentManager(
                 <ItemOperations xmlns="ItemOperations">
                     <Fetch>
                         <Store>Mailbox</Store>
-                        <FileReference>$decodedRef</FileReference>
+                        <FileReference>$safeRef</FileReference>
                     </Fetch>
                 </ItemOperations>
             """.trimIndent(),
@@ -138,7 +146,7 @@ class AttachmentManager(
                 <ItemOperations xmlns="ItemOperations">
                     <Fetch>
                         <Store>Mailbox</Store>
-                        <FileReference xmlns="AirSyncBase">$decodedRef</FileReference>
+                        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
                         <Options>
                             <Range>0-999999999</Range>
                         </Options>

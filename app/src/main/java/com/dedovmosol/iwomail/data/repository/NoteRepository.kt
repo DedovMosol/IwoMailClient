@@ -3,6 +3,7 @@ package com.dedovmosol.iwomail.data.repository
 import android.content.Context
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.eas.withEasRetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -65,17 +66,7 @@ class NoteRepository(private val context: Context) {
                 
                 android.util.Log.d("NotesDebug", "Calling easClient.restoreNote...")
                 // Восстанавливаем на сервере (перемещаем из Deleted Items в Notes)
-                var result = easClient.restoreNote(note.serverId)
-                
-                // Retry при ошибке
-                if (result is EasResult.Error && (
-                    result.message.contains("Status=", ignoreCase = true) ||
-                    result.message.contains("failed", ignoreCase = true) ||
-                    result.message.contains("error", ignoreCase = true)
-                )) {
-                    kotlinx.coroutines.delay(1000)
-                    result = easClient.restoreNote(note.serverId)
-                }
+                val result = withEasRetry { easClient.restoreNote(note.serverId) }
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -227,18 +218,7 @@ class NoteRepository(private val context: Context) {
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
-                var result = easClient.createNote(subject, body)
-                
-                // Retry при ошибке Status или конфликте
-                if (result is EasResult.Error && (
-                    result.message.contains("Status=", ignoreCase = true) ||
-                    result.message.contains("failed", ignoreCase = true) ||
-                    result.message.contains("error", ignoreCase = true)
-                )) {
-                    // Ждём и повторяем попытку
-                    kotlinx.coroutines.delay(1000)
-                    result = easClient.createNote(subject, body)
-                }
+                val result = withEasRetry { easClient.createNote(subject, body) }
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -320,17 +300,7 @@ class NoteRepository(private val context: Context) {
                     return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 }
                 
-                var result = easClient.updateNote(note.serverId, subject, body)
-                
-                // Retry при ошибке Status или конфликте
-                if (result is EasResult.Error && (
-                    result.message.contains("Status=", ignoreCase = true) ||
-                    result.message.contains("failed", ignoreCase = true) ||
-                    result.message.contains("error", ignoreCase = true)
-                )) {
-                    kotlinx.coroutines.delay(1000)
-                    result = easClient.updateNote(note.serverId, subject, body)
-                }
+                val result = withEasRetry { easClient.updateNote(note.serverId, subject, body) }
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -536,17 +506,7 @@ class NoteRepository(private val context: Context) {
                 val easClient = accountRepo.createEasClient(note.accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
 
-                var result = easClient.deleteNotePermanently(note.serverId)
-                
-                // Retry при ошибке
-                if (result is EasResult.Error && (
-                    result.message.contains("Status=", ignoreCase = true) ||
-                    result.message.contains("failed", ignoreCase = true) ||
-                    result.message.contains("error", ignoreCase = true)
-                )) {
-                    kotlinx.coroutines.delay(1000)
-                    result = easClient.deleteNotePermanently(note.serverId)
-                }
+                val result = withEasRetry { easClient.deleteNotePermanently(note.serverId) }
 
                 when (result) {
                     is EasResult.Success -> {
@@ -846,58 +806,61 @@ class NoteRepository(private val context: Context) {
                         val syncTime = System.currentTimeMillis()
                         val RECENT_EDIT_THRESHOLD = 10_000L // 10 секунд
                         
+                        // Phase 1: Collect duplicate IDs to delete
+                        val activeDuplicateIdsToDelete = mutableSetOf<String>()
+                        for (note in activeServerNotes) {
+                            val duplicate = existingNotes.find {
+                                it.serverId != note.serverId &&
+                                it.subject == note.subject &&
+                                it.body == note.body
+                            }
+                            if (duplicate != null) {
+                                if (duplicate.isDeleted && !skipRecentDeleteCheck) {
+                                    val timeSinceDelete = syncTime - duplicate.lastModified
+                                    if (timeSinceDelete < 30_000) continue
+                                }
+                                activeDuplicateIdsToDelete.add(duplicate.id)
+                            }
+                        }
+                        // Phase 2: Delete duplicates
+                        for (dupId in activeDuplicateIdsToDelete) {
+                            noteDao.delete(dupId)
+                        }
+                        // Phase 3: Map to entities
                         val activeNoteEntities = activeServerNotes.mapNotNull { note ->
                             val noteId = "${accountId}_${note.serverId}"
                             val existingNote = existingNotes.find { it.id == noteId }
                             
-                            // Защита от race condition - НЕ перезаписываем свежие локальные изменения
                             if (existingNote != null) {
                                 val timeSinceLocalEdit = syncTime - existingNote.lastModified
                                 
-                                // СЛУЧАЙ 1: Обычная синхронизация (skipRecentDeleteCheck=false)
                                 if (!skipRecentDeleteCheck && timeSinceLocalEdit < RECENT_EDIT_THRESHOLD) {
-                                    // Если данные идентичны - пропускаем (оптимизация)
                                     if (existingNote.subject == note.subject && existingNote.body == note.body) {
                                         return@mapNotNull null
                                     }
-                                    return@mapNotNull null // Блок - защита от race condition
+                                    return@mapNotNull null
                                 }
                                 
-                                // СЛУЧАЙ 2: Явная синхронизация после update/delete/restore (skipRecentDeleteCheck=true)
-                                // КРИТИЧНО: Разрешаем обновление ТОЛЬКО если сервер вернул ИЗМЕНЁННЫЕ данные
-                                // Это защищает от потери данных если сервер не успел обработать UpdateItem
                                 if (skipRecentDeleteCheck && timeSinceLocalEdit < RECENT_EDIT_THRESHOLD) {
-                                    // Проверяем: изменились ли данные или serverId?
                                     val dataChanged = existingNote.subject != note.subject || existingNote.body != note.body
                                     val serverIdChanged = existingNote.serverId != note.serverId
                                     
                                     if (!dataChanged && !serverIdChanged) {
-                                        // Данные и serverId идентичны - сервер вернул ТО ЖЕ что у нас локально
-                                        // НЕ перезаписываем (это может быть устаревший ответ из-за задержки репликации)
                                         return@mapNotNull null
                                     }
-                                    // Продолжаем - обновляем т.к. данные или serverId изменились
                                 }
                             }
                             
-                            // Удаляем дубликаты с другим serverId
-                            val duplicate = existingNotes.find { 
-                                it.serverId != note.serverId && 
-                                it.subject == note.subject && 
+                            val duplicate = existingNotes.find {
+                                it.serverId != note.serverId &&
+                                it.subject == note.subject &&
                                 it.body == note.body
                             }
-                            if (duplicate != null) {
-                                // Если дубликат удалён недавно (< 30 сек) - НЕ восстанавливаем
-                                // Даём серверу время обработать удаление
-                                // ИСКЛЮЧЕНИЕ: При явном восстановлении (skipRecentDeleteCheck=true) пропускаем проверку
-                                if (duplicate.isDeleted && !skipRecentDeleteCheck) {
-                                    val timeSinceDelete = syncTime - duplicate.lastModified
-                                    if (timeSinceDelete < 30_000) {
-                                        return@mapNotNull null
-                                    }
+                            if (duplicate != null && duplicate.isDeleted && !skipRecentDeleteCheck) {
+                                val timeSinceDelete = syncTime - duplicate.lastModified
+                                if (timeSinceDelete < 30_000) {
+                                    return@mapNotNull null
                                 }
-                                
-                                noteDao.delete(duplicate.id)
                             }
                             
                             NoteEntity(
@@ -907,7 +870,7 @@ class NoteRepository(private val context: Context) {
                                 subject = note.subject,
                                 body = note.body,
                                 categories = note.categories.joinToString(","),
-                                lastModified = existingNote?.lastModified ?: note.lastModified, // Сохраняем локальный timestamp
+                                lastModified = existingNote?.lastModified ?: note.lastModified,
                                 isDeleted = false
                             )
                         }
@@ -936,25 +899,27 @@ class NoteRepository(private val context: Context) {
                             noteDao.delete(noteId)
                         }
                         
-                        val deletedNoteEntities = deletedServerNotes.mapNotNull { note ->
-                            val noteId = "${accountId}_${note.serverId}"
-                            val existingNote = existingNotes.find { it.id == noteId }
-                            
-                            // КРИТИЧНО: Проверяем дубликаты перед добавлением
-                            // Если заметка с таким subject/body уже есть локально (активная или удалённая)
-                            // с ДРУГИМ serverId - НЕ добавляем новую, а обновляем существующую
-                            val duplicate = existingNotes.find { 
-                                it.serverId != note.serverId && 
-                                it.subject == note.subject && 
+                        // Phase 1: Collect duplicate IDs to delete for deleted notes
+                        val deletedDuplicateIdsToDelete = mutableSetOf<String>()
+                        for (note in deletedServerNotes) {
+                            val duplicate = existingNotes.find {
+                                it.serverId != note.serverId &&
+                                it.subject == note.subject &&
                                 it.body == note.body
                             }
-                            
                             if (duplicate != null) {
-                                // КРИТИЧНО: Удаляем старую запись и добавляем новую с актуальным serverId
-                                // Это НЕОБХОДИМО для корректной работы restore - нужен актуальный EWS ItemId
                                 android.util.Log.d("NOT", "syncNotes: Found duplicate note (isDeleted=${duplicate.isDeleted}) serverId=${duplicate.serverId}, replacing with new serverId=${note.serverId}")
-                                noteDao.delete(duplicate.id)
+                                deletedDuplicateIdsToDelete.add(duplicate.id)
                             }
+                        }
+                        // Phase 2: Delete duplicates
+                        for (dupId in deletedDuplicateIdsToDelete) {
+                            noteDao.delete(dupId)
+                        }
+                        // Phase 3: Map to entities
+                        val deletedNoteEntities = deletedServerNotes.map { note ->
+                            val noteId = "${accountId}_${note.serverId}"
+                            val existingNote = existingNotes.find { it.id == noteId }
                             
                             NoteEntity(
                                 id = noteId,
@@ -963,7 +928,7 @@ class NoteRepository(private val context: Context) {
                                 subject = note.subject,
                                 body = note.body,
                                 categories = note.categories.joinToString(","),
-                                lastModified = existingNote?.lastModified ?: note.lastModified, // Сохраняем локальный timestamp для удалённых
+                                lastModified = existingNote?.lastModified ?: note.lastModified,
                                 isDeleted = true
                             )
                         }

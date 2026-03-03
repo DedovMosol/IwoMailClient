@@ -58,7 +58,7 @@ class EasDraftsService internal constructor(
     )
     
     // Кэш ID папки черновиков
-    private var cachedDraftsFolderId: String? = null
+    @Volatile private var cachedDraftsFolderId: String? = null
     
 suspend fun createDraft(
     to: String,
@@ -245,6 +245,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             
             EasResult.Success(body)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка загрузки Body")
         }
     }
@@ -289,6 +290,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val enriched = fillDraftDetailsEws(ewsUrl, drafts, exchangeVersion)
             EasResult.Success(enriched)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("EWS syncDrafts: ${e.message}")
         }
     }
@@ -373,6 +375,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val mimeBytes = Base64.decode(mimeBase64, Base64.DEFAULT)
             EasResult.Success(String(mimeBytes, Charsets.UTF_8))
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка загрузки MIME: ${e.message}")
         }
     }
@@ -399,6 +402,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             }
             EasResult.Success(bytes)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка скачивания вложения: ${e.message}")
         }
     }
@@ -486,6 +490,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
                 EasResult.Error("MIME CreateItem: $details")
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("MIME CreateItem: ${e.message}")
         }
     }
@@ -790,6 +795,7 @@ private suspend fun createDraftEws(
                 EasResult.Error("Не удалось создать черновик: $error")
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка создания черновика")
         }
     }
@@ -857,6 +863,7 @@ private suspend fun createDraftEws(
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка создания черновика: ${e.message}")
             }
         }
@@ -908,17 +915,18 @@ private suspend fun createDraftEas(
                 if (email.contains("<")) email else "\"$email\" <$email>"
             }
         
+        val esc = deps.escapeXml
         // ВАЖНО: namespace с двоеточием - Email:, AirSyncBase:, Email2:
         val createXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync" xmlns:email="Email:" xmlns:airsyncbase="AirSyncBase:" xmlns:email2="Email2:">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$draftsFolderId</CollectionId>
+            <SyncKey>${esc(syncKey)}</SyncKey>
+            <CollectionId>${esc(draftsFolderId)}</CollectionId>
             <GetChanges>0</GetChanges>
             <Commands>
                 <Add>
-                    <ClientId>$clientId</ClientId>
+                    <ClientId>${esc(clientId)}</ClientId>
                     <ApplicationData>
                         ${if (toFormatted.isNotBlank()) "<email:To>$toFormatted</email:To>" else ""}
                         ${if (ccFormatted.isNotBlank()) "<email:CC>$ccFormatted</email:CC>" else ""}
@@ -1081,6 +1089,7 @@ private suspend fun updateDraftEws(
                 EasResult.Error("Не удалось обновить черновик: $error")
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка обновления черновика")
         }
     }
@@ -1145,6 +1154,7 @@ private suspend fun updateDraftEws(
                         return@withContext EasResult.Error("Не удалось удалить черновик: $lastError")
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     lastError = e.message ?: "Ошибка удаления черновика"
                     if (attempt < maxRetries) {
                         kotlinx.coroutines.delay(1000L * attempt)

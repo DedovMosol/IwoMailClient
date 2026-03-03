@@ -47,7 +47,7 @@ class MailWidget : GlanceAppWidget() {
             val data = withContext(Dispatchers.IO) { loadWidgetData(context) }
             provideContent { MailWidgetContent(data, context) }
         } catch (e: Exception) {
-            // Fallback при любой ошибке
+            if (e is kotlinx.coroutines.CancellationException) throw e
             provideContent {
                 MailWidgetContent(WidgetData(emptyList(), null, false), context)
             }
@@ -55,45 +55,57 @@ class MailWidget : GlanceAppWidget() {
     }
 
     private suspend fun loadWidgetData(context: Context): WidgetData {
-        return try {
-            val db = MailDatabase.getInstance(context)
-            
-            val accounts = db.accountDao().getAllAccountsSync()
-            val unreadCounts = db.emailDao().getUnreadCountsByAccount()
-            val unreadByAccountId = unreadCounts.associate { it.accountId to it.unreadCount }
-            val accountsWithUnread = accounts.map { account ->
-                val unread = unreadByAccountId[account.id] ?: 0
-                AccountUnread(account.id, account.displayName, account.color, unread)
-            }
-            
-            // Ближайшее событие (по всем аккаунтам)
-            val now = System.currentTimeMillis()
-            val nextEvent = db.calendarEventDao().getNextEventGlobalSync(now)
-            
-            val eventInfo = nextEvent?.let {
-                val timeFormat = DateFormat.getTimeFormat(context)
-                val startStr = timeFormat.format(Date(it.startTime))
-                val endStr = if (it.endTime > it.startTime) timeFormat.format(Date(it.endTime)) else ""
-                EventInfo(it.subject, startStr, endStr, it.location)
-            }
-            
-            // Дата и день недели
-            val dateStr = formatTodayDate(context)
-            
-            // Задачи на сегодня
-            val cal = Calendar.getInstance()
-            cal.set(Calendar.HOUR_OF_DAY, 23)
-            cal.set(Calendar.MINUTE, 59)
-            cal.set(Calendar.SECOND, 59)
-            cal.set(Calendar.MILLISECOND, 999)
-            val endOfDay = cal.timeInMillis
-            val todayTasksCount = db.taskDao().getTodayTasksCountGlobal(endOfDay)
-            val activeTasksCount = db.taskDao().getActiveTasksCountGlobal()
-            val nextTask = db.taskDao().getNextTaskGlobalSync()
-            val nextTaskTitle = nextTask?.subject?.take(30) ?: ""
-            
-            // Последние письма из Inbox
-            val recentEmails = db.emailDao().getRecentUnreadInboxGlobal(3).map { email ->
+        val db = try {
+            MailDatabase.getInstance(context)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return WidgetData(emptyList(), null, false, "", 0, 0, emptyList())
+        }
+
+        val accounts = try { db.accountDao().getAllAccountsSync() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; emptyList()
+        }
+        val unreadCounts = try { db.emailDao().getUnreadCountsByAccount() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; emptyList()
+        }
+        val unreadByAccountId = unreadCounts.associate { it.accountId to it.unreadCount }
+        val accountsWithUnread = accounts.map { account ->
+            val unread = unreadByAccountId[account.id] ?: 0
+            AccountUnread(account.id, account.displayName, account.color, unread)
+        }
+
+        val now = System.currentTimeMillis()
+        val nextEvent = try { db.calendarEventDao().getNextEventGlobalSync(now) } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; null
+        }
+        val eventInfo = nextEvent?.let {
+            val timeFormat = DateFormat.getTimeFormat(context)
+            val startStr = timeFormat.format(Date(it.startTime))
+            val endStr = if (it.endTime > it.startTime) timeFormat.format(Date(it.endTime)) else ""
+            EventInfo(it.subject, startStr, endStr, it.location)
+        }
+
+        val dateStr = try { formatTodayDate(context) } catch (_: Exception) { "" }
+
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 23)
+        cal.set(Calendar.MINUTE, 59)
+        cal.set(Calendar.SECOND, 59)
+        cal.set(Calendar.MILLISECOND, 999)
+        val endOfDay = cal.timeInMillis
+        val todayTasksCount = try { db.taskDao().getTodayTasksCountGlobal(endOfDay) } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; 0
+        }
+        val activeTasksCount = try { db.taskDao().getActiveTasksCountGlobal() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; 0
+        }
+        val nextTask = try { db.taskDao().getNextTaskGlobalSync() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; null
+        }
+        val nextTaskTitle = nextTask?.subject?.take(30) ?: ""
+
+        val recentEmails = try {
+            db.emailDao().getRecentUnreadInboxGlobal(3).map { email ->
                 RecentEmail(
                     id = email.id,
                     sender = email.fromName.ifBlank { email.from },
@@ -102,29 +114,27 @@ class MailWidget : GlanceAppWidget() {
                     dateReceived = email.dateReceived
                 )
             }
-            
-            // Общее число непрочитанных
-            val totalUnread = unreadCounts.sumOf { it.unreadCount }
-            
-            // Заметки
-            val notesCount = db.noteDao().getNotesCountGlobal()
-            val calendarEventsCount = db.calendarEventDao().getEventsCountGlobal()
-            
-            // Текущая тема → градиент
-            val settingsRepo = SettingsRepository.getInstance(context)
-            val themeCode = settingsRepo.getCurrentThemeSync()
-            val gradientRes = themeToGradient(themeCode)
-            
-            // Время последней синхронизации
-            val lastSyncTime = settingsRepo.getLastSyncTimeSync()
-            val lastSyncStr = formatSyncAgo(context, lastSyncTime)
-            
-            val themeColor = themeToColor(themeCode)
-            
-            WidgetData(accountsWithUnread, eventInfo, accounts.isNotEmpty(), dateStr, todayTasksCount, activeTasksCount, recentEmails, gradientRes, totalUnread, notesCount, lastSyncStr, calendarEventsCount, nextTaskTitle, themeColor)
         } catch (e: Exception) {
-            WidgetData(emptyList(), null, false, "", 0, 0, emptyList())
+            if (e is kotlinx.coroutines.CancellationException) throw e; emptyList()
         }
+
+        val totalUnread = unreadCounts.sumOf { it.unreadCount }
+
+        val notesCount = try { db.noteDao().getNotesCountGlobal() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; 0
+        }
+        val calendarEventsCount = try { db.calendarEventDao().getEventsCountGlobal() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; 0
+        }
+
+        val settingsRepo = SettingsRepository.getInstance(context)
+        val themeCode = try { settingsRepo.getCurrentThemeSync() } catch (_: Exception) { "purple" }
+        val gradientRes = themeToGradient(themeCode)
+        val lastSyncTime = try { settingsRepo.getLastSyncTimeSync() } catch (_: Exception) { 0L }
+        val lastSyncStr = formatSyncAgo(context, lastSyncTime)
+        val themeColor = themeToColor(themeCode)
+
+        return WidgetData(accountsWithUnread, eventInfo, accounts.isNotEmpty(), dateStr, todayTasksCount, activeTasksCount, recentEmails, gradientRes, totalUnread, notesCount, lastSyncStr, calendarEventsCount, nextTaskTitle, themeColor)
     }
     
     private fun themeToGradient(themeCode: String): Int = when (themeCode) {
@@ -220,7 +230,7 @@ private fun NoAccountView(context: Context) {
             .padding(16.dp)
             .clickable(actionStartActivity(
                 Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }
             )),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -266,7 +276,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .background(ColorProvider(searchBg))
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                             setData(android.net.Uri.parse("iwomail://widget/search"))
                             putExtra("search", true)
                         }
@@ -327,7 +337,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .fillMaxWidth()
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                             setData(android.net.Uri.parse("iwomail://widget/calendar"))
                             putExtra("calendar", true)
                         }
@@ -369,7 +379,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .fillMaxWidth()
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                             setData(android.net.Uri.parse("iwomail://widget/tasks"))
                             putExtra("tasks", true)
                         }
@@ -412,7 +422,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     .fillMaxWidth()
                     .clickable(actionStartActivity(
                         Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                             setData(android.net.Uri.parse("iwomail://widget/notes"))
                             putExtra("notes", true)
                         }
@@ -474,7 +484,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                                 .padding(horizontal = 10.dp, vertical = 5.dp)
                                 .clickable(actionStartActivity(
                                     Intent(context, MainActivity::class.java).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                                         this.data = android.net.Uri.parse("iwomail://email/${email.id}")
                                         putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, email.id)
                                     }
@@ -542,7 +552,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                         .cornerRadius(iconBtnSize / 2)
                         .clickable(actionStartActivity(
                             Intent(context, MainActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                                 setData(android.net.Uri.parse("iwomail://widget/compose"))
                                 putExtra("compose", true)
                             }
@@ -597,7 +607,7 @@ private fun AccountAvatar(account: AccountUnread, context: Context) {
             .size(48.dp)
             .clickable(actionStartActivity(
                 Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                     this.data = android.net.Uri.parse("iwomail://account/${account.id}")
                     putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, account.id)
                     // Если есть непрочитанные → фильтр непрочитанных, иначе → просто входящие
@@ -657,5 +667,7 @@ class MailWidgetReceiver : GlanceAppWidgetReceiver() {
 }
 
 suspend fun updateMailWidget(context: Context) {
-    try { MailWidget().updateAll(context) } catch (_: Exception) { }
+    try { MailWidget().updateAll(context) } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+    }
 }

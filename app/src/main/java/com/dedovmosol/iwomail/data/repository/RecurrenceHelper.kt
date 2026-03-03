@@ -17,11 +17,33 @@ import java.util.*
  */
 object RecurrenceHelper {
     
-    /** Максимум экземпляров для защиты от бесконечных циклов */
     private const val MAX_OCCURRENCES = 500
-    
-    /** Горизонт генерации по умолчанию — 1 год вперёд */
     private const val DEFAULT_HORIZON_MS = 365L * 24 * 60 * 60 * 1000
+    
+    /** MS-ASCAL ExceptionStartTime (UTC) vs locally generated occurrence time
+     *  can differ by up to ±2h due to DST transitions when device timezone != event timezone */
+    const val DST_TOLERANCE_MS = 2 * 60 * 60 * 1000L
+    
+    private fun <T> findFuzzyMatch(map: Map<Long, T>, target: Long): T? {
+        map[target]?.let { return it }
+        for ((key, value) in map) {
+            if (kotlin.math.abs(key - target) <= DST_TOLERANCE_MS) return value
+        }
+        return null
+    }
+    
+    private fun isFuzzyDeleted(deletedTimes: Set<Long>, target: Long): Boolean {
+        if (target in deletedTimes) return true
+        return deletedTimes.any { kotlin.math.abs(it - target) <= DST_TOLERANCE_MS }
+    }
+    
+    fun fuzzyMatchException(
+        exceptions: List<RecurrenceException>,
+        targetStartTime: Long
+    ): RecurrenceException? {
+        exceptions.find { it.exceptionStartTime == targetStartTime }?.let { return it }
+        return exceptions.find { kotlin.math.abs(it.exceptionStartTime - targetStartTime) <= DST_TOLERANCE_MS }
+    }
     
     /**
      * Данные правила повторения (парсится из JSON)
@@ -48,7 +70,9 @@ object RecurrenceHelper {
         val location: String = "",
         val startTime: Long = 0,
         val endTime: Long = 0,
-        val body: String = ""
+        val body: String = "",
+        val attachments: String = "",
+        val attachmentsOverridden: Boolean = false
     )
     
     /**
@@ -62,6 +86,7 @@ object RecurrenceHelper {
         val location: String,
         val isException: Boolean = false,
         val body: String = "",
+        val attachments: String = "",
         /** Оригинальное время из паттерна повторения (до применения exception).
          *  Именно это время используется как ключ exception (ExceptionStartTime в MS-ASCAL). */
         val originalStartTime: Long = startTime
@@ -106,7 +131,9 @@ object RecurrenceHelper {
                     location = obj.optString("location", ""),
                     startTime = obj.optLong("startTime", 0),
                     endTime = obj.optLong("endTime", 0),
-                    body = obj.optString("body", "")
+                    body = obj.optString("body", ""),
+                    attachments = obj.optString("attachments", ""),
+                    attachmentsOverridden = obj.optBoolean("attachmentsOverridden", false)
                 )
             }
         } catch (e: Exception) {
@@ -127,7 +154,7 @@ object RecurrenceHelper {
 
     fun removeException(existingJson: String, exceptionStartTime: Long): String {
         val existing = parseExceptions(existingJson).toMutableList()
-        existing.removeAll { it.exceptionStartTime == exceptionStartTime }
+        existing.removeAll { kotlin.math.abs(it.exceptionStartTime - exceptionStartTime) <= DST_TOLERANCE_MS }
         return exceptionsToJson(existing)
     }
 
@@ -142,14 +169,34 @@ object RecurrenceHelper {
                 append(",\"startTime\":${ex.startTime}")
                 append(",\"endTime\":${ex.endTime}")
                 append(",\"body\":\"${escapeJson(ex.body)}\"")
+                append(",\"attachments\":\"${escapeJson(ex.attachments)}\"")
+                append(",\"attachmentsOverridden\":${ex.attachmentsOverridden}")
                 append("}")
             }
         }
         return "[${parts.joinToString(",")}]"
     }
 
-    private fun escapeJson(s: String): String =
-        s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    private fun escapeJson(s: String): String {
+        val sb = StringBuilder(s.length)
+        for (c in s) {
+            when (c) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> {
+                    if (c.code < 0x20) {
+                        sb.append("\\u%04x".format(c.code))
+                    } else {
+                        sb.append(c)
+                    }
+                }
+            }
+        }
+        return sb.toString()
+    }
 
     /**
      * Генерирует экземпляры повторяющегося события для заданного диапазона дат.
@@ -175,13 +222,11 @@ object RecurrenceHelper {
         val dates = generateDates(rule, event.startTime, rangeStart, rangeEnd)
         
         return dates.mapNotNull { occurrenceStart ->
-            // Пропускаем удалённые экземпляры
-            if (occurrenceStart in deletedTimes) return@mapNotNull null
+            if (isFuzzyDeleted(deletedTimes, occurrenceStart)) return@mapNotNull null
             
             val occurrenceEnd = occurrenceStart + duration
             
-            // Применяем модифицированное исключение
-            val exception = modifiedExceptions[occurrenceStart]
+            val exception = findFuzzyMatch(modifiedExceptions, occurrenceStart)
             if (exception != null) {
                 val actualStart = if (exception.startTime > 0) exception.startTime else occurrenceStart
                 val actualEnd = if (exception.endTime > 0) exception.endTime else actualStart + duration
@@ -193,6 +238,7 @@ object RecurrenceHelper {
                     location = exception.location.ifBlank { event.location },
                     isException = true,
                     body = exception.body.ifBlank { event.body },
+                    attachments = if (exception.attachmentsOverridden) exception.attachments else event.attachments,
                     originalStartTime = occurrenceStart
                 )
             } else {
@@ -204,6 +250,7 @@ object RecurrenceHelper {
                     location = event.location,
                     isException = false,
                     body = event.body,
+                    attachments = event.attachments,
                     originalStartTime = occurrenceStart
                 )
             }

@@ -27,6 +27,7 @@ import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.MainScreen
 import com.dedovmosol.iwomail.ui.screens.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLDecoder
@@ -394,8 +395,10 @@ fun AppNavigation(
                 ShareIntentData.attachments = composeAttachments
             }
             
-            // Увеличенная задержка чтобы NavHost успел инициализироваться
-            kotlinx.coroutines.delay(500)
+            withTimeoutOrNull(2000L) {
+                snapshotFlow { navController.currentBackStackEntry }.first { it != null }
+            }
+            kotlinx.coroutines.delay(100)
             try {
                 navController.navigate(Screen.Compose.createRoute(
                     toEmail = composeToEmail,
@@ -405,7 +408,22 @@ fun AppNavigation(
                     launchSingleTop = true
                 }
                 onComposeHandled()
-            } catch (_: Exception) { }
+            } catch (e1: Exception) {
+                android.util.Log.w("AppNavigation", "Compose navigate failed, retrying", e1)
+                kotlinx.coroutines.delay(500)
+                try {
+                    navController.navigate(Screen.Compose.createRoute(
+                        toEmail = composeToEmail,
+                        subject = composeSubject,
+                        body = composeBody
+                    )) {
+                        launchSingleTop = true
+                    }
+                    onComposeHandled()
+                } catch (e2: Exception) {
+                    android.util.Log.e("AppNavigation", "Compose navigate retry also failed", e2)
+                }
+            }
         }
     }
     
@@ -420,8 +438,10 @@ fun AppNavigation(
         // и этот конкретный intent ещё не обработан
         if (openEmailIntentId > 0 && openEmailIntentId != lastHandledEmailIntentId && openEmailId != null && hasCheckedAccounts && startDestination == Screen.Main.route && accountSwitchCompleted) {
             lastHandledEmailIntentId = openEmailIntentId
-            // Задержка чтобы NavHost успел инициализироваться
-            kotlinx.coroutines.delay(500)
+            withTimeoutOrNull(2000L) {
+                snapshotFlow { navController.currentBackStackEntry }.first { it != null }
+            }
+            kotlinx.coroutines.delay(100)
             try {
                 // Получаем папку Входящие для навигации
                 val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
@@ -468,9 +488,10 @@ fun AppNavigation(
         }
     }
     
-    // Обработка перехода на Входящие с фильтром Непрочитанные
+    var inboxUnreadHandled by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(openInboxUnread, hasCheckedAccounts, accountSwitchCompleted) {
-        if (openInboxUnread && hasCheckedAccounts && accountSwitchCompleted) {
+        if (openInboxUnread && !inboxUnreadHandled && hasCheckedAccounts && accountSwitchCompleted) {
+            inboxUnreadHandled = true
             // Получаем папку Входящие
             val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
             if (account != null) {
@@ -479,11 +500,24 @@ fun AppNavigation(
                     database.folderDao().getFolderByType(account.id, 2) // type 2 = Inbox
                 }
                 if (inboxFolder != null) {
-                    // Небольшая задержка чтобы NavHost успел инициализироваться
+                    withTimeoutOrNull(2000L) {
+                        snapshotFlow { navController.currentBackStackEntry }.first { it != null }
+                    }
                     kotlinx.coroutines.delay(100)
-                    navController.navigate(Screen.EmailList.createRoute(inboxFolder.id, "UNREAD")) {
-                        // Очищаем back stack до Main
-                        popUpTo(Screen.Main.route) { inclusive = false }
+                    try {
+                        navController.navigate(Screen.EmailList.createRoute(inboxFolder.id, "UNREAD")) {
+                            popUpTo(Screen.Main.route) { inclusive = false }
+                        }
+                    } catch (e1: Exception) {
+                        android.util.Log.w("AppNavigation", "Unread navigate failed, retrying", e1)
+                        kotlinx.coroutines.delay(500)
+                        try {
+                            navController.navigate(Screen.EmailList.createRoute(inboxFolder.id, "UNREAD")) {
+                                popUpTo(Screen.Main.route) { inclusive = false }
+                            }
+                        } catch (e2: Exception) {
+                            android.util.Log.e("AppNavigation", "Unread navigate retry failed", e2)
+                        }
                     }
                 }
             }
@@ -495,8 +529,12 @@ fun AppNavigation(
     
     LaunchedEffect(shortcutCompose, shortcutInbox, shortcutSearch, shortcutCalendar, shortcutTasks, shortcutNotes, hasCheckedAccounts, startDestination) {
         if (hasAnyShortcut && hasCheckedAccounts && startDestination == Screen.Main.route) {
-            kotlinx.coroutines.delay(300)
-            try {
+            withTimeoutOrNull(2000L) {
+                snapshotFlow { navController.currentBackStackEntry }.first { it != null }
+            }
+            kotlinx.coroutines.delay(100)
+
+            val doNavigate: () -> Unit = {
                 when {
                     shortcutCompose -> {
                         navController.navigate(Screen.Compose.createRoute()) {
@@ -504,21 +542,7 @@ fun AppNavigation(
                             launchSingleTop = true
                         }
                     }
-                    shortcutInbox -> {
-                        val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
-                        if (account != null) {
-                            val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
-                            val inboxFolder = withContext(Dispatchers.IO) {
-                                database.folderDao().getFolderByType(account.id, 2)
-                            }
-                            if (inboxFolder != null) {
-                                navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
-                                    popUpTo(Screen.Main.route) { inclusive = false }
-                                    launchSingleTop = true
-                                }
-                            }
-                        }
-                    }
+                    shortcutInbox -> {}
                     shortcutSearch -> {
                         navController.navigate(Screen.Search.route) {
                             popUpTo(Screen.Main.route) { inclusive = false }
@@ -544,7 +568,50 @@ fun AppNavigation(
                         }
                     }
                 }
-            } catch (_: Exception) { }
+            }
+
+            if (shortcutInbox) {
+                try {
+                    val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
+                    if (account != null) {
+                        val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
+                        val inboxFolder = withContext(Dispatchers.IO) {
+                            database.folderDao().getFolderByType(account.id, 2)
+                        }
+                        if (inboxFolder != null) {
+                            try {
+                                navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
+                                    popUpTo(Screen.Main.route) { inclusive = false }
+                                    launchSingleTop = true
+                                }
+                            } catch (e1: Exception) {
+                                android.util.Log.w("AppNavigation", "Shortcut email navigate failed, retrying", e1)
+                                kotlinx.coroutines.delay(500)
+                                try {
+                                    navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
+                                        popUpTo(Screen.Main.route) { inclusive = false }
+                                        launchSingleTop = true
+                                    }
+                                } catch (e2: Exception) {
+                                    android.util.Log.e("AppNavigation", "Shortcut email navigate retry failed", e2)
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("AppNavigation", "Shortcut with inbox navigate failed", e)
+                }
+            } else {
+                try {
+                    doNavigate()
+                } catch (e1: Exception) {
+                    android.util.Log.w("AppNavigation", "Shortcut navigate failed, retrying", e1)
+                    kotlinx.coroutines.delay(500)
+                    try { doNavigate() } catch (e2: Exception) {
+                        android.util.Log.e("AppNavigation", "Shortcut navigate retry failed", e2)
+                    }
+                }
+            }
             onShortcutHandled()
         }
     }
@@ -552,12 +619,25 @@ fun AppNavigation(
     // Обработка перехода на экран обновлений (из push-уведомления)
     LaunchedEffect(openUpdates, hasCheckedAccounts, startDestination) {
         if (openUpdates && hasCheckedAccounts && startDestination == Screen.Main.route) {
-            kotlinx.coroutines.delay(300)
+            withTimeoutOrNull(2000L) {
+                snapshotFlow { navController.currentBackStackEntry }.first { it != null }
+            }
+            kotlinx.coroutines.delay(100)
             try {
                 navController.navigate(Screen.Updates.route) {
                     launchSingleTop = true
                 }
-            } catch (_: Exception) { }
+            } catch (e1: Exception) {
+                android.util.Log.w("AppNavigation", "Updates navigate failed, retrying", e1)
+                kotlinx.coroutines.delay(500)
+                try {
+                    navController.navigate(Screen.Updates.route) {
+                        launchSingleTop = true
+                    }
+                } catch (e2: Exception) {
+                    android.util.Log.e("AppNavigation", "Updates navigate retry failed", e2)
+                }
+            }
             onUpdatesHandled()
         }
     }

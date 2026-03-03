@@ -80,7 +80,9 @@ class NtlmAuthenticator(
      * Создаёт NTLM Type 3 (Authenticate) сообщение с NTLMv2
      */
     fun createType3Message(type2Message: ByteArray): ByteArray {
-        // Извлекаем данные из Type 2
+        if (type2Message.size < 32) {
+            throw IllegalArgumentException("NTLM Type 2 message too short: ${type2Message.size} bytes, need at least 32")
+        }
         val serverChallenge = type2Message.copyOfRange(24, 32)
         
         // Извлекаем target info из Type 2 (если есть)

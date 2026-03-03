@@ -40,7 +40,8 @@ class SyncWorker(
         val id: String,
         val senderName: String?,
         val senderEmail: String?,
-        val subject: String?
+        val subject: String?,
+        val dateReceived: Long = 0L
     )
     
     /**
@@ -72,7 +73,7 @@ class SyncWorker(
         return try {
             doWorkInternal()
         } catch (e: Throwable) {
-            // Ловим ВСЕ исключения включая OutOfMemoryError, StackOverflowError
+            if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("SyncWorker", "CRITICAL ERROR in doWork", e)
             cancelSyncNotification()
             Result.failure()
@@ -213,7 +214,7 @@ class SyncWorker(
             if (filteredEmails.isNotEmpty()) {
                 val accountEmails = newEmailsByAccount.getOrPut(account.id) { mutableListOf() }
                 for (email in filteredEmails) {
-                    accountEmails.add(NewEmailInfo(email.id, email.fromName, email.from, email.subject))
+                    accountEmails.add(NewEmailInfo(email.id, email.fromName, email.from, email.subject, email.dateReceived))
                 }
             }
             
@@ -296,7 +297,7 @@ class SyncWorker(
         // Явно убираем уведомление о синхронизации
         cancelSyncNotification()
         
-        return if (hasErrors) Result.retry() else Result.success()
+        return Result.success()
     }
     
     /**
@@ -385,7 +386,7 @@ class SyncWorker(
         val languageCode = settingsRepo.language.first()
         val isRussian = languageCode == "ru"
         
-        val latestEmail = newEmails.maxByOrNull { it.id }
+        val latestEmail = newEmails.maxByOrNull { it.dateReceived }
         val senderName = latestEmail?.senderName?.takeIf { it.isNotBlank() } 
             ?: latestEmail?.senderEmail?.substringBefore("@")
         val subject = latestEmail?.subject?.takeIf { it.isNotBlank() }

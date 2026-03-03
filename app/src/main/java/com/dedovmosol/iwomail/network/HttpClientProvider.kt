@@ -287,9 +287,8 @@ object HttpClientProvider {
             .callTimeout(0, TimeUnit.SECONDS)  // 0=disabled (OkHttp default); readTimeout=60s защищает от зависших соединений
             .retryOnConnectionFailure(true)
             .connectionSpecs(listOf(
-                ConnectionSpec.COMPATIBLE_TLS,
                 ConnectionSpec.MODERN_TLS,
-                ConnectionSpec.CLEARTEXT
+                ConnectionSpec.COMPATIBLE_TLS
             ))
         
         // Настраиваем TLS с поддержкой старых версий

@@ -1,6 +1,10 @@
 package com.dedovmosol.iwomail.sync
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.work.*
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
@@ -229,8 +233,12 @@ class OutboxWorker(
     }
     
     private fun showNotification(count: Int) {
-        // Простое уведомление через NotificationManager
         try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
             val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) 
                 as android.app.NotificationManager
             

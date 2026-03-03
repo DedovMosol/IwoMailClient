@@ -168,9 +168,11 @@ fun TasksScreen(
         }
     }
     
-    // Синхронизация при переключении на фильтр "Удалённые"
+    var lastDeletedSyncMs by remember { mutableStateOf(0L) }
     LaunchedEffect(currentFilter) {
-        if (currentFilter == TaskFilter.DELETED && accountId > 0 && !isSyncing) {
+        val now = System.currentTimeMillis()
+        if (currentFilter == TaskFilter.DELETED && accountId > 0 && !isSyncing && now - lastDeletedSyncMs > 30_000L) {
+            lastDeletedSyncMs = now
             isSyncing = true
             try {
                 withContext(Dispatchers.IO) {

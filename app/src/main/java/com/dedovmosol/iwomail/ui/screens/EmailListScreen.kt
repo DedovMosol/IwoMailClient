@@ -1113,11 +1113,10 @@ private fun EmailList(
     val showScrollButton = emails.size > 5
     val pullRefreshState = rememberPullRefreshState(isRefreshing, onRetry)
     
-    // Автоскролл вверх при появлении новых писем (во время синхронизации)
     var previousEmailCount by remember { mutableStateOf(emails.size) }
     LaunchedEffect(emails.size) {
-        if (emails.size > previousEmailCount && previousEmailCount > 0) {
-            // Новые письма появились — скроллим вверх
+        if (emails.size > previousEmailCount && previousEmailCount > 0 &&
+            listState.firstVisibleItemIndex == 0) {
             listState.animateScrollToItem(0)
         }
         previousEmailCount = emails.size
@@ -1315,13 +1314,14 @@ private fun EmailListContent(
     val stableOnLongClick by rememberUpdatedState(onLongClick)
     val stableOnStarClick by rememberUpdatedState(onStarClick)
     
-    // Кэш превью изображений для писем с вложениями
     var imagePreviewCache by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
     
-    // Загружаем превью для писем с вложениями
-    // PERF: emails.size как ключ — Room эмитит новый list на каждое DB-изменение,
-    // но превью нужно загружать только при появлении новых писем.
     LaunchedEffect(emails.size) {
+        val emailIds = emails.map { it.id }.toSet()
+        val staleKeys = imagePreviewCache.keys - emailIds
+        if (staleKeys.isNotEmpty()) {
+            imagePreviewCache = imagePreviewCache - staleKeys
+        }
         val emailsWithAttachments = emails.filter { it.hasAttachments && it.id !in imagePreviewCache }
         if (emailsWithAttachments.isNotEmpty()) {
             withContext(Dispatchers.IO) {

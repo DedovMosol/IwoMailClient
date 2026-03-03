@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -42,31 +43,31 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         
         localScope.launch {
             try {
-                val notificationManager = context.getSystemService(NotificationManager::class.java)
-                when (action) {
-                    ACTION_CALENDAR_REMINDER -> {
-                        val database = MailDatabase.getInstance(context)
-                        val event = database.calendarEventDao().getEvent(eventId)
-                        if (event != null && event.startTime > System.currentTimeMillis()) {
-                            // Событие ещё не началось - показываем уведомление
-                            showNotification(context, event)
+                withTimeoutOrNull(25_000) {
+                    val notificationManager = context.getSystemService(NotificationManager::class.java)
+                    when (action) {
+                        ACTION_CALENDAR_REMINDER -> {
+                            val database = MailDatabase.getInstance(context)
+                            val event = database.calendarEventDao().getEvent(eventId)
+                            if (event != null && event.startTime > System.currentTimeMillis()) {
+                                showNotification(context, event)
+                            }
                         }
-                        // Если событие уже прошло - не показываем уведомление
-                    }
 
-                    ACTION_CALENDAR_MARK_READ -> {
-                        notificationManager.cancel(notificationIdForEvent(eventId))
-                    }
+                        ACTION_CALENDAR_MARK_READ -> {
+                            notificationManager.cancel(notificationIdForEvent(eventId))
+                        }
 
-                    ACTION_CALENDAR_SNOOZE_5_MIN -> {
-                        notificationManager.cancel(notificationIdForEvent(eventId))
-                        val database = MailDatabase.getInstance(context)
-                        val event = database.calendarEventDao().getEvent(eventId)
-                        if (event != null) {
-                            val now = System.currentTimeMillis()
-                            val snoozeAt = now + SNOOZE_5_MIN_MS
-                            if (event.startTime > snoozeAt) {
-                                scheduleReminderAt(context, event.id, snoozeAt)
+                        ACTION_CALENDAR_SNOOZE_5_MIN -> {
+                            notificationManager.cancel(notificationIdForEvent(eventId))
+                            val database = MailDatabase.getInstance(context)
+                            val event = database.calendarEventDao().getEvent(eventId)
+                            if (event != null) {
+                                val now = System.currentTimeMillis()
+                                val snoozeAt = now + SNOOZE_5_MIN_MS
+                                if (event.startTime > snoozeAt) {
+                                    scheduleReminderAt(context, event.id, snoozeAt)
+                                }
                             }
                         }
                     }
@@ -87,9 +88,10 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             putExtra("open_calendar", true)
             putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, event.accountId)
         }
+        val safeHash = event.id.hashCode() and 0x7FFFFFFF
         val contentPendingIntent = PendingIntent.getActivity(
             context,
-            event.id.hashCode() + REQUEST_CODE_CONTENT,
+            safeHash + REQUEST_CODE_CONTENT,
             contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -100,7 +102,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         }
         val markReadPendingIntent = PendingIntent.getBroadcast(
             context,
-            event.id.hashCode() + REQUEST_CODE_MARK_READ,
+            safeHash + REQUEST_CODE_MARK_READ,
             markReadIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -111,7 +113,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         }
         val snoozePendingIntent = PendingIntent.getBroadcast(
             context,
-            event.id.hashCode() + REQUEST_CODE_SNOOZE,
+            safeHash + REQUEST_CODE_SNOOZE,
             snoozeIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -168,7 +170,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         private const val REQUEST_CODE_SNOOZE = 30_000
         private const val SNOOZE_5_MIN_MS = 5 * 60 * 1000L
 
-        private fun notificationIdForEvent(eventId: String): Int = NOTIFICATION_ID_BASE + eventId.hashCode()
+        private fun notificationIdForEvent(eventId: String): Int = NOTIFICATION_ID_BASE + (eventId.hashCode() and 0x7FFFFFFF)
 
         private fun scheduleReminderAt(context: Context, eventId: String, triggerAtMillis: Long) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -178,7 +180,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                eventId.hashCode(),
+                eventId.hashCode() and 0x7FFFFFFF,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -210,12 +212,10 @@ class CalendarReminderReceiver : BroadcastReceiver() {
          * @param event Событие календаря
          */
         fun scheduleReminder(context: Context, event: CalendarEventEntity) {
-            // Не планируем если reminder = 0 или событие уже прошло
             if (event.reminder <= 0) return
             
             val reminderTime = event.startTime - (event.reminder * 60 * 1000L)
             
-            // Не планируем если время напоминания уже прошло
             if (reminderTime <= System.currentTimeMillis()) return
             
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -227,7 +227,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                event.id.hashCode(),
+                event.id.hashCode() and 0x7FFFFFFF,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -268,7 +268,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                eventId.hashCode(),
+                eventId.hashCode() and 0x7FFFFFFF,
                 intent,
                 PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
             )

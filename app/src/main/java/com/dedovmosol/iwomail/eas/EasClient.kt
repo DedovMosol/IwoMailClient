@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.eas
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -47,6 +48,23 @@ class EasClient(
             pinnedCertInfo = pinnedCertInfo,  // Передаём информацию для Certificate Pinning
             accountId = accountId  // Передаём ID для отслеживания изменений
         )
+    }
+    
+    // Cached client for Ping with extended read timeout (heartbeat + buffer)
+    @Volatile private var pingClientCached: OkHttpClient? = null
+    @Volatile private var pingClientHeartbeat: Int = 0
+    
+    private fun getPingClient(heartbeatInterval: Int): OkHttpClient {
+        val cached = pingClientCached
+        if (cached != null && pingClientHeartbeat == heartbeatInterval) return cached
+        val newClient = client.newBuilder()
+            .readTimeout((heartbeatInterval + 60).toLong(), TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .build()
+        pingClientCached = newClient
+        pingClientHeartbeat = heartbeatInterval
+        return newClient
     }
     
     // Нормализуем URL - добавляем схему и порт
@@ -335,7 +353,18 @@ class EasClient(
                     .header("User-Agent", "Android/12-EAS-2.0")
                     .build()
                 
-                val response = client.newCall(request).execute()
+                val call = client.newCall(request)
+                val response = suspendCancellableCoroutine { cont ->
+                    cont.invokeOnCancellation { call.cancel() }
+                    call.enqueue(object : Callback {
+                        override fun onFailure(call: Call, e: IOException) {
+                            if (cont.isActive) cont.resumeWithException(e)
+                        }
+                        override fun onResponse(call: Call, response: Response) {
+                            if (cont.isActive) cont.resume(response)
+                        }
+                    })
+                }
                 
                 response.use { resp ->
                     if (resp.code == 200) {
@@ -978,6 +1007,7 @@ class EasClient(
                     result = operation(syncResult.data.syncKey)
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 return EasResult.Error("SyncKey retry failed: ${e.message}")
             }
         }
@@ -1179,6 +1209,7 @@ class EasClient(
                 
                 EasResult.Success("")
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("EWS error: ${e.message}")
             }
         }
@@ -1371,12 +1402,7 @@ $foldersXml
                 val url = buildUrl("Ping")
                 val wbxmlBody = wbxmlParser.generate(xml)
                 
-                // Создаём клиент с увеличенным таймаутом для Ping
-                val pingClient = client.newBuilder()
-                    .readTimeout((heartbeatInterval + 60).toLong(), TimeUnit.SECONDS)
-                    .writeTimeout(30, TimeUnit.SECONDS)
-                    .connectTimeout(30, TimeUnit.SECONDS)
-                    .build()
+                val pingClient = getPingClient(heartbeatInterval)
                 
                 val requestBuilder = Request.Builder()
                     .url(url)
@@ -1424,6 +1450,7 @@ $foldersXml
             } catch (e: java.net.SocketTimeoutException) {
                 EasResult.Success(PingResult(1, emptyList()))
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка Ping: ${e.message}")
             }
         }
@@ -1950,17 +1977,18 @@ $SOAP_ENVELOPE_END"""
     suspend fun deleteCalendarEvent(
         serverId: String,
         isMeeting: Boolean = false,
-        isOrganizer: Boolean = false
+        isOrganizer: Boolean = false,
+        isRecurringSeries: Boolean = false
     ): EasResult<Boolean> = 
-        calendarService.deleteCalendarEvent(serverId, isMeeting, isOrganizer)
+        calendarService.deleteCalendarEvent(serverId, isMeeting, isOrganizer, isRecurringSeries)
     
     /**
      * Batch-удаление событий календаря (один EWS DeleteItem на группу).
-     * @param requests список (serverId, isMeeting, isOrganizer)
+     * @param requests список DeleteRequest (serverId, isMeeting, isOrganizer, isRecurringSeries)
      * @return количество успешно удалённых
      */
     suspend fun deleteCalendarEventsBatch(
-        requests: List<Triple<String, Boolean, Boolean>>
+        requests: List<EasCalendarService.DeleteRequest>
     ): EasResult<Int> =
         calendarService.deleteCalendarEventsBatch(requests)
 
@@ -2012,11 +2040,14 @@ $SOAP_ENVELOPE_END"""
         allDayEvent: Boolean,
         reminder: Int,
         busyStatus: Int,
-        sensitivity: Int
-    ): EasResult<Boolean> = calendarService.updateSingleOccurrence(
+        sensitivity: Int,
+        attachments: List<DraftAttachmentData> = emptyList(),
+        removedAttachmentIds: List<String> = emptyList()
+    ): EasResult<String> = calendarService.updateSingleOccurrence(
         serverId, existingExceptionsJson, occurrenceOriginalStartTime,
         masterSubject, subject, startTime, endTime, location, body,
-        allDayEvent, reminder, busyStatus, sensitivity
+        allDayEvent, reminder, busyStatus, sensitivity,
+        attachments, removedAttachmentIds
     )
 
     /**
@@ -2104,7 +2135,7 @@ $SOAP_ENVELOPE_END"""
                     }
                 }
             } catch (e: Exception) {
-                // Пробуем EWS как fallback
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 respondToMeetingRequestEws(serverId, response, sendResponse)
             }
         }
@@ -2260,6 +2291,7 @@ $SOAP_ENVELOPE_END"""
                 val errorMsg = EWS_MESSAGE_TEXT_REGEX.find(responseXml)?.groupValues?.get(1) ?: "Неизвестная ошибка"
                 EasResult.Error(errorMsg)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка EWS: ${e.message}")
             }
         }
@@ -2270,7 +2302,16 @@ $SOAP_ENVELOPE_END"""
      * Делегирует в CalendarService
      */
     suspend fun syncCalendar(): EasResult<EasCalendarService.CalendarSyncResult> = calendarService.syncCalendar()
-    
+
+    /**
+     * Дополняет exceptions для повторяющихся событий через EWS.
+     * Exchange 2007 SP1 EAS Sync может не возвращать обновлённые exceptions
+     * при модификации отдельных вхождений на ПК.
+     */
+    suspend fun supplementRecurringExceptions(
+        localRecurringEvents: List<EasCalendarService.RecurringEventInfo>
+    ): Map<String, String> = calendarService.supplementRecurringExceptionsViaEws(localRecurringEvents)
+
     private fun parseCalendarDate(dateStr: String?): Long {
         if (dateStr.isNullOrBlank()) return 0L
         
@@ -2565,7 +2606,7 @@ $SOAP_ENVELOPE_END"""
     }
     
     // Кэш ID папки черновиков
-    private var cachedDraftsFolderId: String? = null
+    @Volatile private var cachedDraftsFolderId: String? = null
     
     /**
      * Синхронизация задач из папки Tasks на сервере Exchange
@@ -2825,6 +2866,7 @@ $SOAP_ENVELOPE_END"""
                 EasResult.Error("Ошибка отправки: HTTP ${response.code}")
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка отправки: ${e.message}")
         }
         }
@@ -3015,6 +3057,7 @@ $SOAP_ENVELOPE_END"""
                     EasResult.Error("ItemId not found for subject=$subject")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Failed to get ItemId: ${e.message}")
             }
         }
@@ -3062,6 +3105,7 @@ $SOAP_ENVELOPE_END"""
                 matches.getOrNull(index)?.groupValues?.get(1)
                     ?: matches.firstOrNull()?.groupValues?.get(1)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 null
             }
         }

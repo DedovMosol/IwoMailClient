@@ -50,6 +50,7 @@ class MailApplication : Application() {
         registerForegroundTracker()
         settingsRepository = SettingsRepository.getInstance(this)
         createNotificationChannels()
+        cleanupStaleTempFiles()
         cleanupDuplicateEmails()
         scheduleSync()
         startPushService()
@@ -78,15 +79,24 @@ class MailApplication : Application() {
         })
     }
     
+    private fun cleanupStaleTempFiles() {
+        try {
+            cacheDir.listFiles()?.filter {
+                it.name.startsWith("compose_state_") && it.name.endsWith(".tmp")
+            }?.forEach { it.delete() }
+        } catch (_: Exception) { }
+    }
+    
     private fun cleanupDuplicateEmails() {
-        // Очистка дублей писем и вложений в фоне (один раз при запуске)
+        val prefs = getSharedPreferences("app_maintenance", MODE_PRIVATE)
+        if (prefs.getBoolean("duplicates_cleaned_v35", false)) return
+        
         applicationScope.launch(Dispatchers.IO) {
             try {
                 val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(this@MailApplication)
                 database.emailDao().deleteDuplicateEmails()
-                // Очистка дублей вложений: AttachmentEntity.id — autoGenerate,
-                // поэтому REPLACE при синхронизации создавал дубликаты.
                 database.attachmentDao().removeDuplicates()
+                prefs.edit().putBoolean("duplicates_cleaned_v35", true).apply()
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "Failed to cleanup duplicates", e)
             }

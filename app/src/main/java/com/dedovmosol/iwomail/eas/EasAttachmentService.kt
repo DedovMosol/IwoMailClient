@@ -39,6 +39,13 @@ class EasAttachmentService internal constructor(
         val getNormalizedServerUrl: () -> String
     )
     
+    private fun escapeXml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
+    
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         
@@ -106,19 +113,20 @@ class EasAttachmentService internal constructor(
                 requestBuilder.header("X-MS-PolicyKey", key)
             }
             
-            val response = deps.executeRequest(requestBuilder.build())
-            
-            if (response.isSuccessful || response.code == 200) {
-                EasResult.Success(true)
-            } else {
-                val errorMsg = when (response.code) {
-                    500 -> "Сервер отклонил письмо. Возможно, размер вложений превышает лимит сервера."
-                    413 -> "Размер письма слишком большой для сервера"
-                    else -> "Ошибка отправки: HTTP ${response.code}"
+            deps.executeRequest(requestBuilder.build()).use { response ->
+                if (response.isSuccessful || response.code == 200) {
+                    EasResult.Success(true)
+                } else {
+                    val errorMsg = when (response.code) {
+                        500 -> "Сервер отклонил письмо. Возможно, размер вложений превышает лимит сервера."
+                        413 -> "Размер письма слишком большой для сервера"
+                        else -> "Ошибка отправки: HTTP ${response.code}"
+                    }
+                    EasResult.Error(errorMsg)
                 }
-                EasResult.Error(errorMsg)
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка отправки: ${e.message}")
         }
     }
@@ -282,14 +290,15 @@ class EasAttachmentService internal constructor(
                 requestBuilder.header("X-MS-PolicyKey", key)
             }
             
-            val response = deps.executeRequest(requestBuilder.build())
-            
-            if (response.isSuccessful || response.code == 200) {
-                EasResult.Success(true)
-            } else {
-                EasResult.Error("Ошибка отправки MDN: HTTP ${response.code}")
+            deps.executeRequest(requestBuilder.build()).use { response ->
+                if (response.isSuccessful || response.code == 200) {
+                    EasResult.Success(true)
+                } else {
+                    EasResult.Error("Ошибка отправки MDN: HTTP ${response.code}")
+                }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка отправки MDN: ${e.message}")
         }
     }
@@ -404,12 +413,13 @@ class EasAttachmentService internal constructor(
     }
     
     private suspend fun tryItemOperations(fileRef: String): EasResult<ByteArray> {
+        val safeRef = escapeXml(fileRef)
         // Вариант 1: FileReference в namespace AirSyncBase
         val xml1 = """<?xml version="1.0" encoding="UTF-8"?>
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <FileReference xmlns="AirSyncBase">$fileRef</FileReference>
+        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
     </Fetch>
 </ItemOperations>""".trimIndent()
         
@@ -423,7 +433,7 @@ class EasAttachmentService internal constructor(
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <FileReference>$fileRef</FileReference>
+        <FileReference>$safeRef</FileReference>
     </Fetch>
 </ItemOperations>""".trimIndent()
         
@@ -437,7 +447,7 @@ class EasAttachmentService internal constructor(
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <FileReference xmlns="AirSyncBase">$fileRef</FileReference>
+        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
         <Options>
             <Range>0-999999999</Range>
         </Options>
@@ -518,8 +528,8 @@ class EasAttachmentService internal constructor(
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$collectionId</CollectionId>
-        <ServerId xmlns="AirSync">$serverId</ServerId>
+        <CollectionId xmlns="AirSync">${escapeXml(collectionId)}</CollectionId>
+        <ServerId xmlns="AirSync">${escapeXml(serverId)}</ServerId>
         <Options>
             <BodyPreference xmlns="AirSyncBase">
                 <Type>4</Type>
@@ -576,10 +586,11 @@ class EasAttachmentService internal constructor(
                 
                 deps.getPolicyKey()?.let { requestBuilder.header("X-MS-PolicyKey", it) }
                 
-                var response = deps.executeRequest(requestBuilder.build())
+                val initialResponse = deps.executeRequest(requestBuilder.build())
                 
                 // Обработка 449 (Provision Required)
-                if (response.code == 449) {
+                val finalResponse = if (initialResponse.code == 449) {
+                    initialResponse.close()
                     when (val provResult = deps.provision()) {
                         is EasResult.Success -> {
                             val retryBuilder = Request.Builder()
@@ -589,23 +600,28 @@ class EasAttachmentService internal constructor(
                                 .header("MS-ASProtocolVersion", deps.getEasVersion())
                                 .header("User-Agent", "Android/12-EAS-2.0")
                             deps.getPolicyKey()?.let { retryBuilder.header("X-MS-PolicyKey", it) }
-                            response = deps.executeRequest(retryBuilder.build())
+                            deps.executeRequest(retryBuilder.build())
                         }
                         is EasResult.Error -> return@withContext EasResult.Error(provResult.message)
                     }
+                } else {
+                    initialResponse
                 }
                 
-                if (!response.isSuccessful) {
-                    return@withContext EasResult.Error("HTTP ${response.code}: ${response.message}")
+                finalResponse.use { response ->
+                    if (!response.isSuccessful) {
+                        return@withContext EasResult.Error("HTTP ${response.code}: ${response.message}")
+                    }
+                    
+                    val data = response.body?.bytes()
+                    if (data == null || data.isEmpty()) {
+                        return@withContext EasResult.Error("Пустой ответ")
+                    }
+                    EasResult.Success(data)
                 }
-                
-                val data = response.body?.bytes()
-                if (data == null || data.isEmpty()) {
-                    return@withContext EasResult.Error("Пустой ответ")
-                }
-                EasResult.Success(data)
                 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка: ${e.message}")
             }
         }

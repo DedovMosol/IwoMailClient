@@ -134,9 +134,11 @@ fun NotesScreen(
         }
     }
     
-    // Синхронизация при переключении на вкладку "Удалённые"
+    var lastDeletedSyncMs by remember { mutableStateOf(0L) }
     LaunchedEffect(selectedTab) {
-        if (selectedTab == 1 && accountId > 0 && !isSyncing) {
+        val now = System.currentTimeMillis()
+        if (selectedTab == 1 && accountId > 0 && !isSyncing && now - lastDeletedSyncMs > 30_000L) {
+            lastDeletedSyncMs = now
             isSyncing = true
             try {
                 withContext(Dispatchers.IO) {

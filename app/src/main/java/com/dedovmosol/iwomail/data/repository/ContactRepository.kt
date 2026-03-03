@@ -7,6 +7,7 @@ import com.dedovmosol.iwomail.eas.GalContact
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import androidx.room.withTransaction
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -153,6 +154,7 @@ class ContactRepository(context: Context) {
                     is EasResult.Error -> result
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.CONTACT_SYNC_ERROR)
             }
         }
@@ -273,6 +275,7 @@ class ContactRepository(context: Context) {
                 
                 EasResult.Success(countWithoutSelf)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.GAL_SYNC_ERROR)
             }
         }
@@ -599,6 +602,7 @@ class ContactRepository(context: Context) {
         var imported = 0
         val vcards = vCardData.split("END:VCARD")
         
+        database.withTransaction {
         for (vcard in vcards) {
             if (!vcard.contains("BEGIN:VCARD")) continue
             
@@ -635,6 +639,7 @@ class ContactRepository(context: Context) {
             )
             imported++
         }
+        }
         
         return imported
     }
@@ -659,7 +664,7 @@ class ContactRepository(context: Context) {
         val companyIdx = header.indexOfFirst { it.equals("Company", true) || it.equals("Organization", true) }
         val jobTitleIdx = header.indexOfFirst { it.equals("JobTitle", true) || it.equals("Job Title", true) }
         
-        // Парсим данные
+        database.withTransaction {
         for (i in 1 until lines.size) {
             val line = lines[i]
             if (line.isBlank()) continue
@@ -684,6 +689,7 @@ class ContactRepository(context: Context) {
                 jobTitle = values.getOrNull(jobTitleIdx) ?: ""
             )
             imported++
+        }
         }
         
         return imported
@@ -731,9 +737,16 @@ class ContactRepository(context: Context) {
         val result = mutableListOf<String>()
         var current = StringBuilder()
         var inQuotes = false
+        var i = 0
         
-        for (char in line) {
+        while (i < line.length) {
+            val char = line[i]
             when {
+                char == '"' && inQuotes && i + 1 < line.length && line[i + 1] == '"' -> {
+                    current.append('"')
+                    i += 2
+                    continue
+                }
                 char == '"' -> inQuotes = !inQuotes
                 char == ',' && !inQuotes -> {
                     result.add(current.toString())
@@ -741,6 +754,7 @@ class ContactRepository(context: Context) {
                 }
                 else -> current.append(char)
             }
+            i++
         }
         result.add(current.toString())
         

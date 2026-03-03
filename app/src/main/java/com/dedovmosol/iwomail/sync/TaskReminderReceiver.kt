@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -37,7 +38,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             ACTION_TASK_MARK_READ -> {
                 // Закрываем уведомление мгновенно (UI-операция, не требует goAsync)
                 val notificationManager = context.getSystemService(NotificationManager::class.java)
-                notificationManager.cancel(NOTIFICATION_ID_BASE + taskId.hashCode())
+                notificationManager.cancel(NOTIFICATION_ID_BASE + (taskId.hashCode() and 0x7FFFFFFF))
                 
                 // Серверную работу делегируем WorkManager — надёжно на MIUI/HyperOS/EMUI
                 MarkTaskCompleteWorker.enqueue(context, taskId)
@@ -48,10 +49,12 @@ class TaskReminderReceiver : BroadcastReceiver() {
                 val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
                 localScope.launch {
                     try {
-                        val database = MailDatabase.getInstance(context)
-                        val task = database.taskDao().getTask(taskId)
-                        if (task != null && !task.complete) {
-                            showNotification(context, task)
+                        withTimeoutOrNull(25_000) {
+                            val database = MailDatabase.getInstance(context)
+                            val task = database.taskDao().getTask(taskId)
+                            if (task != null && !task.complete) {
+                                showNotification(context, task)
+                            }
                         }
                     } finally {
                         localScope.cancel()
@@ -70,9 +73,10 @@ class TaskReminderReceiver : BroadcastReceiver() {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("open_tasks", true)
         }
+        val safeHash = task.id.hashCode() and 0x7FFFFFFF
         val contentPendingIntent = PendingIntent.getActivity(
             context,
-            task.id.hashCode() + REQUEST_CODE_CONTENT,
+            safeHash + REQUEST_CODE_CONTENT,
             contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -83,7 +87,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
         }
         val markReadPendingIntent = PendingIntent.getBroadcast(
             context,
-            task.id.hashCode() + REQUEST_CODE_MARK_READ,
+            safeHash + REQUEST_CODE_MARK_READ,
             markReadIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -124,7 +128,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
             .build()
         
-        val notificationId = NOTIFICATION_ID_BASE + task.id.hashCode()
+        val notificationId = NOTIFICATION_ID_BASE + (task.id.hashCode() and 0x7FFFFFFF)
         notificationManager.notify(notificationId, notification)
     }
     
@@ -154,7 +158,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                task.id.hashCode(),
+                task.id.hashCode() and 0x7FFFFFFF,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -191,7 +195,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                taskId.hashCode(),
+                taskId.hashCode() and 0x7FFFFFFF,
                 intent,
                 PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
             )

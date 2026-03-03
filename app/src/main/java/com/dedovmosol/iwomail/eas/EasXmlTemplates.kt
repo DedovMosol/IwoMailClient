@@ -12,7 +12,14 @@ import android.util.Base64
  * - Переиспользование между сервисами
  */
 object EasXmlTemplates {
-    
+
+    private fun escapeXml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
+
     // ==================== EWS SOAP Константы ====================
     
     const val SOAP_ENVELOPE_START = """<?xml version="1.0" encoding="utf-8"?>
@@ -40,7 +47,7 @@ object EasXmlTemplates {
     <Collections>
         <Collection>
             <SyncKey>0</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <CollectionId>${escapeXml(collectionId)}</CollectionId>
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
@@ -58,8 +65,8 @@ object EasXmlTemplates {
 <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${escapeXml(collectionId)}</CollectionId>
             <DeletesAsMoves>1</DeletesAsMoves>
             <GetChanges>1</GetChanges>
             <WindowSize>$windowSize</WindowSize>
@@ -84,8 +91,8 @@ object EasXmlTemplates {
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${escapeXml(collectionId)}</CollectionId>
             <DeletesAsMoves/>
             <GetChanges/>
             <WindowSize>$windowSize</WindowSize>
@@ -108,12 +115,12 @@ object EasXmlTemplates {
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${escapeXml(collectionId)}</CollectionId>
             <DeletesAsMoves>${if (deletesAsMoves) "1" else "0"}</DeletesAsMoves>
             <Commands>
                 <Delete>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${escapeXml(serverId)}</ServerId>
                 </Delete>
             </Commands>
         </Collection>
@@ -127,7 +134,7 @@ object EasXmlTemplates {
      */
     fun folderSync(syncKey: String): String = """<?xml version="1.0" encoding="UTF-8"?>
 <FolderSync xmlns="FolderHierarchy">
-    <SyncKey>$syncKey</SyncKey>
+    <SyncKey>${escapeXml(syncKey)}</SyncKey>
 </FolderSync>""".trimIndent()
     
     // ==================== Search шаблоны ====================
@@ -139,7 +146,7 @@ object EasXmlTemplates {
 <Search xmlns="Search" xmlns:gal="Gal">
     <Store>
         <Name>GAL</Name>
-        <Query>$query</Query>
+        <Query>${escapeXml(query)}</Query>
         <Options>
             <Range>0-${maxResults - 1}</Range>
         </Options>
@@ -160,8 +167,8 @@ object EasXmlTemplates {
         <Name>Mailbox</Name>
         <Query>
             <And>
-                <airsync:CollectionId>$collectionId</airsync:CollectionId>
-                <FreeText>$freeText</FreeText>
+                <airsync:CollectionId>${escapeXml(collectionId)}</airsync:CollectionId>
+                <FreeText>${escapeXml(freeText)}</FreeText>
             </And>
         </Query>
         <Options>
@@ -199,7 +206,7 @@ $SOAP_ENVELOPE_END"""
         </m:ItemShape>
         <m:IndexedPageItemView MaxEntriesReturned="1000" Offset="0" BasePoint="Beginning"/>
         <m:ParentFolderIds>
-            <t:DistinguishedFolderId Id="$folderId"/>
+            <t:DistinguishedFolderId Id="${escapeXml(folderId)}"/>
         </m:ParentFolderIds>
     </m:FindItem>
     """.trimIndent()
@@ -208,9 +215,9 @@ $SOAP_ENVELOPE_END"""
      * EWS DeleteItem запрос
      */
     fun ewsDeleteItem(itemId: String, deleteType: String = "MoveToDeletedItems"): String = """
-    <m:DeleteItem DeleteType="$deleteType">
+    <m:DeleteItem DeleteType="${escapeXml(deleteType)}">
         <m:ItemIds>
-            <t:ItemId Id="$itemId"/>
+            <t:ItemId Id="${escapeXml(itemId)}"/>
         </m:ItemIds>
     </m:DeleteItem>
     """.trimIndent()
@@ -220,7 +227,7 @@ $SOAP_ENVELOPE_END"""
      */
     fun ewsGetItem(itemIds: List<String>): String {
         val itemIdsXml = itemIds.joinToString("\n            ") { 
-            """<t:ItemId Id="$it"/>""" 
+            """<t:ItemId Id="${escapeXml(it)}"/>""" 
         }
         return """
     <GetItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages">
@@ -257,11 +264,11 @@ $SOAP_ENVELOPE_END"""
 <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:notes="Notes">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${escapeXml(collectionId)}</CollectionId>
             <Commands>
                 <Add>
-                    <ClientId>$clientId</ClientId>
+                    <ClientId>${escapeXml(clientId)}</ClientId>
                     <ApplicationData>
                         <notes:Subject>$subject</notes:Subject>
                         <airsyncbase:Body>
@@ -290,11 +297,11 @@ $SOAP_ENVELOPE_END"""
 <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:notes="Notes">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${escapeXml(collectionId)}</CollectionId>
             <Commands>
                 <Change>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${escapeXml(serverId)}</ServerId>
                     <ApplicationData>
                         <notes:Subject>$subject</notes:Subject>
                         <airsyncbase:Body>
@@ -337,7 +344,7 @@ $SOAP_ENVELOPE_END"""
                 ConflictResolution="AlwaysOverwrite">
         <ItemChanges>
             <t:ItemChange>
-                <t:ItemId Id="$itemId" ChangeKey="$changeKey"/>
+                <t:ItemId Id="${escapeXml(itemId)}" ChangeKey="${escapeXml(changeKey)}"/>
                 <t:Updates>
                     <t:SetItemField>
                         <t:FieldURI FieldURI="item:Subject"/>
@@ -491,11 +498,12 @@ $SOAP_ENVELOPE_END"""
      * MoveItems запрос
      */
     fun moveItems(items: List<Pair<String, String>>, dstFolderId: String): String {
+        val safeDst = escapeXml(dstFolderId)
         val movesXml = items.joinToString("\n") { (srcMsgId, srcFldId) ->
             """<Move>
-    <SrcMsgId>$srcMsgId</SrcMsgId>
-    <SrcFldId>$srcFldId</SrcFldId>
-    <DstFldId>$dstFolderId</DstFldId>
+    <SrcMsgId>${escapeXml(srcMsgId)}</SrcMsgId>
+    <SrcFldId>${escapeXml(srcFldId)}</SrcFldId>
+    <DstFldId>$safeDst</DstFldId>
 </Move>""".trimIndent()
         }
         

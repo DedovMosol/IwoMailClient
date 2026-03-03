@@ -39,16 +39,19 @@ class CalendarRepository(private val context: Context) {
         
         private const val PREFS_NAME = "calendar_deleted_ids"
         private const val KEY_DELETED_IDS = "deleted_server_ids"
-        private var prefsInitialized = false
+        @Volatile private var prefsInitialized = false
         
         private fun initFromPrefs(context: Context) {
             if (prefsInitialized) return
-            prefsInitialized = true
-            try {
-                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val saved = prefs.getStringSet(KEY_DELETED_IDS, emptySet()) ?: emptySet()
-                deletedServerIds.addAll(saved)
-            } catch (_: Exception) { }
+            synchronized(this) {
+                if (prefsInitialized) return
+                try {
+                    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    val saved = prefs.getStringSet(KEY_DELETED_IDS, emptySet()) ?: emptySet()
+                    deletedServerIds.addAll(saved)
+                } catch (_: Exception) { }
+                prefsInitialized = true
+            }
         }
         
         private fun saveToPrefs(context: Context) {
@@ -83,12 +86,26 @@ class CalendarRepository(private val context: Context) {
          * Если сервер ЕЩЁ возвращает событие — защиту НЕ снимаем!
          */
         private fun confirmServerDeletions(serverReturnedIds: Set<String>, context: Context? = null) {
-            val confirmedDeleted = deletedServerIds.filter { it !in serverReturnedIds }
-            if (confirmedDeleted.isNotEmpty()) {
-                deletedServerIds.removeAll(confirmedDeleted.toSet())
+            val removed = deletedServerIds.removeIf { it !in serverReturnedIds }
+            if (removed) {
                 context?.let { saveToPrefs(it) }
             }
         }
+    }
+    
+    private fun normalizeAllDayTimes(startTime: Long, endTime: Long): Pair<Long, Long> {
+        val local = java.util.Calendar.getInstance()
+        val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        local.timeInMillis = startTime
+        utc.clear()
+        utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+        val normalizedStart = utc.timeInMillis
+        local.timeInMillis = endTime
+        utc.clear()
+        utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+        utc.add(java.util.Calendar.DAY_OF_MONTH, 1)
+        val normalizedEnd = utc.timeInMillis
+        return normalizedStart to normalizedEnd
     }
     
     // === Получение событий ===
@@ -177,23 +194,10 @@ class CalendarRepository(private val context: Context) {
                 
                 // AllDayEvent: нормализуем к midnight UTC той же даты (как это сделает EasCalendarService).
                 // Используем эти же значения для temp event → matching после sync не создаст дубль.
-                val effectiveStartTime: Long
-                val effectiveEndTime: Long
-                if (allDayEvent) {
-                    val local = java.util.Calendar.getInstance()
-                    val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-                    local.timeInMillis = startTime
-                    utc.clear()
-                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
-                    effectiveStartTime = utc.timeInMillis
-                    local.timeInMillis = endTime
-                    utc.clear()
-                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
-                    utc.add(java.util.Calendar.DAY_OF_MONTH, 1)
-                    effectiveEndTime = utc.timeInMillis
+                val (effectiveStartTime, effectiveEndTime) = if (allDayEvent) {
+                    normalizeAllDayTimes(startTime, endTime)
                 } else {
-                    effectiveStartTime = startTime
-                    effectiveEndTime = endTime
+                    startTime to endTime
                 }
 
                 val result = easClient.createCalendarEvent(
@@ -416,23 +420,10 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Error -> return@withContext r
                 }
 
-                val effectiveStartTime: Long
-                val effectiveEndTime: Long
-                if (allDayEvent) {
-                    val local = java.util.Calendar.getInstance()
-                    val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-                    local.timeInMillis = startTime
-                    utc.clear()
-                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
-                    effectiveStartTime = utc.timeInMillis
-                    local.timeInMillis = endTime
-                    utc.clear()
-                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
-                    utc.add(java.util.Calendar.DAY_OF_MONTH, 1)
-                    effectiveEndTime = utc.timeInMillis
+                val (effectiveStartTime, effectiveEndTime) = if (allDayEvent) {
+                    normalizeAllDayTimes(startTime, endTime)
                 } else {
-                    effectiveStartTime = startTime
-                    effectiveEndTime = endTime
+                    startTime to endTime
                 }
 
                 if (removedAttachmentIds.isNotEmpty()) {
@@ -598,7 +589,9 @@ class CalendarRepository(private val context: Context) {
         allDayEvent: Boolean,
         reminder: Int,
         busyStatus: Int,
-        sensitivity: Int
+        sensitivity: Int,
+        attachments: List<DraftAttachmentData> = emptyList(),
+        removedAttachmentIds: List<String> = emptyList()
     ): EasResult<CalendarEventEntity> {
         return withContext(Dispatchers.IO) {
             try {
@@ -607,23 +600,10 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Error -> return@withContext r
                 }
 
-                val effectiveStart: Long
-                val effectiveEnd: Long
-                if (allDayEvent) {
-                    val local = java.util.Calendar.getInstance()
-                    val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-                    local.timeInMillis = startTime
-                    utc.clear()
-                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
-                    effectiveStart = utc.timeInMillis
-                    local.timeInMillis = endTime
-                    utc.clear()
-                    utc.set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
-                    utc.add(java.util.Calendar.DAY_OF_MONTH, 1)
-                    effectiveEnd = utc.timeInMillis
+                val (effectiveStart, effectiveEnd) = if (allDayEvent) {
+                    normalizeAllDayTimes(startTime, endTime)
                 } else {
-                    effectiveStart = startTime
-                    effectiveEnd = endTime
+                    startTime to endTime
                 }
 
                 val result = easClient.updateSingleOccurrence(
@@ -639,11 +619,28 @@ class CalendarRepository(private val context: Context) {
                     allDayEvent = allDayEvent,
                     reminder = reminder,
                     busyStatus = busyStatus,
-                    sensitivity = sensitivity
+                    sensitivity = sensitivity,
+                    attachments = attachments,
+                    removedAttachmentIds = removedAttachmentIds
                 )
 
                 when (result) {
                     is EasResult.Success -> {
+                        val changedAttachments = attachments.isNotEmpty() || removedAttachmentIds.isNotEmpty()
+                        val existingException = RecurrenceHelper.fuzzyMatchException(
+                            RecurrenceHelper.parseExceptions(masterEvent.exceptions).filter { !it.deleted },
+                            occurrenceOriginalStart
+                        )
+                        val occurrenceAttachmentsJson = if (changedAttachments) {
+                            result.data
+                        } else {
+                            existingException?.attachments ?: ""
+                        }
+                        val attachmentsOverridden = if (changedAttachments) {
+                            true
+                        } else {
+                            existingException?.attachmentsOverridden ?: false
+                        }
                         val newException = RecurrenceHelper.RecurrenceException(
                             exceptionStartTime = occurrenceOriginalStart,
                             deleted = false,
@@ -651,7 +648,9 @@ class CalendarRepository(private val context: Context) {
                             location = location,
                             startTime = effectiveStart,
                             endTime = effectiveEnd,
-                            body = body
+                            body = body,
+                            attachments = occurrenceAttachmentsJson,
+                            attachmentsOverridden = attachmentsOverridden
                         )
                         val updatedExceptionsJson = RecurrenceHelper.mergeException(
                             masterEvent.exceptions, newException
@@ -809,12 +808,14 @@ class CalendarRepository(private val context: Context) {
             try {
                 val totalCount = events.size
                 var totalDeleted = 0
-                for (event in events) {
-                    CalendarReminderReceiver.cancelReminder(context, event.id)
-                    calendarEventDao.softDelete(event.id)
-                    totalDeleted++
-                    onProgress(totalDeleted, totalCount)
+                database.withTransaction {
+                    for (event in events) {
+                        CalendarReminderReceiver.cancelReminder(context, event.id)
+                        calendarEventDao.softDelete(event.id)
+                        totalDeleted++
+                    }
                 }
+                onProgress(totalDeleted, totalCount)
                 EasResult.Success(totalDeleted)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -872,7 +873,8 @@ class CalendarRepository(private val context: Context) {
                             val serverResult = easClient.deleteCalendarEvent(
                                 serverId = event.serverId,
                                 isMeeting = event.isMeeting,
-                                isOrganizer = isOrganizer
+                                isOrganizer = isOrganizer,
+                                isRecurringSeries = event.isRecurring
                             )
                             when (serverResult) {
                                 is EasResult.Success ->
@@ -921,7 +923,12 @@ class CalendarRepository(private val context: Context) {
                             val currentEmail = accountRepo.getAccount(accountId)?.email?.lowercase() ?: ""
                             val batchRequests = eventsWithServerId.map { event ->
                                 val isOrganizer = event.organizer.lowercase() == currentEmail
-                                Triple(event.serverId, event.isMeeting, isOrganizer)
+                                com.dedovmosol.iwomail.eas.EasCalendarService.DeleteRequest(
+                                    serverId = event.serverId,
+                                    isMeeting = event.isMeeting,
+                                    isOrganizer = isOrganizer,
+                                    isRecurringSeries = event.isRecurring
+                                )
                             }
                             val batchResult = easClient.deleteCalendarEventsBatch(batchRequests)
                             android.util.Log.d("CalendarRepository",
@@ -1074,16 +1081,15 @@ class CalendarRepository(private val context: Context) {
                         val existingServerIds = existingEvents.map { it.serverId }.toSet()
                         val serverReturnedIds = serverEvents.map { it.serverId }.toSet()
                         
+                        val existingEventsMap = existingEvents.associateBy { it.serverId }
+                        
                         if (serverEvents.isNotEmpty() || existingEvents.isEmpty()) {
                             val serverDeletedIds = existingServerIds - serverReturnedIds
                             
                             val now = System.currentTimeMillis()
                             val pastCutoffMs = now - (90L * 24 * 60 * 60 * 1000)
                             val futureCutoffMs = now + (730L * 24 * 60 * 60 * 1000)
-                            // 5 минут: Exchange 2007 SP1 может индексировать событие до нескольких минут.
-                            // 30 секунд было недостаточно — событие удалялось до индексации.
                             val RECENT_CREATE_THRESHOLD = 300_000L
-                            val existingEventsMap = existingEvents.associateBy { it.serverId }
                             
                             for (serverId in serverDeletedIds) {
                                 val localEvent = existingEventsMap[serverId] ?: continue
@@ -1154,19 +1160,28 @@ class CalendarRepository(private val context: Context) {
                             "syncCalendar: filtered=${filteredServerEvents.size}, unique=${uniqueEvents.size}, " +
                             "deletedServerIds=${deletedServerIds.size}, trashIds=${trashServerIds.size}")
                         
-                        // КРИТИЧНО: НЕ перезаписываем записи, изменённые локально менее 10 сек назад
-                        // Это защита от race condition когда sync получает устаревшие данные после update
+                        // Защита от race condition: sync может получить устаревшие данные после update
                         val syncTime = System.currentTimeMillis()
-                        val RECENT_EDIT_THRESHOLD = 10_000L // 10 секунд
-                        val existingEventsMap = existingEvents.associateBy { it.serverId }
+                        val RECENT_EDIT_THRESHOLD = 30_000L // 30 секунд — Exchange 2007 SP1 медленно индексирует
+                        
+                        // Извлекаем deleted exceptions из локальных мастеров ДО insertAll.
+                        // EWS CalendarView не возвращает deleted occurrences, поэтому
+                        // единственный источник deleted exceptions — локальная БД.
+                        val localDeletedExceptionsMap = mutableMapOf<String, List<RecurrenceHelper.RecurrenceException>>()
+                        for ((serverId, existing) in existingEventsMap) {
+                            if (existing.isRecurring && existing.exceptions.isNotBlank()) {
+                                val deletedExc = RecurrenceHelper.parseExceptions(existing.exceptions)
+                                    .filter { it.deleted }
+                                if (deletedExc.isNotEmpty()) {
+                                    localDeletedExceptionsMap[serverId] = deletedExc
+                                }
+                            }
+                        }
                         
                         var skippedCount = 0
-                        // Добавляем/обновляем события с сервера
                         val eventEntities = uniqueEvents.mapNotNull { event ->
                             val existingEvent = existingEventsMap[event.serverId]
                             
-                            // Если локальная версия изменена недавно - НЕ перезаписываем
-                            // КРИТИЧНО: Проверяем только если данные ДЕЙСТВИТЕЛЬНО отличаются
                             if (existingEvent != null) {
                                 val hasLocalChanges = existingEvent.subject != event.subject || 
                                                      existingEvent.location != event.location ||
@@ -1179,21 +1194,50 @@ class CalendarRepository(private val context: Context) {
                                     val timeSinceLocalEdit = syncTime - existingEvent.lastModified
                                     if (timeSinceLocalEdit < RECENT_EDIT_THRESHOLD) {
                                         skippedCount++
-                                        return@mapNotNull null // Пропускаем
+                                        return@mapNotNull null
                                     }
                                 }
                             }
                             
-                            // КРИТИЧНО: Если сервер вернул пустые attachments, но локально есть данные —
-                            // сохраняем локальную версию. Это защита от race condition: после создания
-                            // события с вложениями через EWS, EAS sync может вернуть событие ДО того,
-                            // как Exchange проиндексирует вложения → attachments="" → данные теряются.
                             val finalAttachments = if (event.attachments.isNotBlank()) {
-                                event.attachments  // Сервер вернул актуальные данные
+                                event.attachments
                             } else {
-                                existingEvent?.attachments ?: ""  // Сохраняем локальные данные
+                                existingEvent?.attachments ?: ""
                             }
                             val finalHasAttachments = event.hasAttachments || finalAttachments.isNotBlank()
+                            
+                            // MS-ASCAL §2.2.2.22: Exchange 2007 SP1 может не включать
+                            // Exceptions в инкрементальный Sync Change → protect from wipe.
+                            // Дополнительно: merge deleted exceptions из локальных данных,
+                            // т.к. EWS CalendarView не возвращает deleted occurrences.
+                            val finalExceptions = run {
+                                val baseExceptions = if (event.exceptions.isNotBlank()) {
+                                    event.exceptions
+                                } else {
+                                    existingEvent?.exceptions ?: ""
+                                }
+                                val localDeleted = localDeletedExceptionsMap[event.serverId]
+                                if (localDeleted.isNullOrEmpty()) {
+                                    baseExceptions
+                                } else {
+                                    val baseParsed = RecurrenceHelper.parseExceptions(baseExceptions)
+                                    val baseStartTimes = baseParsed.map { it.exceptionStartTime }.toSet()
+                                    val missingDeleted = localDeleted.filter { 
+                                        it.exceptionStartTime !in baseStartTimes 
+                                    }
+                                    if (missingDeleted.isNotEmpty()) {
+                                        RecurrenceHelper.exceptionsToJson(baseParsed + missingDeleted)
+                                    } else baseExceptions
+                                }
+                            }
+                            
+                            // Аналогичная защита для recurrenceRule (MS-ASCAL §2.2.2.37)
+                            val finalRecurrenceRule = if (event.recurrenceRule.isNotBlank()) {
+                                event.recurrenceRule
+                            } else {
+                                existingEvent?.recurrenceRule ?: ""
+                            }
+                            val finalIsRecurring = event.isRecurring || finalRecurrenceRule.isNotBlank()
                             
                             CalendarEventEntity(
                                 id = "${accountId}_${event.serverId}",
@@ -1211,11 +1255,11 @@ class CalendarRepository(private val context: Context) {
                                 organizer = event.organizer,
                                 organizerName = event.organizerName,
                                 attendees = attendeesToJson(event.attendees),
-                                isRecurring = event.isRecurring,
-                                recurrenceRule = event.recurrenceRule,
+                                isRecurring = finalIsRecurring,
+                                recurrenceRule = finalRecurrenceRule,
                                 uid = event.uid,
                                 timezone = event.timezone,
-                                exceptions = event.exceptions,
+                                exceptions = finalExceptions,
                                 categories = event.categories.joinToString(","),
                                 lastModified = existingEvent?.lastModified ?: event.lastModified,
                                 responseStatus = event.responseStatus,
@@ -1289,6 +1333,36 @@ class CalendarRepository(private val context: Context) {
                                 }
                             }
                         } catch (_: Exception) { }
+                        
+                        // Exchange 2007 SP1: EAS Sync может не возвращать обновлённые exceptions
+                        // для повторяющихся событий при модификации отдельных вхождений на ПК.
+                        // Дополняем через EWS FindItem + CalendarView.
+                        try {
+                            val allLocalAfterSync = calendarEventDao.getEventsByAccountList(accountId)
+                            val localRecurring = allLocalAfterSync.filter { it.isRecurring && it.uid.isNotBlank() }
+                            if (localRecurring.isNotEmpty()) {
+                                val recurringInfoList = localRecurring.map {
+                                    com.dedovmosol.iwomail.eas.EasCalendarService.RecurringEventInfo(
+                                        uid = it.uid,
+                                        serverId = it.serverId,
+                                        currentExceptions = it.exceptions
+                                    )
+                                }
+                                val updatedExceptions = easClient.supplementRecurringExceptions(recurringInfoList)
+                                if (updatedExceptions.isNotEmpty()) {
+                                    android.util.Log.d("CalendarRepository",
+                                        "syncCalendar: EWS supplement updated exceptions for ${updatedExceptions.size} recurring events")
+                                    for ((uid, newExceptions) in updatedExceptions) {
+                                        val event = localRecurring.find { it.uid == uid } ?: continue
+                                        calendarEventDao.insert(event.copy(exceptions = newExceptions))
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            android.util.Log.w("CalendarRepository",
+                                "syncCalendar: supplementRecurringExceptions failed: ${e.message}")
+                        }
                         
                         EasResult.Success(eventEntities.size)
                     }

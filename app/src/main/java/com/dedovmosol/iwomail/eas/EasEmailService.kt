@@ -59,12 +59,12 @@ class EasEmailService internal constructor(
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         
-        // Regex паттерны для MIME парсинга (DRY: используем EasPatterns)
         private val MDN_DISPOSITION_REGEX get() = EasPatterns.MDN_DISPOSITION
         private val MDN_RETURN_RECEIPT_REGEX get() = EasPatterns.MDN_RETURN_RECEIPT
         private val MDN_CONFIRM_READING_REGEX get() = EasPatterns.MDN_CONFIRM_READING
         private val EMAIL_BRACKET_REGEX get() = EasPatterns.EMAIL_BRACKET
         private val BOUNDARY_REGEX get() = EasPatterns.BOUNDARY
+        private val AIRSYNC_DATA_REGEX = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
     }
     
     /**
@@ -76,13 +76,15 @@ class EasEmailService internal constructor(
         windowSize: Int = 100,
         includeMime: Boolean = false
     ): EasResult<SyncResponse> {
+        val safeKey = deps.escapeXml(syncKey)
+        val safeCol = deps.escapeXml(collectionId)
         val xml = if (syncKey == "0") {
             """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>$safeKey</SyncKey>
+            <CollectionId>$safeCol</CollectionId>
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
@@ -92,8 +94,8 @@ class EasEmailService internal constructor(
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>$safeKey</SyncKey>
+            <CollectionId>$safeCol</CollectionId>
             <DeletesAsMoves>1</DeletesAsMoves>
             <GetChanges/>
             <WindowSize>$windowSize</WindowSize>
@@ -190,46 +192,48 @@ class EasEmailService internal constructor(
                 }
                 
                 val request = requestBuilder.build()
-                val response = deps.executeRequest(request)
-                
-                if (response.isSuccessful || response.code == 200) {
-                    val responseBody = response.body?.bytes()
-                    if (responseBody != null && responseBody.isNotEmpty()) {
-                        if (responseBody[0] == 0x03.toByte()) {
-                            val xml = deps.wbxmlParser.parse(responseBody)
-                            val status = deps.extractValue(xml, "Status")
-                            if (status != null && status != "1") {
-                                val statusDesc = getStatusDescription(status)
-                                return@withContext EasResult.Error("Ошибка отправки: $statusDesc (Status: $status, EAS: $easVersion)")
-                            }
-                        }
-                    }
-                    EasResult.Success(true)
-                } else {
-                    if (response.code == 449) {
-                        when (val provResult = deps.provision()) {
-                            is EasResult.Success -> {
-                                val retryRequest = Request.Builder()
-                                    .url(url)
-                                    .post(requestBody)
-                                    .header("Authorization", deps.getAuthHeader())
-                                    .header("MS-ASProtocolVersion", easVersion)
-                                    .header("Content-Type", contentType)
-                                    .header("User-Agent", "Android/12-EAS-2.0")
-                                    .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
-                                    .build()
-                                
-                                val retryResponse = deps.executeRequest(retryRequest)
-                                if (retryResponse.isSuccessful) {
-                                    return@withContext EasResult.Success(true)
+                deps.executeRequest(request).use { response ->
+                    if (response.isSuccessful || response.code == 200) {
+                        val responseBody = response.body?.bytes()
+                        if (responseBody != null && responseBody.isNotEmpty()) {
+                            if (responseBody[0] == 0x03.toByte()) {
+                                val xml = deps.wbxmlParser.parse(responseBody)
+                                val status = deps.extractValue(xml, "Status")
+                                if (status != null && status != "1") {
+                                    val statusDesc = getStatusDescription(status)
+                                    return@withContext EasResult.Error("Ошибка отправки: $statusDesc (Status: $status, EAS: $easVersion)")
                                 }
                             }
-                            is EasResult.Error -> {}
                         }
+                        EasResult.Success(true)
+                    } else {
+                        if (response.code == 449) {
+                            when (val provResult = deps.provision()) {
+                                is EasResult.Success -> {
+                                    val retryRequest = Request.Builder()
+                                        .url(url)
+                                        .post(requestBody)
+                                        .header("Authorization", deps.getAuthHeader())
+                                        .header("MS-ASProtocolVersion", easVersion)
+                                        .header("Content-Type", contentType)
+                                        .header("User-Agent", "Android/12-EAS-2.0")
+                                        .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
+                                        .build()
+                                    
+                                    deps.executeRequest(retryRequest).use { retryResponse ->
+                                        if (retryResponse.isSuccessful) {
+                                            return@withContext EasResult.Success(true)
+                                        }
+                                    }
+                                }
+                                is EasResult.Error -> {}
+                            }
+                        }
+                        EasResult.Error("Ошибка отправки письма (HTTP ${response.code})")
                     }
-                    EasResult.Error("Ошибка отправки письма (HTTP ${response.code})")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка отправки письма: ${e.message}")
             }
         }
@@ -279,8 +283,7 @@ class EasEmailService internal constructor(
                 
                 unescapeXml(deps.extractValue(responseXml, "Data") 
                     ?: run {
-                        val pattern = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                        pattern.find(responseXml)?.groupValues?.get(1)
+                        AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                     }
                     ?: "")
             }
@@ -333,8 +336,7 @@ class EasEmailService internal constructor(
                     unescapeXml(deps.extractValue(responseXml, "Data") 
                         ?: deps.extractValue(responseXml, "Body")
                         ?: run {
-                            val pattern = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                            pattern.find(responseXml)?.groupValues?.get(1)
+                            AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                         }
                         ?: "")
                 }
@@ -380,8 +382,7 @@ class EasEmailService internal constructor(
                     unescapeXml(deps.extractValue(responseXml, "Data") 
                         ?: deps.extractValue(responseXml, "Body")
                         ?: run {
-                            val pattern = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                            pattern.find(responseXml)?.groupValues?.get(1)
+                            AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                         }
                         ?: "")
                 }
@@ -612,8 +613,7 @@ class EasEmailService internal constructor(
             
             val mimeData = unescapeXml(deps.extractValue(responseXml, "Data") 
                 ?: run {
-                    val pattern = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                    pattern.find(responseXml)?.groupValues?.get(1)
+                    AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                 }
                 ?: "")
             
@@ -645,12 +645,12 @@ class EasEmailService internal constructor(
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(collectionId)}</CollectionId>
             <GetChanges>0</GetChanges>
             <Commands>
                 <Change>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
                     <ApplicationData>
                         <Read xmlns="Email">$readValue</Read>
                     </ApplicationData>
@@ -714,9 +714,10 @@ class EasEmailService internal constructor(
         if (serverIds.isEmpty()) return EasResult.Success(syncKey)
         
         val readValue = if (read) "1" else "0"
+        val esc = deps.escapeXml
         val changesXml = serverIds.joinToString("\n") { sid ->
             """                <Change>
-                    <ServerId>$sid</ServerId>
+                    <ServerId>${esc(sid)}</ServerId>
                     <ApplicationData>
                         <Read xmlns="Email">$readValue</Read>
                     </ApplicationData>
@@ -726,8 +727,8 @@ class EasEmailService internal constructor(
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${esc(syncKey)}</SyncKey>
+            <CollectionId>${esc(collectionId)}</CollectionId>
             <GetChanges>0</GetChanges>
             <Commands>
 $changesXml
@@ -797,8 +798,8 @@ $changesXml
         
         // 2. UpdateItem для каждого найденного письма
         val itemChanges = matches.joinToString("") { match ->
-            val itemId = match.groupValues[1]
-            val changeKey = match.groupValues[2]
+            val itemId = deps.escapeXml(match.groupValues[1])
+            val changeKey = deps.escapeXml(match.groupValues[2])
             """<t:ItemChange>
     <t:ItemId Id="$itemId" ChangeKey="$changeKey"/>
     <t:Updates>
@@ -837,12 +838,12 @@ $itemChanges
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(collectionId)}</CollectionId>
             <GetChanges>0</GetChanges>
             <Commands>
                 <Change>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
                     <ApplicationData>
                         <Flag xmlns="Email">
                             <FlagStatus>$flagValue</FlagStatus>
@@ -871,13 +872,13 @@ $itemChanges
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(collectionId)}</CollectionId>
             <GetChanges>0</GetChanges>
             <DeletesAsMoves>1</DeletesAsMoves>
             <Commands>
                 <Delete>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
                 </Delete>
             </Commands>
         </Collection>
@@ -946,6 +947,7 @@ $itemChanges
                 EasResult.Error(errorMessage)
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("EWS delete error: ${e.message}")
         }
     }
@@ -1082,6 +1084,7 @@ $itemIdsXml
                 EasResult.Error(errorMessage)
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("EWS batch delete error: ${e.message}")
         }
     }
@@ -1109,14 +1112,14 @@ $itemIdsXml
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(collectionId)}</CollectionId>
             <DeletesAsMoves>0</DeletesAsMoves>
             <GetChanges>0</GetChanges>
             <WindowSize>10</WindowSize>
             <Commands>
                 <Delete>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
                 </Delete>
             </Commands>
         </Collection>
@@ -1151,9 +1154,10 @@ $itemIdsXml
         // Для элементов в Deleted Items (Корзине) DeletesAsMoves неважен —
         // серверу некуда перемещать, он обязан удалить безвозвратно.
         // Exchange 2007 тоже обрабатывает Delete в Deleted Items корректно.
-        val deleteCommands = serverIds.joinToString("\n") { serverId ->
+        val esc = deps.escapeXml
+        val deleteCommands = serverIds.joinToString("\n") { sid ->
             """                            <Delete>
-                                <ServerId>$serverId</ServerId>
+                                <ServerId>${esc(sid)}</ServerId>
                             </Delete>"""
         }
         
@@ -1174,8 +1178,8 @@ $itemIdsXml
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$collectionId</CollectionId>
+            <SyncKey>${esc(syncKey)}</SyncKey>
+            <CollectionId>${esc(collectionId)}</CollectionId>
             <DeletesAsMoves>0</DeletesAsMoves>
             <GetChanges>0</GetChanges>
             <WindowSize>1</WindowSize>
@@ -1238,12 +1242,14 @@ $deleteCommands
             return EasResult.Success(emptyMap())
         }
         
+        val esc = deps.escapeXml
+        val safeDst = esc(dstFolderId)
         val movesXml = items.joinToString("") { (srcFolderId, serverId) ->
             """
                 <Move>
-                    <SrcMsgId>$serverId</SrcMsgId>
-                    <SrcFldId>$srcFolderId</SrcFldId>
-                    <DstFldId>$dstFolderId</DstFldId>
+                    <SrcMsgId>${esc(serverId)}</SrcMsgId>
+                    <SrcFldId>${esc(srcFolderId)}</SrcFldId>
+                    <DstFldId>$safeDst</DstFldId>
                 </Move>
             """.trimIndent()
         }
@@ -1519,10 +1525,18 @@ $deleteCommands
     /**
      * Извлекает HTML/текст из MIME данных (для bodyType=4)
      */
+    private fun looksLikeBase64(s: String): Boolean {
+        for (c in s) {
+            if (c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '+' || c == '/' || c == '=' || c.isWhitespace()) continue
+            return false
+        }
+        return true
+    }
+    
     private fun extractBodyFromMime(mimeData: String): String {
         // Декодируем base64 если нужно
         val decoded = try {
-            if (mimeData.matches(Regex("^[A-Za-z0-9+/=\\s]+$"))) {
+            if (looksLikeBase64(mimeData)) {
                 String(android.util.Base64.decode(mimeData, android.util.Base64.DEFAULT), Charsets.UTF_8)
             } else {
                 mimeData
@@ -1589,8 +1603,7 @@ $deleteCommands
     }
     
     private fun extractBodyFromItemOperations(xml: String): String {
-        val dataPattern = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val raw = dataPattern.find(xml)?.groupValues?.get(1) ?: return ""
+        val raw = AIRSYNC_DATA_REGEX.find(xml)?.groupValues?.get(1) ?: return ""
         return unescapeXml(raw)
     }
     

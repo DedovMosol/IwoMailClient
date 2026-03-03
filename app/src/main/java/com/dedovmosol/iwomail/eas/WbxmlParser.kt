@@ -2,6 +2,8 @@ package com.dedovmosol.iwomail.eas
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.IOException
 import java.io.InputStream
 
 /**
@@ -58,7 +60,7 @@ class WbxmlParser {
     private fun parseBody(input: InputStream, result: StringBuilder) {
         val tagStack = mutableListOf<String>()
         
-        while (input.available() > 0) {
+        while (true) {
             val token = input.read()
             if (token == -1) break
             
@@ -78,7 +80,7 @@ class WbxmlParser {
                 TOKEN_OPAQUE -> {
                     val length = readMultiByteInt(input)
                     val bytes = ByteArray(length)
-                    input.read(bytes)
+                    DataInputStream(input).readFully(bytes)
                     result.append(String(bytes, Charsets.UTF_8))
                 }
                 else -> {
@@ -90,9 +92,9 @@ class WbxmlParser {
                     result.append("<$tagName")
                     
                     if (hasAttrs) {
-                        // Пропускаем атрибуты (редко используются в EAS)
                         while (true) {
                             val attrToken = input.read()
+                            if (attrToken == -1) throw IOException("Unexpected EOF in WBXML attribute")
                             if (attrToken == TOKEN_END) break
                         }
                     }
@@ -123,6 +125,7 @@ class WbxmlParser {
         var result = 0
         while (true) {
             val b = input.read()
+            if (b == -1) throw IOException("Unexpected EOF in WBXML multi-byte int")
             result = (result shl 7) or (b and 0x7F)
             if ((b and 0x80) == 0) break
         }
@@ -291,11 +294,6 @@ class WbxmlParser {
     }
     
     private fun writeMultiByteInt(output: ByteArrayOutputStream, value: Int) {
-        if (value == 0) {
-            output.write(0)
-            return
-        }
-        
         if (value == 0) {
             output.write(0)
             return

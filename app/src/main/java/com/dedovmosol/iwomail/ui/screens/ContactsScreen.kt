@@ -106,9 +106,10 @@ fun ContactsScreen(
     var isSyncing by remember { mutableStateOf(false) }
     var syncError by remember { mutableStateOf<String?>(null) }
     
-    // Автоматическая синхронизация при первом открытии если нет данных
-    LaunchedEffect(accountId, localContacts.isEmpty(), exchangeContacts.isEmpty()) {
-        if (accountId > 0 && localContacts.isEmpty() && exchangeContacts.isEmpty() && !isSyncing) {
+    var initialSyncDone by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(accountId) {
+        if (accountId > 0 && !initialSyncDone && !isSyncing) {
+            initialSyncDone = true
             isSyncing = true
             try {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

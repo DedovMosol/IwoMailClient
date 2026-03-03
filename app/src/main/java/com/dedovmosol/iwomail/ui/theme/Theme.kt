@@ -799,7 +799,8 @@ fun ThemeOutlinedButton(
                 Text(
                     text = text,
                     color = if (isActive) Color.White else Color.White.copy(alpha = 0.7f),
-                    style = MaterialTheme.typography.labelLarge
+                    style = MaterialTheme.typography.labelLarge,
+                    textAlign = TextAlign.Center
                 )
             }
         }

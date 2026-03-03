@@ -156,7 +156,7 @@ private fun parseHtmlContent(html: String): List<ContentElement> {
     imgRegex.findAll(html).forEach { match ->
         val imgUrl = match.groupValues[1]
         val imgAlt = match.groupValues.getOrNull(2) ?: ""
-        if (imgUrl.startsWith("http")) {
+        if (imgUrl.startsWith("http") || imgUrl.startsWith("data:")) {
             allImages.add(ImageMatch(match.range, imgUrl, imgAlt))
         }
     }

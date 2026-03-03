@@ -37,7 +37,7 @@ class MailRepository(private val context: Context) {
     // LruCache вместо ConcurrentHashMap: при достижении лимита вытесняет самые старые записи
     // вместо полного сброса кэша (устраняет "cache clear storm")
     private val emailNameCache = android.util.LruCache<String, String>(5000)
-    private var cacheInitialized = false
+    @Volatile private var cacheInitialized = false
     private var contactsDatabase: MailDatabase? = null
     
     private val emailExtractRegex = Regex("<([^>]+)>")
@@ -70,7 +70,10 @@ class MailRepository(private val context: Context) {
     
     suspend fun initCacheFromDb() {
         if (cacheInitialized) return
-        cacheInitialized = true
+        synchronized(this) {
+            if (cacheInitialized) return
+            cacheInitialized = true
+        }
         
         try {
             contactsDatabase = database
@@ -885,7 +888,8 @@ if (result is EasResult.Success) {
     suspend fun repairXmlEntities() {
         try {
             val db = database.openHelper.writableDatabase
-            
+            db.beginTransaction()
+            try {
             val repairEmailsSql = """
                 UPDATE emails SET 
                     body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
@@ -930,16 +934,16 @@ if (result is EasResult.Success) {
             db.execSQL(repairTasksSql)
             db.execSQL(repairTasksSql)
             
+            db.setTransactionSuccessful()
             android.util.Log.i("MailRepository", "XML entity repair completed for emails, notes, calendar, tasks")
+            } finally {
+                db.endTransaction()
+            }
         } catch (e: Exception) {
             android.util.Log.e("MailRepository", "XML entity repair failed", e)
         }
     }
     
-    private fun extractEmailAddress(field: String): String {
-        val match = emailExtractRegex.find(field)
-        return match?.groupValues?.get(1) ?: field
-    }
     
     private fun stripHtml(html: String): String {
         return html

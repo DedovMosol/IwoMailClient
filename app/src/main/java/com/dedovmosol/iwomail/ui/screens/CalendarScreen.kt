@@ -67,6 +67,7 @@ import kotlinx.coroutines.delay
 
 // Предкомпилированные regex для производительности
 private val HTML_TAG_REGEX = Regex("<[^>]*>")
+private val HTML_TAG_KEEP_IMG_A_REGEX = Regex("<(?!/?(img|a)\\b)[^>]*>", RegexOption.IGNORE_CASE)
 private val WHITESPACE_REGEX = "\\s+".toRegex()
 private val EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
 
@@ -105,7 +106,9 @@ private fun expandRecurringForRange(
                         endTime = occ.endTime,
                         subject = occ.subject,
                         location = occ.location,
-                        body = occ.body
+                        body = occ.body,
+                        hasAttachments = occ.attachments.isNotBlank(),
+                        attachments = occ.attachments
                     ))
                 }
             } else {
@@ -606,28 +609,18 @@ fun CalendarScreen(
                 pendingOccurrenceIds = emptySet()
                 deleteConfirmTargetIds = emptySet()
             },
-            title = { Text(if (isRussian) "Удаление повторяющегося события" else "Delete Recurring Event") },
+            icon = { Icon(AppIcons.DeleteForever, null) },
+            title = { Text(if (isRussian) "Удаление повторяющегося\nсобытия" else "Delete Recurring\nEvent", textAlign = TextAlign.Center) },
             text = {
                 Text(
-                    if (isRussian) "Удалить только выбранные вхождения или всю серию целиком?"
-                    else "Delete only selected occurrences or the entire series?",
+                    if (isRussian) "Удалить только выбранные вхождения\nили всю серию целиком?"
+                    else "Delete only selected occurrences\nor the entire series?",
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
                 )
             },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.DeleteButton(
-                    onClick = {
-                        showOccurrenceDeleteChoice = false
-                        pendingOccurrenceIds = emptySet()
-                        deleteConfirmCount = deleteConfirmTargetIds.size
-                        deleteConfirmIsPermanent = false
-                        showDeleteConfirmDialog = true
-                    },
-                ) { Text(if (isRussian) "Всю серию" else "Entire series", fontSize = 13.sp, maxLines = 1) }
-            },
             dismissButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeButton(
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         showOccurrenceDeleteChoice = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
@@ -672,7 +665,20 @@ fun CalendarScreen(
                             }
                         }
                     },
-                ) { Text(if (isRussian) "Только вхождения" else "Only occurrences", fontSize = 13.sp, maxLines = 1) }
+                    text = if (isRussian) "Только\nвхождения" else "Only\noccurrences"
+                )
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showOccurrenceDeleteChoice = false
+                        pendingOccurrenceIds = emptySet()
+                        deleteConfirmCount = deleteConfirmTargetIds.size
+                        deleteConfirmIsPermanent = false
+                        showDeleteConfirmDialog = true
+                    },
+                    text = if (isRussian) "Всю\nсерию" else "Entire\nseries"
+                )
             }
         )
     }
@@ -783,7 +789,7 @@ fun CalendarScreen(
         val dialogEvent = if (editingOccurrenceStartTime != null && editingEventId != null) {
             cachedOccurrenceEvent ?: editingEvent?.let { master ->
                 val exceptions = RecurrenceHelper.parseExceptions(master.exceptions)
-                val exc = exceptions.find { it.exceptionStartTime == editingOccurrenceStartTime && !it.deleted }
+                val exc = RecurrenceHelper.fuzzyMatchException(exceptions.filter { !it.deleted }, editingOccurrenceStartTime!!)
                 val duration = master.endTime - master.startTime
                 master.copy(
                     id = "${master.id}_occ_${editingOccurrenceStartTime}",
@@ -791,7 +797,10 @@ fun CalendarScreen(
                     startTime = exc?.startTime?.takeIf { it > 0 } ?: editingOccurrenceStartTime!!,
                     endTime = exc?.endTime?.takeIf { it > 0 } ?: (editingOccurrenceStartTime!! + duration),
                     location = exc?.location?.ifBlank { master.location } ?: master.location,
-                    body = exc?.body?.ifBlank { master.body } ?: master.body
+                    body = exc?.body?.ifBlank { master.body } ?: master.body,
+                    hasAttachments = (exc?.attachmentsOverridden == true && !exc.attachments.isBlank()) ||
+                        (exc?.attachmentsOverridden != true && master.hasAttachments),
+                    attachments = if (exc?.attachmentsOverridden == true) exc.attachments else master.attachments
                 )
             }
         } else editingEvent
@@ -833,7 +842,9 @@ fun CalendarScreen(
                                     allDayEvent = allDayEvent,
                                     reminder = reminder,
                                     busyStatus = busyStatus,
-                                    sensitivity = eventToEdit.sensitivity
+                                    sensitivity = eventToEdit.sensitivity,
+                                    attachments = attachments,
+                                    removedAttachmentIds = removedAttachmentIds
                                 )
                             }
                         } else if (eventToEdit != null) {
@@ -2166,43 +2177,39 @@ private fun EventDetailDialog(
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     var expanded by rememberSaveable { mutableStateOf(false) }
     
-    // Очищаем body от дублированных строк
-    val cleanBody = remember(event.body) {
-        // Убираем HTML теги и нормализуем
-        var textOnly = event.body
-            .replace(HTML_TAG_REGEX, "\n")
+    // cleanBody — plain text для collapsed preview (все HTML-теги убраны)
+    // richBody  — HTML с <img>/<a> для expanded RichTextWithImages
+    val (cleanBody, richBody) = remember(event.body) {
+        fun dedup(text: String): String {
+            var t = text
+            val sepIdx = t.indexOf("*~*~*")
+            if (sepIdx > 0) {
+                val after = t.substring(sepIdx)
+                val nl = after.indexOf("\n")
+                if (nl > 0) t = after.substring(nl + 1)
+            }
+            val seen = mutableSetOf<String>()
+            return t.lines().mapNotNull { line ->
+                val n = line.trim().replace(WHITESPACE_REGEX, " ")
+                if (n.isBlank()) null
+                else if (seen.add(n.lowercase().replace(" ", ""))) n else null
+            }.joinToString("\n")
+        }
+
+        fun decodeEntities(s: String) = s
             .replace("&nbsp;", " ")
             .replace("&amp;", "&")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("\r", "")
-            .replace("\u00A0", " ") // non-breaking space
+            .replace("\u00A0", " ")
             .replace("\t", " ")
-        
-        // Убираем дублированный контент после разделителя *~*~*
-        val separatorIndex = textOnly.indexOf("*~*~*")
-        if (separatorIndex > 0) {
-            // Берём только часть после разделителя (основной контент)
-            val afterSeparator = textOnly.substring(separatorIndex)
-            val separatorEnd = afterSeparator.indexOf("\n")
-            if (separatorEnd > 0) {
-                textOnly = afterSeparator.substring(separatorEnd + 1)
-            }
-        }
-        
-        val lines = textOnly.split("\n")
-        val seen = mutableSetOf<String>()
-        val result = mutableListOf<String>()
-        for (line in lines) {
-            // Нормализуем: убираем все пробелы и приводим к lowercase для сравнения
-            val normalized = line.trim().replace(WHITESPACE_REGEX, " ")
-            if (normalized.isBlank()) continue
-            val key = normalized.lowercase().replace(" ", "")
-            if (seen.add(key)) {
-                result.add(normalized)
-            }
-        }
-        result.joinToString("\n")
+
+        val clean = dedup(decodeEntities(event.body.replace(HTML_TAG_REGEX, "\n")))
+        val rich  = dedup(decodeEntities(
+            event.body.replace(HTML_TAG_KEEP_IMG_A_REGEX, "\n")
+        ))
+        clean to rich
     }
     
     // Извлекаем email из строки организатора
@@ -2217,7 +2224,7 @@ private fun EventDetailDialog(
     }
     
     // Проверяем есть ли что показывать в расширенном виде
-    val hasMoreContent = cleanBody.isNotBlank() || event.organizer.isNotBlank() || event.organizerName.isNotBlank() || attendees.isNotEmpty() || event.hasAttachments || event.onlineMeetingLink.isNotBlank()
+    val hasMoreContent = richBody.isNotBlank() || event.organizer.isNotBlank() || event.organizerName.isNotBlank() || attendees.isNotEmpty() || event.hasAttachments || event.onlineMeetingLink.isNotBlank()
     
     // Диалог подтверждения удаления
     if (showDeleteConfirm) {
@@ -2509,14 +2516,14 @@ private fun EventDetailDialog(
                     }
                     
                     // Полное описание с изображениями и ссылками
-                    if (cleanBody.isNotBlank()) {
+                    if (richBody.isNotBlank()) {
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         SelectionContainer {
                             com.dedovmosol.iwomail.ui.components.RichTextWithImages(
-                                htmlContent = cleanBody,
+                                htmlContent = richBody,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }

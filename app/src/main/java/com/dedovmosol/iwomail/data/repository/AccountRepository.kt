@@ -435,7 +435,6 @@ class AccountRepository(private val context: Context) {
      */
     fun clearEasClientCache(accountId: Long) {
         easClientCache.remove(accountId)
-        easClientLocks.remove(accountId)
     }
     
     /**

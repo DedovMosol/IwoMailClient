@@ -3,6 +3,7 @@ package com.dedovmosol.iwomail.data.repository
 import android.content.Context
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.eas.withEasRetry
 import com.dedovmosol.iwomail.sync.TaskReminderReceiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -118,25 +119,8 @@ class TaskRepository(private val context: Context) {
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
-                var result = easClient.createTask(
-                    subject = subject,
-                    body = body,
-                    startDate = startDate,
-                    dueDate = dueDate,
-                    importance = importance,
-                    reminderSet = reminderSet,
-                    reminderTime = reminderTime,
-                    assignTo = assignTo
-                )
-                
-                // Retry при ошибке
-                if (result is EasResult.Error && (
-                    result.message.contains("Status=", ignoreCase = true) ||
-                    result.message.contains("failed", ignoreCase = true) ||
-                    result.message.contains("error", ignoreCase = true)
-                )) {
-                    kotlinx.coroutines.delay(1000)
-                    result = easClient.createTask(
+                val result = withEasRetry {
+                    easClient.createTask(
                         subject = subject,
                         body = body,
                         startDate = startDate,
@@ -224,31 +208,8 @@ class TaskRepository(private val context: Context) {
                     return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 }
                 
-                val requestTime = System.currentTimeMillis()
-                var result = easClient.updateTask(
-                    serverId = task.serverId,
-                    subject = subject,
-                    body = body,
-                    startDate = startDate,
-                    dueDate = dueDate,
-                    complete = complete,
-                    importance = importance,
-                    reminderSet = reminderSet,
-                    reminderTime = reminderTime,
-                    oldSubject = oldSubject ?: task.subject
-                )
-                val responseTime = System.currentTimeMillis()
-                val requestDuration = responseTime - requestTime
-                
-                // Retry при ошибке
-                if (result is EasResult.Error && (
-                    result.message.contains("Status=", ignoreCase = true) ||
-                    result.message.contains("failed", ignoreCase = true) ||
-                    result.message.contains("error", ignoreCase = true)
-                )) {
-                    kotlinx.coroutines.delay(1000)
-                    val retryRequestTime = System.currentTimeMillis()
-                    result = easClient.updateTask(
+                val result = withEasRetry {
+                    easClient.updateTask(
                         serverId = task.serverId,
                         subject = subject,
                         body = body,
@@ -260,8 +221,6 @@ class TaskRepository(private val context: Context) {
                         reminderTime = reminderTime,
                         oldSubject = oldSubject ?: task.subject
                     )
-                    val retryResponseTime = System.currentTimeMillis()
-                    val retryDuration = retryResponseTime - retryRequestTime
                 }
                 
                 when (result) {
@@ -369,17 +328,7 @@ class TaskRepository(private val context: Context) {
                 val actualServerId = actualTask?.serverId ?: task.serverId
                 
                 // Удаляем на сервере (перемещает в корзину Exchange)
-                var result = easClient.deleteTask(actualServerId)
-                
-                // Retry при ошибке
-                if (result is EasResult.Error && (
-                    result.message.contains("Status=", ignoreCase = true) ||
-                    result.message.contains("failed", ignoreCase = true) ||
-                    result.message.contains("error", ignoreCase = true)
-                )) {
-                    kotlinx.coroutines.delay(1000)
-                    result = easClient.deleteTask(actualServerId)
-                }
+                val result = withEasRetry { easClient.deleteTask(actualServerId) }
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -466,6 +415,7 @@ class TaskRepository(private val context: Context) {
                     is EasResult.Error -> result
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_RESTORE_ERROR)
             }
         }
@@ -488,19 +438,7 @@ class TaskRepository(private val context: Context) {
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
                 // Окончательно удаляем на сервере (HardDelete)
-                var result = easClient.deleteTaskPermanently(task.serverId)
-                
-                // Retry при ошибке
-                if (result is EasResult.Error && 
-                    !result.message.contains("not found", ignoreCase = true) &&
-                    !result.message.contains("ErrorItemNotFound", ignoreCase = true) &&
-                    (result.message.contains("Status=", ignoreCase = true) ||
-                     result.message.contains("failed", ignoreCase = true) ||
-                     result.message.contains("error", ignoreCase = true))
-                ) {
-                    kotlinx.coroutines.delay(1000)
-                    result = easClient.deleteTaskPermanently(task.serverId)
-                }
+                val result = withEasRetry { easClient.deleteTaskPermanently(task.serverId) }
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -520,6 +458,7 @@ class TaskRepository(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_PERMANENT_DELETE_ERROR)
             }
         }
@@ -578,6 +517,7 @@ class TaskRepository(private val context: Context) {
                     EasResult.Success(deletedCount)
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_TRASH_EMPTY_ERROR)
             }
         }
@@ -791,6 +731,7 @@ class TaskRepository(private val context: Context) {
                     is EasResult.Error -> result
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_SYNC_ERROR)
             }
         }

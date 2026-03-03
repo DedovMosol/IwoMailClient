@@ -633,17 +633,17 @@ fun ComposeScreen(
     // Отслеживание начального аккаунта для определения изменений
     var initialAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
     
-    // Функция навигации назад с переключением аккаунта если он изменился
+    var backNavigationInProgress by remember { mutableStateOf(false) }
+    
     fun handleBackNavigation() {
-        // Скрываем WebView перед навигацией чтобы избежать краша RenderThread
+        if (backNavigationInProgress) return
+        backNavigationInProgress = true
         hideWebView = true
         
         scope.launch {
-            // Даём WebView время завершить рендеринг
             delay(100)
             
             val currentAccountId = activeAccount?.id
-            // Безопасная навигация: проверяем что оба ID не null перед сравнением
             if (currentAccountId != null && initialAccountId != null && currentAccountId != initialAccountId) {
                 try {
                     accountRepo.setActiveAccount(currentAccountId)

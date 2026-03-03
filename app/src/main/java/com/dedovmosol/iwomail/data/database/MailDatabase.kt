@@ -172,7 +172,7 @@ abstract class MailDatabase : RoomDatabase() {
         
         fun getInstance(context: Context): MailDatabase {
             return INSTANCE ?: synchronized(this) {
-                Room.databaseBuilder(
+                INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     MailDatabase::class.java,
                     "mail_database"

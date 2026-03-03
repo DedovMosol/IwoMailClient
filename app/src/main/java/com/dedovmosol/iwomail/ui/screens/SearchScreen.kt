@@ -131,16 +131,18 @@ fun SearchScreen(
         }
     }
     
+    var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     fun search() {
         if (query.length < 2) return
-        // Easter egg: "I Want Out"
         if (query.trim().equals("I Want Out", ignoreCase = true)) {
             keyboardController?.hide()
             showEasterEgg = true
             return
         }
         activeAccount?.let { account ->
-            scope.launch {
+            searchJob?.cancel()
+            searchJob = scope.launch {
                 isSearching = true
                 selectedIds = emptySet()
                 val results = mailRepo.search(account.id, query)

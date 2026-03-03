@@ -205,8 +205,9 @@ object InitialSyncController {
                     
                     performBackgroundSync(context, accountId, mailRepo, settingsRepo)
                 }
-            } catch (_: CancellationException) {
+            } catch (e: CancellationException) {
                 updateState()
+                throw e
             } catch (_: Exception) {
                 syncedAccounts.add(accountId)
                 updateState()
@@ -247,7 +248,7 @@ object InitialSyncController {
                     }
                     val foldersToSync = currentFolders.filter { it.type in emailFolderTypes }
                     
-                    val syncSemaphore = kotlinx.coroutines.sync.Semaphore(3)
+                    val syncSemaphore = kotlinx.coroutines.sync.Semaphore(2)
                     val failedFolderIds = java.util.concurrent.ConcurrentLinkedQueue<String>()
                     
                     withContext(Dispatchers.IO) {
@@ -553,8 +554,8 @@ object InitialSyncController {
                     // Обновляем виджет
                     com.dedovmosol.iwomail.widget.updateMailWidget(context)
                 }
-            } catch (_: CancellationException) {
-                // Отмена
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
             } finally {
                 syncingAccounts.remove(accountId)

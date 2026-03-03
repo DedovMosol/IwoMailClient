@@ -326,9 +326,12 @@ class PushService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // CRITICAL: startForeground ДОЛЖЕН быть вызван в течение 5 секунд после startForegroundService()
-        // Вызываем СРАЗУ до любых async операций чтобы избежать ANR на Android 8.0+
-        startForeground(NOTIFICATION_ID, createNotification())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, createNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, createNotification())
+        }
         
         // Проверяем наличие PUSH аккаунтов в фоне
         serviceScope.launch {
@@ -416,7 +419,9 @@ class PushService : Service() {
             // 60 секунд — перезапуск с разумной задержкой (экономия батареи)
             val triggerTime = System.currentTimeMillis() + 60_000
             
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 alarmManager.setExactAndAllowWhileIdle(
                     android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent
                 )
@@ -470,9 +475,13 @@ class PushService : Service() {
             }
         }
         
-        // Перезапускаем foreground notification чтобы убедиться что он виден
         try {
-            startForeground(NOTIFICATION_ID, createNotification())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, createNotification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIFICATION_ID, createNotification())
+            }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "Failed to update foreground notification", e)
         }
@@ -533,7 +542,7 @@ class PushService : Service() {
             }
             
             if (exchangePushAccounts.isEmpty()) {
-                stopSelf()
+                withContext(Dispatchers.Main) { stopSelf() }
                 return@launch
             }
             
@@ -560,11 +569,9 @@ class PushService : Service() {
     }
     
     private fun startPingForAccount(account: AccountEntity) {
-        accountPingJobs[account.id]?.cancel()
-        
         val accountId = account.id
-        
-        accountPingJobs[accountId] = serviceScope.launch {
+        synchronized(accountPingJobs) { accountPingJobs[accountId]?.cancel() }
+        val job = serviceScope.launch {
             // Загружаем сохранённый heartbeat или используем дефолтный
             var heartbeat = loadHeartbeat(accountId)
             var consecutiveErrors = 0
@@ -727,6 +734,7 @@ class PushService : Service() {
                 }
             }
         }
+        synchronized(accountPingJobs) { accountPingJobs[accountId] = job }
     }
     
     private suspend fun doPing(account: AccountEntity, heartbeat: Int): Int {
@@ -868,45 +876,42 @@ class PushService : Service() {
         lastAccountSyncTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
-        // КРИТИЧНО: Используем getNewEmailsForNotification вместо getNewUnreadEmails
-        // Это позволяет показывать уведомления даже если письмо прочитано на другом устройстве
-        val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
-        
-        // КРИТИЧНО: Фильтруем письма, для которых УЖЕ показывались уведомления на этом устройстве
-        // Решает проблему повторных уведомлений на смартфоне после показа на планшете
-        val shownNotifications = getShownNotifications()
-        val filteredEmails = newEmailEntities.filter { email ->
-            val notifKey = "${account.id}_${email.id}"
-            !shownNotifications.contains(notifKey)
-        }
-        
-        val newEmails = filteredEmails.map { email ->
-            NewEmailInfo(email.id, email.fromName, email.from, email.subject)
-        }
-        
-        if (newEmails.isNotEmpty()) {
-            // Предзагружаем тело письма ДО показа уведомления
-            for (emailInfo in newEmails) {
-                try {
-                    val email = database.emailDao().getEmail(emailInfo.id)
-                    if (email != null && email.body.isEmpty()) {
-                        mailRepo.loadEmailBody(emailInfo.id)
+        notificationMutex.withLock {
+            val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
+            
+            val shownNotifications = getShownNotifications()
+            val filteredEmails = newEmailEntities.filter { email ->
+                val notifKey = "${account.id}_${email.id}"
+                !shownNotifications.contains(notifKey)
+            }
+            
+            val newEmails = filteredEmails.map { email ->
+                NewEmailInfo(email.id, email.fromName, email.from, email.subject)
+            }
+            
+            if (newEmails.isNotEmpty()) {
+                for (emailInfo in newEmails) {
+                    try {
+                        val email = database.emailDao().getEmail(emailInfo.id)
+                        if (email != null && email.body.isEmpty()) {
+                            mailRepo.loadEmailBody(emailInfo.id)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.w(TAG, "Failed to preload body for ${emailInfo.id}", e)
                     }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.w(TAG, "Failed to preload body for ${emailInfo.id}", e)
+                }
+                
+                val notificationsEnabled = settingsRepo.notificationsEnabled.first()
+                if (notificationsEnabled) {
+                    showNewMailNotification(newEmails, account.id, account.email)
+                    markNotificationsAsShown(newEmails.map { "${account.id}_${it.id}" })
                 }
             }
             
-            val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-            if (notificationsEnabled) {
-                showNewMailNotification(newEmails, account.id, account.email)
-                markNotificationsAsShown(newEmails.map { "${account.id}_${it.id}" })
-            }
+            lastAccountNotifCheckTimes[account.id] = System.currentTimeMillis()
+            settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
         }
-        
-        lastAccountNotifCheckTimes[account.id] = System.currentTimeMillis()
-        settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
     }
     
     private suspend fun syncFolders(account: AccountEntity) {
@@ -928,19 +933,15 @@ class PushService : Service() {
      */
     private fun markNotificationsAsShown(notificationKeys: List<String>) {
         val prefs = getSharedPreferences("push_notifications", Context.MODE_PRIVATE)
-        val current = prefs.getStringSet("shown_notifications", emptySet())?.toMutableSet() ?: mutableSetOf()
-        
-        // Добавляем новые
+        val current = LinkedHashSet(prefs.getStringSet("shown_notifications", emptySet()) ?: emptySet())
         current.addAll(notificationKeys)
         
-        // Очищаем старые (сохраняем только последние 500 записей)
-        // Это примерно 500 писем = ~1-2 недели для активного пользователя
         if (current.size > 500) {
-            val toKeep = current.toList().takeLast(500).toSet()
-            prefs.edit().putStringSet("shown_notifications", toKeep).apply()
-        } else {
-            prefs.edit().putStringSet("shown_notifications", current).apply()
+            val excess = current.size - 500
+            val iter = current.iterator()
+            repeat(excess) { if (iter.hasNext()) { iter.next(); iter.remove() } }
         }
+        prefs.edit().putStringSet("shown_notifications", current).apply()
     }
     
     private suspend fun showNewMailNotification(newEmails: List<NewEmailInfo>, accountId: Long, accountEmail: String) {

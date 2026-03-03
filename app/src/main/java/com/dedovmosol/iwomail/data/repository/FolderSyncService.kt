@@ -294,6 +294,7 @@ class FolderSyncService(
                 }
             )
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка IMAP")
         }
     }
@@ -323,6 +324,7 @@ class FolderSyncService(
                 onFailure = { EasResult.Error(it.message ?: "Ошибка получения папок") }
             )
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка POP3")
         }
     }

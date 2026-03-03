@@ -14,6 +14,13 @@ class EasContactsService internal constructor(
     private val extractValue: (String, String) -> String?,
     private val getEasVersion: () -> String
 ) {
+
+    private fun escapeXml(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
     
     /**
      * Синхронизация контактов из папки Contacts на сервере Exchange
@@ -39,7 +46,7 @@ class EasContactsService internal constructor(
     <Collections>
         <Collection>
             <SyncKey>0</SyncKey>
-            <CollectionId>$contactsFolderId</CollectionId>
+            <CollectionId>${escapeXml(contactsFolderId)}</CollectionId>
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
@@ -123,6 +130,8 @@ class EasContactsService internal constructor(
     // ==================== Private helpers ====================
     
     private fun buildContactsSyncXml(syncKey: String, contactsFolderId: String, easVersion: String): String {
+        val safeKey = escapeXml(syncKey)
+        val safeFolderId = escapeXml(contactsFolderId)
         return if (easVersion.startsWith("2.")) {
             // EAS 2.5 (Exchange 2003)
             """
@@ -130,8 +139,8 @@ class EasContactsService internal constructor(
                 <Sync xmlns="AirSync">
                     <Collections>
                         <Collection>
-                            <SyncKey>$syncKey</SyncKey>
-                            <CollectionId>$contactsFolderId</CollectionId>
+                            <SyncKey>$safeKey</SyncKey>
+                            <CollectionId>$safeFolderId</CollectionId>
                             <DeletesAsMoves/>
                             <GetChanges/>
                             <WindowSize>500</WindowSize>
@@ -149,8 +158,8 @@ class EasContactsService internal constructor(
                 <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
                     <Collections>
                         <Collection>
-                            <SyncKey>$syncKey</SyncKey>
-                            <CollectionId>$contactsFolderId</CollectionId>
+                            <SyncKey>$safeKey</SyncKey>
+                            <CollectionId>$safeFolderId</CollectionId>
                             <DeletesAsMoves/>
                             <GetChanges/>
                             <WindowSize>500</WindowSize>

@@ -59,7 +59,7 @@ class EmailSyncService(
         
         private const val PREFS_NAME = "email_deleted_ids"
         private const val KEY_DELETED_IDS = "deleted_email_ids"
-        private var prefsInitialized = false
+        @Volatile private var prefsInitialized = false
         
         // Кэш данных удалённых черновиков для восстановления при будущем Add.
         // Когда Exchange реорганизует черновик (редактирование в Outlook, внутренняя миграция),
@@ -95,12 +95,15 @@ class EmailSyncService(
         
         private fun initFromPrefs(context: Context) {
             if (prefsInitialized) return
-            prefsInitialized = true
-            try {
-                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val saved = prefs.getStringSet(KEY_DELETED_IDS, emptySet()) ?: emptySet()
-                deletedEmailIds.addAll(saved)
-            } catch (_: Exception) { }
+            synchronized(this) {
+                if (prefsInitialized) return
+                try {
+                    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    val saved = prefs.getStringSet(KEY_DELETED_IDS, emptySet()) ?: emptySet()
+                    deletedEmailIds.addAll(saved)
+                } catch (_: Exception) { }
+                prefsInitialized = true
+            }
         }
         
         private fun saveToPrefs(context: Context) {
@@ -224,7 +227,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 try {
                     attachmentDao.deleteByEmail(localDraft.id)
                     emailDao.delete(localDraft.id)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                }
                 false // Не загружаем
             } else {
                 true // Действительно оффлайн-черновик — загружаем
@@ -390,17 +395,16 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      * Полная ресинхронизация папки Отправленные
      */
     suspend fun syncSentFull(accountId: Long, folderId: String): EasResult<Int> {
-        if (activeSyncs[folderId] == true) {
+        if (activeSyncs.putIfAbsent(folderId, true) != null) {
             var waited = 0
             while (activeSyncs[folderId] == true && waited < 15) {
                 kotlinx.coroutines.delay(1000)
                 waited++
             }
-            if (activeSyncs[folderId] == true) {
+            if (activeSyncs.putIfAbsent(folderId, true) != null) {
                 return EasResult.Error("Синхронизация уже выполняется")
             }
         }
-        activeSyncs[folderId] = true
         
         try {
         val client = accountRepo.createEasClient(accountId) 
@@ -1555,6 +1559,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 }
             )
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка IMAP")
         } finally {
             try { client.disconnect() } catch (_: Exception) { }
@@ -1582,6 +1587,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 onFailure = { EasResult.Error(it.message ?: "Ошибка получения писем") }
             )
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка POP3")
         } finally {
             try { client.disconnect() } catch (_: Exception) { }

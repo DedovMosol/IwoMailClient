@@ -17,3 +17,20 @@ inline fun <T, R> EasResult<T>.flatMapResult(transform: (T) -> EasResult<R>): Ea
     is EasResult.Success -> transform(data)
     is EasResult.Error -> EasResult.Error(message)
 }
+
+private val RETRYABLE_KEYWORDS = arrayOf("Status=", "failed", "error")
+
+fun <T> EasResult<T>.isRetryable(): Boolean =
+    this is EasResult.Error && RETRYABLE_KEYWORDS.any { message.contains(it, ignoreCase = true) }
+
+suspend fun <T> withEasRetry(
+    delayMs: Long = 1000L,
+    action: suspend () -> EasResult<T>
+): EasResult<T> {
+    var result = action()
+    if (result.isRetryable()) {
+        kotlinx.coroutines.delay(delayMs)
+        result = action()
+    }
+    return result
+}

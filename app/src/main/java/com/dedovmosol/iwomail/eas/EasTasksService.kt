@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.eas
 
+import com.dedovmosol.iwomail.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -43,7 +44,7 @@ class EasTasksService internal constructor(
     )
     
     // Кэш ID папки задач
-    private var cachedTasksFolderId: String? = null
+    @Volatile private var cachedTasksFolderId: String? = null
     
     /**
      * Синхронизация задач из папки Tasks на сервере Exchange
@@ -203,12 +204,12 @@ class EasTasksService internal constructor(
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$tasksFolderId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(tasksFolderId)}</CollectionId>
             <DeletesAsMoves>1</DeletesAsMoves>
             <Commands>
                 <Delete>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
                 </Delete>
             </Commands>
         </Collection>
@@ -242,12 +243,12 @@ class EasTasksService internal constructor(
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$tasksFolderId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(tasksFolderId)}</CollectionId>
             <DeletesAsMoves>0</DeletesAsMoves>
             <Commands>
                 <Delete>
-                    <ServerId>$serverId</ServerId>
+                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
                 </Delete>
             </Commands>
         </Collection>
@@ -320,7 +321,7 @@ class EasTasksService internal constructor(
     <Collections>
         <Collection>
             <SyncKey>0</SyncKey>
-            <CollectionId>$tasksFolderId</CollectionId>
+            <CollectionId>${deps.escapeXml(tasksFolderId)}</CollectionId>
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
@@ -336,12 +337,13 @@ class EasTasksService internal constructor(
     }
     
     private suspend fun syncTasksEas(tasksFolderId: String): EasResult<List<EasTask>> {
+        val safeFolderId = deps.escapeXml(tasksFolderId)
         val initialXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
     <Collections>
         <Collection>
             <SyncKey>0</SyncKey>
-            <CollectionId>$tasksFolderId</CollectionId>
+            <CollectionId>$safeFolderId</CollectionId>
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
@@ -384,8 +386,8 @@ class EasTasksService internal constructor(
 <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase">
     <Collections>
         <Collection>
-            <SyncKey>$syncKey</SyncKey>
-            <CollectionId>$tasksFolderId</CollectionId>
+            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
+            <CollectionId>$safeFolderId</CollectionId>
             <DeletesAsMoves>1</DeletesAsMoves>
             <GetChanges>1</GetChanges>
             <WindowSize>100</WindowSize>
@@ -493,13 +495,14 @@ class EasTasksService internal constructor(
         reminderTime: Long,
         dateFormat: java.text.SimpleDateFormat
     ): String = buildString {
+        val esc = deps.escapeXml
         append("""<?xml version="1.0" encoding="UTF-8"?>""")
         append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
         append("<Collections><Collection>")
-        append("<SyncKey>$syncKey</SyncKey>")
-        append("<CollectionId>$tasksFolderId</CollectionId>")
+        append("<SyncKey>${esc(syncKey)}</SyncKey>")
+        append("<CollectionId>${esc(tasksFolderId)}</CollectionId>")
         append("<Commands><Add>")
-        append("<ClientId>$clientId</ClientId>")
+        append("<ClientId>${esc(clientId)}</ClientId>")
         append("<ApplicationData>")
         append("<tasks:Subject>$escapedSubject</tasks:Subject>")
         append("<airsyncbase:Body>")
@@ -543,6 +546,7 @@ class EasTasksService internal constructor(
         majorVersion: Int,
         dateFormat: java.text.SimpleDateFormat
     ): String = buildString {
+        val esc = deps.escapeXml
         append("""<?xml version="1.0" encoding="UTF-8"?>""")
         if (majorVersion >= 14) {
             append("""<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks">""")
@@ -550,10 +554,10 @@ class EasTasksService internal constructor(
             append("""<Sync xmlns="AirSync" xmlns:tasks="Tasks">""")
         }
         append("<Collections><Collection>")
-        append("<SyncKey>$syncKey</SyncKey>")
-        append("<CollectionId>$tasksFolderId</CollectionId>")
+        append("<SyncKey>${esc(syncKey)}</SyncKey>")
+        append("<CollectionId>${esc(tasksFolderId)}</CollectionId>")
         append("<Commands><Change>")
-        append("<ServerId>$serverId</ServerId>")
+        append("<ServerId>${esc(serverId)}</ServerId>")
         append("<ApplicationData>")
         append("<tasks:Subject>$escapedSubject</tasks:Subject>")
         
@@ -610,7 +614,7 @@ class EasTasksService internal constructor(
 
             // 0. Диагностика: GetFolder на tasks → TotalCount + ChildFolderCount
             val folderInfo = getTasksFolderInfo(ewsUrl)
-            android.util.Log.d("EasTasksService",
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "syncTasksEws: GetFolder tasks → totalCount=${folderInfo.first}, childFolders=${folderInfo.second}")
 
             // 1. Синхронизация из корневой папки Tasks (DistinguishedFolderId)
@@ -618,12 +622,12 @@ class EasTasksService internal constructor(
                 buildEwsFindTasksRequest(offset, pageSize)
             }
             allActiveTasks.addAll(rootTasks)
-            android.util.Log.d("EasTasksService", "syncTasksEws: root tasks folder: ${rootTasks.size}")
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: root tasks folder: ${rootTasks.size}")
             
             // 2. Обнаруживаем подпапки Tasks и ищем в каждой.
             val subfolderIds = discoverTaskSubfolderIds(ewsUrl)
             if (subfolderIds.isNotEmpty()) {
-                android.util.Log.d("EasTasksService", "syncTasksEws: discovered ${subfolderIds.size} task subfolders")
+                if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: discovered ${subfolderIds.size} task subfolders")
                 for (subfolderId in subfolderIds) {
                     val subTasks = syncTasksFromFolderEws(ewsUrl, "tasks-sub-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
                         buildEwsFindTasksByFolderIdRequest(subfolderId, offset, pageSize)
@@ -635,7 +639,7 @@ class EasTasksService internal constructor(
             // 2b. Подпапки непосредственно внутри "tasks" (Deep от msgfolderroot может пропустить)
             val directSubfolders = discoverDirectTaskSubfolders(ewsUrl)
             if (directSubfolders.isNotEmpty()) {
-                android.util.Log.d("EasTasksService",
+                if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                     "syncTasksEws: ${directSubfolders.size} direct subfolders under tasks")
                 for (subfolderId in directSubfolders) {
                     if (subfolderIds.contains(subfolderId)) continue
@@ -649,18 +653,18 @@ class EasTasksService internal constructor(
             // todosearch (DistinguishedFolderId "todosearch") введён в Exchange 2010 (v14).
             // EWS-путь используется только для Exchange 2007 SP1 (majorVersion < 14),
             // поэтому todosearch гарантированно вернёт ErrorFolderNotFound — пропускаем.
-            android.util.Log.d("EasTasksService",
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "syncTasksEws: skipping todosearch (not supported on Exchange 2007 SP1)")
 
             // 3. Дедупликация по serverId
             val uniqueActive = allActiveTasks.distinctBy { it.serverId }
-            android.util.Log.d("EasTasksService", "syncTasksEws: active tasks total: ${uniqueActive.size} (before dedup: ${allActiveTasks.size})")
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: active tasks total: ${uniqueActive.size} (before dedup: ${allActiveTasks.size})")
             
             // 4. Синхронизация удалённых задач
             val deletedTasks = syncTasksFromFolderEws(ewsUrl, "deleteditems", isDeleted = true) { offset, pageSize ->
                 buildEwsFindDeletedTasksRequest(offset, pageSize)
             }
-            android.util.Log.d("EasTasksService", "syncTasksEws: deleted tasks: ${deletedTasks.size}")
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: deleted tasks: ${deletedTasks.size}")
             
             val allTasks = uniqueActive + deletedTasks
             EasResult.Success(allTasks)
@@ -715,7 +719,7 @@ class EasTasksService internal constructor(
                 val pageIds = itemIdPattern.findAll(responseXml).map { it.groupValues[1] }.toList()
                 allItemIds.addAll(pageIds)
                 
-                android.util.Log.d("EasTasksService", 
+                if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", 
                     "syncTasksFromFolderEws($folderLabel): offset=$offset, totalItemsInView=$totalItems, " +
                     "pageItemIds=${pageIds.size}, includesLast=$includesLast")
                 
@@ -733,7 +737,7 @@ class EasTasksService internal constructor(
             }
             
             val uniqueIds = allItemIds.distinct()
-            android.util.Log.d("EasTasksService", 
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", 
                 "syncTasksFromFolderEws($folderLabel): FindItem complete, ${uniqueIds.size} unique ItemIds")
             
             if (uniqueIds.isEmpty()) return emptyList()
@@ -792,7 +796,7 @@ class EasTasksService internal constructor(
             
             if (responseXml.isBlank()) continue
             
-            android.util.Log.d("EasTasksService",
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "getTaskDetailsEws($label): batch ${batch.size} ids, response len=${responseXml.length}")
             
             val pageTasks = parseEwsTasksResponse(responseXml)
@@ -820,7 +824,7 @@ class EasTasksService internal constructor(
             }
         }
         
-        android.util.Log.d("EasTasksService",
+        if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
             "getTaskDetailsEws($label): total ${allTasks.size} tasks from ${itemIds.size} ids")
         return allTasks.distinctBy { it.serverId }
     }
@@ -984,14 +988,14 @@ $itemIdsXml
                     ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
             }
 
-            android.util.Log.d("EasTasksService",
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "deleteTasksBatchEws: ${ewsItemIds.size} items, deleteType=$deleteType, response len=${responseXml.length}")
 
             val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
             val hasNoError = responseXml.contains("NoError")
             val hasNotFound = responseXml.contains("ErrorItemNotFound")
 
-            if (hasSuccess || hasNoError || hasNotFound) {
+            if ((hasSuccess && hasNoError) || hasNotFound) {
                 EasResult.Success(ewsItemIds.size)
             } else {
                 val errorCode = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>"
@@ -1273,7 +1277,7 @@ $itemIdsXml
         val taskPattern = "<(?:t:|m:)?Task[^>]*>(.*?)</(?:t:|m:)?Task>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val taskMatches = taskPattern.findAll(responseXml).toList()
         
-        android.util.Log.d("EasTasksService", "getTaskBodiesEws: found ${taskMatches.size} Task elements in GetItem response")
+        if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "getTaskBodiesEws: found ${taskMatches.size} Task elements in GetItem response")
         
         taskMatches.forEach { match ->
             val taskXml = match.groupValues[1]
@@ -1494,12 +1498,12 @@ $itemIdsXml
                     ?: return emptyList()
             }
             
-            android.util.Log.d("EasTasksService",
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverTaskSubfolderIds: response len=${responseXml.length}")
             // Логируем больше ответа для диагностики: первые 2000 символов
             val logChunks = responseXml.take(2000).chunked(800)
             logChunks.forEachIndexed { i, chunk ->
-                android.util.Log.d("EasTasksService", "discoverTaskSubfolderIds[chunk$i]: $chunk")
+                if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "discoverTaskSubfolderIds[chunk$i]: $chunk")
             }
             
             val folderIds = mutableListOf<String>()
@@ -1519,11 +1523,11 @@ $itemIdsXml
                 val displayName = namePattern.find(folderXml)?.groupValues?.get(1) ?: ""
                 val totalCount = countPattern.find(folderXml)?.groupValues?.get(1)?.toIntOrNull() ?: -1
                 folderIds.add(folderId)
-                android.util.Log.d("EasTasksService", 
+                if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", 
                     "discoverTaskSubfolderIds: found '$displayName' (class=$folderClass, items=$totalCount, id=${folderId.take(20)}...)")
             }
             
-            android.util.Log.d("EasTasksService", "discoverTaskSubfolderIds: total ${folderIds.size} task folders")
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "discoverTaskSubfolderIds: total ${folderIds.size} task folders")
             return folderIds
         } catch (e: Exception) {
             android.util.Log.w("EasTasksService", "discoverTaskSubfolderIds: ${e.message}")
@@ -1559,7 +1563,7 @@ $itemIdsXml
                 val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "GetFolder") ?: return Pair(-1, -1)
                 responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "GetFolder") ?: return Pair(-1, -1)
             }
-            android.util.Log.d("EasTasksService",
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "getTasksFolderInfo: response: ${responseXml.take(800)}")
 
             val totalCount = "<(?:t:)?TotalCount>(\\d+)</(?:t:)?TotalCount>"
@@ -1610,7 +1614,7 @@ $itemIdsXml
                 val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "FindFolder") ?: return emptyList()
                 responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "FindFolder") ?: return emptyList()
             }
-            android.util.Log.d("EasTasksService",
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverDirectTaskSubfolders: response len=${responseXml.length}, first 600: ${responseXml.take(600)}")
 
             val folderIds = mutableListOf<String>()
@@ -1626,7 +1630,7 @@ $itemIdsXml
                 val displayName = namePattern.find(folderXml)?.groupValues?.get(1) ?: ""
                 val totalCount = countPattern.find(folderXml)?.groupValues?.get(1)?.toIntOrNull() ?: -1
                 folderIds.add(folderId)
-                android.util.Log.d("EasTasksService",
+                if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                     "discoverDirectTaskSubfolders: found '$displayName' (items=$totalCount, id=${folderId.take(20)}...)")
             }
             return folderIds
@@ -1809,7 +1813,7 @@ $itemIdsXml
     <soap:Body>
         <m:DeleteItem DeleteType="$deleteType" AffectedTaskOccurrences="AllOccurrences">
             <m:ItemIds>
-                <t:ItemId Id="$itemId"/>
+                <t:ItemId Id="${deps.escapeXml(itemId)}"/>
             </m:ItemIds>
         </m:DeleteItem>
     </soap:Body>
@@ -1817,7 +1821,7 @@ $itemIdsXml
     
     // КРИТИЧНО: НЕ используем MessageDisposition для Task — только для Message-элементов
     private fun buildEwsUpdateTaskRequest(itemId: String, changeKey: String, updates: String): String {
-        val changeKeyAttr = if (changeKey.isNotEmpty()) """ ChangeKey="$changeKey"""" else ""
+        val changeKeyAttr = if (changeKey.isNotEmpty()) """ ChangeKey="${deps.escapeXml(changeKey)}"""" else ""
         return """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -1829,7 +1833,7 @@ $itemIdsXml
         <m:UpdateItem ConflictResolution="AutoResolve">
             <m:ItemChanges>
                 <t:ItemChange>
-                    <t:ItemId Id="$itemId"$changeKeyAttr/>
+                    <t:ItemId Id="${deps.escapeXml(itemId)}"$changeKeyAttr/>
                     <t:Updates>
                         $updates
                     </t:Updates>
@@ -1943,7 +1947,7 @@ $itemIdsXml
             }
         }
 
-        android.util.Log.d("EasTasksService",
+        if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
             "parseEwsTasksResponse: itemsBlocks=${itemsBlocks.size}, rawMatches=$totalRawMatches, " +
             "totalItemIds=${allIds.size}, parsed=${tasks.size}")
 
