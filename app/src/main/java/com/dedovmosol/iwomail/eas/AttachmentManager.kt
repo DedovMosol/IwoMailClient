@@ -5,7 +5,10 @@ import android.content.Intent
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -32,17 +35,13 @@ class AttachmentManager(
     private val port: Int = 443,
     private val useHttps: Boolean = true,
     private val policyKey: String? = null,
-    deviceIdSuffix: String = "" // Для стабильного deviceId
+    deviceIdSuffix: String = "",
+    private val easVersion: String = "12.1"
 ) {
-    // Используем общий HttpClient с увеличенными таймаутами для вложений
     private val client: OkHttpClient = com.dedovmosol.iwomail.network.HttpClientProvider.getAttachmentClient(acceptAllCerts)
     private val wbxmlParser = WbxmlParser()
-    private val easVersion = "12.1"
-    // Используем стабильный deviceId как в EasClient
     private val deviceId = generateStableDeviceId(username, deviceIdSuffix)
-    
-    // Нормализуем URL - добавляем схему и порт
-    private val normalizedServerUrl: String = normalizeUrl(serverUrl, port, useHttps)
+    private val normalizedServerUrl: String = EasClient.normalizeUrl(serverUrl, port, useHttps)
     
     private fun generateStableDeviceId(username: String, suffix: String): String {
         val hash = (username + suffix).hashCode().toLong() and 0xFFFFFFFFL
@@ -50,24 +49,31 @@ class AttachmentManager(
     }
     
     companion object {
-        /**
-         * Нормализует URL сервера - добавляет схему и порт
-         */
-        fun normalizeUrl(url: String, port: Int = 443, useHttps: Boolean = true): String {
-            var trimmed = url.trim()
-            
-            // Убираем существующую схему если есть
-            trimmed = trimmed.removePrefix("https://").removePrefix("http://")
-            
-            // Извлекаем только хост (без порта и пути)
-            val hostOnly = trimmed
-                .substringBefore("/")  // убираем путь
-                .substringBefore(":")  // убираем порт если есть
-            
-            val scheme = if (useHttps) "https" else "http"
-            return "$scheme://$hostOnly:$port"
+        private const val MAX_CACHE_SIZE_BYTES = 500L * 1024 * 1024 // 500 MB
+        private const val MAX_FILE_AGE_MS = 7L * 24 * 60 * 60 * 1000 // 7 days
+
+        fun cleanupOldAttachments(context: Context) {
+            try {
+                val dir = File(context.filesDir, "attachments")
+                if (!dir.exists()) return
+                val files = dir.listFiles() ?: return
+                val now = System.currentTimeMillis()
+                var totalSize = files.sumOf { it.length() }
+
+                val sorted = files.sortedBy { it.lastModified() }
+                for (file in sorted) {
+                    val tooOld = now - file.lastModified() > MAX_FILE_AGE_MS
+                    val overSize = totalSize > MAX_CACHE_SIZE_BYTES
+                    if (tooOld || overSize) {
+                        val size = file.length()
+                        if (file.delete()) totalSize -= size
+                    } else if (!overSize) {
+                        break
+                    }
+                }
+            } catch (_: Exception) {}
         }
-        
+
         fun getFileIcon(fileName: String): String {
             val extension = fileName.substringAfterLast('.', "").lowercase()
             return when (extension) {
@@ -86,13 +92,6 @@ class AttachmentManager(
         }
     }
     
-    private fun escapeXml(text: String): String = text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&apos;")
-
     private fun getAuthHeader(): String {
         val credentials = if (domain.isNotEmpty()) {
             "$domain\\$username:$password"
@@ -117,7 +116,7 @@ class AttachmentManager(
         } catch (e: Exception) {
             fileReference
         }
-        val safeRef = escapeXml(decodedRef)
+        val safeRef = XmlUtils.escape(decodedRef)
         // Пробуем разные варианты XML
         val variants = listOf(
             // Вариант 1: FileReference в namespace AirSyncBase
@@ -166,6 +165,7 @@ class AttachmentManager(
         EasResult.Error("Сервер не поддерживает скачивание вложений через EAS.\n\nВозможные причины:\n• Политика безопасности запрещает скачивание\n• Вложение удалено с сервера\n\nПопробуйте открыть письмо в веб-интерфейсе OWA.")
     }
     
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private suspend fun tryDownload(
         xml: String,
         fileName: String,
@@ -173,8 +173,13 @@ class AttachmentManager(
     ): EasResult<File> = withContext(Dispatchers.IO) {
         try {
             val wbxml = wbxmlParser.generate(xml)
+            val encodedUser = if (domain.isNotEmpty()) {
+                java.net.URLEncoder.encode("$domain\\$username", "UTF-8")
+            } else {
+                java.net.URLEncoder.encode(username, "UTF-8")
+            }
             val url = "$normalizedServerUrl/Microsoft-Server-ActiveSync?" +
-                "Cmd=ItemOperations&User=$username&DeviceId=$deviceId&DeviceType=Android"
+                "Cmd=ItemOperations&User=$encodedUser&DeviceId=$deviceId&DeviceType=Android"
             
             val requestBuilder = Request.Builder()
                 .url(url)
@@ -190,30 +195,39 @@ class AttachmentManager(
             }
             
             val request = requestBuilder.build()
-            val response = client.newCall(request).execute()
-            if (response.code == 449) {
+            val call = client.newCall(request)
+            val response = suspendCancellableCoroutine<Response> { cont ->
+                cont.invokeOnCancellation { call.cancel() }
+                call.enqueue(object : Callback {
+                    override fun onResponse(call: Call, response: Response) {
+                        cont.resume(response) { response.close() }
+                    }
+                    override fun onFailure(call: Call, e: java.io.IOException) {
+                        if (!cont.isCancelled) cont.resumeWithException(e)
+                    }
+                })
+            }
+            response.use { resp ->
+            if (resp.code == 449) {
                 return@withContext EasResult.Error("Требуется повторная авторизация (449)")
             }
             
-            if (!response.isSuccessful) {
-                return@withContext EasResult.Error("HTTP ${response.code}")
+            if (!resp.isSuccessful) {
+                return@withContext EasResult.Error("HTTP ${resp.code}")
             }
             
-            val responseBody = response.body?.bytes()
+            val responseBody = resp.body?.bytes()
             if (responseBody == null || responseBody.isEmpty()) {
                 return@withContext EasResult.Error("Пустой ответ")
             }
             
             val responseXml = wbxmlParser.parse(responseBody)
             
-            // Проверяем статус внутри Fetch
             val fetchStatus = FETCH_STATUS_REGEX.find(responseXml)?.groupValues?.get(1)
-            // Status=1 - успех, Status=6 - не найдено
             if (fetchStatus != "1") {
                 return@withContext EasResult.Error("Вложение не найдено (Status=$fetchStatus)")
             }
             
-            // Извлекаем данные вложения
             val dataMatch = DATA_REGEX.find(responseXml)
             
             if (dataMatch == null) {
@@ -237,8 +251,10 @@ class AttachmentManager(
             
             onProgress(100)
             EasResult.Success(file)
+            } // response.use
             
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка: ${e.message}")
         }
     }

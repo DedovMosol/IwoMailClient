@@ -56,7 +56,7 @@ class PushService : Service() {
     //исправляем race condition при одновременном доступе из разных корутин
     private val easClientCache = java.util.Collections.synchronizedMap(mutableMapOf<Long, com.dedovmosol.iwomail.eas.EasClient>())
     
-    private val accountPingJobs = java.util.Collections.synchronizedMap(mutableMapOf<Long, Job>())
+    private val accountPingJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
     
     // Сохранённые heartbeat для каждого аккаунта (восстанавливаются между перезапусками)
     private val accountHeartbeats = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
@@ -84,7 +84,7 @@ class PushService : Service() {
         // Адаптивный heartbeat: начинаем с большого значения, уменьшаем при ошибках
         private const val MIN_HEARTBEAT = 120      // Минимум 2 минуты
         private const val DEFAULT_HEARTBEAT = 480  // Начинаем с 8 минут (оптимизация батареи)
-        private const val MAX_HEARTBEAT = 900      // Максимум 15 минут
+        private const val MAX_HEARTBEAT = 1800     // Максимум 30 минут (MS-ASCMD: 60-3540с)
         private const val HEARTBEAT_INCREASE_STEP = 60  // Увеличиваем на 1 минуту
         private const val SUCCESS_COUNT_TO_INCREASE = 3 // После 3 успехов увеличиваем
         
@@ -216,8 +216,10 @@ class PushService : Service() {
     private fun clearCacheForAccount(accountId: Long) {
         easClientCache.remove(accountId)
         accountHeartbeats.remove(accountId)
-        accountPingJobs[accountId]?.cancel()
-        accountPingJobs.remove(accountId)
+        accountPingJobs.remove(accountId)?.cancel()
+        maxPingFoldersPerAccount.remove(accountId)
+        lastAccountSyncTimes.remove(accountId)
+        lastAccountNotifCheckTimes.remove(accountId)
     }
     
     override fun onCreate() {
@@ -226,9 +228,9 @@ class PushService : Service() {
             .edit().putBoolean("explicit_stop", false).apply()
         
         database = MailDatabase.getInstance(applicationContext)
-        mailRepo = MailRepository(applicationContext)
+        mailRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getMailRepository(applicationContext)
         settingsRepo = SettingsRepository.getInstance(applicationContext)
-        accountRepo = AccountRepository(applicationContext)
+        accountRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(applicationContext)
         
         // Подписываемся на изменение языка для обновления уведомления
         serviceScope.launch {
@@ -254,7 +256,7 @@ class PushService : Service() {
                 try {
                     getSharedPreferences("push_service", Context.MODE_PRIVATE)
                         .edit().putLong("last_update", System.currentTimeMillis()).apply()
-                    delay(300_000) // Обновляем каждые 5 минут (watchdog проверяет с порогом 15 мин)
+                    delay(300_000) // Обновляем каждые 5 минут (watchdog проверяет с порогом 10 мин)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -284,10 +286,8 @@ class PushService : Service() {
                 if (activeNetwork == null) {
                     isNetworkAvailable = false
                     // Сеть пропала — останавливаем все Ping
-                    synchronized(accountPingJobs) {
-                        accountPingJobs.values.forEach { it.cancel() }
-                        accountPingJobs.clear()
-                    }
+                    accountPingJobs.values.forEach { it.cancel() }
+                    accountPingJobs.clear()
                 }
             }
         }
@@ -357,7 +357,8 @@ class PushService : Service() {
                 val minInterval = SyncWorker.getMinSyncInterval(applicationContext)
                 val intervalMinutes = if (minInterval > 0) minInterval else 5
                 scheduleSyncAlarm(applicationContext, intervalMinutes)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 scheduleSyncAlarm(applicationContext, 5)
             }
         }
@@ -374,10 +375,8 @@ class PushService : Service() {
         unregisterNetworkCallback()
         heartbeatJob?.cancel()
         pushJob?.cancel()
-        synchronized(accountPingJobs) {
-            accountPingJobs.values.forEach { it.cancel() }
-            accountPingJobs.clear()
-        }
+        accountPingJobs.values.forEach { it.cancel() }
+        accountPingJobs.clear()
         easClientCache.clear()
         serviceScope.cancel()
         
@@ -459,34 +458,23 @@ class PushService : Service() {
     }
     
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // КРИТИЧНО: НЕ вызываем super.onTaskRemoved() - это может остановить сервис
-        // Вместо этого планируем fallback синхронизацию и продолжаем работу
+        super.onTaskRemoved(rootIntent)
         
         android.util.Log.i(TAG, "Task removed - ensuring service continues")
         
-        serviceScope.launch {
-            try {
-                val minInterval = SyncWorker.getMinSyncInterval(applicationContext)
-                val intervalMinutes = if (minInterval > 0) minInterval else 5
-                scheduleSyncAlarm(applicationContext, intervalMinutes)
-            } catch (e: Exception) {
-                android.util.Log.w(TAG, "Failed to get sync interval", e)
-                scheduleSyncAlarm(applicationContext, 5)
-            }
-        }
-        
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, createNotification(),
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-            } else {
-                startForeground(NOTIFICATION_ID, createNotification())
+        val ctx = applicationContext
+        val intervalMinutes = try {
+            kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withTimeoutOrNull(2000L) {
+                    val min = SyncWorker.getMinSyncInterval(ctx)
+                    if (min > 0) min else 5
+                } ?: 5
             }
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "Failed to update foreground notification", e)
+            5
         }
+        scheduleSyncAlarm(ctx, intervalMinutes)
         
-        // Планируем перезапуск на случай если система всё же остановит сервис
         scheduleRestart()
     }
     
@@ -517,15 +505,15 @@ class PushService : Service() {
             .build()
     }
     
+    private val pushStartLock = Any()
+
     private fun startPushForAllAccounts() {
-        // Отменяем предыдущий job чтобы не дублировать ping-циклы
-        pushJob?.cancel()
-        synchronized(accountPingJobs) {
+        synchronized(pushStartLock) {
+            pushJob?.cancel()
             accountPingJobs.values.forEach { it.cancel() }
             accountPingJobs.clear()
-        }
-        
-        pushJob = serviceScope.launch {
+
+            pushJob = serviceScope.launch {
             val accounts = database.accountDao().getAllAccountsList()
             // Фильтруем только Exchange аккаунты с режимом PUSH
             val exchangePushAccounts = accounts.filter { 
@@ -550,6 +538,7 @@ class PushService : Service() {
                 startPingForAccount(account)
             }
         }
+        }
     }
     
     /**
@@ -570,8 +559,10 @@ class PushService : Service() {
     
     private fun startPingForAccount(account: AccountEntity) {
         val accountId = account.id
-        synchronized(accountPingJobs) { accountPingJobs[accountId]?.cancel() }
-        val job = serviceScope.launch {
+        val oldJob = accountPingJobs.remove(accountId)
+        oldJob?.cancel()
+        val job = serviceScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            oldJob?.join()
             // Загружаем сохранённый heartbeat или используем дефолтный
             var heartbeat = loadHeartbeat(accountId)
             var consecutiveErrors = 0
@@ -734,7 +725,8 @@ class PushService : Service() {
                 }
             }
         }
-        synchronized(accountPingJobs) { accountPingJobs[accountId] = job }
+        accountPingJobs[accountId] = job
+        job.start()
     }
     
     private suspend fun doPing(account: AccountEntity, heartbeat: Int): Int {
@@ -797,8 +789,12 @@ class PushService : Service() {
         }
         
         val folderIds = folders.map { it.serverId }
-        val client = easClientCache.getOrPut(account.id) {
-            accountRepo.createEasClient(account.id) ?: return STATUS_SERVER_ERROR
+        val cached = synchronized(easClientCache) { easClientCache[account.id] }
+        val client = cached ?: run {
+            val created = accountRepo.createEasClient(account.id) ?: return STATUS_SERVER_ERROR
+            synchronized(easClientCache) {
+                easClientCache.getOrPut(account.id) { created }
+            }
         }
         
         return when (val result = client.ping(folderIds, heartbeat)) {
@@ -876,6 +872,18 @@ class PushService : Service() {
         lastAccountSyncTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
+        val preloadCandidates = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
+        for (entity in preloadCandidates) {
+            if (entity.body.isEmpty()) {
+                try {
+                    mailRepo.loadEmailBody(entity.id)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.w(TAG, "Failed to preload body for ${entity.id}", e)
+                }
+            }
+        }
+
         notificationMutex.withLock {
             val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
             
@@ -890,18 +898,6 @@ class PushService : Service() {
             }
             
             if (newEmails.isNotEmpty()) {
-                for (emailInfo in newEmails) {
-                    try {
-                        val email = database.emailDao().getEmail(emailInfo.id)
-                        if (email != null && email.body.isEmpty()) {
-                            mailRepo.loadEmailBody(emailInfo.id)
-                        }
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        android.util.Log.w(TAG, "Failed to preload body for ${emailInfo.id}", e)
-                    }
-                }
-                
                 val notificationsEnabled = settingsRepo.notificationsEnabled.first()
                 if (notificationsEnabled) {
                     showNewMailNotification(newEmails, account.id, account.email)
@@ -923,7 +919,7 @@ class PushService : Service() {
      */
     private fun getShownNotifications(): Set<String> {
         val prefs = getSharedPreferences("push_notifications", Context.MODE_PRIVATE)
-        return prefs.getStringSet("shown_notifications", emptySet()) ?: emptySet()
+        return prefs.getStringSet("shown_notifications", emptySet())?.toSet() ?: emptySet()
     }
     
     /**
@@ -960,7 +956,7 @@ class PushService : Service() {
         val languageCode = settingsRepo.language.first()
         val isRussian = languageCode == "ru"
         
-        val latestEmail = newEmails.maxByOrNull { it.id }
+        val latestEmail = newEmails.firstOrNull()
         val senderName = latestEmail?.senderName?.takeIf { it.isNotBlank() } 
             ?: latestEmail?.senderEmail?.substringBefore("@")
         val subject = latestEmail?.subject?.takeIf { it.isNotBlank() }
@@ -981,7 +977,7 @@ class PushService : Service() {
         val uniqueRequestCode = if (count == 1 && latestEmail != null) {
             latestEmail.id.hashCode()
         } else {
-            accountId.toInt() + 10000
+            100_000 + accountId.toInt()
         }
         
         val pendingIntent = PendingIntent.getActivity(
@@ -1017,7 +1013,7 @@ class PushService : Service() {
         }
         
         // Кнопка «Прочитано» — помечает письма как прочитанные на сервере
-        val notificationId = 3000 + accountId.toInt()
+        val notificationId = 200_000 + accountId.toInt()
         val markReadIntent = Intent(this, MailNotificationActionReceiver::class.java).apply {
             action = MailNotificationActionReceiver.ACTION_MARK_READ
             putExtra(MailNotificationActionReceiver.EXTRA_ACCOUNT_ID, accountId)

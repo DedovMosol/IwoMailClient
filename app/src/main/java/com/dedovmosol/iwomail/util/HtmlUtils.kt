@@ -26,13 +26,27 @@ object HtmlRegex {
     val SCRIPT = Regex("<script[^>]*>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
     val COMMENT = Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL)
     val TAG = Regex("<[^>]+>")
-    val HTML_ENTITY = Regex("&#\\d+;")
+    val HTML_ENTITY = Regex("&#x?[0-9a-fA-F]+;")
     val HEAD = Regex("<head[^>]*>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
     val P_OPEN = Regex("<p[^>]*>", RegexOption.IGNORE_CASE)
     val P_CLOSE = Regex("</p>", RegexOption.IGNORE_CASE)
     val NUMERIC_ENTITY = Regex("&#(\\d+);")
     val BLANK_LINES = Regex("[ \\t]*\\n[ \\t]*")
     val MULTI_NEWLINES = Regex("\\n{3,}")
+
+    fun decodeNumericEntity(match: MatchResult): String {
+        return try {
+            val raw = match.value.drop(2).dropLast(1)
+            val code = if (raw.startsWith("x", ignoreCase = true)) {
+                raw.drop(1).toInt(16)
+            } else {
+                raw.toInt()
+            }
+            code.toChar().toString()
+        } catch (_: Exception) {
+            match.value
+        }
+    }
 }
 
 /**
@@ -58,9 +72,7 @@ fun stripHtmlIfNeeded(text: String): String {
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
-        .replace(HtmlRegex.NUMERIC_ENTITY) { match ->
-            try { match.groupValues[1].toInt().toChar().toString() } catch (_: Exception) { "" }
-        }
+        .replace(HtmlRegex.HTML_ENTITY) { HtmlRegex.decodeNumericEntity(it) }
         .replace(HtmlRegex.BLANK_LINES, "\n")
         .replace(HtmlRegex.MULTI_NEWLINES, "\n\n")
         .trim()

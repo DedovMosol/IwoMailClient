@@ -38,23 +38,23 @@ class TaskReminderReceiver : BroadcastReceiver() {
             ACTION_TASK_MARK_READ -> {
                 // Закрываем уведомление мгновенно (UI-операция, не требует goAsync)
                 val notificationManager = context.getSystemService(NotificationManager::class.java)
-                notificationManager.cancel(NOTIFICATION_ID_BASE + (taskId.hashCode() and 0x7FFFFFFF))
+                notificationManager.cancel(NOTIFICATION_ID_BASE + safeHashForId(taskId))
                 
                 // Серверную работу делегируем WorkManager — надёжно на MIUI/HyperOS/EMUI
                 MarkTaskCompleteWorker.enqueue(context, taskId)
             }
             ACTION_TASK_REMINDER -> {
-                // Чтение из БД + показ уведомления — лёгкая операция, goAsync достаточно
                 val pendingResult = goAsync()
                 val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
                 localScope.launch {
                     try {
-                        withTimeoutOrNull(25_000) {
+                        withTimeoutOrNull(8_000) {
                             val database = MailDatabase.getInstance(context)
                             val task = database.taskDao().getTask(taskId)
                             if (task != null && !task.complete) {
                                 showNotification(context, task)
                             }
+                            RescheduleRemindersWorker.enqueue(context)
                         }
                     } finally {
                         localScope.cancel()
@@ -73,7 +73,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("open_tasks", true)
         }
-        val safeHash = task.id.hashCode() and 0x7FFFFFFF
+        val safeHash = safeHashForId(task.id)
         val contentPendingIntent = PendingIntent.getActivity(
             context,
             safeHash + REQUEST_CODE_CONTENT,
@@ -128,7 +128,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
             .build()
         
-        val notificationId = NOTIFICATION_ID_BASE + (task.id.hashCode() and 0x7FFFFFFF)
+        val notificationId = NOTIFICATION_ID_BASE + safeHashForId(task.id)
         notificationManager.notify(notificationId, notification)
     }
     
@@ -136,9 +136,11 @@ class TaskReminderReceiver : BroadcastReceiver() {
         const val ACTION_TASK_REMINDER = "com.dedovmosol.iwomail.TASK_REMINDER"
         const val ACTION_TASK_MARK_READ = "com.dedovmosol.iwomail.TASK_MARK_READ"
         const val EXTRA_TASK_ID = "task_id"
-        private const val NOTIFICATION_ID_BASE = 4000
-        private const val REQUEST_CODE_CONTENT = 40_000
-        private const val REQUEST_CODE_MARK_READ = 50_000
+        private const val NOTIFICATION_ID_BASE = 20_000_000
+        private const val REQUEST_CODE_CONTENT = 22_000_000
+        private const val REQUEST_CODE_MARK_READ = 24_000_000
+        
+        private fun safeHashForId(id: String): Int = (id.hashCode() and 0x7FFFFFFF) % 1_000_000
         
         /**
          * Планирует напоминание для задачи.
@@ -158,27 +160,25 @@ class TaskReminderReceiver : BroadcastReceiver() {
             
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                task.id.hashCode() and 0x7FFFFFFF,
+                safeHashForId(task.id),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        task.reminderTime,
-                        pendingIntent
-                    )
-                } else {
-                    alarmManager.setExact(
-                        AlarmManager.RTC_WAKEUP,
-                        task.reminderTime,
-                        pendingIntent
-                    )
-                }
-            } catch (_: SecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                 alarmManager.set(AlarmManager.RTC_WAKEUP, task.reminderTime, pendingIntent)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    task.reminderTime,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    task.reminderTime,
+                    pendingIntent
+                )
             }
         }
         
@@ -195,7 +195,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                taskId.hashCode() and 0x7FFFFFFF,
+                safeHashForId(taskId),
                 intent,
                 PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
             )
@@ -203,15 +203,24 @@ class TaskReminderReceiver : BroadcastReceiver() {
             pendingIntent?.let { alarmManager.cancel(it) }
         }
         
+        private const val MAX_SCHEDULED_REMINDERS = 50
+
         /**
-         * Перепланирует все напоминания для задач.
+         * Планирует напоминания для ближайших задач (до MAX_SCHEDULED_REMINDERS).
+         * Ограничение из-за лимита 500 AlarmManager на UID (MIUI/HyperOS, Samsung, OPPO).
          */
         fun rescheduleAllReminders(context: Context, tasks: List<TaskEntity>) {
             val now = System.currentTimeMillis()
-            
-            tasks.forEach { task ->
-                if (task.reminderSet && task.reminderTime > now && !task.complete) {
+            val eligible = tasks
+                .filter { it.reminderSet && it.reminderTime > now && !it.complete }
+                .sortedBy { it.reminderTime }
+                .take(MAX_SCHEDULED_REMINDERS)
+
+            eligible.forEach { task ->
+                try {
                     scheduleReminder(context, task)
+                } catch (e: Exception) {
+                    android.util.Log.w("TaskReminder", "Failed to schedule alarm for ${task.id}: ${e.message}")
                 }
             }
         }

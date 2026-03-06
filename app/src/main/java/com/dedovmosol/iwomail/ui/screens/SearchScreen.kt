@@ -143,12 +143,20 @@ fun SearchScreen(
         activeAccount?.let { account ->
             searchJob?.cancel()
             searchJob = scope.launch {
-                isSearching = true
-                selectedIds = emptySet()
-                val results = mailRepo.search(account.id, query)
-                allResults = results
-                searchResultIds = results.map { it.id }
-                isSearching = false
+                try {
+                    isSearching = true
+                    selectedIds = emptySet()
+                    val results = mailRepo.search(account.id, query)
+                    allResults = results
+                    searchResultIds = results.map { it.id }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.e("SearchScreen", "Search failed", e)
+                    allResults = emptyList()
+                    searchResultIds = emptyList()
+                } finally {
+                    isSearching = false
+                }
             }
         }
     }
@@ -348,6 +356,8 @@ fun SearchScreen(
                 else -> 4
             }
             
+            val listState = rememberLazyListState()
+            
             AnimatedContent(
                 targetState = contentState,
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -379,7 +389,6 @@ fun SearchScreen(
                             }
                         }
                         else -> {
-                            val listState = rememberLazyListState()
                             
                             Box(modifier = Modifier.fillMaxSize()) {
                             LazyColumn(state = listState) {

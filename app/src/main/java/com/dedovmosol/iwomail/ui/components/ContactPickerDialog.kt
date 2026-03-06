@@ -45,12 +45,13 @@ fun ContactPickerDialog(
     onContactsSelected: (List<String>) -> Unit, // Список email адресов
     onGroupsSelected: (List<Triple<String, List<String>, Int>>) -> Unit = {} // Список (groupName, emails, color)
 ) {
-    // Вкладки: 0=Личные, 1=Организация, 2=Группы
+    // Вкладки: 0=Личные, 1=Exchange, 2=GAL, 3=Группы
     var selectedTab by remember { mutableIntStateOf(0) }
     
     // Контакты
     var localContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
-    var exchangeContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
+    var exchangeFolderContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
+    var galContactsList by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     
     // Группы
@@ -71,12 +72,12 @@ fun ContactPickerDialog(
         val ownEmailLower = ownEmail.lowercase()
         isLoading = true
         withContext(Dispatchers.IO) {
-            localContacts = database.contactDao().searchContacts(accountId, "", 2000)
-                .filter { it.source == ContactSource.LOCAL }
+            val allContacts = database.contactDao().searchContacts(accountId, "", 5000)
                 .filter { ownEmailLower.isBlank() || it.email.lowercase() != ownEmailLower }
-            exchangeContacts = database.contactDao().searchContacts(accountId, "", 2000)
-                .filter { it.source == ContactSource.EXCHANGE }
-                .filter { ownEmailLower.isBlank() || it.email.lowercase() != ownEmailLower }
+            localContacts = allContacts.filter { it.source == ContactSource.LOCAL }
+            val prefix = "${accountId}_"
+            exchangeFolderContacts = allContacts.filter { it.source == ContactSource.EXCHANGE && it.id.startsWith("${prefix}exchange_") }
+            galContactsList = allContacts.filter { it.source == ContactSource.EXCHANGE && it.id.startsWith("${prefix}gal_") }
             // Загружаем группы и считаем контакты в каждой
             groups = database.contactGroupDao().getGroupsByAccountList(accountId)
             val counts = mutableMapOf<String, Int>()
@@ -95,9 +96,14 @@ fun ContactPickerDialog(
     }
     
     // Фильтрация по поиску
-    val filteredContacts = remember(selectedTab, searchQuery, localContacts, exchangeContacts) {
-        if (selectedTab == 2) return@remember emptyList() // Группы — отдельная логика
-        val contacts = if (selectedTab == 0) localContacts else exchangeContacts
+    val filteredContacts = remember(selectedTab, searchQuery, localContacts, exchangeFolderContacts, galContactsList) {
+        if (selectedTab == 3) return@remember emptyList()
+        val contacts = when (selectedTab) {
+            0 -> localContacts
+            1 -> exchangeFolderContacts
+            2 -> galContactsList
+            else -> emptyList()
+        }
         if (searchQuery.isBlank()) {
             contacts
         } else {
@@ -110,7 +116,7 @@ fun ContactPickerDialog(
     }
     
     val filteredGroups = remember(selectedTab, searchQuery, groups) {
-        if (selectedTab != 2) return@remember emptyList()
+        if (selectedTab != 3) return@remember emptyList()
         if (searchQuery.isBlank()) {
             groups
         } else {
@@ -209,59 +215,30 @@ fun ContactPickerDialog(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // Вкладки
-                ScrollableTabRow(
+                // Вкладки: Личные | Exchange | GAL | Группы
+                TabRow(
                     selectedTabIndex = selectedTab,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    edgePadding = 8.dp
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
-                    // Вкладка "Личные"
                     Tab(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    AppIcons.Person,
-                                    null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("${Strings.personalContacts} (${localContacts.size})")
-                            }
-                        }
+                        text = { Text("${Strings.personalContacts} (${localContacts.size})", maxLines = 1) }
                     )
-                    // Вкладка "Организация"
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    AppIcons.Business,
-                                    null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("${Strings.organization} (${exchangeContacts.size})")
-                            }
-                        }
+                        text = { Text("${Strings.exchangeContacts} (${exchangeFolderContacts.size})", maxLines = 1) }
                     )
-                    // Вкладка "Группы"
                     Tab(
                         selected = selectedTab == 2,
                         onClick = { selectedTab = 2 },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    AppIcons.People,
-                                    null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("${Strings.contactGroups} (${groups.size})")
-                            }
-                        }
+                        text = { Text("${Strings.galContacts} (${galContactsList.size})", maxLines = 1) }
+                    )
+                    Tab(
+                        selected = selectedTab == 3,
+                        onClick = { selectedTab = 3 },
+                        text = { Text("${Strings.contactGroups} (${groups.size})", maxLines = 1) }
                     )
                 }
                 
@@ -273,7 +250,7 @@ fun ContactPickerDialog(
                     ) {
                         CircularProgressIndicator()
                     }
-                } else if (selectedTab == 2) {
+                } else if (selectedTab == 3) {
                     // Вкладка групп
                     if (filteredGroups.isEmpty()) {
                         Box(

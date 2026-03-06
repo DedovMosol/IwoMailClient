@@ -28,23 +28,9 @@ class EwsClient(
     private val httpClient: OkHttpClient,
     private val ntlmAuth: NtlmAuthenticator
 ) {
-    companion object {
-        private const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
-        private const val SOAP_ACTION_PREFIX = "http://schemas.microsoft.com/exchange/services/2006/messages/"
-        
-        // EWS версии
-        const val VERSION_2007 = "Exchange2007_SP1"
-    }
-    
-    // Кэш для NTLM auth header (избегаем повторных handshake)
-    private var cachedNtlmAuth: String? = null
-    private var ntlmAuthTimestamp: Long = 0
-    private val ntlmCacheTimeout = 5 * 60 * 1000L // 5 минут
-    
-    /**
-     * Версия Exchange сервера для EWS запросов
-     */
-    var serverVersion: String = VERSION_2007
+    private val ntlmLock = Any()
+    @Volatile var serverVersion: String = VERSION_2007
+        private set
     
     // ==================== Низкоуровневые методы ====================
     
@@ -71,18 +57,10 @@ class EwsClient(
                 
                 EwsResult.Error("Не удалось выполнить EWS запрос: аутентификация не удалась")
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EwsResult.Error("EWS ошибка: ${e.message}")
             }
         }
-    }
-    
-    /**
-     * Проверяет что NTLM доступен (просто возвращает маркер)
-     * Реальный NTLM handshake делается в executeNtlmRequest
-     */
-    suspend fun performNtlmHandshake(soapRequest: String, action: String): String? {
-        // Маркер что NTLM доступен - реальный handshake в executeNtlmRequest
-        return "NTLM_OK"
     }
     
     /**
@@ -95,80 +73,66 @@ class EwsClient(
     suspend fun executeNtlmRequest(soapRequest: String, authHeader: String, action: String): String? {
         android.util.Log.d("NTM", "executeNtlmRequest START action=$action, url=$ewsUrl")
         return withContext(Dispatchers.IO) {
-            try {
-                // === Шаг 1: Type 1 (Negotiate) ===
-                android.util.Log.d("NTM", "Step 1: Type1 Negotiate")
-                val request1 = Request.Builder()
-                    .url(ewsUrl)
-                    .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
-                    .header("Authorization", ntlmAuth.createType1AuthHeader())
-                    .header("Content-Type", CONTENT_TYPE_XML)
-                    .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
-                    .header("Connection", "keep-alive")
-                    .build()
-                
-                val response1 = httpClient.newCall(request1).execute()
-                android.util.Log.d("NTM", "Step 1 response: code=${response1.code}")
-                
-                val wwwAuth: String
-                response1.use { resp1 ->
-                    if (resp1.code != 401) {
-                        // Если не 401, возможно сервер принял без NTLM
-                        if (resp1.isSuccessful) {
-                            val body = resp1.body?.string()
-                            android.util.Log.d("NTM", "Step 1 SUCCESS (no NTLM needed)")
-                            return@withContext body
-                        }
-                        android.util.Log.e("NTM", "Step 1 unexpected code: ${resp1.code}")
-                        return@withContext null
-                    }
-                    // === Шаг 2: Получаем Type 2 (Challenge) ===
-                    wwwAuth = resp1.header("WWW-Authenticate") ?: ""
+            var lastException: Exception? = null
+            for (attempt in 0..1) {
+                try {
+                    val result = executeNtlmHandshake(soapRequest, action)
+                    if (result != null || attempt > 0) return@withContext result
+                    android.util.Log.w("NTM", "NTLM attempt $attempt returned null, retrying")
+                } catch (e: Exception) {
+                    lastException = e
+                    android.util.Log.w("NTM", "NTLM attempt $attempt failed: ${e.message}")
+                    if (attempt == 0) continue else break
                 }
-                android.util.Log.d("NTM", "Step 2: Got WWW-Authenticate header, length=${wwwAuth.length}")
-                
-                val type2Message = ntlmAuth.parseType2FromHeader(wwwAuth)
-                if (type2Message == null) {
-                    android.util.Log.e("NTM", "Cannot parse Type2 from: ${wwwAuth.take(100)}")
-                    return@withContext null
+            }
+            android.util.Log.e("NTM", "NTLM all attempts failed", lastException)
+            null
+        }
+    }
+
+    private fun executeNtlmHandshake(soapRequest: String, action: String): String? = synchronized(ntlmLock) {
+        val request1 = Request.Builder()
+            .url(ewsUrl)
+            .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
+            .header("Authorization", ntlmAuth.createType1AuthHeader())
+            .header("Content-Type", CONTENT_TYPE_XML)
+            .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
+            .header("Connection", "keep-alive")
+            .build()
+        
+        val response1 = httpClient.newCall(request1).execute()
+        
+        if (response1.code != 401) {
+            return@synchronized response1.use { if (it.isSuccessful) it.body?.string() else null }
+        }
+        val wwwAuth = response1.header("WWW-Authenticate")
+        response1.body?.close()
+
+        if (wwwAuth == null) return@synchronized null
+
+        val type2Message = ntlmAuth.parseType2FromHeader(wwwAuth)
+            ?: return@synchronized null
+        val type3Header = ntlmAuth.createType3AuthHeader(type2Message)
+        
+        val request3 = Request.Builder()
+            .url(ewsUrl)
+            .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
+            .header("Authorization", type3Header)
+            .header("Content-Type", CONTENT_TYPE_XML)
+            .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
+            .header("Connection", "keep-alive")
+            .build()
+        
+        return@synchronized httpClient.newCall(request3).execute().use { response3 ->
+            if (response3.isSuccessful) {
+                response3.body?.string()
+            } else {
+                val errorBody = response3.body?.string()
+                if (response3.code == 500 && errorBody != null && errorBody.contains("soap", ignoreCase = true)) {
+                    errorBody
+                } else {
+                    null
                 }
-                android.util.Log.d("NTM", "Step 2: Type2 parsed OK")
-                
-                // === Шаг 3: Type 3 (Authenticate) + финальный запрос ===
-                val type3Header = ntlmAuth.createType3AuthHeader(type2Message)
-                android.util.Log.d("NTM", "Step 3: Type3 created, sending final request")
-                
-                val request3 = Request.Builder()
-                    .url(ewsUrl)
-                    .post(soapRequest.toRequestBody(CONTENT_TYPE_XML.toMediaType()))
-                    .header("Authorization", type3Header)
-                    .header("Content-Type", CONTENT_TYPE_XML)
-                    .header("SOAPAction", "\"$SOAP_ACTION_PREFIX$action\"")
-                    .header("Connection", "keep-alive")
-                    .build()
-                
-                httpClient.newCall(request3).execute().use { response3 ->
-                    android.util.Log.d("NTM", "Step 3 response: code=${response3.code}")
-                    
-                    if (response3.isSuccessful) {
-                        val body = response3.body?.string()
-                        android.util.Log.d("NTM", "Step 3 SUCCESS, body length=${body?.length ?: 0}")
-                        body
-                    } else {
-                        // HTTP 500 от EWS часто содержит SOAP Fault с описанием ошибки
-                        val errorBody = response3.body?.string()
-                        android.util.Log.e("NTM", "Step 3 FAILED: HTTP ${response3.code}, bodyLen=${errorBody?.length ?: 0}")
-                        // Для HTTP 500 пробуем вернуть тело - там может быть валидный SOAP с ошибкой
-                        if (response3.code == 500 && errorBody != null && errorBody.contains("soap")) {
-                            errorBody
-                        } else {
-                            null
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("NTM", "NTLM EXCEPTION: ${e.message}", e)
-                null
             }
         }
     }
@@ -221,15 +185,15 @@ class EwsClient(
         baseShape: String = "AllProperties"
     ): EwsResult<String> {
         val folderIdXml = if (isDistinguished) {
-            """<t:DistinguishedFolderId Id="$folderId"/>"""
+            """<t:DistinguishedFolderId Id="${XmlUtils.escape(folderId)}"/>"""
         } else {
-            """<t:FolderId Id="$folderId"/>"""
+            """<t:FolderId Id="${XmlUtils.escape(folderId)}"/>"""
         }
         
         val body = """
             <m:FindItem Traversal="Shallow">
                 <m:ItemShape>
-                    <t:BaseShape>$baseShape</t:BaseShape>
+                    <t:BaseShape>${XmlUtils.escape(baseShape)}</t:BaseShape>
                 </m:ItemShape>
                 <m:IndexedPageItemView MaxEntriesReturned="$maxEntries" Offset="0" BasePoint="Beginning"/>
                 <m:ParentFolderIds>
@@ -252,11 +216,11 @@ class EwsClient(
         val body = """
             <GetItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages">
                 <ItemShape>
-                    <t:BaseShape>$baseShape</t:BaseShape>
-                    <t:BodyType>$bodyType</t:BodyType>
+                    <t:BaseShape>${XmlUtils.escape(baseShape)}</t:BaseShape>
+                    <t:BodyType>${XmlUtils.escape(bodyType)}</t:BodyType>
                 </ItemShape>
                 <ItemIds>
-                    <t:ItemId Id="${escapeXml(itemId)}"/>
+                    <t:ItemId Id="${XmlUtils.escape(itemId)}"/>
                 </ItemIds>
             </GetItem>
         """.trimIndent()
@@ -273,14 +237,14 @@ class EwsClient(
         baseShape: String = "AllProperties"
     ): EwsResult<String> {
         val itemIdsXml = itemIds.joinToString("\n") { 
-            """<t:ItemId Id="${escapeXml(it)}"/>""" 
+            """<t:ItemId Id="${XmlUtils.escape(it)}"/>""" 
         }
         
         val body = """
             <GetItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages">
                 <ItemShape>
-                    <t:BaseShape>$baseShape</t:BaseShape>
-                    <t:BodyType>$bodyType</t:BodyType>
+                    <t:BaseShape>${XmlUtils.escape(baseShape)}</t:BaseShape>
+                    <t:BodyType>${XmlUtils.escape(bodyType)}</t:BodyType>
                 </ItemShape>
                 <ItemIds>
                     $itemIdsXml
@@ -301,16 +265,17 @@ class EwsClient(
         messageDisposition: String = "SaveOnly"
     ): EwsResult<String> {
         val folderXml = if (folderId != null) {
+            val safeFolderId = XmlUtils.escape(folderId)
             val folderIdXml = if (isDistinguishedFolder) {
-                """<t:DistinguishedFolderId Id="$folderId"/>"""
+                """<t:DistinguishedFolderId Id="$safeFolderId"/>"""
             } else {
-                """<t:FolderId Id="$folderId"/>"""
+                """<t:FolderId Id="$safeFolderId"/>"""
             }
             """<m:SavedItemFolderId>$folderIdXml</m:SavedItemFolderId>"""
         } else ""
         
         val body = """
-            <m:CreateItem MessageDisposition="$messageDisposition">
+            <m:CreateItem MessageDisposition="${XmlUtils.escape(messageDisposition)}">
                 $folderXml
                 <m:Items>
                     $itemXml
@@ -330,13 +295,13 @@ class EwsClient(
         sendMeetingCancellations: String? = null
     ): EwsResult<String> {
         val meetingAttr = if (sendMeetingCancellations != null) {
-            """ SendMeetingCancellations="$sendMeetingCancellations""""
+            """ SendMeetingCancellations="${XmlUtils.escape(sendMeetingCancellations)}""""
         } else ""
-        
+
         val body = """
-            <m:DeleteItem DeleteType="$deleteType"$meetingAttr>
+            <m:DeleteItem DeleteType="${XmlUtils.escape(deleteType)}"$meetingAttr>
                 <m:ItemIds>
-                    <t:ItemId Id="${escapeXml(itemId)}"/>
+                    <t:ItemId Id="${XmlUtils.escape(itemId)}"/>
                 </m:ItemIds>
             </m:DeleteItem>
         """.trimIndent()
@@ -355,14 +320,14 @@ class EwsClient(
         messageDisposition: String = "SaveOnly"
     ): EwsResult<String> {
         val changeKeyAttr = if (changeKey != null) {
-            """ ChangeKey="${escapeXml(changeKey)}""""
+            """ ChangeKey="${XmlUtils.escape(changeKey)}""""
         } else ""
         
         val body = """
-            <m:UpdateItem MessageDisposition="$messageDisposition" ConflictResolution="$conflictResolution">
+            <m:UpdateItem MessageDisposition="${XmlUtils.escape(messageDisposition)}" ConflictResolution="${XmlUtils.escape(conflictResolution)}">
                 <m:ItemChanges>
                     <t:ItemChange>
-                        <t:ItemId Id="${escapeXml(itemId)}"$changeKeyAttr/>
+                        <t:ItemId Id="${XmlUtils.escape(itemId)}"$changeKeyAttr/>
                         <t:Updates>
                             $updates
                         </t:Updates>
@@ -382,10 +347,11 @@ class EwsClient(
         destinationFolderId: String,
         isDistinguishedFolder: Boolean = true
     ): EwsResult<String> {
+        val safeDestId = XmlUtils.escape(destinationFolderId)
         val folderIdXml = if (isDistinguishedFolder) {
-            """<t:DistinguishedFolderId Id="$destinationFolderId"/>"""
+            """<t:DistinguishedFolderId Id="$safeDestId"/>"""
         } else {
-            """<t:FolderId Id="$destinationFolderId"/>"""
+            """<t:FolderId Id="$safeDestId"/>"""
         }
         
         val body = """
@@ -394,7 +360,7 @@ class EwsClient(
                     $folderIdXml
                 </m:ToFolderId>
                 <m:ItemIds>
-                    <t:ItemId Id="${escapeXml(itemId)}"/>
+                    <t:ItemId Id="${XmlUtils.escape(itemId)}"/>
                 </m:ItemIds>
             </m:MoveItem>
         """.trimIndent()
@@ -434,11 +400,19 @@ class EwsClient(
     }
     
     /**
+     * Выполняет NTLM handshake и возвращает маркер доступности NTLM.
+     * Реальный 3-step handshake (Type1→Type2→Type3) выполняется внутри executeNtlmRequest,
+     * т.к. все шаги ДОЛЖНЫ идти в одном TCP соединении.
+     */
+    suspend fun performNtlmHandshake(soapRequest: String, action: String): String? {
+        return ""
+    }
+
+    /**
      * Выполняет запрос с NTLM аутентификацией
      */
     private suspend fun executeNtlm(soapRequest: String, action: String): String? {
-        val authHeader = performNtlmHandshake(soapRequest, action) ?: return null
-        return executeNtlmRequest(soapRequest, authHeader, action)
+        return executeNtlmRequest(soapRequest, "", action)
     }
     
     /**
@@ -449,27 +423,20 @@ class EwsClient(
     }
     
     /**
-     * Экранирует XML специальные символы
-     */
-    private fun escapeXml(text: String): String {
-        return text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
-    }
-    
-    /**
      * Проверяет успешность ответа
      */
     fun isSuccessResponse(responseXml: String): Boolean {
-        // КРИТИЧНО: Проверяем ОБА условия (ResponseClass="Success" И ResponseCode="NoError")
-        // EWS может вернуть Success с ErrorItemNotFound!
-        val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-        val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                        responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
+        val hasSuccess = RESPONSE_SUCCESS_PATTERN.containsMatchIn(responseXml)
+        val hasNoError = RESPONSE_NO_ERROR_PATTERN.containsMatchIn(responseXml)
         return hasSuccess && hasNoError
+    }
+
+    companion object {
+        private const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
+        private const val SOAP_ACTION_PREFIX = "http://schemas.microsoft.com/exchange/services/2006/messages/"
+        const val VERSION_2007 = "Exchange2007_SP1"
+        private val RESPONSE_SUCCESS_PATTERN = Regex("""<\w+[^>]+ResponseClass="Success"""")
+        private val RESPONSE_NO_ERROR_PATTERN = Regex("""<(?:m:)?ResponseCode>NoError</(?:m:)?ResponseCode>""")
     }
     
     /**
@@ -502,13 +469,6 @@ class EwsClient(
         return messageText ?: responseCode ?: "Unknown EWS error"
     }
     
-    /**
-     * Сбрасывает кэш NTLM аутентификации
-     */
-    fun clearAuthCache() {
-        cachedNtlmAuth = null
-        ntlmAuthTimestamp = 0
-    }
 }
 
 /**

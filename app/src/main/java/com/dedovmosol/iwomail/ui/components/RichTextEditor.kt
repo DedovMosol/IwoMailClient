@@ -151,8 +151,22 @@ class RichTextEditorController {
         execJs("insertImageBase64('$base64', '$escapedMime')")
     }
     fun setHtml(html: String) {
-        val escaped = html.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+        val sanitized = stripDangerousTags(html)
+        val escaped = sanitized.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
         execJs("setHtml(\"$escaped\")")
+    }
+    
+    internal fun stripDangerousTags(html: String): String {
+        return html
+            .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<script[^>]*/>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<iframe[^>]*>[\\s\\S]*?</iframe>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<iframe[^>]*/>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<object[^>]*>[\\s\\S]*?</object>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<embed[^>]*/?>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<applet[^>]*>[\\s\\S]*?</applet>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<base[^>]*/?>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<link[^>]*/?>", RegexOption.IGNORE_CASE), "")
     }
     fun focus() = execJs("focusEditor()")
     fun checkFormatState() = execJs("checkFormatState()")
@@ -701,8 +715,30 @@ fun RichTextEditor(
                     Android.onHtmlChanged(editor.innerHTML);
                 }
                 
+                function sanitizeHtml(html) {
+                    var temp = document.createElement('div');
+                    temp.innerHTML = html;
+                    var dangerous = temp.querySelectorAll('script, iframe, object, embed, applet, meta[http-equiv], form, base, link');
+                    for (var i = 0; i < dangerous.length; i++) dangerous[i].parentNode.removeChild(dangerous[i]);
+                    var all = temp.querySelectorAll('*');
+                    for (var j = 0; j < all.length; j++) {
+                        var attrs = [];
+                        for (var k = 0; k < all[j].attributes.length; k++) attrs.push(all[j].attributes[k].name);
+                        for (var m = 0; m < attrs.length; m++) {
+                            var name = attrs[m].toLowerCase();
+                            if (name.indexOf('on') === 0) { all[j].removeAttribute(attrs[m]); continue; }
+                            var val_ = (all[j].getAttribute(attrs[m]) || '').trim().toLowerCase();
+                            if ((name === 'href' || name === 'src' || name === 'action') && 
+                                (val_.indexOf('javascript:') === 0 || val_.indexOf('data:text/html') === 0 || val_.indexOf('vbscript:') === 0)) {
+                                all[j].removeAttribute(attrs[m]);
+                            }
+                        }
+                    }
+                    return temp.innerHTML;
+                }
+                
                 function setHtml(html) {
-                    editor.innerHTML = html;
+                    editor.innerHTML = sanitizeHtml(html);
                     // Не вызываем onHtmlChanged чтобы избежать цикла
                     // Но обновляем состояние форматирования
                     setTimeout(function() {
@@ -862,6 +898,9 @@ fun RichTextEditor(
             fun onHtmlChanged(html: String) {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     lastHtmlFromWebView.value = html
+                    if (html.length < 500_000) {
+                        webViewStateBundle.putString("editor_html", html)
+                    }
                     onHtmlChangedRef.value(html)
                 }
             }
@@ -973,12 +1012,12 @@ fun RichTextEditor(
                         view?.animate()?.alpha(1f)?.setDuration(150)?.start()
                         isLoaded = true
                         controller.isLoaded = true
-                        // Устанавливаем начальный HTML после загрузки
-                        // Используем initialHtmlRef.value чтобы получить актуальное значение
-                        val currentInitialHtml = initialHtmlRef.value
+                        val savedHtml = webViewStateBundle.getString("editor_html")
+                        val currentInitialHtml = if (!savedHtml.isNullOrEmpty()) savedHtml else initialHtmlRef.value
                         if (currentInitialHtml.isNotEmpty()) {
                             lastHtmlFromWebView.value = currentInitialHtml
-                            val escapedHtml = currentInitialHtml
+                            val sanitizedHtml = controller.stripDangerousTags(currentInitialHtml)
+                            val escapedHtml = sanitizedHtml
                                 .replace("\\", "\\\\")
                                 .replace("\"", "\\\"")
                                 .replace("'", "\\'")

@@ -57,11 +57,20 @@ fun AccountSettingsScreen(
     
     var account by remember { mutableStateOf<AccountEntity?>(null) }
     var signatures by remember { mutableStateOf<List<com.dedovmosol.iwomail.data.database.SignatureEntity>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
     
-    // Загружаем аккаунт
     LaunchedEffect(accountId) {
+        isLoading = true
         account = accountRepo.getAccount(accountId)
         signatures = database.signatureDao().getSignaturesByAccountList(accountId)
+        isLoading = false
+    }
+    
+    if (isLoading) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
     }
     
     val currentAccount = account ?: return
@@ -135,12 +144,14 @@ fun AccountSettingsScreen(
                 try {
                     val validExtensions = listOf("cer", "crt", "pem", "der", "p12", "pfx", "p7b", "p7c")
                     var originalFileName: String? = null
-                    val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                    cursor?.use {
-                        if (it.moveToFirst()) {
-                            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            if (nameIndex >= 0) {
-                                originalFileName = it.getString(nameIndex)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                if (nameIndex >= 0) {
+                                    originalFileName = it.getString(nameIndex)
+                                }
                             }
                         }
                     }
@@ -256,12 +267,14 @@ fun AccountSettingsScreen(
                 try {
                     val validExtensions = listOf("p12", "pfx")
                     var originalFileName: String? = null
-                    val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                    cursor?.use {
-                        if (it.moveToFirst()) {
-                            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            if (nameIndex >= 0) {
-                                originalFileName = it.getString(nameIndex)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                if (nameIndex >= 0) {
+                                    originalFileName = it.getString(nameIndex)
+                                }
                             }
                         }
                     }

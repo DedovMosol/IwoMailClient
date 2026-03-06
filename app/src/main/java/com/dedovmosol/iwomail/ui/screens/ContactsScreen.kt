@@ -53,6 +53,15 @@ import com.dedovmosol.iwomail.ui.utils.getAvatarColor
 import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
 import kotlinx.coroutines.launch
 
+private val BRACKET_EMAIL_RE = Regex("<([^>]+@[^>]+)>")
+private val SIMPLE_EMAIL_RE = Regex("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}")
+private fun cleanContactEmail(raw: String): String {
+    if (raw.isBlank()) return ""
+    BRACKET_EMAIL_RE.find(raw)?.groupValues?.get(1)?.let { return it.trim() }
+    SIMPLE_EMAIL_RE.find(raw)?.value?.let { return it }
+    return raw.trim()
+}
+
 private val GROUP_COLORS = listOf(
     0xFF1976D2.toInt(), 0xFFD32F2F.toInt(), 0xFF388E3C.toInt(), 0xFFF57C00.toInt(),
     0xFF7B1FA2.toInt(), 0xFF0097A7.toInt(), 0xFFC2185B.toInt(), 0xFF5D4037.toInt(),
@@ -75,9 +84,8 @@ fun ContactsScreen(
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
     
-    // Вкладки
+    // Вкладки: Личные | Exchange (папка Contacts) | GAL (адресная книга)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    val tabs = listOf(Strings.personalContacts, Strings.organization)
     
     // Личные контакты - используем key чтобы пересоздавать Flow при смене accountId
     val localContacts by remember(accountId) { contactRepo.getLocalContacts(accountId) }.collectAsState(initial = emptyList())
@@ -99,25 +107,52 @@ fun ContactsScreen(
     // Избранные контакты
     val favoriteContacts by remember(accountId) { contactRepo.getFavoriteContacts(accountId) }.collectAsState(initial = emptyList())
     
-    // Exchange контакты из БД (синхронизированные в фоне)
-    val exchangeContacts by remember(accountId) { contactRepo.getExchangeContacts(accountId) }.collectAsState(initial = emptyList())
+    // Tab 1: Exchange Folder контакты (папка Contacts на сервере)
+    val exchangeFolderContacts by remember(accountId) { contactRepo.getExchangeFolderContacts(accountId) }.collectAsState(initial = emptyList())
     var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedExchangeSearch by rememberDebouncedState(exchangeSearchQuery)
-    var isSyncing by remember { mutableStateOf(false) }
-    var syncError by remember { mutableStateOf<String?>(null) }
+    var isExchangeSyncing by remember { mutableStateOf(false) }
+    var exchangeSyncError by remember(accountId) { mutableStateOf<String?>(null) }
     
-    var initialSyncDone by rememberSaveable { mutableStateOf(false) }
+    // Tab 2: GAL контакты (глобальная адресная книга)
+    val galContacts by remember(accountId) { contactRepo.getGalContacts(accountId) }.collectAsState(initial = emptyList())
+    var galSearchQuery by rememberSaveable { mutableStateOf("") }
+    val debouncedGalSearch by rememberDebouncedState(galSearchQuery)
+    var isGalSyncing by remember { mutableStateOf(false) }
+    var galSyncError by remember(accountId) { mutableStateOf<String?>(null) }
+    
+    var initialExchangeSyncDone by rememberSaveable(accountId) { mutableStateOf(false) }
+    var initialGalSyncDone by rememberSaveable(accountId) { mutableStateOf(false) }
+    
+    // Автоматическая синхронизация Exchange при первом открытии
     LaunchedEffect(accountId) {
-        if (accountId > 0 && !initialSyncDone && !isSyncing) {
-            initialSyncDone = true
-            isSyncing = true
+        if (accountId > 0 && !initialExchangeSyncDone && !isExchangeSyncing) {
+            initialExchangeSyncDone = true
+            isExchangeSyncing = true
             try {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    contactRepo.syncExchangeContacts(accountId)
-                    contactRepo.syncGalContactsToDb(accountId)
-                }
+                contactRepo.syncExchangeContacts(accountId)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
             } finally {
-                isSyncing = false
+                isExchangeSyncing = false
+            }
+        }
+    }
+    
+    // Автоматическая синхронизация GAL при первом переключении на вкладку GAL.
+    // snapshotFlow гарантирует, что смена вкладки не отменит уже запущенную синхронизацию.
+    LaunchedEffect(accountId) {
+        androidx.compose.runtime.snapshotFlow { selectedTab }.collect { tab ->
+            if (tab == 2 && accountId > 0 && !initialGalSyncDone && !isGalSyncing) {
+                initialGalSyncDone = true
+                isGalSyncing = true
+                try {
+                    contactRepo.syncGalContactsToDb(accountId)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                } finally {
+                    isGalSyncing = false
+                }
             }
         }
     }
@@ -138,27 +173,53 @@ fun ContactsScreen(
     // Email текущего аккаунта для фильтрации себя
     val ownEmail = activeAccount?.email?.lowercase() ?: ""
     
-    // Количество контактов организации (без себя) для отображения в табе
-    val exchangeContactsCount = remember(exchangeContacts, ownEmail) {
+    // Количество контактов Exchange Folder (без себя)
+    val exchangeFolderCount = remember(exchangeFolderContacts, ownEmail) {
         if (ownEmail.isNotBlank()) {
-            exchangeContacts.count { it.email.lowercase() != ownEmail }
+            exchangeFolderContacts.count { it.email.lowercase() != ownEmail }
         } else {
-            exchangeContacts.size
+            exchangeFolderContacts.size
         }
     }
     
-    // Фильтрация Exchange контактов по поиску (исключая себя)
-    val filteredExchangeContacts = remember(exchangeContacts, debouncedExchangeSearch, ownEmail) {
-        val filtered = if (debouncedExchangeSearch.isBlank()) {
-            exchangeContacts
+    // Количество контактов GAL (без себя)
+    val galCount = remember(galContacts, ownEmail) {
+        if (ownEmail.isNotBlank()) {
+            galContacts.count { it.email.lowercase() != ownEmail }
         } else {
-            exchangeContacts.filter { contact ->
+            galContacts.size
+        }
+    }
+    
+    // Фильтрация Exchange Folder контактов по поиску (исключая себя)
+    val filteredExchangeContacts = remember(exchangeFolderContacts, debouncedExchangeSearch, ownEmail) {
+        val filtered = if (debouncedExchangeSearch.isBlank()) {
+            exchangeFolderContacts
+        } else {
+            exchangeFolderContacts.filter { contact ->
                 contact.displayName.contains(debouncedExchangeSearch, ignoreCase = true) ||
                 contact.email.contains(debouncedExchangeSearch, ignoreCase = true) ||
                 contact.company.contains(debouncedExchangeSearch, ignoreCase = true)
             }
         }
-        // Исключаем себя из списка
+        if (ownEmail.isNotBlank()) {
+            filtered.filter { it.email.lowercase() != ownEmail }
+        } else {
+            filtered
+        }
+    }
+    
+    // Фильтрация GAL контактов по поиску (исключая себя)
+    val filteredGalContacts = remember(galContacts, debouncedGalSearch, ownEmail) {
+        val filtered = if (debouncedGalSearch.isBlank()) {
+            galContacts
+        } else {
+            galContacts.filter { contact ->
+                contact.displayName.contains(debouncedGalSearch, ignoreCase = true) ||
+                contact.email.contains(debouncedGalSearch, ignoreCase = true) ||
+                contact.company.contains(debouncedGalSearch, ignoreCase = true)
+            }
+        }
         if (ownEmail.isNotBlank()) {
             filtered.filter { it.email.lowercase() != ownEmail }
         } else {
@@ -179,9 +240,15 @@ fun ContactsScreen(
     var pendingBulkContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
     var pendingBulkDuplicatePairs by remember { mutableStateOf<List<Pair<ContactEntity, ContactEntity>>>(emptyList()) }
     var addToContactsConfirmId by rememberSaveable { mutableStateOf<String?>(null) }
-    val addToContactsConfirmContact = addToContactsConfirmId?.let { id -> exchangeContacts.find { it.id == id } }
+    val addToContactsConfirmContact = addToContactsConfirmId?.let { id ->
+        exchangeFolderContacts.find { it.id == id } ?: galContacts.find { it.id == id }
+    }
     var duplicateCheckContactId by rememberSaveable { mutableStateOf<String?>(null) }
-    val duplicateCheckContact = duplicateCheckContactId?.let { id -> localContacts.find { it.id == id } ?: exchangeContacts.find { it.id == id } }
+    val duplicateCheckContact = duplicateCheckContactId?.let { id ->
+        localContacts.find { it.id == id }
+            ?: exchangeFolderContacts.find { it.id == id }
+            ?: galContacts.find { it.id == id }
+    }
     var duplicateExistingContactId by rememberSaveable { mutableStateOf<String?>(null) }
     val duplicateExistingContact = duplicateExistingContactId?.let { id -> localContacts.find { it.id == id } }
     
@@ -189,7 +256,9 @@ fun ContactsScreen(
     val editingContact = editingContactId?.let { id -> localContacts.find { it.id == id } }
     val showDeleteDialog = showDeleteDialogId?.let { id -> localContacts.find { it.id == id } }
     val showContactDetails: ContactEntity? = showContactDetailsId?.let { id -> 
-        localContacts.find { it.id == id } ?: exchangeContacts.find { it.id == id }
+        localContacts.find { it.id == id }
+            ?: exchangeFolderContacts.find { it.id == id }
+            ?: galContacts.find { it.id == id }
     }
     
     // Импорт
@@ -206,9 +275,11 @@ fun ContactsScreen(
         uri?.let {
             scope.launch {
                 try {
-                    val content = context.contentResolver.openInputStream(it)?.use { stream ->
-                        stream.bufferedReader().readText()
-                    } ?: ""
+                    val content = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        context.contentResolver.openInputStream(it)?.use { stream ->
+                            stream.bufferedReader().readText()
+                        } ?: ""
+                    }
                     val count = contactRepo.importFromVCard(accountId, content)
                     Toast.makeText(context, "$importedMessage $count", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
@@ -224,9 +295,11 @@ fun ContactsScreen(
         uri?.let {
             scope.launch {
                 try {
-                    val content = context.contentResolver.openInputStream(it)?.use { stream ->
-                        stream.bufferedReader().readText()
-                    } ?: ""
+                    val content = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        context.contentResolver.openInputStream(it)?.use { stream ->
+                            stream.bufferedReader().readText()
+                        } ?: ""
+                    }
                     val count = contactRepo.importFromCSV(accountId, content)
                     Toast.makeText(context, "$importedMessage $count", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
@@ -491,7 +564,7 @@ fun ContactsScreen(
                 showContactDetailsId = null
                 scope.launch {
                     try {
-                        val existing = contactRepo.findLocalDuplicate(accountId, contact.email)
+                        val existing = contactRepo.findLocalDuplicate(accountId, cleanContactEmail(contact.email))
                         if (existing != null) {
                             duplicateCheckContactId = contact.id
                             duplicateExistingContactId = existing.id
@@ -513,7 +586,7 @@ fun ContactsScreen(
             onDismiss = { showExportDialog = false },
             onExportVCard = {
                 scope.launch {
-                    val contacts = if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts
+                    val contacts = when (selectedTab) { 0 -> filteredLocalContacts; 1 -> filteredExchangeContacts; else -> filteredGalContacts }
                     if (contacts.isEmpty()) {
                         Toast.makeText(context, noContactsToExportMsg, Toast.LENGTH_SHORT).show()
                         return@launch
@@ -525,7 +598,7 @@ fun ContactsScreen(
             },
             onExportCSV = {
                 scope.launch {
-                    val contacts = if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts
+                    val contacts = when (selectedTab) { 0 -> filteredLocalContacts; 1 -> filteredExchangeContacts; else -> filteredGalContacts }
                     if (contacts.isEmpty()) {
                         Toast.makeText(context, noContactsToExportMsg, Toast.LENGTH_SHORT).show()
                         return@launch
@@ -557,9 +630,9 @@ fun ContactsScreen(
                 Column {
                     Text(
                         if (isRussian)
-                            "Контакт с email ${galContact.email} уже есть в личных контактах:"
+                            "Контакт с email ${cleanContactEmail(galContact.email)} уже есть в личных контактах:"
                         else
-                            "A contact with email ${galContact.email} already exists in personal contacts:"
+                            "A contact with email ${cleanContactEmail(galContact.email)} already exists in personal contacts:"
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -639,9 +712,10 @@ fun ContactsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    if (galContact.email.isNotBlank()) {
+                    val galCleanEmail = cleanContactEmail(galContact.email)
+                    if (galCleanEmail.isNotBlank()) {
                         Text(
-                            text = galContact.email,
+                            text = galCleanEmail,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1060,8 +1134,8 @@ fun ContactsScreen(
     }
 
     // Получить выбранные контакты
-    val selectedContacts = remember(selectedContactIds, localContacts, exchangeContacts) {
-        val allContacts = localContacts + exchangeContacts
+    val selectedContacts = remember(selectedContactIds, localContacts, exchangeFolderContacts, galContacts) {
+        val allContacts = localContacts + exchangeFolderContacts + galContacts
         allContacts.filter { it.id in selectedContactIds }
     }
     
@@ -1098,7 +1172,7 @@ fun ContactsScreen(
                         // Написать письмо
                         IconButton(
                             onClick = {
-                                val emails = selectedContacts.map { it.email }.filter { it.isNotBlank() }
+                                val emails = selectedContacts.map { cleanContactEmail(it.email) }.filter { it.isNotBlank() }
                                 if (emails.isNotEmpty()) {
                                     onComposeClick(emails.joinToString(", "))
                                 }
@@ -1109,8 +1183,8 @@ fun ContactsScreen(
                         ) {
                             Icon(AppIcons.Email, Strings.writeEmail, tint = Color.White)
                         }
-                        // Копировать в локальные (только для организации)
-                        if (selectedTab == 1) {
+                        // Копировать в локальные (для Exchange и GAL)
+                        if (selectedTab == 1 || selectedTab == 2) {
                             IconButton(
                                 onClick = {
                                     val contactsToCopy = selectedContacts.toList()
@@ -1121,7 +1195,7 @@ fun ContactsScreen(
                                         val duplicates = mutableListOf<Pair<ContactEntity, ContactEntity>>()
                                         contactsToCopy.forEach { contact ->
                                             try {
-                                                val existing = contactRepo.findLocalDuplicate(accountId, contact.email)
+                                                val existing = contactRepo.findLocalDuplicate(accountId, cleanContactEmail(contact.email))
                                                 if (existing != null) duplicates.add(contact to existing)
                                                 else newOnes.add(contact)
                                             } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
@@ -1234,7 +1308,7 @@ fun ContactsScreen(
                         }
                         // Выбрать все
                         IconButton(onClick = {
-                            val currentContacts = if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts
+                            val currentContacts = when (selectedTab) { 0 -> filteredLocalContacts; 1 -> filteredExchangeContacts; else -> filteredGalContacts }
                             selectedContactIds = if (selectedContactIds.size == currentContacts.size) {
                                 emptySet()
                             } else {
@@ -1242,7 +1316,7 @@ fun ContactsScreen(
                             }
                         }) {
                             Icon(
-                                if (selectedContactIds.size == (if (selectedTab == 0) filteredLocalContacts else filteredExchangeContacts).size)
+                                if (selectedContactIds.size == (when (selectedTab) { 0 -> filteredLocalContacts; 1 -> filteredExchangeContacts; else -> filteredGalContacts }).size)
                                     AppIcons.CheckCircle else AppIcons.Check,
                                 Strings.selectAll,
                                 tint = Color.White
@@ -1346,27 +1420,30 @@ fun ContactsScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Вкладки
+            // Вкладки: Личные | Exchange | GAL
             TabRow(selectedTabIndex = selectedTab) {
-                // Личные
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
                     text = { Text("${Strings.personalContacts} (${localContacts.size})") }
                 )
-                // Организация
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("${Strings.organization} ($exchangeContactsCount)") }
+                    text = { Text("${Strings.exchangeContacts} ($exchangeFolderCount)") }
+                )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = { Text("${Strings.galContacts} ($galCount)") }
                 )
             }
             
             // Поле поиска
             OutlinedTextField(
-                value = if (selectedTab == 0) localSearchQuery else exchangeSearchQuery,
+                value = when (selectedTab) { 0 -> localSearchQuery; 1 -> exchangeSearchQuery; else -> galSearchQuery },
                 onValueChange = {
-                    if (selectedTab == 0) localSearchQuery = it else exchangeSearchQuery = it
+                    when (selectedTab) { 0 -> localSearchQuery = it; 1 -> exchangeSearchQuery = it; else -> galSearchQuery = it }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1374,10 +1451,10 @@ fun ContactsScreen(
                 placeholder = { Text(Strings.searchContacts) },
                 leadingIcon = { Icon(AppIcons.Search, null) },
                 trailingIcon = {
-                    val query = if (selectedTab == 0) localSearchQuery else exchangeSearchQuery
+                    val query = when (selectedTab) { 0 -> localSearchQuery; 1 -> exchangeSearchQuery; else -> galSearchQuery }
                     if (query.isNotEmpty()) {
                         IconButton(onClick = {
-                            if (selectedTab == 0) localSearchQuery = "" else exchangeSearchQuery = ""
+                            when (selectedTab) { 0 -> localSearchQuery = ""; 1 -> exchangeSearchQuery = ""; else -> galSearchQuery = "" }
                         }) {
                             Icon(AppIcons.Clear, null)
                         }
@@ -1426,8 +1503,10 @@ fun ContactsScreen(
                 )
                 1 -> OrganizationContactsList(
                     contacts = filteredExchangeContacts,
-                    isSyncing = isSyncing,
-                    syncError = syncError,
+                    isSyncing = isExchangeSyncing,
+                    syncError = exchangeSyncError,
+                    title = if (isRussian) "Контакты Exchange" else "Exchange Contacts",
+                    emptySubtitle = if (isRussian) "Нажмите для синхронизации" else "Tap to sync",
                     onContactClick = { 
                         if (isSelectionMode) {
                             selectedContactIds = if (it.id in selectedContactIds) {
@@ -1447,8 +1526,54 @@ fun ContactsScreen(
                     },
                     onSyncClick = {
                         scope.launch {
-                            isSyncing = true
-                            syncError = null
+                            isExchangeSyncing = true
+                            exchangeSyncError = null
+                            try {
+                                when (val result = contactRepo.syncExchangeContacts(accountId)) {
+                                    is EasResult.Success -> {
+                                        val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getSynced(result.data, isRussian)
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    }
+                                    is EasResult.Error -> {
+                                        exchangeSyncError = result.message
+                                    }
+                                }
+                            } finally {
+                                isExchangeSyncing = false
+                            }
+                        }
+                    },
+                    isSelectionMode = isSelectionMode,
+                    selectedContactIds = selectedContactIds,
+                    onDragSelect = { newIds -> selectedContactIds = newIds }
+                )
+                2 -> OrganizationContactsList(
+                    contacts = filteredGalContacts,
+                    isSyncing = isGalSyncing,
+                    syncError = galSyncError,
+                    title = com.dedovmosol.iwomail.ui.NotificationStrings.getOrganizationAddressBook(isRussian),
+                    emptySubtitle = com.dedovmosol.iwomail.ui.NotificationStrings.getGlobalAddressList(isRussian),
+                    onContactClick = { 
+                        if (isSelectionMode) {
+                            selectedContactIds = if (it.id in selectedContactIds) {
+                                selectedContactIds - it.id
+                            } else {
+                                selectedContactIds + it.id
+                            }
+                        } else {
+                            showContactDetailsId = it.id
+                        }
+                    },
+                    onContactLongClick = {
+                        if (!isSelectionMode) {
+                            isSelectionMode = true
+                            selectedContactIds = setOf(it.id)
+                        }
+                    },
+                    onSyncClick = {
+                        scope.launch {
+                            isGalSyncing = true
+                            galSyncError = null
                             try {
                                 when (val result = contactRepo.syncGalContactsToDb(accountId)) {
                                     is EasResult.Success -> {
@@ -1456,11 +1581,11 @@ fun ContactsScreen(
                                         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                     }
                                     is EasResult.Error -> {
-                                        syncError = result.message
+                                        galSyncError = result.message
                                     }
                                 }
                             } finally {
-                                isSyncing = false
+                                isGalSyncing = false
                             }
                         }
                     },
@@ -1678,6 +1803,8 @@ private fun OrganizationContactsList(
     contacts: List<ContactEntity>,
     isSyncing: Boolean,
     syncError: String?,
+    title: String,
+    emptySubtitle: String,
     onContactClick: (ContactEntity) -> Unit,
     onContactLongClick: (ContactEntity) -> Unit = {},
     onSyncClick: () -> Unit,
@@ -1705,7 +1832,7 @@ private fun OrganizationContactsList(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    com.dedovmosol.iwomail.ui.NotificationStrings.getOrganizationAddressBook(isRussian),
+                    title,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -1713,7 +1840,7 @@ private fun OrganizationContactsList(
                     if (contacts.isNotEmpty()) 
                         com.dedovmosol.iwomail.ui.NotificationStrings.getContactsCount(contacts.size, isRussian)
                     else 
-                        com.dedovmosol.iwomail.ui.NotificationStrings.getGlobalAddressList(isRussian),
+                        emptySubtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1856,14 +1983,15 @@ private fun ExchangeContactItem(
     isSelected: Boolean = false,
     isSelectionMode: Boolean = false
 ) {
+    val emailClean = cleanContactEmail(contact.email)
     ListItem(
         headlineContent = {
             Text(contact.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
         },
         supportingContent = {
             Column {
-                if (contact.email.isNotBlank()) {
-                    Text(contact.email, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (emailClean.isNotBlank()) {
+                    Text(emailClean, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (contact.company.isNotBlank() || contact.department.isNotBlank()) {
                     Text(
@@ -1971,6 +2099,7 @@ private fun ContactItemWithGroup(
     isSelectionMode: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val emailClean = cleanContactEmail(contact.email)
     
     ListItem(
         headlineContent = {
@@ -1988,8 +2117,8 @@ private fun ContactItemWithGroup(
         },
         supportingContent = {
             Column {
-                if (contact.email.isNotBlank()) {
-                    Text(contact.email, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (emailClean.isNotBlank()) {
+                    Text(emailClean, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 // Метка группы
                 if (group != null) {
@@ -2370,7 +2499,7 @@ private fun ContactDetailsDialog(
     
     val isLocal = contact.source == com.dedovmosol.iwomail.data.database.ContactSource.LOCAL
     val name = contact.displayName
-    val email = contact.email
+    val email = cleanContactEmail(contact.email)
     val phone = contact.phone
     val mobilePhone = contact.mobilePhone
     val workPhone = contact.workPhone

@@ -1,7 +1,10 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
+import android.view.View
+import com.dedovmosol.iwomail.BuildConfig
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -26,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -100,10 +104,41 @@ fun EmailDetailScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val view = LocalView.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
-    
+
+    suspend fun fetchAttachmentBytes(att: AttachmentEntity): ByteArray? {
+        if (att.downloaded && att.localPath != null) {
+            val f = File(att.localPath)
+            if (f.exists()) return withContext(Dispatchers.IO) { f.readBytes() }
+        }
+        if (!NetworkMonitor.isNetworkAvailable(context)) {
+            Toast.makeText(context, if (isRussian) "Нет сети" else "No network", Toast.LENGTH_SHORT).show()
+            return null
+        }
+        val account = accountRepo.getActiveAccountSync()
+        val easClient = account?.let { accountRepo.createEasClient(it.id) }
+        if (easClient != null) {
+            return when (val result = withContext(Dispatchers.IO) { easClient.downloadAttachment(att.fileReference) }) {
+                is EasResult.Success -> {
+                    easClient.policyKey?.let { newKey ->
+                        if (account != null && newKey != account.policyKey) {
+                            accountRepo.savePolicyKey(account.id, newKey)
+                        }
+                    }
+                    result.data
+                }
+                is EasResult.Error -> {
+                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    null
+                }
+            }
+        }
+        return null
+    }
+
     val email by mailRepo.getEmail(emailId).collectAsState(initial = null)
     
     // Вложения - используем Flow напрямую, сохраняем ID для восстановления после поворота
@@ -173,6 +208,7 @@ fun EmailDetailScreen(
                     downloadingId = null
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
                 downloadingId = null
             }
@@ -214,14 +250,9 @@ fun EmailDetailScreen(
         // блокировался, inline-картинки не загружались при повторном входе в письмо.
         isLoadingInlineImages = false
         
-        android.util.Log.d("InlineImages", "=== START: emailId=${currentEmail.id}, subject='${currentEmail.subject.take(30)}', bodyType=${currentEmail.bodyType}")
-        android.util.Log.d("InlineImages", "Body preview (first 500 chars): ${body.take(500)}")
-        android.util.Log.d("InlineImages", "Attachments count: ${attachments.size}")
-        attachments.forEach { att ->
-            android.util.Log.d(
-                "InlineImages",
-                "  - ${att.displayName}, isInline=${att.isInline}, contentId=${att.contentId}, estimatedSize=${att.estimatedSize}"
-            )
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("InlineImages", "=== START: emailId=${currentEmail.id}, subject='${currentEmail.subject.take(30)}', bodyType=${currentEmail.bodyType}")
+            android.util.Log.d("InlineImages", "Attachments count: ${attachments.size}")
         }
         
         // Если bodyType=4 (MIME) И тело действительно содержит MIME-структуру —
@@ -232,12 +263,12 @@ fun EmailDetailScreen(
         val bodyLooksMime = body.contains("Content-Type:", ignoreCase = true) && 
                            body.contains("boundary", ignoreCase = true)
         if (currentEmail.bodyType == 4 && bodyLooksMime) {
-            android.util.Log.d("InlineImages", "BodyType=4 (MIME) and body contains MIME markers, extracting inline images")
+            if (BuildConfig.DEBUG) android.util.Log.d("InlineImages", "BodyType=4 MIME, extracting inline images")
             isLoadingInlineImages = true
             val mimeImages = withContext(Dispatchers.IO) {
                 extractInlineImagesFromMime(body)
             }
-            android.util.Log.d("InlineImages", "Extracted ${mimeImages.size} images from MIME")
+            if (BuildConfig.DEBUG) android.util.Log.d("InlineImages", "Extracted ${mimeImages.size} images from MIME")
             if (mimeImages.isNotEmpty()) {
                 inlineImages = mimeImages
                 isLoadingInlineImages = false
@@ -245,17 +276,16 @@ fun EmailDetailScreen(
             }
             // Если из MIME ничего не извлеклось — падаем в fallback через cid/fetchInlineImages
             isLoadingInlineImages = false
-            android.util.Log.d("InlineImages", "MIME extraction empty, falling through to cid/fetchInlineImages")
+            if (BuildConfig.DEBUG) android.util.Log.d("InlineImages", "MIME extraction empty, falling through to cid/fetchInlineImages")
         } else if (currentEmail.bodyType == 4) {
-            android.util.Log.d("InlineImages", "BodyType=4 but body is already HTML (extracted from MIME), skipping MIME parse")
+            if (BuildConfig.DEBUG) android.util.Log.d("InlineImages", "BodyType=4 already HTML, skipping MIME parse")
         }
         
         // Находим все cid: ссылки в HTML
         val cidRefs = CID_REGEX.findAll(body).map { it.groupValues[1] }.toSet()
-        android.util.Log.d("InlineImages", "Found ${cidRefs.size} cid refs in body: ${cidRefs.take(5)}")
+        if (BuildConfig.DEBUG) android.util.Log.d("InlineImages", "Found ${cidRefs.size} cid refs in body")
         
         if (cidRefs.isEmpty()) {
-            android.util.Log.d("InlineImages", "No cid refs found, skipping")
             return@LaunchedEffect
         }
         
@@ -267,10 +297,7 @@ fun EmailDetailScreen(
             val cleanCid = att.contentId.removeSurrounding("<", ">")
             cidRefs.contains(cleanCid) || cidRefs.contains(att.contentId) || cidRefs.contains(att.displayName)
         }
-        android.util.Log.d("InlineImages", "Found ${inlineAttachments.size} inline attachments out of ${attachments.size} total")
-        inlineAttachments.forEach { att ->
-            android.util.Log.d("InlineImages", "  - contentId=${att.contentId}, displayName=${att.displayName}, fileRef='${att.fileReference}'")
-        }
+        if (BuildConfig.DEBUG) android.util.Log.d("InlineImages", "Found ${inlineAttachments.size} inline attachments out of ${attachments.size} total")
         
         isLoadingInlineImages = true
         val account = accountRepo.getActiveAccountSync()
@@ -339,6 +366,7 @@ fun EmailDetailScreen(
                             android.util.Log.w("InlineImages", "Failed to create EAS client")
                         }
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         android.util.Log.e("InlineImages", "fetchInlineImages exception: ${e.message}")
                     }
                 }
@@ -674,6 +702,7 @@ fun EmailDetailScreen(
                                         }
                                     }
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     bodyLoadError = e.message
                                 } finally {
                                     isLoadingBody = false
@@ -1085,6 +1114,7 @@ fun EmailDetailScreen(
                                                 }
                                             }
                                         } catch (e: Exception) {
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
                                             Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
                                         } finally {
                                             isAddingTask = false
@@ -1268,6 +1298,7 @@ fun EmailDetailScreen(
                                                 }
                                             }
                                         } catch (e: Exception) {
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
                                             Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
                                         } finally {
                                             isUpdating = false
@@ -1477,6 +1508,7 @@ fun EmailDetailScreen(
                                                             }
                                                         }
                                                     } catch (e: Exception) {
+                                                        if (e is kotlinx.coroutines.CancellationException) throw e
                                                         Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
                                                     } finally {
                                                         isAccepting = false
@@ -1518,6 +1550,7 @@ fun EmailDetailScreen(
                                                             Toast.LENGTH_SHORT
                                                         ).show()
                                                     } catch (e: Exception) {
+                                                        if (e is kotlinx.coroutines.CancellationException) throw e
                                                         Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
                                                     } finally {
                                                         isAccepting = false
@@ -1576,6 +1609,7 @@ fun EmailDetailScreen(
                                                             is EasResult.Error -> Toast.makeText(context, NotificationStrings.localizeError(result.message, isRussian), Toast.LENGTH_LONG).show()
                                                         }
                                                     } catch (e: Exception) {
+                                                        if (e is kotlinx.coroutines.CancellationException) throw e
                                                         Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
                                                     } finally {
                                                         isAccepting = false
@@ -1606,39 +1640,8 @@ fun EmailDetailScreen(
                         onAttachmentClick = { attachment ->
                             scope.launch {
                                 try {
-                                    // Tap = preview: берём локальный файл, если есть, иначе скачиваем
                                     downloadingId = attachment.id
-                                    val data: ByteArray? = if (attachment.downloaded && attachment.localPath != null) {
-                                        val localFile = File(attachment.localPath)
-                                        if (localFile.exists()) {
-                                            withContext(Dispatchers.IO) { localFile.readBytes() }
-                                        } else null
-                                    } else {
-                                        if (!NetworkMonitor.isNetworkAvailable(context)) {
-                                            val noNetworkMsg = if (isRussian) "Нет сети" else "No network"
-                                            Toast.makeText(context, noNetworkMsg, Toast.LENGTH_SHORT).show()
-                                            null
-                                        } else {
-                                            val account = accountRepo.getActiveAccountSync()
-                                            val easClient = account?.let { accountRepo.createEasClient(it.id) }
-                                            if (easClient != null) {
-                                                when (val result = withContext(Dispatchers.IO) { easClient.downloadAttachment(attachment.fileReference) }) {
-                                                    is EasResult.Success -> {
-                                                        easClient.policyKey?.let { newKey ->
-                                                            if (account != null && newKey != account.policyKey) {
-                                                                accountRepo.savePolicyKey(account.id, newKey)
-                                                            }
-                                                        }
-                                                        result.data
-                                                    }
-                                                    is EasResult.Error -> {
-                                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                                                        null
-                                                    }
-                                                }
-                                            } else null
-                                        }
-                                    }
+                                    val data = fetchAttachmentBytes(attachment)
 
                                     if (data != null) {
                                         val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
@@ -1666,7 +1669,6 @@ fun EmailDetailScreen(
                                             }
                                             previewLauncher.launch(intent)
 
-                                            // Fallback: если внешнее приложение не вернёт result, чистим позже
                                             scope.launch {
                                                 kotlinx.coroutines.delay(60 * 60 * 1000L)
                                                 if (pendingPreviewFile?.absolutePath == tempFile.absolutePath) {
@@ -1674,7 +1676,8 @@ fun EmailDetailScreen(
                                                     pendingPreviewFile = null
                                                 }
                                             }
-                                        } catch (_: Exception) {
+                                        } catch (e: Exception) {
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
                                             withContext(Dispatchers.IO) { tempFile.delete() }
                                             pendingPreviewFile = null
                                             val message = if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file"
@@ -1682,8 +1685,8 @@ fun EmailDetailScreen(
                                         }
                                     }
                                 } catch (e: Exception) {
-                                    val errorMsg = "${NotificationStrings.getErrorWithMessage(isRussian, e.message)}"
-                                    Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Toast.makeText(context, NotificationStrings.getErrorWithMessage(isRussian, e.message), Toast.LENGTH_LONG).show()
                                 } finally {
                                     downloadingId = null
                                 }
@@ -1693,19 +1696,7 @@ fun EmailDetailScreen(
                             scope.launch {
                                 try {
                                     downloadingId = attachment.id
-                                    // Если уже скачано (кеш от «Открыть») — берём оттуда, иначе качаем с сервера напрямую (без кеширования)
-                                    val data: ByteArray? = if (attachment.downloaded && attachment.localPath != null) {
-                                        val f = File(attachment.localPath)
-                                        if (f.exists()) withContext(Dispatchers.IO) { f.readBytes() } else null
-                                    } else {
-                                        val account = accountRepo.getActiveAccountSync()
-                                        val easClient = account?.let { accountRepo.createEasClient(it.id) }
-                                        when (val res = easClient?.let { withContext(Dispatchers.IO) { it.downloadAttachment(attachment.fileReference) } }) {
-                                            is EasResult.Success -> res.data
-                                            is EasResult.Error -> { Toast.makeText(context, res.message, Toast.LENGTH_LONG).show(); null }
-                                            else -> null
-                                        }
-                                    }
+                                    val data = fetchAttachmentBytes(attachment)
                                     if (data != null) {
                                         val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
                                         withContext(Dispatchers.IO) {
@@ -1719,14 +1710,14 @@ fun EmailDetailScreen(
                                             val uri = context.contentResolver.insert(
                                                 android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
                                             )
-                                            uri?.let { 
+                                            uri?.let {
                                                 context.contentResolver.openOutputStream(it)?.use { out -> out.write(data) }
                                             }
                                         }
-                                        val savedMsg = if (isRussian) "Сохранено в Downloads/IwoMail/" else "Saved to Downloads/IwoMail/"
-                                        Toast.makeText(context, savedMsg, Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, if (isRussian) "Сохранено в Downloads/IwoMail/" else "Saved to Downloads/IwoMail/", Toast.LENGTH_SHORT).show()
                                     }
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
                                 } finally {
                                     downloadingId = null
@@ -1736,6 +1727,88 @@ fun EmailDetailScreen(
                         onSaveAsClick = { attachment ->
                             pendingSaveAsAttachment = attachment
                             saveAsLauncher.launch(attachment.displayName)
+                        },
+                        onShareClick = { attachment ->
+                            scope.launch {
+                                try {
+                                    downloadingId = attachment.id
+                                    val data = fetchAttachmentBytes(attachment)
+                                    if (data != null) {
+                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
+                                        val shareFile = withContext(Dispatchers.IO) {
+                                            val dir = File(context.cacheDir, "email_share")
+                                            if (!dir.exists()) dir.mkdirs()
+                                            File(dir, safeFileName).apply { writeBytes(data) }
+                                        }
+                                        val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                                            .getMimeTypeFromExtension(File(safeFileName).extension.lowercase(java.util.Locale.ROOT))
+                                            ?: "application/octet-stream"
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                                            context, "${context.packageName}.fileprovider", shareFile
+                                        )
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = mimeType
+                                            putExtra(Intent.EXTRA_STREAM, uri)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(Intent.createChooser(intent, attachment.displayName))
+                                    }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                                } finally {
+                                    downloadingId = null
+                                }
+                            }
+                        },
+                        onDragAttachment = { attachment ->
+                            scope.launch {
+                                try {
+                                    downloadingId = attachment.id
+                                    val data = fetchAttachmentBytes(attachment)
+                                    if (data != null) {
+                                        val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
+                                        val dragFile = withContext(Dispatchers.IO) {
+                                            val dir = File(context.cacheDir, "email_drag")
+                                            if (!dir.exists()) dir.mkdirs()
+                                            File(dir, safeFileName).apply { writeBytes(data) }
+                                        }
+                                        val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                                            .getMimeTypeFromExtension(File(safeFileName).extension.lowercase(java.util.Locale.ROOT))
+                                            ?: "application/octet-stream"
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                                            context, "${context.packageName}.fileprovider", dragFile
+                                        )
+                                        val clipData = ClipData(
+                                            attachment.displayName,
+                                            arrayOf(mimeType),
+                                            ClipData.Item(uri)
+                                        )
+                                        val label = android.widget.TextView(context).apply {
+                                            text = attachment.displayName
+                                            setTextColor(0xFF333333.toInt())
+                                            textSize = 14f
+                                            setPadding(24, 12, 24, 12)
+                                            setBackgroundColor(0xFFE8E8E8.toInt())
+                                            measure(
+                                                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                                                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+                                            )
+                                            layout(0, 0, measuredWidth, measuredHeight)
+                                        }
+                                        view.startDragAndDrop(
+                                            clipData,
+                                            View.DragShadowBuilder(label),
+                                            null,
+                                            View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                } finally {
+                                    downloadingId = null
+                                }
+                            }
                         }
                     )
                 }
@@ -1952,20 +2025,30 @@ fun EmailDetailScreen(
                                                 
                                                 override fun onPageFinished(view: WebView?, url: String?) {
                                                     super.onPageFinished(view, url)
-                                                    view?.postDelayed({
-                                                        val density = view.resources.displayMetrics.density
-                                                        val contentHeightDp = (view.contentHeight * view.scale / density).toInt()
-                                                        if (contentHeightDp > 0) {
-                                                            webViewHeight = contentHeightDp + 16 // +padding
-                                                        }
-                                                    }, 100)
+                                                    val measureJs = "(function(){var b=document.body,d=document.documentElement;return Math.max(b.scrollHeight||0,b.offsetHeight||0,d.scrollHeight||0);})()"
+                                                    fun measure(v: WebView) {
+                                                        try {
+                                                            v.evaluateJavascript(measureJs) { result ->
+                                                                val cssH = result?.replace("\"", "")?.toIntOrNull()
+                                                                if (cssH != null && cssH > 0) {
+                                                                    @Suppress("DEPRECATION")
+                                                                    val scale = v.scale
+                                                                    val h = (cssH.toFloat() * scale).toInt()
+                                                                    if (h > 0 && h < 20000) {
+                                                                        webViewHeight = h + 16
+                                                                    }
+                                                                }
+                                                            }
+                                                        } catch (_: Exception) { }
+                                                    }
+                                                    view?.postDelayed({ measure(view) }, 500)
+                                                    view?.postDelayed({ measure(view) }, 2000)
                                                 }
                                             }
                                         }
                                     },
                                     update = { webView ->
                                         webViewRef = webView
-                                        // Заменяем cid: ссылки на data URL
                                         var processedBody = bodyText
                                         for ((cid, dataUrl) in inlineImages) {
                                             processedBody = processedBody
@@ -1973,23 +2056,26 @@ fun EmailDetailScreen(
                                                 .replace("cid:${cid.removePrefix("<").removeSuffix(">")}", dataUrl)
                                         }
                                         
-                                        // PERF: Пропускаем перезагрузку если контент не изменился
-                                        // Без этой проверки loadDataWithBaseURL вызывается при КАЖДОЙ рекомпозиции,
-                                        // что перезагружает WebView, сбрасывает скролл и убивает FPS
-                                        val contentKey = processedBody.hashCode().toString() + "_" + inlineImages.size
+                                        val sanitizedBody = sanitizeEmailHtml(processedBody)
+                                        
+                                        val contentKey = sanitizedBody.hashCode().toString() + "_" + inlineImages.size
                                         if (contentKey == lastLoadedHtml) return@AndroidView
                                         lastLoadedHtml = contentKey
                                         
-                                        // Оборачиваем в HTML с адаптивным контентом
+                                        val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
+                                        
                                         val styledHtml = """
                                             <html>
                                             <head>
+                                                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src https: data:;">
                                                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
                                                 <style>
+                                                    html { margin: 0 !important; padding: 0 !important; }
                                                     body { 
                                                         background-color: white !important; 
                                                         color: black !important;
-                                                        margin: 8px;
+                                                        margin: 0 8px !important;
+                                                        padding: 0 !important;
                                                         font-family: sans-serif;
                                                         font-size: 14px;
                                                         word-wrap: break-word;
@@ -2036,7 +2122,7 @@ fun EmailDetailScreen(
                                                     body > br:last-child, body > div:last-child:empty,
                                                     body > p:last-child:empty { display: none; }
                                                 </style>
-                                                <script>
+                                                <script nonce="$nonce">
                                                 document.addEventListener('DOMContentLoaded', function() {
                                                     // Обработка сломанных изображений — показываем placeholder
                                                     document.querySelectorAll('img').forEach(function(img) {
@@ -2051,42 +2137,42 @@ fun EmailDetailScreen(
                                                             if (!img.alt) img.alt = '\u{1F5BC} Image';
                                                         }
                                                     });
-                                                    // Удаляем хвост пустых элементов (от RichTextEditor)
-                                                    var body = document.body;
-                                                    while (body.lastChild) {
-                                                        var last = body.lastChild;
-                                                        if (last.nodeType === 1) {
+                                                    function cleanTrail(el, depth) {
+                                                        if (depth > 5) return;
+                                                        while (el.lastChild) {
+                                                            var last = el.lastChild;
+                                                            if (last.nodeType === 3 && last.textContent.trim() === '') {
+                                                                el.removeChild(last); continue;
+                                                            }
+                                                            if (last.nodeType !== 1) break;
                                                             var tag = last.tagName;
-                                                            // Удаляем сломанные картинки (CID не загрузился) в конце тела
                                                             if (tag === 'IMG' && last.classList.contains('broken-img')) {
-                                                                body.removeChild(last);
-                                                                continue;
+                                                                el.removeChild(last); continue;
                                                             }
-                                                            var inner = last.innerHTML.replace(/&nbsp;/g,'').trim();
-                                                            if ((tag === 'DIV' || tag === 'P' || tag === 'BR') && (inner === '' || inner === '<br>')) {
-                                                                body.removeChild(last);
-                                                                continue;
+                                                            if (tag === 'BR') { el.removeChild(last); continue; }
+                                                            var inner = last.innerHTML ? last.innerHTML.replace(/&nbsp;/g,'').replace(/<br\s*\/?>/gi,'').trim() : '';
+                                                            if ((tag === 'P' || tag === 'DIV' || tag === 'SPAN') && inner === '') {
+                                                                el.removeChild(last); continue;
                                                             }
-                                                            // Удаляем обёртки, содержащие только сломанные картинки
                                                             if ((tag === 'DIV' || tag === 'P' || tag === 'SPAN') && last.children.length > 0) {
                                                                 var onlyBroken = true;
                                                                 for (var ci = 0; ci < last.children.length; ci++) {
                                                                     var ch = last.children[ci];
                                                                     if (!(ch.tagName === 'IMG' && ch.classList.contains('broken-img')) && ch.tagName !== 'BR') {
-                                                                        onlyBroken = false;
-                                                                        break;
+                                                                        onlyBroken = false; break;
                                                                     }
                                                                 }
                                                                 if (onlyBroken && last.textContent.trim() === '') {
-                                                                    body.removeChild(last);
-                                                                    continue;
+                                                                    el.removeChild(last); continue;
                                                                 }
                                                             }
-                                                        } else if (last.nodeType === 3 && last.textContent.trim() === '') {
-                                                            body.removeChild(last);
-                                                            continue;
+                                                            break;
                                                         }
-                                                        break;
+                                                    }
+                                                    cleanTrail(document.body, 0);
+                                                    var lastSig = document.body.lastElementChild;
+                                                    if (lastSig && /^(DIV|SECTION|TD|ARTICLE)$/.test(lastSig.tagName)) {
+                                                        cleanTrail(lastSig, 1);
                                                     }
                                                     function isInsideLink(node) {
                                                         var p = node.parentNode;
@@ -2122,15 +2208,13 @@ fun EmailDetailScreen(
                                                 });
                                                 </script>
                                             </head>
-                                            <body>$processedBody</body>
+                                            <body>$sanitizedBody</body>
                                             </html>
                                         """.trimIndent()
-                                        // Используем baseURL для загрузки внешних ресурсов
-                                        webView.loadDataWithBaseURL("https://localhost/", styledHtml, "text/html", "UTF-8", null)
+                                        webView.loadDataWithBaseURL(null, styledHtml, "text/html", "UTF-8", null)
                                     },
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 200.dp, max = 2000.dp)
+                                        .fillMaxSize()
                                         .padding(8.dp)
                                 )
                         }
@@ -2222,7 +2306,9 @@ private fun AttachmentsSection(
     downloadingId: Long?,
     onAttachmentClick: (AttachmentEntity) -> Unit,
     onSaveClick: (AttachmentEntity) -> Unit = {},
-    onSaveAsClick: (AttachmentEntity) -> Unit = {}
+    onSaveAsClick: (AttachmentEntity) -> Unit = {},
+    onShareClick: (AttachmentEntity) -> Unit = {},
+    onDragAttachment: (AttachmentEntity) -> Unit = {}
 ) {
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     Column(
@@ -2248,7 +2334,7 @@ private fun AttachmentsSection(
                         .combinedClickable(
                             enabled = !isDownloading,
                             onClick = { onAttachmentClick(attachment) },
-                            onLongClick = { showSaveMenu = true }
+                            onLongClick = { onDragAttachment(attachment) }
                         )
                 ) {
                     Row(
@@ -2326,6 +2412,14 @@ private fun AttachmentsSection(
                             onSaveAsClick(attachment)
                         },
                         leadingIcon = { Icon(AppIcons.Folder, contentDescription = null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (isRussian) "Поделиться" else "Share") },
+                        onClick = {
+                            showSaveMenu = false
+                            onShareClick(attachment)
+                        },
+                        leadingIcon = { Icon(AppIcons.Share, contentDescription = null) }
                     )
                 }
             }
@@ -2630,4 +2724,21 @@ private fun parseICalDate(dateStr: String?, tzid: String? = null): Long? {
         null
     }
 }
+
+private val SCRIPT_TAG_REGEX = Regex("(?si)<script[^>]*>.*?</script>")
+private val SCRIPT_OPEN_CLOSE_REGEX = Regex("(?i)</?script[^>]*>")
+private val EVENT_HANDLER_DOUBLE_QUOTE = Regex("""(?i)\s+on\w+\s*=\s*"[^"]*"""")
+private val EVENT_HANDLER_SINGLE_QUOTE = Regex("""(?i)\s+on\w+\s*=\s*'[^']*'""")
+private val EVENT_HANDLER_UNQUOTED = Regex("""(?i)\s+on\w+\s*=\s*[^\s>"']+""")
+private val JS_URI_DOUBLE_QUOTE = Regex("""(?i)(href|src|action|formaction)\s*=\s*"\s*javascript:[^"]*"""")
+private val JS_URI_SINGLE_QUOTE = Regex("""(?i)(href|src|action|formaction)\s*=\s*'\s*javascript:[^']*'""")
+
+private fun sanitizeEmailHtml(html: String): String = html
+    .replace(SCRIPT_TAG_REGEX, "")
+    .replace(SCRIPT_OPEN_CLOSE_REGEX, "")
+    .replace(EVENT_HANDLER_DOUBLE_QUOTE, "")
+    .replace(EVENT_HANDLER_SINGLE_QUOTE, "")
+    .replace(EVENT_HANDLER_UNQUOTED, "")
+    .replace(JS_URI_DOUBLE_QUOTE, """$1="#"""")
+    .replace(JS_URI_SINGLE_QUOTE, """$1='#'""")
 

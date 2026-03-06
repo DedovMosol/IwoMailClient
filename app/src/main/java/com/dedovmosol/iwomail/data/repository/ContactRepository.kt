@@ -15,6 +15,17 @@ import java.util.UUID
 private val vcardFieldCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
 private val vcardAllFieldsCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
 
+private val BRACKET_EMAIL_RE = Regex("<([^>]+@[^>]+)>")
+private val SIMPLE_EMAIL_RE = Regex("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}")
+
+/** Exchange 2007 SP1 EAS may return Email1Address as `"Name" <user@domain>` */
+private fun extractCleanEmail(raw: String): String {
+    if (raw.isBlank()) return ""
+    BRACKET_EMAIL_RE.find(raw)?.groupValues?.get(1)?.let { return it.trim() }
+    SIMPLE_EMAIL_RE.find(raw)?.value?.let { return it }
+    return raw.trim()
+}
+
 /** SHA-256 хеш строки (первые 16 символов hex) — без коллизий hashCode */
 private fun stableHash(input: String): String {
     val digest = MessageDigest.getInstance("SHA-256")
@@ -51,6 +62,20 @@ class ContactRepository(context: Context) {
      */
     fun getExchangeContacts(accountId: Long): Flow<List<ContactEntity>> {
         return contactDao.getExchangeContacts(accountId)
+    }
+    
+    /**
+     * Контакты из папки Contacts на Exchange (личные контакты пользователя)
+     */
+    fun getExchangeFolderContacts(accountId: Long): Flow<List<ContactEntity>> {
+        return contactDao.getExchangeFolderContacts(accountId)
+    }
+    
+    /**
+     * Контакты из GAL (глобальная адресная книга организации)
+     */
+    fun getGalContacts(accountId: Long): Flow<List<ContactEntity>> {
+        return contactDao.getGalContacts(accountId)
     }
     
     suspend fun getContactsList(accountId: Long): List<ContactEntity> {
@@ -101,40 +126,46 @@ class ContactRepository(context: Context) {
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
-                // Получаем контакты с сервера
                 val result = easClient.syncContacts()
                 
                 when (result) {
                     is EasResult.Success -> {
                         val serverContacts = result.data
+
+                        if (easClient.contactsIncrementalNoChanges) {
+                            val existingCount = contactDao.getExchangeContactsList(accountId)
+                                .count { it.id.startsWith("${accountId}_exchange_") }
+                            return@withContext EasResult.Success(existingCount)
+                        }
                         
-                        // Получаем существующие Exchange контакты (только с _exchange_ prefix, не GAL)
                         val existingContacts = contactDao.getExchangeContactsList(accountId)
                             .filter { it.id.startsWith("${accountId}_exchange_") }
-                        val existingEmails = existingContacts.map { it.email.lowercase() }.toSet()
+                        val existingServerIds = existingContacts.mapNotNull { it.serverId }.toSet()
                         
-                        // Определяем какие контакты удалены на сервере
-                        val serverEmails = serverContacts.map { it.email.lowercase() }.toSet()
-                        val deletedEmails = existingEmails - serverEmails
+                        val serverServerIds = serverContacts
+                            .map { it.easServerId.ifEmpty { it.email } }
+                            .filter { it.isNotEmpty() }
+                            .toSet()
+                        val deletedServerIds = existingServerIds - serverServerIds
                         
-                        // Удаляем только те, которых нет на сервере
-                        for (email in deletedEmails) {
-                            val contactId = "${accountId}_exchange_${stableHash(email)}"
+                        for (sid in deletedServerIds) {
+                            val contactId = "${accountId}_exchange_${stableHash(sid)}"
                             contactDao.deleteById(contactId)
                         }
                         
-                        // Добавляем/обновляем контакты с сервера
                         val contactEntities = serverContacts.map { galContact ->
+                            val cleanedEmail = extractCleanEmail(galContact.email)
+                            val contactKey = galContact.easServerId.ifEmpty { cleanedEmail }
                             ContactEntity(
-                                id = "${accountId}_exchange_${stableHash(galContact.email)}",
+                                id = "${accountId}_exchange_${stableHash(contactKey)}",
                                 accountId = accountId,
-                                serverId = galContact.email, // Используем email как serverId
+                                serverId = contactKey,
                                 displayName = galContact.displayName.ifBlank { 
-                                    "${galContact.firstName} ${galContact.lastName}".trim().ifBlank { galContact.email }
+                                    "${galContact.firstName} ${galContact.lastName}".trim().ifBlank { cleanedEmail }
                                 },
                                 firstName = galContact.firstName,
                                 lastName = galContact.lastName,
-                                email = galContact.email,
+                                email = cleanedEmail,
                                 phone = galContact.phone,
                                 mobilePhone = galContact.mobilePhone,
                                 company = galContact.company,
@@ -145,8 +176,9 @@ class ContactRepository(context: Context) {
                         }
                         
                         if (contactEntities.isNotEmpty()) {
-                            // INSERT OR REPLACE — обновляет существующие
-                            contactDao.insertAll(contactEntities)
+                            for (chunk in contactEntities.chunked(500)) {
+                                contactDao.insertAll(chunk)
+                            }
                         }
                         
                         EasResult.Success(contactEntities.size)
@@ -169,7 +201,7 @@ class ContactRepository(context: Context) {
             try {
                 // Получаем email текущего аккаунта для фильтрации "себя"
                 val account = accountRepo.getAccount(accountId)
-                val ownEmail = account?.email?.lowercase() ?: ""
+                val ownEmail = extractCleanEmail(account?.email ?: "").lowercase()
                 
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
@@ -190,22 +222,30 @@ class ContactRepository(context: Context) {
                 
                 // Если "*" не дал результатов — загружаем по буквам
                 if (allContacts.isEmpty()) {
-                    val letters = ('a'..'z').toList() + ('а'..'я').toList()
-                    for (letter in letters) {
-                        try {
-                            when (val result = easClient.searchGAL(letter.toString(), 100)) {
-                                is EasResult.Success -> {
-                                    result.data.forEach { contact ->
-                                        val emailLower = contact.email.lowercase()
-                                        if (emailLower !in seenEmails && emailLower.isNotBlank()) {
-                                            seenEmails.add(emailLower)
-                                            allContacts.add(contact)
+                    val latinLetters = ('a'..'z').toList()
+                    val cyrillicLetters = ('а'..'я').toList()
+                    for (alphabet in listOf(latinLetters, cyrillicLetters)) {
+                        var consecutiveEmpty = 0
+                        for (letter in alphabet) {
+                            try {
+                                when (val result = easClient.searchGAL(letter.toString(), 100)) {
+                                    is EasResult.Success -> {
+                                        var addedInBatch = 0
+                                        result.data.forEach { contact ->
+                                            val emailLower = contact.email.lowercase()
+                                            if (emailLower !in seenEmails && emailLower.isNotBlank()) {
+                                                seenEmails.add(emailLower)
+                                                allContacts.add(contact)
+                                                addedInBatch++
+                                            }
                                         }
+                                        consecutiveEmpty = if (addedInBatch == 0) consecutiveEmpty + 1 else 0
                                     }
+                                    is EasResult.Error -> { consecutiveEmpty++ }
                                 }
-                                is EasResult.Error -> { /* продолжаем */ }
-                            }
-                        } catch (e: Exception) { /* игнорируем */ }
+                            } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; consecutiveEmpty++ }
+                            if (consecutiveEmpty >= 10) break
+                        }
                     }
                 }
                 
@@ -237,21 +277,21 @@ class ContactRepository(context: Context) {
                 // Добавляем/обновляем контакты с сервера (исключая себя)
                 val ownDisplayName = account?.displayName?.lowercase() ?: ""
                 val contactEntities = allContacts.mapNotNull { galContact ->
-                    if (galContact.email.isBlank()) return@mapNotNull null
-                    // Фильтруем себя по email ИЛИ по displayName
-                    val emailLower = galContact.email.lowercase()
+                    val cleanedGalEmail = extractCleanEmail(galContact.email)
+                    if (cleanedGalEmail.isBlank()) return@mapNotNull null
+                    val emailLower = cleanedGalEmail.lowercase()
                     if (ownEmail.isNotBlank() && emailLower == ownEmail) return@mapNotNull null
                     if (ownDisplayName.isNotBlank() && galContact.displayName.lowercase() == ownDisplayName) return@mapNotNull null
                     ContactEntity(
-                        id = "${accountId}_gal_${stableHash(galContact.email)}",
+                        id = "${accountId}_gal_${stableHash(cleanedGalEmail)}",
                         accountId = accountId,
-                        serverId = galContact.email,
+                        serverId = cleanedGalEmail,
                         displayName = galContact.displayName.ifBlank { 
-                            "${galContact.firstName} ${galContact.lastName}".trim().ifBlank { galContact.email }
+                            "${galContact.firstName} ${galContact.lastName}".trim().ifBlank { cleanedGalEmail }
                         },
                         firstName = galContact.firstName,
                         lastName = galContact.lastName,
-                        email = galContact.email,
+                        email = cleanedGalEmail,
                         phone = galContact.phone,
                         mobilePhone = galContact.mobilePhone,
                         company = galContact.company,
@@ -262,8 +302,9 @@ class ContactRepository(context: Context) {
                 }
                 
                 if (contactEntities.isNotEmpty()) {
-                    // INSERT OR REPLACE — обновляет существующие
-                    contactDao.insertAll(contactEntities)
+                    for (chunk in contactEntities.chunked(500)) {
+                        contactDao.insertAll(chunk)
+                    }
                 }
                 
                 // КРИТИЧНО: Возвращаем количество БЕЗ "себя" (как показывается в UI)
@@ -284,9 +325,10 @@ class ContactRepository(context: Context) {
     // === Проверка дубликатов ===
     
     suspend fun findLocalDuplicate(accountId: Long, email: String): ContactEntity? {
-        if (email.isBlank()) return null
+        val cleaned = extractCleanEmail(email)
+        if (cleaned.isBlank()) return null
         return withContext(Dispatchers.IO) {
-            contactDao.findLocalByEmail(accountId, email)
+            contactDao.findLocalByEmail(accountId, cleaned)
         }
     }
     
@@ -306,14 +348,15 @@ class ContactRepository(context: Context) {
         jobTitle: String = "",
         notes: String = ""
     ): ContactEntity {
+        val cleanedEmail = extractCleanEmail(email)
         val id = "${accountId}_${UUID.randomUUID()}"
         val contact = ContactEntity(
             id = id,
             accountId = accountId,
-            displayName = displayName.ifBlank { "$firstName $lastName".trim().ifBlank { email } },
+            displayName = displayName.ifBlank { "$firstName $lastName".trim().ifBlank { cleanedEmail } },
             firstName = firstName,
             lastName = lastName,
-            email = email,
+            email = cleanedEmail,
             phone = phone,
             mobilePhone = mobilePhone,
             workPhone = workPhone,
@@ -460,17 +503,17 @@ class ContactRepository(context: Context) {
      * Добавляет контакт из email если его ещё нет, или увеличивает счётчик
      */
     suspend fun trackEmailUsage(accountId: Long, email: String, displayName: String) {
-        if (email.isBlank()) return
+        val cleaned = extractCleanEmail(email)
+        if (cleaned.isBlank()) return
         
-        val existing = contactDao.findByEmail(accountId, email)
+        val existing = contactDao.findByEmail(accountId, cleaned)
         if (existing != null) {
             contactDao.incrementUseCount(existing.id)
         } else {
-            // Добавляем как локальный контакт
             addContact(
                 accountId = accountId,
-                displayName = displayName.ifBlank { email.substringBefore("@") },
-                email = email
+                displayName = displayName.ifBlank { cleaned.substringBefore("@") },
+                email = cleaned
             )
         }
     }

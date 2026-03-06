@@ -12,16 +12,16 @@ interface CalendarEventDao {
     @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 ORDER BY startTime ASC")
     suspend fun getEventsByAccountList(accountId: Long): List<CalendarEventEntity>
     
-    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime >= :startOfDay AND startTime < :endOfDay ORDER BY startTime ASC")
+    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime < :endOfDay AND endTime > :startOfDay ORDER BY startTime ASC")
     fun getEventsForDay(accountId: Long, startOfDay: Long, endOfDay: Long): Flow<List<CalendarEventEntity>>
     
-    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime >= :startOfDay AND startTime < :endOfDay ORDER BY startTime ASC")
+    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime < :endOfDay AND endTime > :startOfDay ORDER BY startTime ASC")
     suspend fun getEventsForDayList(accountId: Long, startOfDay: Long, endOfDay: Long): List<CalendarEventEntity>
     
-    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime >= :startTime AND endTime <= :endTime ORDER BY startTime ASC")
+    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime < :endTime AND endTime > :startTime ORDER BY startTime ASC")
     fun getEventsInRange(accountId: Long, startTime: Long, endTime: Long): Flow<List<CalendarEventEntity>>
     
-    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime >= :startTime AND endTime <= :endTime ORDER BY startTime ASC")
+    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime < :endTime AND endTime > :startTime ORDER BY startTime ASC")
     suspend fun getEventsInRangeList(accountId: Long, startTime: Long, endTime: Long): List<CalendarEventEntity>
     
     @Query("SELECT * FROM calendar_events WHERE id = :id")
@@ -36,7 +36,7 @@ interface CalendarEventDao {
     @Query("SELECT COUNT(*) FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0")
     suspend fun getEventsCountSync(accountId: Long): Int
     
-    @Query("SELECT COUNT(*) FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime >= :startOfDay AND startTime < :endOfDay")
+    @Query("SELECT COUNT(*) FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND startTime < :endOfDay AND endTime > :startOfDay")
     suspend fun getEventsCountForDay(accountId: Long, startOfDay: Long, endOfDay: Long): Int
     
     @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isDeleted = 0 AND endTime > :now ORDER BY startTime ASC LIMIT 1")
@@ -52,7 +52,7 @@ interface CalendarEventDao {
         SELECT * FROM calendar_events 
         WHERE accountId = :accountId 
         AND isDeleted = 0
-        AND (subject LIKE '%' || :query || '%' OR location LIKE '%' || :query || '%' OR body LIKE '%' || :query || '%')
+        AND (subject LIKE '%' || :query || '%' ESCAPE '\' OR location LIKE '%' || :query || '%' ESCAPE '\' OR body LIKE '%' || :query || '%' ESCAPE '\')
         ORDER BY startTime ASC
     """)
     suspend fun searchEvents(accountId: Long, query: String): List<CalendarEventEntity>

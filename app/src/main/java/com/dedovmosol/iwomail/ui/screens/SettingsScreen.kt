@@ -756,7 +756,7 @@ fun SignaturesManagementDialog(
                                     // Сортируем по createdAt и берём первую
                                     val nextDefault = remaining.minByOrNull { it.createdAt }
                                     nextDefault?.let {
-                                        database.signatureDao().setDefault(it.id)
+                                        database.signatureDao().setDefault(it.id, accountId)
                                     }
                                 }
                             }

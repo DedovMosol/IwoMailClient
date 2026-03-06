@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.data.repository
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasDraft
 import com.dedovmosol.iwomail.eas.EasResult
@@ -12,6 +13,8 @@ import com.dedovmosol.iwomail.util.HtmlRegex
 private val CN_REGEX = Regex("CN=([^/><]+)", RegexOption.IGNORE_CASE)
 private val NAME_BEFORE_BRACKET_REGEX = Regex("^\"?([^\"<]+)\"?\\s*<")
 private val WHITESPACE_REGEX = Regex("\\s+")
+private val DATA_URL_EXTRACT_REGEX = Regex("""data:[^;]+;base64,[A-Za-z0-9+/=]+""")
+private val IMG_ORDINAL_REGEX = Regex("""^img(\d+)_""")
 
 /**
  * Сервис для синхронизации писем по протоколам (EAS, IMAP, POP3)
@@ -24,6 +27,7 @@ class EmailSyncService(
     private val attachmentDao: AttachmentDao,
     private val accountDao: AccountDao,
     private val accountRepo: AccountRepository,
+    private val database: MailDatabase,
     private val onNameResolved: ((email: String, name: String) -> Unit)? = null
 ) {
     // Данные сохранённых тел черновиков (для восстановления при full resync)
@@ -46,7 +50,7 @@ class EmailSyncService(
         // SyncWorker и PushService создают РАЗНЫЕ экземпляры MailRepository → EmailSyncService.
         // Без общего activeSyncs они могут одновременно синхронизировать одну папку,
         // вызывая дублирование данных, гонки SyncKey и прыжки счётчиков.
-        private val activeSyncs = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        private val activeSyncs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<Unit>>()
         
         // КРИТИЧНО: Защита от "воскрешения" удалённых писем.
         // Множество emailId (accountId_serverId) писем, удалённых пользователем.
@@ -84,14 +88,34 @@ class EmailSyncService(
         
         // Максимальный размер защитного множества.
         // Ограничение необходимо потому что:
-        // 1. SharedPreferences.putStringSet() на некоторых устройствах ненадёжен при >100 элементов
-        // 2. Для клиентских удалений (Sync Delete) сервер НЕ отправляет <Delete> в ответе
+        // 1. Для клиентских удалений (Sync Delete) сервер НЕ отправляет <Delete> в ответе
         //    (MS-ASCMD: ответ только для failed deletions), поэтому confirmDeletions() 
         //    не вызывается — набор растёт бесконечно без этого лимита
-        // 3. Память: каждый emailId ~30-50 символов
+        // 2. Память: каждый emailId ~30-50 символов
+        // NB: saveToPrefs() использует .toSet() для создания нового Set при putStringSet(),
+        // что предотвращает известный баг Android с reference equality (StackOverflow #14034803).
         // 500 записей покрывают ~5 минут интенсивного удаления, что достаточно
         // для защиты от race condition с фоновым sync.
         private const val MAX_DELETED_IDS_SIZE = 500
+
+        private val DATE_FORMATS = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+            "yyyy-MM-dd'T'HH:mm:ssZ",
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd HH:mm:ss",
+            "EEE, dd MMM yyyy HH:mm:ss Z",
+            "dd MMM yyyy HH:mm:ss Z"
+        )
+
+        private val threadLocalDateFormats = ThreadLocal.withInitial {
+            DATE_FORMATS.map { format ->
+                java.text.SimpleDateFormat(format, java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+            }
+        }
+
+        private val tzColonRegex = Regex("([+-])(\\d{2}):(\\d{2})$")
         
         private fun initFromPrefs(context: Context) {
             if (prefsInitialized) return
@@ -121,12 +145,19 @@ class EmailSyncService(
          */
         fun registerDeletedEmail(emailId: String, context: Context? = null) {
             if (emailId.isNotBlank()) {
-                if (deletedEmailIds.size >= MAX_DELETED_IDS_SIZE) {
-                    android.util.Log.w("EmailSyncService", 
-                        "deletedEmailIds exceeded $MAX_DELETED_IDS_SIZE, clearing old entries")
-                    deletedEmailIds.clear()
+                synchronized(deletedEmailIds) {
+                    if (deletedEmailIds.size >= MAX_DELETED_IDS_SIZE) {
+                        val evictCount = MAX_DELETED_IDS_SIZE / 4
+                        val iter = deletedEmailIds.iterator()
+                        var removed = 0
+                        while (iter.hasNext() && removed < evictCount) {
+                            iter.next()
+                            iter.remove()
+                            removed++
+                        }
+                    }
+                    deletedEmailIds.add(emailId)
                 }
-                deletedEmailIds.add(emailId)
                 context?.let { saveToPrefs(it) }
             }
         }
@@ -146,10 +177,12 @@ class EmailSyncService(
          * @param confirmedDeletedIds — набор emailId, удалённых сервером
          */
         fun confirmDeletions(confirmedDeletedIds: Set<String>, context: Context? = null) {
-            val sizeBefore = deletedEmailIds.size
-            deletedEmailIds.removeAll(confirmedDeletedIds)
-            if (sizeBefore != deletedEmailIds.size) {
-                context?.let { saveToPrefs(it) }
+            synchronized(deletedEmailIds) {
+                val sizeBefore = deletedEmailIds.size
+                deletedEmailIds.removeAll(confirmedDeletedIds)
+                if (sizeBefore != deletedEmailIds.size) {
+                    context?.let { saveToPrefs(it) }
+                }
             }
         }
     }
@@ -163,7 +196,7 @@ class EmailSyncService(
      * Проверка, идёт ли сейчас синхронизация указанной папки
      */
     fun isFolderSyncing(folderId: String): Boolean {
-        return activeSyncs[folderId] == true
+        return activeSyncs.containsKey(folderId)
     }
     
     /**
@@ -265,8 +298,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                         id = "${accountId}_${serverItemId}",
                                         serverId = serverItemId
                                     )
-                                    emailDao.delete(draft.id)
-                                    emailDao.insert(updatedEmail)
+                                    database.withTransaction {
+                                        emailDao.delete(draft.id)
+                                        emailDao.insert(updatedEmail)
+                                    }
                                 }
                             }
                             is EasResult.Error -> {}
@@ -284,124 +319,17 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     
     return syncResult
 }
-    /**
-     * Обработка результата EWS синхронизации черновиков
-     */
-    private suspend fun processDraftsEwsResult(
-        serverDrafts: List<EasDraft>,
-        accountId: Long,
-        folderId: String,
-        skipRecentEditCheck: Boolean = false
-    ): EasResult<Int> {
-        val serverDraftIds = serverDrafts.map { it.serverId }.toSet()
-        
-        val syncTime = System.currentTimeMillis()
-        val RECENT_EDIT_THRESHOLD = 10_000L
-        val existingEmails = emailDao.getEmailsByFolderList(folderId).associateBy { it.serverId }
-        
-        if (serverDrafts.isNotEmpty()) {
-            val emailEntities = serverDrafts.mapNotNull { draft ->
-                val existingEmail = existingEmails[draft.serverId]
-                
-                if (existingEmail != null) {
-                    val timeSinceLocalEdit = syncTime - existingEmail.dateReceived
-                    
-                    if (!skipRecentEditCheck && timeSinceLocalEdit < RECENT_EDIT_THRESHOLD) {
-                        return@mapNotNull null
-                    }
-                    
-                    if (skipRecentEditCheck && timeSinceLocalEdit < RECENT_EDIT_THRESHOLD) {
-                        val dataChanged = existingEmail.subject != draft.subject || 
-                                          existingEmail.to != draft.to ||
-                                          existingEmail.body != draft.body
-                        val serverIdChanged = existingEmail.serverId != draft.serverId
-                        
-                        if (!dataChanged && !serverIdChanged) {
-                            return@mapNotNull null
-                        }
-                    }
-                }
-                
-                val parsedDate = parseEwsDate(draft.dateCreated)
-                // Если сервер не вернул дату — сохраняем существующую или ставим 1L
-                // (НЕ currentTimeMillis, чтобы старые письма не всплывали как новые)
-                val effectiveDate = if (parsedDate > 0L) parsedDate
-                    else existingEmail?.dateReceived?.takeIf { it > 0L }
-                    ?: 1L
-                val preview = stripHtml(draft.body).take(150).replace("\n", " ").trim()
-                EmailEntity(
-                    id = "${accountId}_${draft.serverId}",
-                    accountId = accountId,
-                    folderId = folderId,
-                    serverId = draft.serverId,
-                    from = "",
-                    fromName = "",
-                    to = draft.to,
-                    cc = draft.cc,
-                    subject = draft.subject,
-                    preview = preview,
-                    body = draft.body,
-                    bodyType = 2,
-                    dateReceived = effectiveDate,
-                    read = true,
-                    importance = 1,
-                    hasAttachments = draft.hasAttachments || draft.attachments.isNotEmpty()
-                )
-            }
-            if (emailEntities.isNotEmpty()) {
-                emailDao.insertAll(emailEntities)
-            }
-
-            val draftEmailIds = serverDrafts.map { "${accountId}_${it.serverId}" }
-            if (draftEmailIds.isNotEmpty()) {
-                attachmentDao.deleteByEmailIds(draftEmailIds)
-            }
-
-            val allAttachments = serverDrafts.flatMap { draft ->
-                val emailId = "${accountId}_${draft.serverId}"
-                draft.attachments.map { att ->
-                    AttachmentEntity(
-                        emailId = emailId,
-                        fileReference = att.fileReference,
-                        displayName = att.displayName,
-                        contentType = att.contentType,
-                        estimatedSize = att.estimatedSize,
-                        isInline = att.isInline,
-                        contentId = att.contentId
-                    )
-                }
-            }
-            if (allAttachments.isNotEmpty()) {
-                attachmentDao.insertAll(allAttachments)
-            }
-        }
-        
-        val localDrafts = emailDao.getEmailsByFolderList(folderId)
-        localDrafts.forEach { localDraft ->
-            if (localDraft.serverId !in serverDraftIds) {
-                attachmentDao.deleteByEmail(localDraft.id)
-                emailDao.delete(localDraft.id)
-            }
-        }
-        
-        val totalCount = emailDao.getCountByFolder(folderId)
-        val unreadCount = emailDao.getUnreadCount(folderId)
-        folderDao.updateCounts(folderId, unreadCount, totalCount)
-        
-        return EasResult.Success(serverDrafts.size)
-    }
     
     /**
      * Полная ресинхронизация папки Отправленные
      */
     suspend fun syncSentFull(accountId: Long, folderId: String): EasResult<Int> {
-        if (activeSyncs.putIfAbsent(folderId, true) != null) {
-            var waited = 0
-            while (activeSyncs[folderId] == true && waited < 15) {
-                kotlinx.coroutines.delay(1000)
-                waited++
-            }
-            if (activeSyncs.putIfAbsent(folderId, true) != null) {
+        val signal = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val existing = activeSyncs.putIfAbsent(folderId, signal)
+        if (existing != null) {
+            kotlinx.coroutines.withTimeoutOrNull(15_000L) { existing.await() }
+            val retrySignal = kotlinx.coroutines.CompletableDeferred<Unit>()
+            if (activeSyncs.putIfAbsent(folderId, retrySignal) != null) {
                 return EasResult.Error("Синхронизация уже выполняется")
             }
         }
@@ -441,23 +369,25 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     moreAvailable = result.data.moreAvailable
                     totalEmails += result.data.emails.size
                     
-                    result.data.emails.forEach { email ->
-                        serverEmailIds.add(email.serverId)
+                    if (serverEmailIds.size < 50_000) {
+                        result.data.emails.forEach { email ->
+                            serverEmailIds.add(email.serverId)
+                        }
                     }
                     
                     if (result.data.emails.isNotEmpty()) {
                         val emailEntities = result.data.emails.mapNotNull { email ->
+                            val emailId = "${accountId}_${email.serverId}"
+                            if (isDeletedByUser(emailId)) return@mapNotNull null
                             val parsedDate = parseDate(email.dateReceived)
                             val effectiveDate = if (parsedDate > 0L) parsedDate else 0L
-                            // MS-ASEMAIL: DateReceived обязателен для валидных писем.
-                            // Ghost-записи без даты пропускаем целиком (вместо fallback на epoch).
                             if (effectiveDate <= 0L) return@mapNotNull null
                             val resolvedName = extractName(email.from)
                             if (resolvedName.isNotBlank() && !resolvedName.contains("@")) {
                                 onNameResolved?.invoke(email.from, resolvedName)
                             }
                             EmailEntity(
-                                id = "${accountId}_${email.serverId}",
+                                id = emailId,
                                 accountId = accountId,
                                 folderId = folderId,
                                 serverId = email.serverId,
@@ -478,7 +408,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         }
                         
                         val emailIdsToInsert = emailEntities.map { it.id }
-                        val alreadyExistingIds = emailDao.getExistingIds(emailIdsToInsert).toSet()
+                        val alreadyExistingIds = emailIdsToInsert.chunked(500).flatMap { emailDao.getExistingIds(it) }.toSet()
                         
                         emailDao.insertAllIgnore(emailEntities)
                         
@@ -514,22 +444,27 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         }
         
         if (syncCompletedFully) {
-            val localEmails = emailDao.getEmailsByFolderList(folderId)
-            var removedCount = 0
-            localEmails.forEach { localEmail ->
-                if (localEmail.serverId !in serverEmailIds) {
-                    attachmentDao.deleteByEmail(localEmail.id)
-                    emailDao.delete(localEmail.id)
-                    removedCount++
+            if (serverEmailIds.size < 50_000) {
+                val localEmails = emailDao.getEmailsByFolderList(folderId)
+                var removedCount = 0
+                localEmails.forEach { localEmail ->
+                    if (localEmail.serverId !in serverEmailIds) {
+                        attachmentDao.deleteByEmail(localEmail.id)
+                        emailDao.delete(localEmail.id)
+                        removedCount++
+                    }
                 }
-            }
-            if (removedCount > 0) {
-                android.util.Log.d("EmailSyncService", "syncSentFull: Removed $removedCount orphaned emails")
+                if (removedCount > 0) {
+                    android.util.Log.d("EmailSyncService", "syncSentFull: Removed $removedCount orphaned emails")
+                }
+            } else {
+                android.util.Log.w("EmailSyncService",
+                    "syncSentFull: Too many emails (${serverEmailIds.size}). Skipping orphan deletion.")
             }
             folderDao.updateSyncKey(folderId, syncKey)
         } else {
-            android.util.Log.w("EmailSyncService", 
-                "syncSentFull: Incomplete sync (${serverEmailIds.size} emails). Skipping orphan deletion and syncKey save.")
+            android.util.Log.w("EmailSyncService",
+                "syncSentFull: Incomplete sync (${serverEmailIds.size} emails). Skipping syncKey save.")
         }
         
         emailDao.deleteGhostEmails(folderId)
@@ -540,7 +475,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         
         return EasResult.Success(serverEmailIds.size)
         } finally {
-            activeSyncs.remove(folderId)
+            activeSyncs.remove(folderId)?.complete(Unit)
         }
     }
     
@@ -583,8 +518,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 mergedSet.add(sAtt.copy(id = 0, emailId = targetEmailId))
             }
         }
-        attachmentDao.deleteByEmail(targetEmailId)
-        attachmentDao.insertAll(mergedSet)
+        database.withTransaction {
+            attachmentDao.deleteByEmail(targetEmailId)
+            attachmentDao.insertAll(mergedSet)
+        }
     }
     
     /**
@@ -606,7 +543,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (sourceBodyType != 0) emailDao.updateBodyType(targetEmailId, sourceBodyType)
             bodyUpdated = true
         } else if (sourceBody.contains("data:") && !currentBody.contains("data:")) {
-            val merged = mergeDraftBody(currentBody, sourceBody, sourceAttachments)
+            val merged = mergeDraftBody(currentBody, sourceAttachments, sourceBody)
             emailDao.updateBody(targetEmailId, merged)
             if (sourceBodyType != 0) emailDao.updateBodyType(targetEmailId, sourceBodyType)
             bodyUpdated = true
@@ -657,15 +594,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         
         initFromPrefs(context)
         
-        if (retryCount == 0 && activeSyncs.putIfAbsent(folderId, true) != null) {
-            // Ждём завершения текущей синхронизации вместо мгновенного отказа
-            var waited = 0
-            while (activeSyncs[folderId] == true && waited < 30) {
-                kotlinx.coroutines.delay(1000)
-                waited++
-            }
-            if (activeSyncs.putIfAbsent(folderId, true) != null) {
-                return EasResult.Error("Синхронизация уже выполняется")
+        if (retryCount == 0) {
+            val signal = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val existing = activeSyncs.putIfAbsent(folderId, signal)
+            if (existing != null) {
+                kotlinx.coroutines.withTimeoutOrNull(30_000L) { existing.await() }
+                val retrySignal = kotlinx.coroutines.CompletableDeferred<Unit>()
+                if (activeSyncs.putIfAbsent(folderId, retrySignal) != null) {
+                    return EasResult.Error("Синхронизация уже выполняется")
+                }
             }
         }
         
@@ -896,7 +833,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             folderDao.updateCounts(folderId, unreadCount, totalCount)
             return EasResult.Success(newEmailsCount)
         } finally {
-            activeSyncs.remove(folderId)
+            activeSyncs.remove(folderId)?.complete(Unit)
         }
     }
     
@@ -921,9 +858,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             return NewEmailsBatchResult(emptyList(), emptyMap(), 0)
         }
         
-        val existingIds = emailDao.getExistingIds(syncData.emails.map { "${accountId}_${it.serverId}" })
+        val allIds = syncData.emails.map { "${accountId}_${it.serverId}" }
+        val existingIds = allIds.chunked(500).flatMap { emailDao.getExistingIds(it) }
         val existingEmailsMap = if (existingIds.isNotEmpty()) {
-            emailDao.getEmailsByIds(existingIds).associateBy { it.id }
+            existingIds.chunked(500).flatMap { emailDao.getEmailsByIds(it) }.associateBy { it.id }
         } else {
             emptyMap()
         }
@@ -988,7 +926,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     emailDao.updateBody(existingId, serverEmail.body)
                 } else if (existingBody.contains("data:") && !serverEmail.body.contains("data:")) {
                     val atts = attachmentDao.getAttachmentsList(existingId)
-                    val merged = mergeDraftBody(serverEmail.body, existingBody, atts)
+                    val merged = mergeDraftBody(serverEmail.body, atts, existingBody)
                     emailDao.updateBody(existingId, merged)
                 } else if (!existingBody.contains("data:")) {
                     emailDao.updateBody(existingId, serverEmail.body)
@@ -1003,7 +941,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         // Дедупликация по serverId
         val filteredByServerId = if (newEmails.isNotEmpty()) {
             val serverIds = newEmails.map { it.serverId }
-            val existingByServerId = emailDao.getExistingServerIds(accountId, serverIds)
+            val existingByServerId = serverIds.chunked(500).flatMap { emailDao.getExistingServerIds(accountId, it) }
             newEmails.filter { it.serverId !in existingByServerId }
         } else {
             emptyList()
@@ -1095,115 +1033,119 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             filteredByRecentDelete
         }
         
-        // EWS→EAS миграция для черновиков
+        // EWS→EAS миграция для черновиков + вставка батча — атомарно
         val migratedEasIds = mutableSetOf<String>()
-        if (folder.type == FolderType.DRAFTS && finalFiltered.isNotEmpty()) {
-            val allDrafts = emailDao.getEmailsByFolderList(folderId)
-            val ewsDrafts = allDrafts.filter { draft ->
-                draft.serverId.length > 30 && !draft.serverId.contains(":")
-                        && !draft.serverId.startsWith("local_draft_")
-            }
-            if (ewsDrafts.isNotEmpty()) {
-                val remainingEws = ewsDrafts.toMutableList()
-                for (newEas in finalFiltered) {
-                    val matchedEws = remainingEws.firstOrNull { ews ->
-                        ews.subject == newEas.subject &&
-                                kotlin.math.abs(ews.dateReceived - newEas.dateReceived) < 300_000
-                    } ?: remainingEws.firstOrNull { ews ->
-                        ews.subject == newEas.subject
-                    }
-                    if (matchedEws != null && matchedEws.body.isNotBlank()) {
-                        remainingEws.remove(matchedEws)
-                        val migratedEmail = newEas.copy(
-                            body = matchedEws.body,
-                            bodyType = matchedEws.bodyType,
-                            hasAttachments = matchedEws.hasAttachments || newEas.hasAttachments,
-                            to = if (matchedEws.to.contains("@")) matchedEws.to else newEas.to,
-                            cc = if (matchedEws.cc.contains("@")) matchedEws.cc else newEas.cc,
-                            from = if (matchedEws.from.isNotBlank()) matchedEws.from else newEas.from,
-                            fromName = if (matchedEws.fromName.isNotBlank()) matchedEws.fromName else newEas.fromName
-                        )
-                        emailDao.insert(migratedEmail)
-                        migratedEasIds.add(newEas.id)
-                        
-                        val ewsAttachments = attachmentDao.getAttachmentsList(matchedEws.id)
-                        val serverAtts = syncData.emails
-                            .firstOrNull { it.serverId == newEas.serverId }
-                            ?.attachments ?: emptyList()
-                        
-                        if (ewsAttachments.isNotEmpty()) {
-                            val migratedAttachments = ewsAttachments.map { att ->
-                                val serverMatch = serverAtts.firstOrNull { sAtt ->
-                                    (!att.contentId.isNullOrBlank() && sAtt.contentId == att.contentId) ||
-                                    (att.displayName.isNotBlank() && sAtt.displayName == att.displayName)
-                                }
-                                att.copy(
-                                    id = 0,
-                                    emailId = newEas.id,
-                                    fileReference = att.fileReference.ifBlank { serverMatch?.fileReference ?: "" }
-                                )
-                            }
-                            attachmentDao.insertAll(migratedAttachments)
-                        } else if (serverAtts.isNotEmpty()) {
-                            val serverAttEntities = serverAtts.map { sAtt ->
-                                AttachmentEntity(
-                                    emailId = newEas.id,
-                                    fileReference = sAtt.fileReference,
-                                    displayName = sAtt.displayName,
-                                    contentType = sAtt.contentType,
-                                    estimatedSize = sAtt.estimatedSize,
-                                    isInline = sAtt.isInline,
-                                    contentId = sAtt.contentId
-                                )
-                            }
-                            attachmentDao.insertAll(serverAttEntities)
+        database.withTransaction {
+            if (folder.type == FolderType.DRAFTS && finalFiltered.isNotEmpty()) {
+                val allDrafts = emailDao.getEmailsByFolderList(folderId)
+                val ewsDrafts = allDrafts.filter { draft ->
+                    draft.serverId.length > 30 && !draft.serverId.contains(":")
+                            && !draft.serverId.startsWith("local_draft_")
+                }
+                if (ewsDrafts.isNotEmpty()) {
+                    val remainingEws = ewsDrafts.toMutableList()
+                    for (newEas in finalFiltered) {
+                        val matchedEws = remainingEws.firstOrNull { ews ->
+                            ews.subject == newEas.subject &&
+                                    kotlin.math.abs(ews.dateReceived - newEas.dateReceived) < 300_000
+                        } ?: remainingEws.firstOrNull { ews ->
+                            ews.subject == newEas.subject
                         }
-                        
-                        attachmentDao.deleteByEmail(matchedEws.id)
-                        emailDao.delete(matchedEws.id)
+                        if (matchedEws != null && matchedEws.body.isNotBlank()) {
+                            remainingEws.remove(matchedEws)
+                            val migratedEmail = newEas.copy(
+                                body = matchedEws.body,
+                                bodyType = matchedEws.bodyType,
+                                hasAttachments = matchedEws.hasAttachments || newEas.hasAttachments,
+                                to = if (matchedEws.to.contains("@")) matchedEws.to else newEas.to,
+                                cc = if (matchedEws.cc.contains("@")) matchedEws.cc else newEas.cc,
+                                from = if (matchedEws.from.isNotBlank()) matchedEws.from else newEas.from,
+                                fromName = if (matchedEws.fromName.isNotBlank()) matchedEws.fromName else newEas.fromName
+                            )
+                            emailDao.insert(migratedEmail)
+                            migratedEasIds.add(newEas.id)
+                            
+                            val ewsAttachments = attachmentDao.getAttachmentsList(matchedEws.id)
+                            val serverAtts = syncData.emails
+                                .firstOrNull { it.serverId == newEas.serverId }
+                                ?.attachments ?: emptyList()
+                            
+                            if (ewsAttachments.isNotEmpty()) {
+                                val migratedAttachments = ewsAttachments.map { att ->
+                                    val serverMatch = serverAtts.firstOrNull { sAtt ->
+                                        (!att.contentId.isNullOrBlank() && sAtt.contentId == att.contentId) ||
+                                        (att.displayName.isNotBlank() && sAtt.displayName == att.displayName)
+                                    }
+                                    att.copy(
+                                        id = 0,
+                                        emailId = newEas.id,
+                                        fileReference = att.fileReference.ifBlank { serverMatch?.fileReference ?: "" }
+                                    )
+                                }
+                                attachmentDao.insertAll(migratedAttachments)
+                            } else if (serverAtts.isNotEmpty()) {
+                                val serverAttEntities = serverAtts.map { sAtt ->
+                                    AttachmentEntity(
+                                        emailId = newEas.id,
+                                        fileReference = sAtt.fileReference,
+                                        displayName = sAtt.displayName,
+                                        contentType = sAtt.contentType,
+                                        estimatedSize = sAtt.estimatedSize,
+                                        isInline = sAtt.isInline,
+                                        contentId = sAtt.contentId
+                                    )
+                                }
+                                attachmentDao.insertAll(serverAttEntities)
+                            }
+                            
+                            attachmentDao.deleteByEmail(matchedEws.id)
+                            emailDao.delete(matchedEws.id)
+                        }
                     }
                 }
             }
+            
+            val toInsert = if (migratedEasIds.isNotEmpty()) {
+                finalFiltered.filter { it.id !in migratedEasIds }
+            } else {
+                finalFiltered
+            }
+            if (toInsert.isNotEmpty()) {
+                emailDao.insertAllIgnore(toInsert)
+            }
+            
+            val insertedIds = (toInsert.map { it.id } + migratedEasIds).toSet()
+            val allAttachments = syncData.emails
+                .filter { "${accountId}_${it.serverId}" in insertedIds && "${accountId}_${it.serverId}" !in migratedEasIds }
+                .flatMap { email ->
+                    email.attachments.map { att ->
+                        AttachmentEntity(
+                            emailId = "${accountId}_${email.serverId}",
+                            fileReference = att.fileReference,
+                            displayName = att.displayName,
+                            contentType = att.contentType,
+                            estimatedSize = att.estimatedSize,
+                            isInline = att.isInline,
+                            contentId = att.contentId
+                        )
+                    }
+                }
+            if (allAttachments.isNotEmpty()) {
+                attachmentDao.insertAll(allAttachments)
+            }
         }
         
-        // Вставляем отфильтрованные письма (кроме мигрированных)
         val toInsert = if (migratedEasIds.isNotEmpty()) {
             finalFiltered.filter { it.id !in migratedEasIds }
         } else {
             finalFiltered
         }
-        var insertedCount = 0
-        if (toInsert.isNotEmpty()) {
-            emailDao.insertAllIgnore(toInsert)
-            insertedCount += toInsert.size
-        }
-        insertedCount += migratedEasIds.size
+        var insertedCount = toInsert.size + migratedEasIds.size
         
         // RECONCILE: собираем serverIds при full resync
         val batchServerIds = syncData.emails.map { "${accountId}_${it.serverId}" }
         serverDraftIdsInFullResync?.addAll(batchServerIds)
         serverSentIdsInFullResync?.addAll(batchServerIds)
-        
-        // Вставляем вложения для новых писем
-        val insertedIds = (toInsert.map { it.id } + migratedEasIds).toSet()
-        val allAttachments = syncData.emails
-            .filter { "${accountId}_${it.serverId}" in insertedIds && "${accountId}_${it.serverId}" !in migratedEasIds }
-            .flatMap { email ->
-                email.attachments.map { att ->
-                    AttachmentEntity(
-                        emailId = "${accountId}_${email.serverId}",
-                        fileReference = att.fileReference,
-                        displayName = att.displayName,
-                        contentType = att.contentType,
-                        estimatedSize = att.estimatedSize,
-                        isInline = att.isInline,
-                        contentId = att.contentId
-                    )
-                }
-            }
-        if (allAttachments.isNotEmpty()) {
-            attachmentDao.insertAll(allAttachments)
-        }
         
         val allInserted = toInsert + finalFiltered.filter { it.id in migratedEasIds }
         
@@ -1431,29 +1373,131 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         serverDraftIdsInFullResync?.addAll(changedIds)
         serverSentIdsInFullResync?.addAll(changedIds)
         
+        val draftEmailIdsToRefreshAtts = mutableListOf<Pair<String, String>>()
+        
         syncData.changedEmails.forEach { change ->
             val emailId = "${accountId}_${change.serverId}"
             change.read?.let { emailDao.updateReadStatus(emailId, it) }
             change.flagged?.let { emailDao.updateFlagStatus(emailId, it) }
             
-            if (folder.type == FolderType.DRAFTS && !change.body.isNullOrBlank()) {
-                val existing = emailDao.getEmail(emailId)
-                if (existing != null) {
-                    val existingBody = existing.body
-                    if (existingBody.isBlank()) {
-                        emailDao.updateBody(emailId, change.body)
-                    } else if (existingBody.contains("data:") && !change.body.contains("data:")) {
-                        val atts = attachmentDao.getAttachmentsList(emailId)
-                        val merged = mergeDraftBody(change.body, existingBody, atts)
-                        emailDao.updateBody(emailId, merged)
-                    } else {
-                        emailDao.updateBody(emailId, change.body)
+            if (folder.type == FolderType.DRAFTS) {
+                if (!change.body.isNullOrBlank()) {
+                    val existing = emailDao.getEmail(emailId)
+                    if (existing != null) {
+                        val existingBody = existing.body
+                        if (existingBody.isBlank()) {
+                            emailDao.updateBody(emailId, change.body)
+                            change.bodyType?.let { emailDao.updateBodyType(emailId, it) }
+                            val newPreview = stripHtml(change.body).take(150).replace("\n", " ").trim()
+                            emailDao.updatePreview(emailId, newPreview)
+                        } else if (existingBody.contains("data:") && !change.body.contains("data:")) {
+                            val atts = attachmentDao.getAttachmentsList(emailId)
+                            val merged = mergeDraftBody(change.body, atts, existingBody)
+                            emailDao.updateBody(emailId, merged)
+                            change.bodyType?.let { emailDao.updateBodyType(emailId, it) }
+                            val newPreview = stripHtml(change.body).take(150).replace("\n", " ").trim()
+                            emailDao.updatePreview(emailId, newPreview)
+                        } else if (!change.body.contains("cid:") || !existingBody.contains("data:")) {
+                            emailDao.updateBody(emailId, change.body)
+                            change.bodyType?.let { emailDao.updateBodyType(emailId, it) }
+                            val newPreview = stripHtml(change.body).take(150).replace("\n", " ").trim()
+                            emailDao.updatePreview(emailId, newPreview)
+                        }
                     }
-                    change.bodyType?.let { emailDao.updateBodyType(emailId, it) }
-                    val newPreview = stripHtml(change.body).take(150).replace("\n", " ").trim()
-                    emailDao.updatePreview(emailId, newPreview)
+                }
+                draftEmailIdsToRefreshAtts.add(emailId to change.serverId)
+            }
+        }
+        
+        if (draftEmailIdsToRefreshAtts.isNotEmpty()) {
+            syncDraftAttachmentsFromServer(accountId, folderId, draftEmailIdsToRefreshAtts)
+        }
+    }
+    
+    /**
+     * Подтягивает новые вложения с сервера для изменённых черновиков.
+     * Exchange 2007 SP1 / EAS 12.1: использует ItemOperations Fetch
+     * для получения актуального списка вложений (MS-ASAIRS 2.2.2.7).
+     */
+    private suspend fun syncDraftAttachmentsFromServer(
+        accountId: Long,
+        folderId: String,
+        drafts: List<Pair<String, String>>
+    ) {
+        try {
+            val client = accountRepo.createEasClient(accountId) ?: return
+            val folderServerId = folderId.substringAfter("_")
+            
+            for ((emailId, serverId) in drafts) {
+                if (serverId.contains("=") && !serverId.contains(":")) continue
+                val attResult = client.fetchAttachmentMetadata(folderServerId, serverId)
+                if (attResult is EasResult.Success) {
+                    reconcileAttachments(emailId, attResult.data)
                 }
             }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("EmailSync", "syncDraftAttachmentsFromServer failed: ${e.message}")
+        }
+    }
+    
+    /**
+     * Атомарно синхронизирует локальные вложения с серверными данными.
+     * Транзакция гарантирует отсутствие гонок с refreshAttachmentMetadata из UI.
+     * HTTP-вызов выполняется ДО входа в транзакцию — lock не держится во время сети.
+     * File.delete() выполняется ПОСЛЕ commit — необратимая IO-операция не должна
+     * выполняться внутри транзакции (при rollback файл не восстановить).
+     *
+     * Internal: также используется из EmailOperationsService.refreshAttachmentMetadata (DRY).
+     */
+    internal suspend fun reconcileAttachments(
+        emailId: String,
+        serverAttachments: List<com.dedovmosol.iwomail.eas.EasAttachment>
+    ) {
+        val serverNames = serverAttachments.map { it.displayName }.toSet()
+        
+        val filesToDelete = database.withTransaction {
+            val localAtts = attachmentDao.getAttachmentsList(emailId)
+            
+            val staleAtts = localAtts.filter { it.displayName !in serverNames }
+            val pathsToDelete = staleAtts.mapNotNull { it.localPath }
+            val staleIds = staleAtts.map { it.id }
+            if (staleIds.isNotEmpty()) {
+                attachmentDao.deleteByIds(staleIds)
+            }
+            
+            val localByName = localAtts.associateBy { it.displayName }
+            val newAtts = mutableListOf<AttachmentEntity>()
+            for (serverAtt in serverAttachments) {
+                val existing = localByName[serverAtt.displayName]
+                if (existing != null) {
+                    if (serverAtt.fileReference.isNotEmpty()) {
+                        attachmentDao.updateFileReference(emailId, serverAtt.displayName, serverAtt.fileReference)
+                    }
+                    if (!serverAtt.contentId.isNullOrBlank() && existing.contentId != serverAtt.contentId) {
+                        attachmentDao.updateContentId(existing.id, serverAtt.contentId, true)
+                    }
+                } else if (serverAtt.fileReference.isNotEmpty() || !serverAtt.contentId.isNullOrBlank()) {
+                    newAtts.add(AttachmentEntity(
+                        emailId = emailId,
+                        fileReference = serverAtt.fileReference,
+                        displayName = serverAtt.displayName,
+                        contentType = serverAtt.contentType,
+                        estimatedSize = serverAtt.estimatedSize,
+                        isInline = serverAtt.isInline || !serverAtt.contentId.isNullOrBlank(),
+                        contentId = serverAtt.contentId
+                    ))
+                }
+            }
+            if (newAtts.isNotEmpty()) {
+                attachmentDao.insertAll(newAtts)
+            }
+            
+            pathsToDelete
+        }
+        
+        for (path in filesToDelete) {
+            try { java.io.File(path).delete() } catch (_: Exception) {}
         }
     }
     
@@ -1497,7 +1541,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         if (orphan.bodyType != 0) emailDao.updateBodyType(matchingNew.id, orphan.bodyType)
                     } else if (orphan.body.contains("data:") && !newBody.contains("data:")) {
                         val mergeAtts = attachmentDao.getAttachmentsList(orphan.id)
-                        val merged = mergeDraftBody(newBody, orphan.body, mergeAtts)
+                        val merged = mergeDraftBody(newBody, mergeAtts, orphan.body)
                         emailDao.updateBody(matchingNew.id, merged)
                     }
                     migrateDraftFieldsToTarget(matchingNew.id, orphan.to, orphan.cc, orphan.from, orphan.fromName)
@@ -1549,7 +1593,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             
             result.fold(
                 onSuccess = { emails ->
-                    emailDao.insertAll(emails)
+                    emailDao.insertAllIgnore(emails)
                     val unreadCount = emailDao.getUnreadCount(folderId)
                     folderDao.updateUnreadCount(folderId, unreadCount)
                     EasResult.Success(emails.size)
@@ -1579,7 +1623,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             
             result.fold(
                 onSuccess = { emails ->
-                    emailDao.insertAll(emails)
+                    emailDao.insertAllIgnore(emails)
                     val unreadCount = emailDao.getUnreadCount(folderId)
                     folderDao.updateUnreadCount(folderId, unreadCount)
                     EasResult.Success(emails.size)
@@ -1606,43 +1650,21 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         }
     }
     
-   private fun parseDate(dateStr: String): Long {
-    if (dateStr.isEmpty()) {
-        return 0L
-    }
-    
-    return try {
-        // Нормализуем timezone: Z → +0000, +04:00 → +0400
-        var cleaned = dateStr.replace("Z", "+0000")
-        // Убираем двоеточие в timezone offset: +04:00 → +0400, -05:30 → -0530
-        cleaned = cleaned.replace(Regex("([+-])(\\d{2}):(\\d{2})$"), "$1$2$3")
-        
-        val formats = listOf(
-            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-            "yyyy-MM-dd'T'HH:mm:ssZ",
-            "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd HH:mm:ss",
-            "EEE, dd MMM yyyy HH:mm:ss Z",
-            "dd MMM yyyy HH:mm:ss Z"
-        )
-        
-        for (format in formats) {
-            try {
-                val sdf = java.text.SimpleDateFormat(format, java.util.Locale.US)
-                sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                val date = sdf.parse(cleaned)
-                if (date != null) {
-                    return date.time
-                }
-            } catch (e: Exception) {
-                // Пробуем следующий формат
+    private fun parseDate(dateStr: String): Long {
+        if (dateStr.isEmpty()) return 0L
+        return try {
+            var cleaned = dateStr.replace("Z", "+0000")
+            cleaned = cleaned.replace(tzColonRegex, "$1$2$3")
+            val formatters = threadLocalDateFormats.get()!!
+            for (sdf in formatters) {
+                try {
+                    val date = sdf.parse(cleaned)
+                    if (date != null) return date.time
+                } catch (_: Exception) {}
             }
-        }
-        0L
-    } catch (e: Exception) {
-        0L
+            0L
+        } catch (_: Exception) { 0L }
     }
-}
     
     private fun extractName(emailField: String): String {
         if (emailField.isBlank()) return ""
@@ -1670,50 +1692,69 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     /**
      * Мержит серверный body (с текстовыми изменениями из Outlook) и локальные data: URL.
      *
-     * Стратегия: берём НОВЫЙ body (текст из Outlook) + заменяем cid: на data: URL:
-     * 1. Через contentId → localPath → файл → base64 → data: URL
-     * 2. Fallback: извлекаем data: URL из старого body по порядку
+     * Стратегия:
+     * 1. Берём НОВЫЙ body (текст из Outlook) + заменяем cid: на data: URL
+     *    через contentId → localPath → файл → base64 → data: URL.
+     * 2. Fallback: если localPath отсутствует, извлекаем data: URL из existingBody.
+     *    Маппинг: contentId вида "imgN_timestamp" → N-я data: URL в existingBody.
+     * 3. Нерезолвленные cid: (новые картинки из Outlook) остаются —
+     *    fetchInlineImages при открытии письма подгрузит через ItemOperations.
+     *
+     * @param existingBody текущий body в БД (содержит data: URLs из предыдущего merge)
      */
     private fun mergeDraftBody(
         newBody: String,
-        oldBody: String,
-        localAttachments: List<AttachmentEntity>
+        localAttachments: List<AttachmentEntity>,
+        existingBody: String = ""
     ): String {
-        if (newBody.isBlank()) return oldBody
-        if (!oldBody.contains("data:")) return newBody
+        if (newBody.isBlank()) return newBody
         if (!newBody.contains("cid:")) return newBody
 
         var mergedBody = newBody
 
-        // Стратегия 1: contentId → localPath → file → data: URL
         val inlineAtts = localAttachments.filter {
-            it.isInline && !it.contentId.isNullOrBlank() && !it.localPath.isNullOrBlank()
-        }
-        for (att in inlineAtts) {
-            val localFile = java.io.File(att.localPath!!)
-            if (!localFile.exists()) continue
-            try {
-                val bytes = localFile.readBytes()
-                val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                val dataUrl = "data:$mimeType;base64,$base64"
-                mergedBody = mergedBody.replace("cid:${att.contentId}", dataUrl)
-            } catch (e: Exception) {
-                android.util.Log.w("EmailSyncService", "mergeDraftBody: failed to read ${att.localPath}: ${e.message}")
-            }
+            it.isInline && !it.contentId.isNullOrBlank()
         }
 
-        // Стратегия 2 (fallback): позиционный мэтч из data: URL старого body
-        if (mergedBody.contains("cid:")) {
-            val oldDataUrls = """src\s*=\s*"(data:[^"]+)"""".toRegex()
-                .findAll(oldBody).map { it.groupValues[1] }.toList()
-            if (oldDataUrls.isNotEmpty()) {
-                val cidPattern = """cid:[^"'\s)]+""".toRegex()
-                val remainingCids = cidPattern.findAll(mergedBody).map { it.value }.toList()
-                for ((i, cid) in remainingCids.withIndex()) {
-                    if (i < oldDataUrls.size) {
-                        mergedBody = mergedBody.replaceFirst(cid, oldDataUrls[i])
+        val dataUrlsFromExisting: List<String> by lazy {
+            DATA_URL_EXTRACT_REGEX.findAll(existingBody).map { it.groupValues[0] }.toList()
+        }
+
+        for (att in inlineAtts) {
+            val cleanCid = att.contentId!!.removeSurrounding("<", ">")
+            if (!mergedBody.contains("cid:$cleanCid") &&
+                (cleanCid == att.contentId || !mergedBody.contains("cid:${att.contentId}"))) continue
+
+            var dataUrl: String? = null
+
+            if (!att.localPath.isNullOrBlank()) {
+                val localFile = java.io.File(att.localPath)
+                if (localFile.exists()) {
+                    try {
+                        val bytes = localFile.readBytes()
+                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                        val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                        dataUrl = "data:$mimeType;base64,$base64"
+                    } catch (e: Exception) {
+                        android.util.Log.w("EmailSyncService", "mergeDraftBody: failed to read ${att.localPath}: ${e.message}")
                     }
+                }
+            }
+
+            if (dataUrl == null && existingBody.isNotBlank()) {
+                val ordinalMatch = IMG_ORDINAL_REGEX.find(cleanCid)
+                if (ordinalMatch != null) {
+                    val idx = ordinalMatch.groupValues[1].toIntOrNull()
+                    if (idx != null && idx > 0 && idx <= dataUrlsFromExisting.size) {
+                        dataUrl = dataUrlsFromExisting[idx - 1]
+                    }
+                }
+            }
+
+            if (dataUrl != null) {
+                mergedBody = mergedBody.replace("cid:$cleanCid", dataUrl)
+                if (cleanCid != att.contentId) {
+                    mergedBody = mergedBody.replace("cid:${att.contentId}", dataUrl)
                 }
             }
         }
@@ -1733,14 +1774,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             .replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("&quot;", "\"")
-            .replace(HtmlRegex.HTML_ENTITY) { match ->
-                try {
-                    val code = match.value.drop(2).dropLast(1).toInt()
-                    code.toChar().toString()
-                } catch (e: Exception) {
-                    ""
-                }
-            }
+            .replace(HtmlRegex.HTML_ENTITY) { HtmlRegex.decodeNumericEntity(it) }
             .replace(WHITESPACE_REGEX, " ")
             .trim()
     }

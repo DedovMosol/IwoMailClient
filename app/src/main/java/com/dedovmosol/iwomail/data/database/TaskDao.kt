@@ -54,7 +54,7 @@ interface TaskDao {
         SELECT * FROM tasks 
         WHERE accountId = :accountId 
         AND isDeleted = 0
-        AND (subject LIKE '%' || :query || '%' OR body LIKE '%' || :query || '%')
+        AND (subject LIKE '%' || :query || '%' ESCAPE '\' OR body LIKE '%' || :query || '%' ESCAPE '\')
         ORDER BY complete ASC, dueDate ASC
     """)
     suspend fun searchTasks(accountId: Long, query: String): List<TaskEntity>

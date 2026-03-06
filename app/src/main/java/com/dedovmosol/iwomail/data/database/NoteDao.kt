@@ -44,7 +44,7 @@ interface NoteDao {
     @Query("""
         SELECT * FROM notes 
         WHERE accountId = :accountId 
-        AND (subject LIKE '%' || :query || '%' OR body LIKE '%' || :query || '%')
+        AND (subject LIKE '%' || :query || '%' ESCAPE '\' OR body LIKE '%' || :query || '%' ESCAPE '\')
         ORDER BY lastModified DESC
     """)
     suspend fun searchNotes(accountId: Long, query: String): List<NoteEntity>

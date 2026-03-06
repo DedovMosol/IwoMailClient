@@ -156,10 +156,12 @@ fun ExchangeMailTheme(
     }
     
     val currentDensity = LocalDensity.current
-    val scaledDensity = Density(
-        density = currentDensity.density,
-        fontScale = currentDensity.fontScale * fontScale
-    )
+    val scaledDensity = remember(currentDensity, fontScale) {
+        Density(
+            density = currentDensity.density,
+            fontScale = currentDensity.fontScale * fontScale
+        )
+    }
 
     CompositionLocalProvider(
         LocalDensity provides scaledDensity,
@@ -201,13 +203,6 @@ fun ScaledAlertDialog(
     tonalElevation: androidx.compose.ui.unit.Dp = AlertDialogDefaults.TonalElevation,
     properties: DialogProperties = DialogProperties()
 ) {
-    val fontScale = LocalFontScale.current
-    val baseDensity = LocalDensity.current
-    val scaledDensity = Density(
-        density = baseDensity.density,
-        fontScale = baseDensity.fontScale * fontScale
-    )
-    // Ограничиваем высоту диалога: не больше 92% экрана и не больше 600dp
     val configuration = LocalConfiguration.current
     val maxDialogHeight = (configuration.screenHeightDp * 0.92f).dp.coerceAtMost(600.dp)
     
@@ -228,7 +223,6 @@ fun ScaledAlertDialog(
                 ) { onDismissRequest() },
             contentAlignment = Alignment.Center
         ) {
-        CompositionLocalProvider(LocalDensity provides scaledDensity) {
             Surface(
                 modifier = modifier
                     .wrapContentHeight()
@@ -385,7 +379,6 @@ fun ScaledAlertDialog(
                     }
                 }
             }
-        }
         } // Box centering
     }
 }
@@ -409,12 +402,6 @@ fun StyledAlertDialog(
     text: @Composable (() -> Unit)? = null,
     properties: DialogProperties = DialogProperties()
 ) {
-    val fontScale = LocalFontScale.current
-    val baseDensity = LocalDensity.current
-    val scaledDensity = Density(
-        density = baseDensity.density,
-        fontScale = baseDensity.fontScale * fontScale
-    )
     val colorTheme = LocalColorTheme.current
     val animationsEnabled = LocalAnimationsEnabled.current
     
@@ -440,7 +427,6 @@ fun StyledAlertDialog(
         onDismissRequest = onDismissRequest,
         properties = properties
     ) {
-        CompositionLocalProvider(LocalDensity provides scaledDensity) {
             androidx.compose.material3.Card(
                 modifier = modifier
                     .fillMaxWidth()
@@ -542,7 +528,6 @@ fun StyledAlertDialog(
                     }
                 }
             }
-        }
     }
 }
 

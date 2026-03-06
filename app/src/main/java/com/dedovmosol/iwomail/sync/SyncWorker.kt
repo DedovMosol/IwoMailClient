@@ -15,7 +15,7 @@ import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.database.SyncMode
-import com.dedovmosol.iwomail.data.repository.MailRepository
+import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
@@ -32,7 +32,7 @@ class SyncWorker(
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
     
-    private val mailRepo = MailRepository(applicationContext)
+    private val mailRepo = RepositoryProvider.getMailRepository(applicationContext)
     private val settingsRepo = SettingsRepository.getInstance(applicationContext)
     private val database = MailDatabase.getInstance(applicationContext)
     
@@ -49,7 +49,7 @@ class SyncWorker(
      */
     private fun getShownNotifications(context: Context): Set<String> {
         val prefs = context.getSharedPreferences("push_notifications", Context.MODE_PRIVATE)
-        return prefs.getStringSet("shown_notifications", emptySet()) ?: emptySet()
+        return prefs.getStringSet("shown_notifications", emptySet())?.toSet() ?: emptySet()
     }
     
     /**
@@ -110,12 +110,7 @@ class SyncWorker(
         // Это дополнительная защита на случай если сервис был остановлен системой
         checkAndStartPushService(accounts)
         
-        var lastNotificationCheck = settingsRepo.getLastNotificationCheckTimeSync()
-        // При первом запуске (lastNotificationCheck = 0) не показываем уведомления для старых писем
-        val isFirstRun = lastNotificationCheck == 0L
-        if (isFirstRun) {
-            lastNotificationCheck = System.currentTimeMillis() - 60_000 // Только письма за последнюю минуту
-        }
+        val globalNotifFallback = settingsRepo.getLastNotificationCheckTimeSync()
         
         // Собираем новые письма по аккаунтам
         val newEmailsByAccount = mutableMapOf<Long, MutableList<NewEmailInfo>>()
@@ -201,10 +196,13 @@ class SyncWorker(
                 if (!success) hasErrors = true
             }
             
-            // КРИТИЧНО: getNewEmailsForNotification не зависит от статуса прочитанности
-            val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
+            var accountNotifCheck = getNotifCheckTime(applicationContext, account.id, globalNotifFallback)
+            if (accountNotifCheck == 0L) {
+                accountNotifCheck = System.currentTimeMillis() - 60_000
+            }
+
+            val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, accountNotifCheck)
             
-            // Фильтруем уже показанные уведомления
             val shownNotifications = getShownNotifications(applicationContext)
             val filteredEmails = newEmailEntities.filter { email ->
                 val notifKey = "${account.id}_${email.id}"
@@ -217,7 +215,8 @@ class SyncWorker(
                     accountEmails.add(NewEmailInfo(email.id, email.fromName, email.from, email.subject, email.dateReceived))
                 }
             }
-            
+
+            saveNotifCheckTime(applicationContext, account.id, System.currentTimeMillis())
         }
         
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
@@ -297,7 +296,7 @@ class SyncWorker(
         // Явно убираем уведомление о синхронизации
         cancelSyncNotification()
         
-        return Result.success()
+        return if (hasErrors && !isManualSync) Result.retry() else Result.success()
     }
     
     /**
@@ -359,6 +358,13 @@ class SyncWorker(
     }
     
     private fun showSyncCompleteNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                applicationContext, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasPermission) return
+        }
+        
         val isRussian = settingsRepo.getLanguageSync() == "ru"
         
         val notification = NotificationCompat.Builder(applicationContext, MailApplication.CHANNEL_SYNC_STATUS)
@@ -406,7 +412,7 @@ class SyncWorker(
         val uniqueRequestCode = if (count == 1 && latestEmail != null) {
             latestEmail.id.hashCode()
         } else {
-            accountId.toInt() + 10000
+            100_000 + accountId.toInt()
         }
         
         val pendingIntent = PendingIntent.getActivity(
@@ -442,7 +448,7 @@ class SyncWorker(
         }
         
         // Кнопка «Прочитано» — помечает письма как прочитанные на сервере
-        val notificationId = 3000 + accountId.toInt()
+        val notificationId = 200_000 + accountId.toInt()
         val markReadIntent = Intent(applicationContext, MailNotificationActionReceiver::class.java).apply {
             action = MailNotificationActionReceiver.ACTION_MARK_READ
             putExtra(MailNotificationActionReceiver.EXTRA_ACCOUNT_ID, accountId)
@@ -488,14 +494,16 @@ class SyncWorker(
 
                         var folderFailed = false
                         for (trashFolder in trashFolders) {
-                            val allEmails = database.emailDao().getEmailsByFolderList(trashFolder.id)
-                            if (allEmails.isNotEmpty()) {
-                                val emailIds = allEmails.map { it.id }
-                                val result = mailRepo.deleteEmailsPermanently(emailIds)
-                                if (result is EasResult.Error) {
-                                    folderFailed = true
-                                    hasCleanupErrors = true
-                                    android.util.Log.w("SyncWorker", "Auto cleanup trash failed for account ${account.id}: ${result.message}")
+                            val emailIds = database.emailDao().getEmailIdsByFolder(trashFolder.id)
+                            if (emailIds.isNotEmpty()) {
+                                for (batch in emailIds.chunked(200)) {
+                                    val result = mailRepo.deleteEmailsPermanently(batch)
+                                    if (result is EasResult.Error) {
+                                        folderFailed = true
+                                        hasCleanupErrors = true
+                                        android.util.Log.w("SyncWorker", "Auto cleanup trash failed for account ${account.id}: ${result.message}")
+                                        break
+                                    }
                                 }
                             }
                         }
@@ -542,14 +550,16 @@ class SyncWorker(
 
                         var spamFailed = false
                         for (spamFolder in spamFolders) {
-                            val allEmails = database.emailDao().getEmailsByFolderList(spamFolder.id)
-                            if (allEmails.isNotEmpty()) {
-                                val emailIds = allEmails.map { it.id }
-                                val result = mailRepo.deleteEmailsPermanently(emailIds)
-                                if (result is EasResult.Error) {
-                                    spamFailed = true
-                                    hasCleanupErrors = true
-                                    android.util.Log.w("SyncWorker", "Auto cleanup spam failed for account ${account.id}: ${result.message}")
+                            val emailIds = database.emailDao().getEmailIdsByFolder(spamFolder.id)
+                            if (emailIds.isNotEmpty()) {
+                                for (batch in emailIds.chunked(200)) {
+                                    val result = mailRepo.deleteEmailsPermanently(batch)
+                                    if (result is EasResult.Error) {
+                                        spamFailed = true
+                                        hasCleanupErrors = true
+                                        android.util.Log.w("SyncWorker", "Auto cleanup spam failed for account ${account.id}: ${result.message}")
+                                        break
+                                    }
                                 }
                             }
                         }
@@ -580,7 +590,7 @@ class SyncWorker(
      * Загружает контакты и сохраняет в локальную БД
      */
     private suspend fun syncGalContacts(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
-        val contactRepo = com.dedovmosol.iwomail.data.repository.ContactRepository(applicationContext)
+        val contactRepo = RepositoryProvider.getContactRepository(applicationContext)
         
         for (account in accounts) {
             // Только для Exchange аккаунтов
@@ -614,7 +624,7 @@ class SyncWorker(
      * Синхронизация заметок для Exchange аккаунтов
      */
     private suspend fun syncNotes(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
-        val noteRepo = com.dedovmosol.iwomail.data.repository.NoteRepository(applicationContext)
+        val noteRepo = RepositoryProvider.getNoteRepository(applicationContext)
         
         for (account in accounts) {
             // Только для Exchange аккаунтов
@@ -645,7 +655,7 @@ class SyncWorker(
      * Синхронизация календаря для Exchange аккаунтов
      */
     private suspend fun syncCalendar(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
-        val calendarRepo = com.dedovmosol.iwomail.data.repository.CalendarRepository(applicationContext)
+        val calendarRepo = RepositoryProvider.getCalendarRepository(applicationContext)
         
         for (account in accounts) {
             // Только для Exchange аккаунтов
@@ -676,7 +686,7 @@ class SyncWorker(
      * Синхронизация задач для Exchange аккаунтов
      */
     private suspend fun syncTasks(accounts: List<com.dedovmosol.iwomail.data.database.AccountEntity>) {
-        val taskRepo = com.dedovmosol.iwomail.data.repository.TaskRepository(applicationContext)
+        val taskRepo = RepositoryProvider.getTaskRepository(applicationContext)
         
         for (account in accounts) {
             // Только для Exchange аккаунтов
@@ -709,6 +719,38 @@ class SyncWorker(
         private const val SYNC_COMPLETE_NOTIFICATION_ID = 9999
         private const val SYNC_NOTIFICATION_ID = 9998 // ID для foreground уведомления
         const val ONE_DAY_MS = 24 * 60 * 60 * 1000L // 24 часа в миллисекундах
+
+        private const val NOTIF_PREFS = "sync_worker_notif_check"
+        private val perAccountNotifTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+        @Volatile private var notifTimesLoaded = false
+
+        private fun loadNotifTimes(context: Context) {
+            if (notifTimesLoaded) return
+            synchronized(perAccountNotifTimes) {
+                if (notifTimesLoaded) return
+                try {
+                    val prefs = context.getSharedPreferences(NOTIF_PREFS, Context.MODE_PRIVATE)
+                    for ((key, value) in prefs.all) {
+                        val accountId = key.toLongOrNull() ?: continue
+                        perAccountNotifTimes[accountId] = (value as? Long) ?: continue
+                    }
+                } catch (_: Exception) {}
+                notifTimesLoaded = true
+            }
+        }
+
+        private fun getNotifCheckTime(context: Context, accountId: Long, globalFallback: Long): Long {
+            loadNotifTimes(context)
+            return perAccountNotifTimes[accountId] ?: globalFallback
+        }
+
+        private fun saveNotifCheckTime(context: Context, accountId: Long, time: Long) {
+            perAccountNotifTimes[accountId] = time
+            try {
+                context.getSharedPreferences(NOTIF_PREFS, Context.MODE_PRIVATE)
+                    .edit().putLong(accountId.toString(), time).apply()
+            } catch (_: Exception) {}
+        }
         
         fun schedule(context: Context, intervalMinutes: Long = 15, wifiOnly: Boolean = false) {
             if (intervalMinutes <= 0) {

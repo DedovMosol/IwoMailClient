@@ -122,7 +122,7 @@ fun TasksScreen(
     val editingTask = remember(editingTaskId, allTasks) {
         editingTaskId?.let { id -> allTasks.find { it.id == id } }
     }
-    var isCreating by rememberSaveable { mutableStateOf(false) }
+    var isCreating by remember { mutableStateOf(false) }
     var currentFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
     

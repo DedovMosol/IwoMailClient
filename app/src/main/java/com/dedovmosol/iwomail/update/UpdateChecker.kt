@@ -215,6 +215,7 @@ class UpdateChecker(context: Context) {
                     UpdateResult.UpToDate
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 lastError = e
                 if (attempt < MAX_RETRY_ATTEMPTS - 1) {
                     kotlinx.coroutines.delay(1000L * (attempt + 1))
@@ -314,6 +315,7 @@ class UpdateChecker(context: Context) {
                     PreviousVersionResult.NotAvailable
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 lastError = e
                 if (attempt < MAX_RETRY_ATTEMPTS - 1) {
                     kotlinx.coroutines.delay(1000L * (attempt + 1))

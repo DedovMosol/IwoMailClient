@@ -8,6 +8,7 @@ import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
 import com.dedovmosol.iwomail.util.HtmlRegex
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.withLock
 
 // Предкомпилированные regex для производительности
 private val CN_REGEX = Regex("CN=([^/><]+)", RegexOption.IGNORE_CASE)
@@ -27,6 +28,10 @@ class MailRepository(private val context: Context) {
     private val database = MailDatabase.getInstance(context)
     private val accountRepo = RepositoryProvider.getAccountRepository(context)
     
+    companion object {
+        private val SAFE_FILENAME_REGEX = Regex("[^a-zA-Z0-9._\\-а-яА-ЯёЁ]")
+    }
+    
     private val folderDao = database.folderDao()
     private val emailDao = database.emailDao()
     private val attachmentDao = database.attachmentDao()
@@ -38,7 +43,6 @@ class MailRepository(private val context: Context) {
     // вместо полного сброса кэша (устраняет "cache clear storm")
     private val emailNameCache = android.util.LruCache<String, String>(5000)
     @Volatile private var cacheInitialized = false
-    private var contactsDatabase: MailDatabase? = null
     
     private val emailExtractRegex = Regex("<([^>]+)>")
     
@@ -53,10 +57,14 @@ class MailRepository(private val context: Context) {
     }
     
     suspend fun getNameFromContacts(email: String): String? {
-        val db = contactsDatabase ?: return null
+        if (!cacheInitialized) return null
+        val db = database
         return try {
             db.contactDao().getNameByEmail(email)
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            null
+        }
     }
     
     fun cacheName(email: String, name: String) {
@@ -68,45 +76,44 @@ class MailRepository(private val context: Context) {
         }
     }
     
+    private val cacheInitMutex = kotlinx.coroutines.sync.Mutex()
+    
     suspend fun initCacheFromDb() {
         if (cacheInitialized) return
-        synchronized(this) {
+        cacheInitMutex.withLock {
             if (cacheInitialized) return
-            cacheInitialized = true
+            try {
+                val accounts = database.accountDao().getAllAccountsList()
+                for (account in accounts) {
+                    val pairs = database.contactDao().getContactEmailNames(account.id)
+                    for ((email, name) in pairs) {
+                        emailNameCache.put(extractEmail(email), name)
+                    }
+                }
+                
+                val senderPairs = database.emailDao().getAllSenderNames()
+                for ((rawEmail, name) in senderPairs) {
+                    if (rawEmail.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
+                        val key = extractEmail(rawEmail)
+                        if (emailNameCache.get(key) == null) {
+                            emailNameCache.put(key, name)
+                        }
+                    }
+                }
+                cacheInitialized = true
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            }
         }
-        
-        try {
-            contactsDatabase = database
-            
-            val accounts = database.accountDao().getAllAccountsList()
-            for (account in accounts) {
-                val contacts = database.contactDao().getContactsByAccountList(account.id)
-                for (contact in contacts) {
-                    if (contact.email.isNotBlank() && contact.displayName.isNotBlank() && !contact.displayName.contains("@")) {
-                        emailNameCache.put(extractEmail(contact.email), contact.displayName)
-                    }
-                }
-            }
-            
-            val senderPairs = database.emailDao().getAllSenderNames()
-            for ((rawEmail, name) in senderPairs) {
-                if (rawEmail.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
-                    val key = extractEmail(rawEmail)
-                    if (emailNameCache.get(key) == null) {
-                        emailNameCache.put(key, name)
-                    }
-                }
-            }
-        } catch (_: Exception) { }
     }
     
     // Сервисы (lazy для избежания циклических зависимостей)
     private val folderSyncService by lazy {
-        FolderSyncService(context, folderDao, emailDao, accountDao, accountRepo)
+        FolderSyncService(context, folderDao, emailDao, accountDao, accountRepo, database)
     }
     
     private val emailSyncService by lazy {
-        EmailSyncService(context, folderDao, emailDao, attachmentDao, accountDao, accountRepo) { email, name ->
+        EmailSyncService(context, folderDao, emailDao, attachmentDao, accountDao, accountRepo, database) { email, name ->
             cacheName(email, name)
         }
     }
@@ -273,7 +280,7 @@ class MailRepository(private val context: Context) {
     }
     
     suspend fun getAttachmentsForEmails(emailIds: List<String>): List<AttachmentEntity> {
-        return attachmentDao.getAttachmentsForEmails(emailIds)
+        return emailIds.chunked(500).flatMap { attachmentDao.getAttachmentsForEmails(it) }
     }
     
     suspend fun search(accountId: Long, query: String): List<EmailEntity> {
@@ -286,7 +293,7 @@ class MailRepository(private val context: Context) {
     }
     
     suspend fun getEmailsByIds(ids: List<String>): List<EmailEntity> {
-        return emailDao.getEmailsByIds(ids)
+        return ids.chunked(500).flatMap { emailDao.getEmailsByIds(it) }
     }
     
     suspend fun getUnreadCount(accountId: Long): Int {
@@ -462,7 +469,7 @@ if (result is EasResult.Success) {
         
         return attachments.mapNotNull { att ->
             try {
-                val safeFileName = att.name.replace(Regex("[^a-zA-Z0-9._\\-а-яА-ЯёЁ]"), "_")
+                val safeFileName = att.name.replace(SAFE_FILENAME_REGEX, "_")
                 val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                 file.writeBytes(att.data)
                 AttachmentEntity(
@@ -495,7 +502,9 @@ if (result is EasResult.Success) {
                     try { java.io.File(path).delete() } catch (_: Exception) {}
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+        }
     }
 
    suspend fun updateDraft(
@@ -670,16 +679,16 @@ if (result is EasResult.Success) {
                 }
             }
             
-            // Шаг 2: Если serverId — EAS формат (5:8), ищем по индексу.
-            // КРИТИЧНО: проверяем что найденный ItemId НЕ равен excludeEwsItemId
-            // (новый черновик, который был только что создан через saveDraft).
             if (actualServerId.contains(":")) {
-                val draftItemId = easClient.findDraftItemIdByIndex(actualServerId)
-                if (draftItemId != null && draftItemId != excludeEwsItemId) {
-                    val ewsDeleteResult = easClient.deleteEmailPermanentlyViaEWS(draftItemId)
-                    if (ewsDeleteResult is EasResult.Success) {
-                        finalizeDraftDeletion()
-                        return EasResult.Success(true)
+                val draftSubject = freshEmail?.subject ?: ""
+                if (draftSubject.isNotBlank()) {
+                    val draftItemId = easClient.findDraftItemIdBySubject(draftSubject)
+                    if (draftItemId != null && draftItemId != excludeEwsItemId) {
+                        val ewsDeleteResult = easClient.deleteEmailPermanentlyViaEWS(draftItemId)
+                        if (ewsDeleteResult is EasResult.Success) {
+                            finalizeDraftDeletion()
+                            return EasResult.Success(true)
+                        }
                     }
                 }
             }
@@ -732,9 +741,11 @@ if (result is EasResult.Success) {
             // но finalizeDraftDeletion() всё равно очистит локально.
             val syncKey = folderDao.getFolder(draftsFolder.id)?.syncKey ?: draftsFolder.syncKey
             if (syncKey != "0") {
-                easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, syncKey)
+                val delResult = easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, syncKey)
+                if (delResult is EasResult.Error) {
+                    android.util.Log.w("MailRepository", "EAS draft delete failed (will reappear on next sync): ${delResult.message}")
+                }
             }
-            // Независимо от результата — удаляем локально
             finalizeDraftDeletion()
             return EasResult.Success(true)
         }
@@ -887,59 +898,56 @@ if (result is EasResult.Success) {
      */
     suspend fun repairXmlEntities() {
         try {
-            val db = database.openHelper.writableDatabase
-            db.beginTransaction()
-            try {
-            val repairEmailsSql = """
-                UPDATE emails SET 
-                    body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    `from` = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(`from`, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    `to` = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(`to`, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    cc = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(cc, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    preview = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(preview, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    fromName = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(fromName, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
-                WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%' OR `from` LIKE '%&lt;%'
-                   OR `to` LIKE '%&lt;%' OR cc LIKE '%&lt;%' OR preview LIKE '%&lt;%' OR fromName LIKE '%&lt;%'
-            """.trimIndent()
-            db.execSQL(repairEmailsSql) // Проход 1
-            db.execSQL(repairEmailsSql) // Проход 2 (двойное кодирование)
-            
-            val repairNotesSql = """
-                UPDATE notes SET 
-                    subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
-                WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%'
-            """.trimIndent()
-            db.execSQL(repairNotesSql)
-            db.execSQL(repairNotesSql)
-            
-            val repairCalendarSql = """
-                UPDATE calendar_events SET 
-                    subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    location = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(location, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    organizer = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(organizer, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
-                WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%' OR location LIKE '%&lt;%' OR organizer LIKE '%&lt;%'
-            """.trimIndent()
-            db.execSQL(repairCalendarSql)
-            db.execSQL(repairCalendarSql)
-            
-            val repairTasksSql = """
-                UPDATE tasks SET 
-                    subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
-                    body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
-                WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%'
-            """.trimIndent()
-            db.execSQL(repairTasksSql)
-            db.execSQL(repairTasksSql)
-            
-            db.setTransactionSuccessful()
-            android.util.Log.i("MailRepository", "XML entity repair completed for emails, notes, calendar, tasks")
-            } finally {
-                db.endTransaction()
+            database.withTransaction {
+                val db = database.openHelper.writableDatabase
+                val repairEmailsSql = """
+                    UPDATE emails SET 
+                        body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        `from` = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(`from`, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        `to` = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(`to`, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        cc = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(cc, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        preview = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(preview, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        fromName = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(fromName, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
+                    WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%' OR `from` LIKE '%&lt;%'
+                       OR `to` LIKE '%&lt;%' OR cc LIKE '%&lt;%' OR preview LIKE '%&lt;%' OR fromName LIKE '%&lt;%'
+                """.trimIndent()
+                db.execSQL(repairEmailsSql)
+                db.execSQL(repairEmailsSql)
+
+                val repairNotesSql = """
+                    UPDATE notes SET 
+                        subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
+                    WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%'
+                """.trimIndent()
+                db.execSQL(repairNotesSql)
+                db.execSQL(repairNotesSql)
+
+                val repairCalendarSql = """
+                    UPDATE calendar_events SET 
+                        subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        location = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(location, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        organizer = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(organizer, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
+                    WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%' OR location LIKE '%&lt;%' OR organizer LIKE '%&lt;%'
+                """.trimIndent()
+                db.execSQL(repairCalendarSql)
+                db.execSQL(repairCalendarSql)
+
+                val repairTasksSql = """
+                    UPDATE tasks SET 
+                        subject = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(subject, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&'),
+                        body = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(body, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&apos;', ''''), '&amp;', '&')
+                    WHERE body LIKE '%&lt;%' OR subject LIKE '%&lt;%'
+                """.trimIndent()
+                db.execSQL(repairTasksSql)
+                db.execSQL(repairTasksSql)
+
+                android.util.Log.i("MailRepository", "XML entity repair completed for emails, notes, calendar, tasks")
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("MailRepository", "XML entity repair failed", e)
         }
     }
@@ -957,14 +965,7 @@ if (result is EasResult.Success) {
             .replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("&quot;", "\"")
-            .replace(HtmlRegex.HTML_ENTITY) { match ->
-                try {
-                    val code = match.value.drop(2).dropLast(1).toInt()
-                    code.toChar().toString()
-                } catch (e: Exception) {
-                    ""
-                }
-            }
+            .replace(HtmlRegex.HTML_ENTITY) { HtmlRegex.decodeNumericEntity(it) }
             .replace(WHITESPACE_REGEX, " ")
             .trim()
     }

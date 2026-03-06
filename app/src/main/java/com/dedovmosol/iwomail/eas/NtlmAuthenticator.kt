@@ -25,15 +25,17 @@ class NtlmAuthenticator(
         private const val NTLM_FLAG_NEGOTIATE_NTLM = 0x00000200
         private const val NTLM_FLAG_NEGOTIATE_ALWAYS_SIGN = 0x00008000
         private const val NTLM_FLAG_NEGOTIATE_NTLM2_KEY = 0x00080000
-        private const val NTLM_FLAG_NEGOTIATE_128 = 0x02000000
-        private const val NTLM_FLAG_NEGOTIATE_56 = 0x20000000
+        // MS-NLMP 2.2.2.5: bit 25 (0x02000000) = NTLMSSP_NEGOTIATE_VERSION
+        private const val NTLM_FLAG_NEGOTIATE_VERSION = 0x02000000
+        // MS-NLMP 2.2.2.5: bit 29 (0x20000000) = NTLMSSP_NEGOTIATE_128
+        private const val NTLM_FLAG_NEGOTIATE_128 = 0x20000000
     }
     
     /**
      * Создаёт NTLM Type 1 (Negotiate) сообщение
      */
     fun createType1Message(): ByteArray {
-        val domainBytes = domain.uppercase().toByteArray(Charsets.US_ASCII)
+        val domainBytes = domain.uppercase(java.util.Locale.ROOT).toByteArray(Charsets.US_ASCII)
         val workstationBytes = WORKSTATION.toByteArray(Charsets.US_ASCII)
         
         val flags = NTLM_FLAG_NEGOTIATE_UNICODE or
@@ -43,7 +45,7 @@ class NtlmAuthenticator(
                     NTLM_FLAG_NEGOTIATE_ALWAYS_SIGN or
                     NTLM_FLAG_NEGOTIATE_NTLM2_KEY or
                     NTLM_FLAG_NEGOTIATE_128 or
-                    NTLM_FLAG_NEGOTIATE_56
+                    NTLM_FLAG_NEGOTIATE_VERSION
         
         val message = ByteArrayOutputStream()
         
@@ -58,7 +60,8 @@ class NtlmAuthenticator(
         writeInt32LE(message, flags)
         
         // Domain (security buffer): length, allocated, offset
-        val domainOffset = 32
+        // MS-NLMP 2.2.1.1: Version(8 bytes) at offset 32 → payload starts at 40
+        val domainOffset = 40
         writeInt16LE(message, domainBytes.size)
         writeInt16LE(message, domainBytes.size)
         writeInt32LE(message, domainOffset)
@@ -68,6 +71,9 @@ class NtlmAuthenticator(
         writeInt16LE(message, workstationBytes.size)
         writeInt16LE(message, workstationBytes.size)
         writeInt32LE(message, workstationOffset)
+        
+        // Version (8 bytes): MS-NLMP 2.2.2.10 — required when NTLMSSP_NEGOTIATE_VERSION is set
+        message.write(byteArrayOf(6, 1, 0, 0, 0, 0, 0, 15))
         
         // Domain and workstation data
         message.write(domainBytes)
@@ -89,7 +95,7 @@ class NtlmAuthenticator(
         val targetInfo = extractTargetInfo(type2Message)
         
         // Подготавливаем данные
-        val domainUnicode = domain.uppercase().toByteArray(Charsets.UTF_16LE)
+        val domainUnicode = domain.uppercase(java.util.Locale.ROOT).toByteArray(Charsets.UTF_16LE)
         val userUnicode = username.toByteArray(Charsets.UTF_16LE)
         val workstationUnicode = WORKSTATION.toByteArray(Charsets.UTF_16LE)
         
@@ -165,13 +171,14 @@ class NtlmAuthenticator(
                     NTLM_FLAG_NEGOTIATE_ALWAYS_SIGN or
                     NTLM_FLAG_NEGOTIATE_NTLM2_KEY or
                     NTLM_FLAG_NEGOTIATE_128 or
-                    NTLM_FLAG_NEGOTIATE_56
+                    NTLM_FLAG_NEGOTIATE_VERSION
         writeInt32LE(message, flags)
         
-        // Version (optional, 8 bytes)
-        message.write(byteArrayOf(6, 1, 0, 0, 0, 0, 0, 15)) // Windows Vista
+        // Version (8 bytes): required because NTLMSSP_NEGOTIATE_VERSION is set
+        // MS-NLMP 2.2.10: ProductMajor=6, ProductMinor=1, Build=0, NTLMRevision=0x0F
+        message.write(byteArrayOf(6, 1, 0, 0, 0, 0, 0, 15))
         
-        // MIC (16 bytes, zeros for now)
+        // MIC (16 bytes, zeros): server ignores since MsvAvFlags bit 0x2 is not set
         message.write(ByteArray(16))
         
         // Данные
@@ -234,7 +241,7 @@ class NtlmAuthenticator(
     }
     
     private fun createNtlmv2Hash(ntlmHash: ByteArray, user: String, domain: String): ByteArray {
-        val identity = (user.uppercase() + domain.uppercase()).toByteArray(Charsets.UTF_16LE)
+        val identity = (user.uppercase(java.util.Locale.ROOT) + domain.uppercase(java.util.Locale.ROOT)).toByteArray(Charsets.UTF_16LE)
         return hmacMd5(ntlmHash, identity)
     }
     

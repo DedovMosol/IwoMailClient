@@ -27,7 +27,7 @@ class EasNotesServiceTest {
     private val getDeletedItemsFolderId = mockk<suspend () -> String?>()
     private val performNtlmHandshake = mockk<suspend (String, String, String) -> String?>()
     private val executeNtlmRequest = mockk<suspend (String, String, String, String) -> String?>()
-    private val findEwsNoteItemId = mockk<suspend (String, String, Boolean) -> String?>()
+    private val findEwsNoteItemId = mockk<suspend (String, String, String, Boolean) -> String?>()
     
     @Before
     fun setup() {

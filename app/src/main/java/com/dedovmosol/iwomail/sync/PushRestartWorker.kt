@@ -25,7 +25,7 @@ class PushRestartWorker(
             // На Android 12+ это тоже может не сработать если нет foreground exemption.
             // В таком случае AlarmManager-стратегия должна была сработать раньше.
             android.util.Log.w("PushRestartWorker", "Failed to restart PushService", e)
-            Result.failure()
+            Result.retry()
         }
     }
 }

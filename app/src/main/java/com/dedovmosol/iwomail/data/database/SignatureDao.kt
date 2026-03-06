@@ -36,12 +36,14 @@ interface SignatureDao {
     @Query("UPDATE signatures SET isDefault = 0 WHERE accountId = :accountId")
     suspend fun clearDefaultForAccount(accountId: Long)
     
-    @Query("UPDATE signatures SET isDefault = 1 WHERE id = :id")
-    suspend fun setDefault(id: Long)
+    @Query("UPDATE signatures SET isDefault = 1 WHERE id = :id AND accountId = :accountId")
+    suspend fun setDefault(id: Long, accountId: Long)
     
     @Transaction
     suspend fun setDefaultSignature(accountId: Long, signatureId: Long) {
+        val sig = getSignature(signatureId)
+        if (sig == null || sig.accountId != accountId) return
         clearDefaultForAccount(accountId)
-        setDefault(signatureId)
+        setDefault(signatureId, accountId)
     }
 }

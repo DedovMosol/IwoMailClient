@@ -24,6 +24,9 @@ class CalendarRepository(private val context: Context) {
     private val accountRepo = RepositoryProvider.getAccountRepository(context)
     
     companion object {
+        private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
+        private fun getSyncMutex(accountId: Long) = syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
+
         /**
          * Защита от "воскрешения" удалённых событий.
          * Множество serverId событий, удалённых пользователем.
@@ -33,21 +36,20 @@ class CalendarRepository(private val context: Context) {
          * Записи удаляются ТОЛЬКО когда syncCalendar() подтверждает,
          * что сервер больше не возвращает эти события.
          */
-        private val deletedServerIds = java.util.Collections.newSetFromMap(
-            java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-        )
+        private val deletedServerIds = java.util.LinkedHashSet<String>()
         
         private const val PREFS_NAME = "calendar_deleted_ids"
         private const val KEY_DELETED_IDS = "deleted_server_ids"
+        private const val MAX_DELETED_IDS = 1000
         @Volatile private var prefsInitialized = false
         
         private fun initFromPrefs(context: Context) {
             if (prefsInitialized) return
-            synchronized(this) {
+            synchronized(deletedServerIds) {
                 if (prefsInitialized) return
                 try {
                     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    val saved = prefs.getStringSet(KEY_DELETED_IDS, emptySet()) ?: emptySet()
+                    val saved = prefs.getStringSet(KEY_DELETED_IDS, emptySet())?.toSet() ?: emptySet()
                     deletedServerIds.addAll(saved)
                 } catch (_: Exception) { }
                 prefsInitialized = true
@@ -56,24 +58,39 @@ class CalendarRepository(private val context: Context) {
         
         private fun saveToPrefs(context: Context) {
             try {
+                val snapshot = synchronized(deletedServerIds) { deletedServerIds.toSet() }
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                prefs.edit().putStringSet(KEY_DELETED_IDS, deletedServerIds.toSet()).apply()
+                prefs.edit().putStringSet(KEY_DELETED_IDS, snapshot).apply()
             } catch (_: Exception) { }
         }
         
         private fun markAsDeleted(serverId: String, context: Context? = null) {
             if (serverId.isNotBlank()) {
-                deletedServerIds.add(serverId)
+                synchronized(deletedServerIds) {
+                    if (deletedServerIds.size >= MAX_DELETED_IDS) {
+                        val excess = deletedServerIds.size - MAX_DELETED_IDS / 2
+                        if (excess > 0) {
+                            val iter = deletedServerIds.iterator()
+                            var removed = 0
+                            while (iter.hasNext() && removed < excess) {
+                                iter.next()
+                                iter.remove()
+                                removed++
+                            }
+                        }
+                    }
+                    deletedServerIds.add(serverId)
+                }
                 context?.let { saveToPrefs(it) }
             }
         }
         
         private fun isMarkedAsDeleted(serverId: String): Boolean {
-            return deletedServerIds.contains(serverId)
+            return synchronized(deletedServerIds) { deletedServerIds.contains(serverId) }
         }
         
         private fun removeFromDeleted(serverId: String, context: Context? = null) {
-            deletedServerIds.remove(serverId)
+            synchronized(deletedServerIds) { deletedServerIds.remove(serverId) }
             context?.let { saveToPrefs(it) }
         }
         
@@ -86,7 +103,9 @@ class CalendarRepository(private val context: Context) {
          * Если сервер ЕЩЁ возвращает событие — защиту НЕ снимаем!
          */
         private fun confirmServerDeletions(serverReturnedIds: Set<String>, context: Context? = null) {
-            val removed = deletedServerIds.removeIf { it !in serverReturnedIds }
+            val removed = synchronized(deletedServerIds) {
+                deletedServerIds.removeIf { it !in serverReturnedIds }
+            }
             if (removed) {
                 context?.let { saveToPrefs(it) }
             }
@@ -161,7 +180,8 @@ class CalendarRepository(private val context: Context) {
     
     suspend fun searchEvents(accountId: Long, query: String): List<CalendarEventEntity> {
         if (query.isBlank()) return getEventsList(accountId)
-        return calendarEventDao.searchEvents(accountId, query)
+        val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return calendarEventDao.searchEvents(accountId, escaped)
     }
     
     // === Создание/Редактирование/Удаление ===
@@ -202,8 +222,8 @@ class CalendarRepository(private val context: Context) {
 
                 val result = easClient.createCalendarEvent(
                     subject = subject,
-                    startTime = startTime,
-                    endTime = endTime,
+                    startTime = effectiveStartTime,
+                    endTime = effectiveEndTime,
                     location = location,
                     body = body,
                     allDayEvent = allDayEvent,
@@ -1015,7 +1035,7 @@ class CalendarRepository(private val context: Context) {
                 }
                 
                 val result = withRetry {
-                    easClient.respondToMeetingRequest(event.serverId, response, sendResponse)
+                    easClient.respondToMeetingRequest(event.serverId, response, sendResponse, subject = event.subject)
                 }
                 
                 when (result) {
@@ -1047,7 +1067,18 @@ class CalendarRepository(private val context: Context) {
      * Синхронизация календаря с Exchange сервера
      */
     suspend fun syncCalendar(accountId: Long): EasResult<Int> {
-        // КРИТИЧНО: Загружаем из SharedPreferences при первом обращении
+        val mutex = getSyncMutex(accountId)
+        if (!mutex.tryLock()) {
+            return EasResult.Error("Calendar sync already in progress")
+        }
+        try {
+            return syncCalendarInternal(accountId)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    private suspend fun syncCalendarInternal(accountId: Long): EasResult<Int> {
         initFromPrefs(context)
         return withContext(Dispatchers.IO) {
             try {
@@ -1065,6 +1096,9 @@ class CalendarRepository(private val context: Context) {
                         val explicitlyDeletedIds = syncResult.deletedServerIds
                         android.util.Log.d("CalendarRepository", 
                             "syncCalendar: server returned ${serverEvents.size} events, ${explicitlyDeletedIds.size} explicit deletes")
+                        
+                        // Все DB-записи в одной транзакции для атомарности
+                        val syncedCount = database.withTransaction {
                         
                         // Явные удаления из EAS <Delete> команд
                         if (explicitlyDeletedIds.isNotEmpty()) {
@@ -1199,10 +1233,20 @@ class CalendarRepository(private val context: Context) {
                                 }
                             }
                             
-                            val finalAttachments = if (event.attachments.isNotBlank()) {
-                                event.attachments
-                            } else {
-                                existingEvent?.attachments ?: ""
+                            val finalAttachments = when {
+                                event.attachments.isNotBlank() -> {
+                                    event.attachments
+                                }
+                                event.hasAttachments && existingEvent?.attachments?.isNotBlank() == true -> {
+                                    // EAS 12.1: HasAttachments=true но нет <Attachment> потомков.
+                                    // supplementAttachmentsViaEws уже пытался получить данные.
+                                    // Если supplement не нашёл — вложения были удалены на сервере
+                                    // (EWS уже отразил удаление, EAS ещё нет). Очищаем кэш.
+                                    ""
+                                }
+                                else -> {
+                                    ""
+                                }
                             }
                             val finalHasAttachments = event.hasAttachments || finalAttachments.isNotBlank()
                             
@@ -1278,8 +1322,9 @@ class CalendarRepository(private val context: Context) {
                             "syncCalendar: stored=${eventEntities.size}, skipped=$skippedCount")
                         
                         if (eventEntities.isNotEmpty()) {
-                            // INSERT OR REPLACE — обновляет существующие
-                            calendarEventDao.insertAll(eventEntities)
+                            for (chunk in eventEntities.chunked(500)) {
+                                calendarEventDao.insertAll(chunk)
+                            }
                             
                             // Перепланируем напоминания только для новых/изменённых событий
                             val newServerIds = serverReturnedIds - existingServerIds
@@ -1297,42 +1342,41 @@ class CalendarRepository(private val context: Context) {
                         // При удалении призрака МИГРИРУЕМ вложения на реальную запись!
                         try {
                             val allLocalEvents = calendarEventDao.getEventsByAccountList(accountId)
-                            // Реальные EAS записи (ServerId от сервера: содержит ":" и короткий)
-                            val realEasEvents = allLocalEvents.filter { 
-                                it.serverId.contains(":") && it.serverId.length < 50
-                            }
-                            // Призраки: clientId (32 hex) или EWS ItemId (длинный, без ":")
-                            val ghosts = allLocalEvents.filter { ev ->
+                            
+                            data class EventKey(val subject: String, val startTime: Long, val endTime: Long)
+                            
+                            val realEasIndex = mutableMapOf<EventKey, MutableList<com.dedovmosol.iwomail.data.database.CalendarEventEntity>>()
+                            val ghosts = mutableListOf<com.dedovmosol.iwomail.data.database.CalendarEventEntity>()
+                            
+                            for (ev in allLocalEvents) {
                                 val sid = ev.serverId
-                                (sid.length == 32 && !sid.contains(":")) ||  // clientId
-                                (sid.length > 50 && !sid.contains(":"))       // EWS ItemId
+                                val isReal = sid.contains(":") && sid.length < 50
+                                val isGhost = (sid.length == 32 && !sid.contains(":")) ||
+                                              (sid.length > 50 && !sid.contains(":"))
+                                if (isReal) {
+                                    realEasIndex.getOrPut(EventKey(ev.subject, ev.startTime, ev.endTime)) { mutableListOf() }.add(ev)
+                                }
+                                if (isGhost) ghosts.add(ev)
                             }
+                            
                             for (ghost in ghosts) {
-                                val realMatch = realEasEvents.find { real ->
-                                    real.id != ghost.id &&
-                                    real.subject == ghost.subject &&
-                                    real.startTime == ghost.startTime &&
-                                    real.endTime == ghost.endTime
+                                val key = EventKey(ghost.subject, ghost.startTime, ghost.endTime)
+                                val realMatch = realEasIndex[key]?.firstOrNull { it.id != ghost.id } ?: continue
+                                
+                                if (ghost.attachments.isNotBlank() && realMatch.attachments.isBlank()) {
+                                    val updated = realMatch.copy(hasAttachments = true, attachments = ghost.attachments)
+                                    calendarEventDao.insert(updated)
+                                    android.util.Log.d("CalendarRepository",
+                                        "syncCalendar: Migrated attachments from ghost to real: ${realMatch.serverId}")
                                 }
-                                if (realMatch != null) {
-                                    // КРИТИЧНО: Мигрируем вложения с призрака на реальную запись,
-                                    // если у призрака есть данные, а у реальной — нет.
-                                    if (ghost.attachments.isNotBlank() && realMatch.attachments.isBlank()) {
-                                        val updated = realMatch.copy(
-                                            hasAttachments = true,
-                                            attachments = ghost.attachments
-                                        )
-                                        calendarEventDao.insert(updated) // INSERT OR REPLACE
-                                        android.util.Log.d("CalendarRepository",
-                                            "syncCalendar: Migrated attachments from ghost to real: ${realMatch.serverId}")
-                                    }
-                                    android.util.Log.w("CalendarRepository",
-                                        "syncCalendar: Removing ghost entity serverId=${ghost.serverId.take(30)}, subject=${ghost.subject}")
-                                    CalendarReminderReceiver.cancelReminder(context, ghost.id)
-                                    calendarEventDao.delete(ghost.id)
-                                }
+                                android.util.Log.w("CalendarRepository",
+                                    "syncCalendar: Removing ghost entity serverId=${ghost.serverId.take(30)}, subject=${ghost.subject}")
+                                CalendarReminderReceiver.cancelReminder(context, ghost.id)
+                                calendarEventDao.delete(ghost.id)
                             }
-                        } catch (_: Exception) { }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                        }
                         
                         // Exchange 2007 SP1: EAS Sync может не возвращать обновлённые exceptions
                         // для повторяющихся событий при модификации отдельных вхождений на ПК.
@@ -1363,8 +1407,10 @@ class CalendarRepository(private val context: Context) {
                             android.util.Log.w("CalendarRepository",
                                 "syncCalendar: supplementRecurringExceptions failed: ${e.message}")
                         }
+                        uniqueEvents.size
+                        } // end withTransaction
                         
-                        EasResult.Success(eventEntities.size)
+                        EasResult.Success(syncedCount)
                     }
                     is EasResult.Error -> result
                 }
@@ -1464,9 +1510,10 @@ class CalendarRepository(private val context: Context) {
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
-                // Ищем событие по названию
                 val events = calendarEventDao.getEventsByAccountList(accountId)
-                val event = events.find { it.subject.equals(meetingSubject, ignoreCase = true) }
+                val matching = events.filter { it.subject.equals(meetingSubject, ignoreCase = true) }
+                val now = System.currentTimeMillis()
+                val event = matching.minByOrNull { kotlin.math.abs(it.startTime - now) }
                     ?: return@withContext EasResult.Error(RepositoryErrors.EVENT_NOT_FOUND)
                 
                 // Парсим текущих участников

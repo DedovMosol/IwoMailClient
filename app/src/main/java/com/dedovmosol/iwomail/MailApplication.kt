@@ -52,6 +52,9 @@ class MailApplication : Application() {
         createNotificationChannels()
         cleanupStaleTempFiles()
         cleanupDuplicateEmails()
+        applicationScope.launch(Dispatchers.IO) {
+            com.dedovmosol.iwomail.eas.AttachmentManager.cleanupOldAttachments(this@MailApplication)
+        }
         scheduleSync()
         startPushService()
     }
@@ -119,8 +122,7 @@ class MailApplication : Application() {
         // Названия каналов не критичны — пользователь видит их только в настройках Android
         val existingChannels = notificationManager.notificationChannels.map { it.id }.toSet()
         
-        // Для новых каналов используем русский (дефолт), т.к. runBlocking в onCreate нежелателен
-        val isRussian = true
+        val isRussian = java.util.Locale.getDefault().language == "ru"
         
         // Канал для новых писем - ВЫСОКИЙ приоритет для показа на заблокированном экране
         if (CHANNEL_NEW_MAIL !in existingChannels) {
@@ -292,11 +294,12 @@ class MailApplication : Application() {
         }
     }
     
+    // Android docs: onTerminate() is NEVER called on production devices.
+    // Process is killed by the kernel without user code execution.
+    // Kept for emulator/test environments only.
     override fun onTerminate() {
         super.onTerminate()
-        // Очищаем ресурсы SettingsRepository для предотвращения memory leak
         settingsRepository.cleanup()
-        // Отменяем applicationScope
         applicationScope.cancel()
     }
 }

@@ -96,6 +96,7 @@ object AppIcons {
     val Search: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_search)
     val Security: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_security)
     val Send: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_send)
+    val Share: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_share)
     val Settings: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_settings)
     val Star: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_star)
     val StarOutline: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_star_outline)

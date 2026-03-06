@@ -51,8 +51,11 @@ class AccountRepository(private val context: Context) {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            // Fallback на обычные SharedPreferences если шифрование не работает
-            context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE)
+            android.util.Log.e("AccountRepo", "EncryptedSharedPreferences failed, using obfuscated fallback", e)
+            ObfuscatedSharedPreferences(
+                context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE),
+                context
+            )
         }
     }
     
@@ -148,6 +151,7 @@ class AccountRepository(private val context: Context) {
                             }
                         )
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         EasResult.Error(formatConnectionError(e, "IMAP"))
                     }
                 }
@@ -174,11 +178,13 @@ class AccountRepository(private val context: Context) {
                             }
                         )
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         EasResult.Error(formatConnectionError(e, "POP3"))
                     }
                 }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка подключения: ${e.message ?: "Неизвестная ошибка"}")
         }
         
@@ -283,39 +289,41 @@ class AccountRepository(private val context: Context) {
         val settingsRepo = SettingsRepository.getInstance(context)
         settingsRepo.resetInitialSyncFlag(accountId)
         
-        // Удаляем файлы вложений с диска (до каскадного удаления из БД)
-        withContext(Dispatchers.IO) {
-            try {
-                val localPaths = attachmentDao.getLocalPathsByAccount(accountId)
-                localPaths.forEach { path ->
-                    try {
-                        File(path).delete()
-                    } catch (_: Exception) {}
-                }
-            } catch (_: Exception) {}
+        // Собираем пути файлов ДО удаления из БД (каскад уничтожит записи)
+        val localPaths = withContext(Dispatchers.IO) {
+            try { attachmentDao.getLocalPathsByAccount(accountId) }
+            catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                emptyList()
+            }
         }
-        
-        // Удаляем сертификаты если были
         val account = accountDao.getAccount(accountId)
-        account?.certificatePath?.let { certPath ->
-            try {
-                File(certPath).delete()
-                // Очищаем кэш HttpClientProvider для этого сертификата
-                com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(certPath)
-            } catch (_: Exception) {}
-        }
-        account?.clientCertificatePath?.let { clientCertPath ->
-            try {
-                File(clientCertPath).delete()
-                // Очищаем кэш HttpClientProvider для клиентского сертификата
-                com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(clientCertPath)
-            } catch (_: Exception) {}
-        }
+        val certPath = account?.certificatePath
+        val clientCertPath = account?.clientCertificatePath
         
-        // Удаляем аккаунт (каскадно удалятся папки, письма, вложения, контакты)
+        // Сначала удаляем из БД (каскадно удалятся папки, письма, вложения, контакты)
         accountDao.delete(accountId)
         deletePassword(accountId)
         deleteClientCertPassword(accountId)
+        
+        // Только после успешного удаления из БД — чистим файлы с диска
+        withContext(Dispatchers.IO) {
+            localPaths.forEach { path ->
+                try { File(path).delete() } catch (_: Exception) {}
+            }
+            certPath?.let { p ->
+                try {
+                    File(p).delete()
+                    com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(p)
+                } catch (_: Exception) {}
+            }
+            clientCertPath?.let { p ->
+                try {
+                    File(p).delete()
+                    com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(p)
+                } catch (_: Exception) {}
+            }
+        }
         
         // Если удалили активный аккаунт, активируем первый доступный
         if (accountDao.getActiveAccountSync() == null) {
@@ -332,8 +340,8 @@ class AccountRepository(private val context: Context) {
         accountDao.setActiveAccount(accountId)
     }
     
-    fun getPassword(accountId: Long): String? {
-        return securePrefs.getString("password_$accountId", null)
+    suspend fun getPassword(accountId: Long): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        securePrefs.getString("password_$accountId", null)
     }
     
     private fun savePassword(accountId: Long, password: String) {
@@ -378,7 +386,7 @@ class AccountRepository(private val context: Context) {
         easClientCache[accountId]?.let { return it }
         
         // Per-account Mutex: не блокируем другие аккаунты
-        val mutex = easClientLocks.getOrPut(accountId) { Mutex() }
+        val mutex = easClientLocks.computeIfAbsent(accountId) { Mutex() }
         return mutex.withLock {
             // Double-check под локом: другой поток мог создать клиент пока мы ждали
             easClientCache[accountId]?.let { return@withLock it }
@@ -442,7 +450,6 @@ class AccountRepository(private val context: Context) {
      */
     fun clearAllEasClientCache() {
         easClientCache.clear()
-        easClientLocks.clear()
     }
     
     /**
@@ -747,6 +754,7 @@ class AccountRepository(private val context: Context) {
                 
                 EasResult.Success(certInfo.hash)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: "Unknown error")
             }
         }
@@ -810,6 +818,63 @@ class AccountRepository(private val context: Context) {
     
     suspend fun updateDraftMode(accountId: Long, mode: String) {
         accountDao.updateDraftMode(accountId, mode)
+    }
+}
+
+/**
+ * SharedPreferences wrapper: XOR-обфускация значений ключом из SHA-256(ANDROID_ID + salt).
+ * Не является криптографической защитой, но предотвращает хранение паролей в plaintext.
+ * Используется только при недоступности EncryptedSharedPreferences (повреждённый Keystore).
+ */
+private class ObfuscatedSharedPreferences(
+    private val delegate: android.content.SharedPreferences,
+    context: Context
+) : android.content.SharedPreferences by delegate {
+
+    private val obfKey: ByteArray by lazy {
+        val androidId = android.provider.Settings.Secure.getString(
+            context.contentResolver, android.provider.Settings.Secure.ANDROID_ID
+        ) ?: "fallback_device_id"
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest("iwomail_obf_v1_$androidId".toByteArray(Charsets.UTF_8))
+    }
+
+    override fun getString(key: String?, defValue: String?): String? {
+        val raw = delegate.getString(key, null) ?: return defValue
+        return try {
+            xorTransform(android.util.Base64.decode(raw, android.util.Base64.NO_WRAP), obfKey)
+                .toString(Charsets.UTF_8)
+        } catch (_: Exception) {
+            defValue
+        }
+    }
+
+    override fun edit(): android.content.SharedPreferences.Editor =
+        ObfuscatedEditor(delegate.edit(), obfKey)
+
+    private class ObfuscatedEditor(
+        private val editor: android.content.SharedPreferences.Editor,
+        private val key: ByteArray
+    ) : android.content.SharedPreferences.Editor by editor {
+
+        override fun putString(k: String?, value: String?): android.content.SharedPreferences.Editor {
+            if (value == null) return editor.putString(k, null)
+            val obfuscated = android.util.Base64.encodeToString(
+                xorTransform(value.toByteArray(Charsets.UTF_8), key),
+                android.util.Base64.NO_WRAP
+            )
+            return editor.putString(k, obfuscated)
+        }
+    }
+
+    companion object {
+        private fun xorTransform(data: ByteArray, key: ByteArray): ByteArray {
+            val out = ByteArray(data.size)
+            for (i in data.indices) {
+                out[i] = (data[i].toInt() xor key[i % key.size].toInt()).toByte()
+            }
+            return out
+        }
     }
 }
 

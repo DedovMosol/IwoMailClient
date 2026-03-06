@@ -43,7 +43,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         
         localScope.launch {
             try {
-                withTimeoutOrNull(25_000) {
+                withTimeoutOrNull(8_000) {
                     val notificationManager = context.getSystemService(NotificationManager::class.java)
                     when (action) {
                         ACTION_CALENDAR_REMINDER -> {
@@ -52,6 +52,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
                             if (event != null && event.startTime > System.currentTimeMillis()) {
                                 showNotification(context, event)
                             }
+                            RescheduleRemindersWorker.enqueue(context)
                         }
 
                         ACTION_CALENDAR_MARK_READ -> {
@@ -88,7 +89,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             putExtra("open_calendar", true)
             putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, event.accountId)
         }
-        val safeHash = event.id.hashCode() and 0x7FFFFFFF
+        val safeHash = safeHashForId(event.id)
         val contentPendingIntent = PendingIntent.getActivity(
             context,
             safeHash + REQUEST_CODE_CONTENT,
@@ -163,14 +164,15 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         const val ACTION_CALENDAR_MARK_READ = "com.dedovmosol.iwomail.CALENDAR_MARK_READ"
         const val ACTION_CALENDAR_SNOOZE_5_MIN = "com.dedovmosol.iwomail.CALENDAR_SNOOZE_5_MIN"
         const val EXTRA_EVENT_ID = "event_id"
-        // Уникальный диапазон ID: 5000+ (SyncWorker использует 3000+, SyncAlarmReceiver 4000+)
-        private const val NOTIFICATION_ID_BASE = 5000
-        private const val REQUEST_CODE_CONTENT = 10_000
-        private const val REQUEST_CODE_MARK_READ = 20_000
-        private const val REQUEST_CODE_SNOOZE = 30_000
+        private const val NOTIFICATION_ID_BASE = 10_000_000
+        private const val REQUEST_CODE_CONTENT = 12_000_000
+        private const val REQUEST_CODE_MARK_READ = 14_000_000
+        private const val REQUEST_CODE_SNOOZE = 16_000_000
         private const val SNOOZE_5_MIN_MS = 5 * 60 * 1000L
 
-        private fun notificationIdForEvent(eventId: String): Int = NOTIFICATION_ID_BASE + (eventId.hashCode() and 0x7FFFFFFF)
+        private fun safeHashForId(id: String): Int = (id.hashCode() and 0x7FFFFFFF) % 1_000_000
+
+        private fun notificationIdForEvent(eventId: String): Int = NOTIFICATION_ID_BASE + safeHashForId(eventId)
 
         private fun scheduleReminderAt(context: Context, eventId: String, triggerAtMillis: Long) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -180,27 +182,25 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                eventId.hashCode() and 0x7FFFFFFF,
+                safeHashForId(eventId),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                } else {
-                    alarmManager.setExact(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                }
-            } catch (_: SecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                 alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
             }
         }
         
@@ -213,43 +213,9 @@ class CalendarReminderReceiver : BroadcastReceiver() {
          */
         fun scheduleReminder(context: Context, event: CalendarEventEntity) {
             if (event.reminder <= 0) return
-            
             val reminderTime = event.startTime - (event.reminder * 60 * 1000L)
-            
             if (reminderTime <= System.currentTimeMillis()) return
-            
-            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            
-            val intent = Intent(context, CalendarReminderReceiver::class.java).apply {
-                action = ACTION_CALENDAR_REMINDER
-                putExtra(EXTRA_EVENT_ID, event.id)
-            }
-            
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                event.id.hashCode() and 0x7FFFFFFF,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        reminderTime,
-                        pendingIntent
-                    )
-                } else {
-                    alarmManager.setExact(
-                        AlarmManager.RTC_WAKEUP,
-                        reminderTime,
-                        pendingIntent
-                    )
-                }
-            } catch (_: SecurityException) {
-                // Нет разрешения на точные alarm'ы - используем неточный
-                alarmManager.set(AlarmManager.RTC_WAKEUP, reminderTime, pendingIntent)
-            }
+            scheduleReminderAt(context, event.id, reminderTime)
         }
         
         /**
@@ -268,7 +234,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                eventId.hashCode() and 0x7FFFFFFF,
+                safeHashForId(eventId),
                 intent,
                 PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
             )
@@ -276,19 +242,27 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             pendingIntent?.let { alarmManager.cancel(it) }
         }
         
+        private const val MAX_SCHEDULED_REMINDERS = 150
+
         /**
-         * Перепланирует все напоминания для аккаунта.
-         * Вызывается после синхронизации календаря.
-         * 
-         * @param context Context
-         * @param events Список событий
+         * Планирует напоминания для ближайших событий (до MAX_SCHEDULED_REMINDERS).
+         * Ограничение необходимо из-за лимита 500 AlarmManager на UID
+         * (MIUI/HyperOS, Samsung, OPPO, RealMe).
          */
         fun rescheduleAllReminders(context: Context, events: List<CalendarEventEntity>) {
             val now = System.currentTimeMillis()
-            
-            events.forEach { event ->
-                if (event.reminder > 0 && event.startTime > now) {
-                    scheduleReminder(context, event)
+            val eligible = events
+                .filter { it.reminder > 0 && it.startTime > now }
+                .map { it to (it.startTime - it.reminder * 60_000L) }
+                .filter { (_, reminderTime) -> reminderTime > now }
+                .sortedBy { (_, reminderTime) -> reminderTime }
+                .take(MAX_SCHEDULED_REMINDERS)
+
+            eligible.forEach { (event, reminderTime) ->
+                try {
+                    scheduleReminderAt(context, event.id, reminderTime)
+                } catch (e: Exception) {
+                    android.util.Log.w("CalendarReminder", "Failed to schedule alarm for ${event.id}: ${e.message}")
                 }
             }
         }

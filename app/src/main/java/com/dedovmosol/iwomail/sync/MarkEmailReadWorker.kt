@@ -31,13 +31,14 @@ class MarkEmailReadWorker(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w(TAG, "Failed to mark emails as read", e)
-            if (runAttemptCount < MAX_RETRIES) Result.retry() else Result.failure()
+            if (runAttemptCount < MAX_RETRIES) Result.retry() else Result.success()
         }
     }
 
     companion object {
         private const val TAG = "MarkEmailRead"
         const val KEY_EMAIL_IDS = "email_ids"
+        private const val WORK_NAME = "mark_email_read"
         private const val MAX_RETRIES = 3
 
         fun enqueue(context: Context, emailIds: Array<String>) {

@@ -17,6 +17,25 @@ import kotlinx.coroutines.withContext
 class EasNotesService internal constructor(
     private val deps: NotesServiceDependencies
 ) {
+
+    private val syncKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    companion object {
+        private val ADD_PATTERN = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val CHANGE_PATTERN = "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val APPLICATION_DATA_PATTERN = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val NOTES_CATEGORIES_PATTERN = "<notes:Categories>(.*?)</notes:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_ITEM_PATTERN = "<t:(?:PostItem|Message)[^>]*>(.*?)</t:(?:PostItem|Message)>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val RESULT_PATTERN = "<Result>(.*?)</Result>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val PROPERTIES_PATTERN = "<Properties>(.*?)</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY_T_PATTERN = "<t:Body[^>]*>(.*?)</t:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY_PATTERN = "<Body[^>]*>(.*?)</Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY_M_PATTERN = "<m:Body[^>]*>(.*?)</m:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY_AIRSYNC_DATA = "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY_DATA = "<Body>.*?<Data>(.*?)</Data>.*?</Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY_NOTES_DATA = "<notes:Body>.*?<Data>(.*?)</Data>.*?</notes:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BODY_NOTES = "<notes:Body>(.*?)</notes:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+    }
     
     interface EasCommandExecutor {
         suspend operator fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T>
@@ -40,12 +59,51 @@ class EasNotesService internal constructor(
         val executeNtlmRequest: suspend (String, String, String, String) -> String?,
         val tryBasicAuthEws: suspend (String, String, String) -> String?,
         val getEwsUrl: () -> String,
-        val findEwsNoteItemId: suspend (String, String, Boolean) -> String?
+        val findEwsNoteItemId: suspend (String, String, String, Boolean) -> String?
     )
     
     // Кэш ID папки заметок
     @Volatile private var cachedNotesFolderId: String? = null
-    
+
+    @Volatile var lastSyncWasIncrementalNoChanges: Boolean = false
+
+    private class InvalidSyncKeyException(status: String) : Exception("InvalidSyncKey: Status=$status")
+
+    /**
+     * Получает валидный SyncKey для папки: сначала из кэша, при ошибке — через "0".
+     * Обновляет syncKeyCache при успехе, очищает при невалидном ключе.
+     */
+    private suspend fun getValidSyncKey(folderId: String): String? {
+        val cachedKey = syncKeyCache[folderId]
+        if (cachedKey != null) {
+            val result = deps.refreshSyncKey(folderId, cachedKey)
+            when (result) {
+                is EasResult.Success -> {
+                    val key = result.data
+                    if (key != "0") {
+                        syncKeyCache[folderId] = key
+                        return key
+                    }
+                    syncKeyCache.remove(folderId)
+                }
+                is EasResult.Error -> {
+                    syncKeyCache.remove(folderId)
+                }
+            }
+        }
+        val result = deps.refreshSyncKey(folderId, "0")
+        return when (result) {
+            is EasResult.Success -> {
+                val key = result.data
+                if (key != "0") {
+                    syncKeyCache[folderId] = key
+                    key
+                } else null
+            }
+            is EasResult.Error -> null
+        }
+    }
+
     /**
      * Синхронизация заметок
      * EAS 14.1+ — стандартный Notes sync
@@ -58,18 +116,17 @@ class EasNotesService internal constructor(
         
         if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService", "syncNotes: EAS version = ${deps.getEasVersion()}")
         
-        val foldersResult = deps.folderSync("0")
-        val folders = when (foldersResult) {
-            is EasResult.Success -> foldersResult.data.folders
-            is EasResult.Error -> return EasResult.Error(foldersResult.message)
-        }
-        
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         
         return if (majorVersion >= 14) {
+            val foldersResult = deps.folderSync("0")
+            val folders = when (foldersResult) {
+                is EasResult.Success -> foldersResult.data.folders
+                is EasResult.Error -> return EasResult.Error(foldersResult.message)
+            }
             syncNotesStandard(folders)
         } else {
-            syncNotesLegacy(folders)
+            syncNotesEws()
         }
     }
     
@@ -110,34 +167,34 @@ class EasNotesService internal constructor(
     /**
      * Удаление заметки (в корзину)
      */
-    suspend fun deleteNote(serverId: String): EasResult<Boolean> {
+    suspend fun deleteNote(serverId: String, subject: String = ""): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        
+
         return if (majorVersion >= 14) {
             deleteNoteEas(serverId)
         } else {
-            deleteNoteEws(serverId)
+            deleteNoteEws(serverId, subject)
         }
     }
     
     /**
      * Окончательное удаление заметки
      */
-    suspend fun deleteNotePermanently(serverId: String): EasResult<Boolean> {
+    suspend fun deleteNotePermanently(serverId: String, subject: String = ""): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        
+
         return if (majorVersion >= 14) {
             deleteNotePermanentlyEas(serverId)
         } else {
-            deleteNotePermanentlyEws(serverId)
+            deleteNotePermanentlyEws(serverId, subject)
         }
     }
     
@@ -182,31 +239,77 @@ class EasNotesService internal constructor(
     /**
      * Восстановление заметки из корзины
      */
-    suspend fun restoreNote(serverId: String): EasResult<String> {
+    suspend fun restoreNote(serverId: String, subject: String = ""): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        
+
         return if (majorVersion >= 14) {
             restoreNoteEas(serverId)
         } else {
-            restoreNoteEws(serverId)
+            restoreNoteEws(serverId, subject)
         }
     }
     
     // ==================== Private EAS methods ====================
     
     private suspend fun syncNotesStandard(folders: List<EasFolder>): EasResult<List<EasNote>> {
+        lastSyncWasIncrementalNoChanges = false
+
         val notesFolderId = folders.find { it.type == FolderType.NOTES }?.serverId
             ?: return EasResult.Error("Папка Notes (type=10) не найдена")
         
         cachedNotesFolderId = notesFolderId
+
+        val cachedKey = syncKeyCache[notesFolderId]
+        if (cachedKey != null) {
+            val probeXml = """<?xml version="1.0" encoding="UTF-8"?>
+<Sync xmlns="AirSync">
+    <Collections>
+        <Collection>
+            <SyncKey>${deps.escapeXml(cachedKey)}</SyncKey>
+            <CollectionId>${deps.escapeXml(notesFolderId)}</CollectionId>
+            <GetChanges>1</GetChanges>
+            <WindowSize>1</WindowSize>
+        </Collection>
+    </Collections>
+</Sync>""".trimIndent()
+
+            val probeResult = deps.executeEasCommand("Sync", probeXml) { responseXml ->
+                val status = deps.extractValue(responseXml, "Status")
+                val newKey = deps.extractValue(responseXml, "SyncKey")
+                Triple(status, newKey, responseXml)
+            }
+
+            if (probeResult is EasResult.Success) {
+                val (status, newKey, responseXml) = probeResult.data
+                when {
+                    status == "1" || status == null -> {
+                        val hasCommands = responseXml.contains("<Add>") ||
+                                responseXml.contains("<Change>") ||
+                                responseXml.contains("<Delete>") ||
+                                responseXml.contains("<SoftDelete>") ||
+                                responseXml.contains("<MoreAvailable")
+                        if (!hasCommands) {
+                            if (newKey != null) syncKeyCache[notesFolderId] = newKey
+                            lastSyncWasIncrementalNoChanges = true
+                            if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService",
+                                "syncNotesStandard: No changes detected (probe), skipping full sync")
+                            return EasResult.Success(emptyList())
+                        }
+                    }
+                    status == "3" || status == "12" -> {
+                        syncKeyCache.remove(notesFolderId)
+                    }
+                }
+            }
+        }
         
         val allNotes = mutableListOf<EasNote>()
         
-        // Активные заметки
+        // Активные заметки (полная синхронизация)
         val activeNotes = syncNotesFromFolder(notesFolderId, isDeleted = false)
         if (activeNotes is EasResult.Success) {
             allNotes.addAll(activeNotes.data)
@@ -285,6 +388,12 @@ class EasNotesService internal constructor(
             val syncXml = EasXmlTemplates.syncWithBody(syncKey, folderId)
             
             val result = deps.executeEasCommand("Sync", syncXml) { responseXml ->
+                val status = deps.extractValue(responseXml, "Status")
+                if (status == "3" || status == "12") {
+                    syncKeyCache.remove(folderId)
+                    throw InvalidSyncKeyException(status)
+                }
+
                 val newSyncKey = deps.extractValue(responseXml, "SyncKey")
                 if (newSyncKey != null) syncKey = newSyncKey
                 
@@ -302,10 +411,17 @@ class EasNotesService internal constructor(
                     if (notes.isEmpty()) moreAvailable = false
                 }
                 is EasResult.Error -> {
-                    if (allNotes.isNotEmpty()) break // Уже есть данные — возвращаем что есть
+                    if (result.message.contains("InvalidSyncKey")) {
+                        syncKeyCache.remove(folderId)
+                    }
+                    if (allNotes.isNotEmpty()) break
                     return EasResult.Error(result.message)
                 }
             }
+        }
+
+        if (syncKey != "0") {
+            syncKeyCache[folderId] = syncKey
         }
         
         return EasResult.Success(allNotes)
@@ -336,25 +452,18 @@ class EasNotesService internal constructor(
             ?: return EasResult.Error("Папка Notes не найдена")
         
         cachedNotesFolderId = notesFolderId
-        
-        // Получаем SyncKey
-        val syncKeyResult = deps.refreshSyncKey(notesFolderId, "0")
-        val syncKey = when (syncKeyResult) {
-            is EasResult.Success -> syncKeyResult.data
-            is EasResult.Error -> return EasResult.Error(syncKeyResult.message)
-        }
-        
-        if (syncKey == "0") {
-            return EasResult.Error("Не удалось получить SyncKey")
-        }
-        
-        val clientId = java.util.UUID.randomUUID().toString().replace("-", "").take(32)
-        val escapedSubject = deps.escapeXml(subject)
-        val escapedBody = deps.escapeXml(body)
-        
-        val safeFolderId = deps.escapeXml(notesFolderId)
-        val safeSyncKey = deps.escapeXml(syncKey)
-        val createXml = """<?xml version="1.0" encoding="UTF-8"?>
+
+        for (attempt in 0..1) {
+            val syncKey = getValidSyncKey(notesFolderId)
+                ?: return EasResult.Error("Не удалось получить SyncKey")
+
+            val clientId = java.util.UUID.randomUUID().toString().replace("-", "").take(32)
+            val escapedSubject = deps.escapeXml(subject)
+            val escapedBody = deps.escapeXml(body)
+
+            val safeFolderId = deps.escapeXml(notesFolderId)
+            val safeSyncKey = deps.escapeXml(syncKey)
+            val createXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:notes="Notes">
     <Collections>
         <Collection>
@@ -376,229 +485,180 @@ class EasNotesService internal constructor(
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
-        return deps.executeEasCommand("Sync", createXml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")
-            if (status == "1") {
-                deps.extractValue(responseXml, "ServerId") ?: clientId
-            } else {
-                throw Exception("Ошибка создания заметки: Status=$status")
+
+            val result = deps.executeEasCommand("Sync", createXml) { responseXml ->
+                val status = deps.extractValue(responseXml, "Status")
+                if (status == "1") {
+                    val newKey = deps.extractValue(responseXml, "SyncKey")
+                    if (newKey != null) syncKeyCache[notesFolderId] = newKey
+                    deps.extractValue(responseXml, "ServerId") ?: clientId
+                } else if (status == "3" || status == "12") {
+                    syncKeyCache.remove(notesFolderId)
+                    throw InvalidSyncKeyException(status)
+                } else {
+                    throw Exception("Ошибка создания заметки: Status=$status")
+                }
+            }
+
+            when (result) {
+                is EasResult.Success -> return result
+                is EasResult.Error -> {
+                    if (attempt == 0 && result.message.contains("InvalidSyncKey")) continue
+                    return result
+                }
             }
         }
+        return EasResult.Error("Не удалось создать заметку после retry")
     }
     
     private suspend fun updateNoteEas(serverId: String, subject: String, body: String): EasResult<Boolean> {
         val notesFolderId = cachedNotesFolderId ?: deps.getNotesFolderId()
             ?: return EasResult.Error("Папка Notes не найдена")
-        
-        val syncKeyResult = deps.refreshSyncKey(notesFolderId, "0")
-        val syncKey = when (syncKeyResult) {
-            is EasResult.Success -> syncKeyResult.data
-            is EasResult.Error -> return EasResult.Error(syncKeyResult.message)
-        }
-        
-        if (syncKey == "0") {
-            return EasResult.Error("Не удалось получить SyncKey")
-        }
-        
-        val escapedSubject = deps.escapeXml(subject)
-        val escapedBody = deps.escapeXml(body)
-        
-        val updateXml = EasXmlTemplates.noteUpdate(syncKey, notesFolderId, serverId, escapedSubject, escapedBody)
-        
-        return deps.executeEasCommand("Sync", updateXml) { responseXml ->
-            // Проверяем статус коллекции
-            val collectionStatus = deps.extractValue(responseXml, "Status")
-            if (collectionStatus != "1") {
-                throw Exception("Collection Status=$collectionStatus")
-            }
-            
-            // КРИТИЧНО: Проверяем статус конкретной операции Change
-            // Согласно MS-ASCMD: "The server is not required to send an individual response
-            // for every operation. The client only receives responses for failed changes."
-            // Если <Responses><Change><Status> ЕСТЬ - проверяем его
-            // Если НЕТ - считаем что SUCCESS
-            
-            if (responseXml.contains("<Responses>") && responseXml.contains("<Change>")) {
-                val changeStatusMatch = Regex("<Change>.*?<Status>(\\d+)</Status>", RegexOption.DOT_MATCHES_ALL)
-                    .find(responseXml)
-                
-                if (changeStatusMatch != null) {
-                    val changeStatus = changeStatusMatch.groupValues[1]
-                    when (changeStatus) {
-                        "1" -> true // Success
-                        "6" -> throw Exception("Change Status=6: Error in client/server conversion (invalid item)")
-                        "7" -> throw Exception("Change Status=7: Conflict (server changes take precedence)")
-                        "8" -> throw Exception("Change Status=8: Object not found on server")
-                        else -> throw Exception("Change Status=$changeStatus")
+
+        for (attempt in 0..1) {
+            val syncKey = getValidSyncKey(notesFolderId)
+                ?: return EasResult.Error("Не удалось получить SyncKey")
+
+            val escapedSubject = deps.escapeXml(subject)
+            val escapedBody = deps.escapeXml(body)
+
+            val updateXml = EasXmlTemplates.noteUpdate(syncKey, notesFolderId, serverId, escapedSubject, escapedBody)
+
+            val result = deps.executeEasCommand("Sync", updateXml) { responseXml ->
+                val collectionStatus = deps.extractValue(responseXml, "Status")
+                if (collectionStatus == "3" || collectionStatus == "12") {
+                    syncKeyCache.remove(notesFolderId)
+                    throw InvalidSyncKeyException(collectionStatus)
+                }
+                if (collectionStatus != "1") {
+                    throw Exception("Collection Status=$collectionStatus")
+                }
+
+                val newKey = deps.extractValue(responseXml, "SyncKey")
+                if (newKey != null) syncKeyCache[notesFolderId] = newKey
+
+                if (responseXml.contains("<Responses>") && responseXml.contains("<Change>")) {
+                    val changeStatusMatch = Regex("<Change>.*?<Status>(\\d+)</Status>", RegexOption.DOT_MATCHES_ALL)
+                        .find(responseXml)
+
+                    if (changeStatusMatch != null) {
+                        val changeStatus = changeStatusMatch.groupValues[1]
+                        when (changeStatus) {
+                            "1" -> true
+                            "6" -> throw Exception("Change Status=6: Error in client/server conversion (invalid item)")
+                            "7" -> throw Exception("Change Status=7: Conflict (server changes take precedence)")
+                            "8" -> throw Exception("Change Status=8: Object not found on server")
+                            else -> throw Exception("Change Status=$changeStatus")
+                        }
+                    } else {
+                        true
                     }
                 } else {
-                    // <Change> есть, но <Status> нет - считаем SUCCESS
                     true
                 }
-            } else {
-                // Нет <Responses><Change> - согласно MS-ASCMD считаем SUCCESS
-                true
+            }
+
+            when (result) {
+                is EasResult.Success -> return result
+                is EasResult.Error -> {
+                    if (attempt == 0 && result.message.contains("InvalidSyncKey")) continue
+                    return result
+                }
             }
         }
+        return EasResult.Error("Не удалось обновить заметку после retry")
     }
     
     private suspend fun deleteNoteEas(serverId: String): EasResult<Boolean> {
         val notesFolderId = cachedNotesFolderId ?: deps.getNotesFolderId()
             ?: return EasResult.Error("Папка Notes не найдена")
-        
-        // Retry логика: если SyncKey невалиден (Status=3), сбрасываем на "0" и повторяем
-        var attempt = 0
-        val maxAttempts = 2
-        
-        while (attempt < maxAttempts) {
-            attempt++
-            
-            val syncKeyResult = deps.refreshSyncKey(notesFolderId, "0")
-            val syncKey = when (syncKeyResult) {
-                is EasResult.Success -> syncKeyResult.data
-                is EasResult.Error -> {
-                    if (attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNoteEas: refreshSyncKey failed (attempt $attempt), retrying...")
-                        continue
-                    }
-                    return EasResult.Error(syncKeyResult.message)
-                }
-            }
-            
-            if (syncKey == "0") {
-                if (attempt < maxAttempts) {
-                    android.util.Log.w("EasNotesService", "deleteNoteEas: got SyncKey=0 (attempt $attempt), retrying...")
-                    continue
-                }
+
+        for (attempt in 0..1) {
+            val syncKey = getValidSyncKey(notesFolderId)
+            if (syncKey == null) {
+                if (attempt < 1) continue
                 return EasResult.Error("Не удалось получить SyncKey")
             }
-            
+
             val deleteXml = EasXmlTemplates.syncDelete(syncKey, notesFolderId, serverId, deletesAsMoves = true)
-            
+
             val result = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
                 val status = deps.extractValue(responseXml, "Status")
-                if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService", "deleteNoteEas: Status=$status (attempt $attempt)")
-                
                 when (status) {
-                    "1" -> true  // Success
-                    "8" -> true  // Object not found (already deleted)
-                    "3" -> {     // Invalid SyncKey
-                        if (attempt < maxAttempts) {
-                            android.util.Log.w("EasNotesService", "deleteNoteEas: Invalid SyncKey (Status=3), will retry")
-                            throw Exception("INVALID_SYNCKEY")
-                        }
-                        false
+                    "1" -> {
+                        val newKey = deps.extractValue(responseXml, "SyncKey")
+                        if (newKey != null) syncKeyCache[notesFolderId] = newKey
+                        true
+                    }
+                    "8" -> true
+                    "3", "12" -> {
+                        syncKeyCache.remove(notesFolderId)
+                        throw InvalidSyncKeyException(status ?: "3")
                     }
                     else -> false
                 }
             }
-            
-            return when (result) {
+
+            when (result) {
                 is EasResult.Success -> {
-                    if (result.data) {
-                        EasResult.Success(true)
-                    } else if (attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNoteEas: Delete failed (attempt $attempt), retrying...")
-                        continue
-                    } else {
-                        EasResult.Error("Не удалось удалить заметку после $maxAttempts попыток")
-                    }
+                    if (result.data) return EasResult.Success(true)
+                    if (attempt < 1) continue
+                    return EasResult.Error("Не удалось удалить заметку")
                 }
                 is EasResult.Error -> {
-                    if (result.message.contains("INVALID_SYNCKEY") && attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNoteEas: INVALID_SYNCKEY (attempt $attempt), retrying...")
-                        continue
-                    }
-                    if (attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNoteEas: Error (attempt $attempt): ${result.message}, retrying...")
-                        continue
-                    }
-                    result
+                    if (attempt == 0 && result.message.contains("InvalidSyncKey")) continue
+                    return result
                 }
             }
         }
-        
-        return EasResult.Error("Не удалось удалить заметку после $maxAttempts попыток")
+
+        return EasResult.Error("Не удалось удалить заметку после retry")
     }
     
     private suspend fun deleteNotePermanentlyEas(serverId: String): EasResult<Boolean> {
         val deletedItemsFolderId = deps.getDeletedItemsFolderId()
             ?: return EasResult.Error("Папка Deleted Items не найдена")
-        
-        // Retry логика: если SyncKey невалиден (Status=3), сбрасываем на "0" и повторяем
-        var attempt = 0
-        val maxAttempts = 2
-        
-        while (attempt < maxAttempts) {
-            attempt++
-            
-            val syncKeyResult = deps.refreshSyncKey(deletedItemsFolderId, "0")
-            val syncKey = when (syncKeyResult) {
-                is EasResult.Success -> syncKeyResult.data
-                is EasResult.Error -> {
-                    if (attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNotePermanentlyEas: refreshSyncKey failed (attempt $attempt), retrying...")
-                        continue
-                    }
-                    return EasResult.Error(syncKeyResult.message)
-                }
-            }
-            
-            if (syncKey == "0") {
-                if (attempt < maxAttempts) {
-                    android.util.Log.w("EasNotesService", "deleteNotePermanentlyEas: got SyncKey=0 (attempt $attempt), retrying...")
-                    continue
-                }
+
+        for (attempt in 0..1) {
+            val syncKey = getValidSyncKey(deletedItemsFolderId)
+            if (syncKey == null) {
+                if (attempt < 1) continue
                 return EasResult.Error("Не удалось получить SyncKey")
             }
-            
+
             val deleteXml = EasXmlTemplates.syncDelete(syncKey, deletedItemsFolderId, serverId, deletesAsMoves = false)
-            
+
             val result = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
                 val status = deps.extractValue(responseXml, "Status")
-                if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService", "deleteNotePermanentlyEas: Status=$status (attempt $attempt)")
-                
                 when (status) {
-                    "1" -> true  // Success
-                    "8" -> true  // Object not found (already deleted)
-                    "3" -> {     // Invalid SyncKey
-                        if (attempt < maxAttempts) {
-                            android.util.Log.w("EasNotesService", "deleteNotePermanentlyEas: Invalid SyncKey (Status=3), will retry")
-                            throw Exception("INVALID_SYNCKEY")
-                        }
-                        false
+                    "1" -> {
+                        val newKey = deps.extractValue(responseXml, "SyncKey")
+                        if (newKey != null) syncKeyCache[deletedItemsFolderId] = newKey
+                        true
+                    }
+                    "8" -> true
+                    "3", "12" -> {
+                        syncKeyCache.remove(deletedItemsFolderId)
+                        throw InvalidSyncKeyException(status ?: "3")
                     }
                     else -> false
                 }
             }
-            
-            return when (result) {
+
+            when (result) {
                 is EasResult.Success -> {
-                    if (result.data) {
-                        EasResult.Success(true)
-                    } else if (attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNotePermanentlyEas: Delete failed (attempt $attempt), retrying...")
-                        continue
-                    } else {
-                        EasResult.Error("Не удалось удалить заметку после $maxAttempts попыток")
-                    }
+                    if (result.data) return EasResult.Success(true)
+                    if (attempt < 1) continue
+                    return EasResult.Error("Не удалось удалить заметку")
                 }
                 is EasResult.Error -> {
-                    if (result.message.contains("INVALID_SYNCKEY") && attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNotePermanentlyEas: INVALID_SYNCKEY (attempt $attempt), retrying...")
-                        continue
-                    }
-                    if (attempt < maxAttempts) {
-                        android.util.Log.w("EasNotesService", "deleteNotePermanentlyEas: Error (attempt $attempt): ${result.message}, retrying...")
-                        continue
-                    }
-                    result
+                    if (attempt == 0 && result.message.contains("InvalidSyncKey")) continue
+                    return result
                 }
             }
         }
-        
-        return EasResult.Error("Не удалось удалить заметку после $maxAttempts попыток")
+
+        return EasResult.Error("Не удалось удалить заметку после retry")
     }
     
     private suspend fun restoreNoteEas(serverId: String): EasResult<String> {
@@ -626,6 +686,15 @@ class EasNotesService internal constructor(
     
     // ==================== Private EWS methods ====================
     
+    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? {
+        var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, operation)
+        if (responseXml == null) {
+            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
+            responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+        }
+        return responseXml
+    }
+    
     private suspend fun syncNotesEws(): EasResult<List<EasNote>> = withContext(Dispatchers.IO) {
         try {
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: START - syncing ACTIVE notes")
@@ -635,15 +704,9 @@ class EasNotesService internal constructor(
             val findRequest = EasXmlTemplates.ewsSoapRequest(EasXmlTemplates.ewsFindItem("notes"))
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: FindItem (notes) request length=${findRequest.length}")
             
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-            if (ntlmAuth == null) {
-                android.util.Log.e("NOT", "syncNotesEws: NTLM FAILED for notes")
-                return@withContext EasResult.Success(emptyList())
-            }
-            
-            val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+            val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
             if (responseXml == null) {
-                android.util.Log.e("NOT", "syncNotesEws: Response NULL for notes")
+                android.util.Log.e("NOT", "syncNotesEws: Auth FAILED for notes")
                 return@withContext EasResult.Success(emptyList())
             }
             
@@ -656,20 +719,15 @@ class EasNotesService internal constructor(
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: START - syncing DELETED notes")
             val findDeletedRequest = EasXmlTemplates.ewsSoapRequest(EasXmlTemplates.ewsFindItem("deleteditems"))
             
-            val ntlmAuth2 = deps.performNtlmHandshake(ewsUrl, findDeletedRequest, "FindItem")
-            if (ntlmAuth2 != null) {
-                val deletedResponseXml = deps.executeNtlmRequest(ewsUrl, findDeletedRequest, ntlmAuth2, "FindItem")
-                if (deletedResponseXml != null) {
-                    val deletedNotesRaw = parseEwsNotesResponse(deletedResponseXml)
-                    val deletedNotes = fillNoteBodiesEws(ewsUrl, deletedNotesRaw)
-                        .map { it.copy(isDeleted = true) }
-                    if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${deletedNotes.size} DELETED notes")
-                    activeWithBodies.addAll(deletedNotes)
-                } else {
-                    android.util.Log.e("NOT", "syncNotesEws: Response NULL for deleteditems")
-                }
+            val deletedResponseXml = executeEwsWithAuth(ewsUrl, findDeletedRequest, "FindItem")
+            if (deletedResponseXml != null) {
+                val deletedNotesRaw = parseEwsNotesResponse(deletedResponseXml)
+                val deletedNotes = fillNoteBodiesEws(ewsUrl, deletedNotesRaw)
+                    .map { it.copy(isDeleted = true) }
+                if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${deletedNotes.size} DELETED notes")
+                activeWithBodies.addAll(deletedNotes)
             } else {
-                android.util.Log.e("NOT", "syncNotesEws: NTLM FAILED for deleteditems")
+                android.util.Log.e("NOT", "syncNotesEws: Auth FAILED for deleteditems")
             }
             
             // === 3. Вывод всех заметок ===
@@ -718,25 +776,10 @@ class EasNotesService internal constructor(
 </soap:Envelope>""".trimIndent()
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: request length=${soapRequest.length}")
             
-            // Сначала пробуем Basic Auth
-            if (BuildConfig.DEBUG) android.util.Log.d("NOT", "Trying Basic Auth first...")
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "CreateItem")
-            
-            // Если Basic не сработал - пробуем NTLM
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
             if (responseXml == null) {
-                if (BuildConfig.DEBUG) android.util.Log.d("NOT", "Basic failed, trying NTLM...")
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
-                if (ntlmAuth == null) {
-                    android.util.Log.e("NOT", "createNoteEws: NTLM handshake FAILED")
-                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                }
-                if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: NTLM OK")
-                
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
-                if (responseXml == null) {
-                    android.util.Log.e("NOT", "createNoteEws: EWS request FAILED (null)")
-                    return@withContext EasResult.Error("Не удалось выполнить запрос")
-                }
+                android.util.Log.e("NOT", "createNoteEws: Auth FAILED")
+                return@withContext EasResult.Error("Аутентификация не удалась")
             }
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: response length=${responseXml.length}, preview=${responseXml.take(500)}")
@@ -780,7 +823,7 @@ class EasNotesService internal constructor(
             val ewsItemId = if (serverId.length >= 50 && !serverId.contains(":")) {
                 serverId
             } else {
-                val foundId = deps.findEwsNoteItemId(ewsUrl, serverId, false)
+                val foundId = deps.findEwsNoteItemId(ewsUrl, serverId, subject, false)
                 if (foundId == null) {
                     return@withContext EasResult.Error("Заметка не найдена")
                 }
@@ -807,16 +850,9 @@ class EasNotesService internal constructor(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var getItemResponse = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
+            val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
             if (getItemResponse == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
-                if (ntlmAuth == null) {
-                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                }
-                getItemResponse = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem")
-                if (getItemResponse == null) {
-                    return@withContext EasResult.Error("Не удалось получить ChangeKey")
-                }
+                return@withContext EasResult.Error("Аутентификация не удалась")
             }
             
             // Извлекаем ChangeKey из ответа
@@ -865,17 +901,9 @@ class EasNotesService internal constructor(
     </soap:Body>
 </soap:Envelope>"""
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "UpdateItem")
-            
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "UpdateItem")
             if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "UpdateItem")
-                if (ntlmAuth == null) {
-                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                }
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "UpdateItem")
-                if (responseXml == null) {
-                    return@withContext EasResult.Error("Не удалось выполнить запрос")
-                }
+                return@withContext EasResult.Error("Аутентификация не удалась")
             }
             
             // КРИТИЧНО: Проверяем ОБА условия (ResponseClass="Success" И ResponseCode="NoError")
@@ -897,32 +925,29 @@ class EasNotesService internal constructor(
         }
     }
     
-    private suspend fun deleteNoteEws(serverId: String): EasResult<Boolean> = withContext(Dispatchers.IO) {
-        deleteNoteEwsInternal(serverId, "MoveToDeletedItems")
+    private suspend fun deleteNoteEws(serverId: String, subject: String = ""): EasResult<Boolean> = withContext(Dispatchers.IO) {
+        deleteNoteEwsInternal(serverId, "MoveToDeletedItems", subject)
+    }
+
+    private suspend fun deleteNotePermanentlyEws(serverId: String, subject: String = ""): EasResult<Boolean> = withContext(Dispatchers.IO) {
+        deleteNoteEwsInternal(serverId, "HardDelete", subject)
     }
     
-    private suspend fun deleteNotePermanentlyEws(serverId: String): EasResult<Boolean> = withContext(Dispatchers.IO) {
-        deleteNoteEwsInternal(serverId, "HardDelete")
-    }
-    
-    private suspend fun deleteNoteEwsInternal(serverId: String, deleteType: String): EasResult<Boolean> {
+    private suspend fun deleteNoteEwsInternal(serverId: String, deleteType: String, subject: String = ""): EasResult<Boolean> {
         return try {
             val ewsUrl = deps.getEwsUrl()
             val ewsItemId = if (serverId.length >= 50 && !serverId.contains(":")) {
                 serverId
             } else {
-                deps.findEwsNoteItemId(ewsUrl, serverId, false) ?: serverId
+                deps.findEwsNoteItemId(ewsUrl, serverId, subject, false) ?: serverId
             }
             
             val soapRequest = EasXmlTemplates.ewsSoapRequest(
                 EasXmlTemplates.ewsDeleteItem(ewsItemId, deleteType)
             )
             
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                ?: return EasResult.Error("NTLM аутентификация не удалась")
-            
-            val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                ?: return EasResult.Error("Не удалось выполнить запрос")
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+                ?: return EasResult.Error("Аутентификация не удалась")
             
             // КРИТИЧНО: Для delete проверяем Success+NoError ИЛИ ErrorItemNotFound (уже удалено)
             val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
@@ -944,9 +969,13 @@ class EasNotesService internal constructor(
      */
     private suspend fun deleteNotesBatchEws(
         serverIds: List<String>,
-        deleteType: String
+        deleteType: String,
+        subjects: Map<String, String> = emptyMap()
     ): EasResult<Int> = withContext(Dispatchers.IO) {
         try {
+            require(deleteType in listOf("HardDelete", "SoftDelete", "MoveToDeletedItems")) {
+                "Invalid deleteType: $deleteType"
+            }
             val ewsUrl = deps.getEwsUrl()
             val ewsItemIds = mutableListOf<String>()
 
@@ -955,7 +984,8 @@ class EasNotesService internal constructor(
                     sid
                 } else {
                     val searchDeleted = (deleteType == "HardDelete")
-                    deps.findEwsNoteItemId(ewsUrl, sid, searchDeleted) ?: sid
+                    val subj = subjects[sid] ?: ""
+                    deps.findEwsNoteItemId(ewsUrl, sid, subj, searchDeleted) ?: sid
                 }
                 ewsItemIds.add(ewsItemId)
             }
@@ -966,17 +996,15 @@ class EasNotesService internal constructor(
                 """            <t:ItemId Id="${deps.escapeXml(it)}"/>"""
             }
             val soapBody = """
-    <m:DeleteItem DeleteType="$deleteType">
+    <m:DeleteItem DeleteType="${deps.escapeXml(deleteType)}">
         <m:ItemIds>
 $itemIdsXml
         </m:ItemIds>
     </m:DeleteItem>""".trimIndent()
             val soapRequest = EasXmlTemplates.ewsSoapRequest(soapBody)
 
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-            val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+                ?: return@withContext EasResult.Error("Аутентификация не удалась")
 
             if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService",
                 "deleteNotesBatchEws: ${ewsItemIds.size} items, deleteType=$deleteType, response len=${responseXml.length}")
@@ -998,7 +1026,7 @@ $itemIdsXml
         }
     }
     
-    private suspend fun restoreNoteEws(serverId: String): EasResult<String> = withContext(Dispatchers.IO) {
+    private suspend fun restoreNoteEws(serverId: String, subject: String = ""): EasResult<String> = withContext(Dispatchers.IO) {
         try {
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: START serverId=$serverId")
             val ewsUrl = deps.getEwsUrl()
@@ -1007,8 +1035,7 @@ $itemIdsXml
                 serverId
             } else {
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: Finding EWS ItemId for EAS serverId (searching in deleteditems)")
-                // КРИТИЧНО: Для restore ищем в корзине (deleteditems), а не в notes!
-                deps.findEwsNoteItemId(ewsUrl, serverId, true) ?: run {
+                deps.findEwsNoteItemId(ewsUrl, serverId, subject, true) ?: run {
                     android.util.Log.e("NOT", "restoreNoteEws: EWS ItemId NOT FOUND in notes or deleteditems")
                     return@withContext EasResult.Error("Заметка не найдена")
                 }
@@ -1035,16 +1062,10 @@ $itemIdsXml
 </soap:Envelope>""".trimIndent()
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: MoveItem request length=${soapRequest.length}")
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "MoveItem")
-            if (ntlmAuth == null) {
-                android.util.Log.e("NOT", "restoreNoteEws: NTLM FAILED")
-                return@withContext EasResult.Error("NTLM аутентификация не удалась")
-            }
-            
-            val responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "MoveItem")
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "MoveItem")
             if (responseXml == null) {
-                android.util.Log.e("NOT", "restoreNoteEws: Response NULL")
-                return@withContext EasResult.Error("Не удалось выполнить запрос")
+                android.util.Log.e("NOT", "restoreNoteEws: Auth FAILED")
+                return@withContext EasResult.Error("Аутентификация не удалась")
             }
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: Response length=${responseXml.length}, preview=${responseXml.take(300)}")
@@ -1079,10 +1100,7 @@ $itemIdsXml
     private fun parseNotesResponse(xml: String, legacy: Boolean = false): List<EasNote> {
         val notes = mutableListOf<EasNote>()
         
-        val patterns = listOf(
-            "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL),
-            "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        )
+        val patterns = listOf(ADD_PATTERN, CHANGE_PATTERN)
         
         for (pattern in patterns) {
             pattern.findAll(xml).forEach { match ->
@@ -1101,12 +1119,11 @@ $itemIdsXml
     private fun parseNoteFromXml(itemXml: String): EasNote? {
         val serverId = deps.extractValue(itemXml, "ServerId") ?: return null
         
-        val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val dataXml = dataPattern.find(itemXml)?.groupValues?.get(1) ?: return null
+        val dataXml = APPLICATION_DATA_PATTERN.find(itemXml)?.groupValues?.get(1) ?: return null
         
         val subject = XmlValueExtractor.extractNote(dataXml, "Subject") ?: ""
         val body = extractNoteBody(dataXml).ifEmpty {
-            unescapeXml(deps.extractValue(dataXml, "notes:Body")
+            XmlUtils.unescape(deps.extractValue(dataXml, "notes:Body")
                 ?: deps.extractValue(dataXml, "Data")
                 ?: deps.extractValue(dataXml, "Body")
                 ?: "")
@@ -1133,11 +1150,8 @@ $itemIdsXml
     private fun parseEwsNotesResponse(xml: String): List<EasNote> {
         val notes = mutableListOf<EasNote>()
         
-        // Ищем PostItem или Message (Notes в EWS)
-        val itemPattern = "<t:(?:PostItem|Message)[^>]*>(.*?)</t:(?:PostItem|Message)>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        
         if (BuildConfig.DEBUG) android.util.Log.d("NOT", "parseEwsNotesResponse: Searching for <t:PostItem> or <t:Message>")
-        itemPattern.findAll(xml).forEach { match ->
+        EWS_ITEM_PATTERN.findAll(xml).forEach { match ->
             val itemXml = match.groupValues[1]
             
             val itemId = XmlValueExtractor.extractAttribute(itemXml, "ItemId", "Id") ?: run {
@@ -1212,12 +1226,10 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
-        val responseXml = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem") ?: return emptyMap()
+        val responseXml = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
 
         val result = mutableMapOf<String, String>()
-        val itemPattern = "<t:(?:PostItem|Message)[^>]*>(.*?)</t:(?:PostItem|Message)>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        itemPattern.findAll(responseXml).forEach { match ->
+        EWS_ITEM_PATTERN.findAll(responseXml).forEach { match ->
             val itemXml = match.groupValues[1]
             val itemId = XmlValueExtractor.extractAttribute(itemXml, "ItemId", "Id") ?: return@forEach
             val body = extractEwsBody(itemXml)
@@ -1231,33 +1243,22 @@ $itemIdsXml
     }
 
     private fun extractEwsBody(xml: String): String? {
-        val bodyPatterns = listOf(
-            "<t:Body[^>]*>(.*?)</t:Body>",
-            "<Body[^>]*>(.*?)</Body>",
-            "<m:Body[^>]*>(.*?)</m:Body>"
-        )
-        for (pattern in bodyPatterns) {
-            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+        val bodyPatterns = listOf(BODY_T_PATTERN, BODY_PATTERN, BODY_M_PATTERN)
+        for (regex in bodyPatterns) {
             val match = regex.find(xml)
             if (match != null && match.groupValues[1].isNotBlank()) {
-                return stripHtmlIfNeeded(unescapeXml(match.groupValues[1].trim()))
+                return stripHtmlIfNeeded(XmlUtils.unescape(match.groupValues[1].trim()))
             }
         }
         return null
     }
     
     private fun extractNoteBody(xml: String): String {
-        val bodyPatterns = listOf(
-            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
-            "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
-            "<notes:Body>.*?<Data>(.*?)</Data>.*?</notes:Body>",
-            "<notes:Body>(.*?)</notes:Body>"
-        )
-        for (pattern in bodyPatterns) {
-            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+        val bodyPatterns = listOf(BODY_AIRSYNC_DATA, BODY_DATA, BODY_NOTES_DATA, BODY_NOTES)
+        for (regex in bodyPatterns) {
             val match = regex.find(xml)
             if (match != null && match.groupValues[1].isNotBlank()) {
-                return stripHtmlIfNeeded(unescapeXml(match.groupValues[1].trim()))
+                return stripHtmlIfNeeded(XmlUtils.unescape(match.groupValues[1].trim()))
             }
         }
         return ""
@@ -1266,31 +1267,17 @@ $itemIdsXml
     private fun stripHtmlIfNeeded(text: String): String =
         com.dedovmosol.iwomail.util.stripHtmlIfNeeded(text)
 
-    /**
-     * Декодирует XML entities (&lt;, &gt;, &quot;, &amp;, &apos;)
-     */
-    private fun unescapeXml(text: String): String {
-        return text
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
-    }
-
     private fun parseNotesSearchResponse(xml: String): List<EasNote> {
         val notes = mutableListOf<EasNote>()
 
-        val resultPattern = "<Result>(.*?)</Result>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        resultPattern.findAll(xml).forEach { match ->
+        RESULT_PATTERN.findAll(xml).forEach { match ->
             val resultXml = match.groupValues[1]
 
             val serverId = deps.extractValue(resultXml, "LongId")
                 ?: deps.extractValue(resultXml, "ServerId")
                 ?: return@forEach
 
-            val propertiesPattern = "<Properties>(.*?)</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val propertiesMatch = propertiesPattern.find(resultXml) ?: return@forEach
+            val propertiesMatch = PROPERTIES_PATTERN.find(resultXml) ?: return@forEach
             val propsXml = propertiesMatch.groupValues[1]
 
             val messageClass = deps.extractValue(propsXml, "MessageClass") ?: ""
@@ -1298,7 +1285,7 @@ $itemIdsXml
                 return@forEach
             }
 
-            val subject = deps.extractValue(propsXml, "Subject") ?: ""
+            val subject = XmlUtils.unescape(deps.extractValue(propsXml, "Subject") ?: "")
             val body = extractNoteBody(propsXml)
             val lastModified = parseNoteDate(deps.extractValue(propsXml, "DateReceived"))
 
@@ -1382,10 +1369,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                    ?: return@withContext EasResult.Success(emptyList())
-
-                val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+                val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
                     ?: return@withContext EasResult.Success(emptyList())
 
                 val notes = parseEwsNotesResponse(responseXml).map { it.copy(isDeleted = true) }
@@ -1398,8 +1382,7 @@ $itemIdsXml
     }
 
     private fun isNoteItem(itemXml: String): Boolean {
-        val dataPattern = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val dataXml = dataPattern.find(itemXml)?.groupValues?.get(1) ?: itemXml
+        val dataXml = APPLICATION_DATA_PATTERN.find(itemXml)?.groupValues?.get(1) ?: itemXml
         val messageClass = XmlValueExtractor.extractNote(dataXml, "MessageClass")
             ?: deps.extractValue(dataXml, "MessageClass")
             ?: ""
@@ -1408,8 +1391,7 @@ $itemIdsXml
     
     private fun extractNoteCategories(xml: String): List<String> {
         val categories = mutableListOf<String>()
-        val categoriesPattern = "<notes:Categories>(.*?)</notes:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val categoriesMatch = categoriesPattern.find(xml)
+        val categoriesMatch = NOTES_CATEGORIES_PATTERN.find(xml)
         if (categoriesMatch != null) {
             val categoriesXml = categoriesMatch.groupValues[1]
             EasPatterns.NOTES_CATEGORY.findAll(categoriesXml).forEach { match ->
@@ -1423,9 +1405,11 @@ $itemIdsXml
         if (dateStr.isNullOrBlank()) return System.currentTimeMillis()
         return try {
             val cleanDate = dateStr.substringBefore("Z").substringBefore(".")
-            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
-                .parse(cleanDate)?.time ?: System.currentTimeMillis()
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.parse(cleanDate)?.time ?: System.currentTimeMillis()
         } catch (e: Exception) {
+            android.util.Log.w("EasNotesService", "Failed to parse note date: $dateStr", e)
             System.currentTimeMillis()
         }
     }

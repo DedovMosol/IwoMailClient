@@ -58,13 +58,26 @@ class EasEmailService internal constructor(
     
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
+
+        private val EMAIL_PATTERN = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
         
+        private fun isValidEmailAddress(addresses: String): Boolean =
+            addresses.split(";", ",").all { addr ->
+                val trimmed = addr.trim()
+                trimmed.isEmpty() || EMAIL_PATTERN.matches(trimmed)
+            }
+
         private val MDN_DISPOSITION_REGEX get() = EasPatterns.MDN_DISPOSITION
         private val MDN_RETURN_RECEIPT_REGEX get() = EasPatterns.MDN_RETURN_RECEIPT
         private val MDN_CONFIRM_READING_REGEX get() = EasPatterns.MDN_CONFIRM_READING
         private val EMAIL_BRACKET_REGEX get() = EasPatterns.EMAIL_BRACKET
         private val BOUNDARY_REGEX get() = EasPatterns.BOUNDARY
         private val AIRSYNC_DATA_REGEX = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        
+        private val CONTENT_ID_PATTERN = "Content-ID:\\s*<([^>]+)>".toRegex(RegexOption.IGNORE_CASE)
+        private val CONTENT_TYPE_IMAGE_PATTERN = "Content-Type:\\s*(image/[^;\\r\\n]+)".toRegex(RegexOption.IGNORE_CASE)
+        private val DATA_PATTERN = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val DATA_IMAGE_SRC_REGEX = Regex("""src="data:image/[^;]+;base64,[^"]+"""")
     }
     
     /**
@@ -135,7 +148,9 @@ class EasEmailService internal constructor(
                         return retryResult
                     }
                 }
-                is EasResult.Error -> { }
+                is EasResult.Error -> {
+                    android.util.Log.w("EasEmailService", "Provision after 449 failed: ${provResult.message}")
+                }
             }
         }
         
@@ -155,7 +170,7 @@ class EasEmailService internal constructor(
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false
     ): EasResult<Boolean> {
-        if (to.isBlank() || !to.contains("@")) {
+        if (to.isBlank() || !isValidEmailAddress(to)) {
             return EasResult.Error("Неверный адрес получателя: $to")
         }
         
@@ -169,7 +184,8 @@ class EasEmailService internal constructor(
                 
                 val easVersion = deps.getEasVersion()
                 val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
-                val url = deps.buildUrl("SendMail") + "&SaveInSent=T"
+                val url = deps.buildUrl("SendMail") +
+                    if (majorVersion < 14) "&SaveInSent=T" else ""
                 
                 val (requestBody, contentType) = if (majorVersion >= 14) {
                     val clientId = System.currentTimeMillis().toString()
@@ -226,7 +242,9 @@ class EasEmailService internal constructor(
                                         }
                                     }
                                 }
-                                is EasResult.Error -> {}
+                                is EasResult.Error -> {
+                                    android.util.Log.w("EasEmailService", "Provision retry failed: ${provResult.message}")
+                                }
                             }
                         }
                         EasResult.Error("Ошибка отправки письма (HTTP ${response.code})")
@@ -244,7 +262,7 @@ class EasEmailService internal constructor(
      * Сначала пробует MIME (Type=4) для парсинга заголовков, потом HTML, потом plain text
      */
     suspend fun fetchEmailBodyWithMdn(collectionId: String, serverId: String): EasResult<EmailBodyResult> {
-        return withTimeoutOrNull(25_000L) {
+        return withTimeoutOrNull(45_000L) {
             // Сначала пробуем получить полный MIME (Type=4) для парсинга заголовков.
             // КРИТИЧНО: Увеличен TruncationSize с 1 МБ до 5 МБ.
             // При отправке писем с inline-картинками + файловыми вложениями MIME легко
@@ -252,21 +270,23 @@ class EasEmailService internal constructor(
             // возвращал Truncated=1 → откатывался к HTML (Type=2) с cid: ссылками без данных →
             // inline-картинки не отображались в Отправленных.
             // 5 МБ покрывает большинство писем с 2-3 inline-картинками + файлами.
+            val safeCollectionId = deps.escapeXml(collectionId)
+            val safeServerId = deps.escapeXml(serverId)
             val mimeXml = """<?xml version="1.0" encoding="UTF-8"?>
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$collectionId</CollectionId>
-                        <ServerId xmlns="AirSync">$serverId</ServerId>
-                        <Options>
-                            <BodyPreference xmlns="AirSyncBase">
-                                <Type>4</Type>
-                                <TruncationSize>5242880</TruncationSize>
-                            </BodyPreference>
-                        </Options>
-                    </Fetch>
-                </ItemOperations>
-            """.trimIndent()
+        <CollectionId xmlns="AirSync">$safeCollectionId</CollectionId>
+        <ServerId xmlns="AirSync">$safeServerId</ServerId>
+        <Options>
+            <MIMESupport xmlns="AirSync">2</MIMESupport>
+            <BodyPreference xmlns="AirSyncBase">
+                <Type>4</Type>
+                <TruncationSize>5242880</TruncationSize>
+            </BodyPreference>
+        </Options>
+    </Fetch>
+</ItemOperations>""".trimIndent()
             
             val mimeResult = deps.executeEasCommand("ItemOperations", mimeXml) { responseXml ->
                 val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
@@ -281,7 +301,7 @@ class EasEmailService internal constructor(
                     return@executeEasCommand ""  // Возвращаем пустую строку, попробуем другие типы
                 }
                 
-                unescapeXml(deps.extractValue(responseXml, "Data") 
+                XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
                     ?: run {
                         AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                     }
@@ -310,8 +330,8 @@ class EasEmailService internal constructor(
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$collectionId</CollectionId>
-        <ServerId xmlns="AirSync">$serverId</ServerId>
+        <CollectionId xmlns="AirSync">$safeCollectionId</CollectionId>
+        <ServerId xmlns="AirSync">$safeServerId</ServerId>
         <Options>
             <BodyPreference xmlns="AirSyncBase">
                 <Type>2</Type>
@@ -333,7 +353,7 @@ class EasEmailService internal constructor(
                         return@executeEasCommand ""
                     }
                     
-                    unescapeXml(deps.extractValue(responseXml, "Data") 
+                    XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
                         ?: deps.extractValue(responseXml, "Body")
                         ?: run {
                             AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
@@ -356,8 +376,8 @@ class EasEmailService internal constructor(
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$collectionId</CollectionId>
-        <ServerId xmlns="AirSync">$serverId</ServerId>
+        <CollectionId xmlns="AirSync">$safeCollectionId</CollectionId>
+        <ServerId xmlns="AirSync">$safeServerId</ServerId>
         <Options>
             <BodyPreference xmlns="AirSyncBase">
                 <Type>1</Type>
@@ -379,7 +399,7 @@ class EasEmailService internal constructor(
                         return@executeEasCommand ""
                     }
                     
-                    unescapeXml(deps.extractValue(responseXml, "Data") 
+                    XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
                         ?: deps.extractValue(responseXml, "Body")
                         ?: run {
                             AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
@@ -408,11 +428,9 @@ class EasEmailService internal constructor(
      */
     private fun parseAttachmentsFromXml(xml: String): List<EasAttachment> {
         val attachments = mutableListOf<EasAttachment>()
-        val attachmentPattern = "<(?:airsyncbase:)?Attachment>(.*?)</(?:airsyncbase:)?Attachment>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        attachmentPattern.findAll(xml).forEach { match ->
-            val attXml = match.groupValues[1]
+        for (attXml in XmlUtils.extractTopLevelBlocks(xml, "Attachment")) {
             val fileRef = deps.extractValue(attXml, "FileReference") ?: ""
-            val displayName = deps.extractValue(attXml, "DisplayName")
+            val displayName = deps.extractValue(attXml, "DisplayName")?.let { XmlUtils.unescape(it) }
             val contentId = deps.extractValue(attXml, "ContentId")
             val isInline = deps.extractValue(attXml, "IsInline") == "1"
             // КРИТИЧНО: Добавляем вложение даже без FileReference (для inline изображений в Sent Items)
@@ -440,8 +458,8 @@ class EasEmailService internal constructor(
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$collectionId</CollectionId>
-        <ServerId xmlns="AirSync">$serverId</ServerId>
+        <CollectionId xmlns="AirSync">${deps.escapeXml(collectionId)}</CollectionId>
+        <ServerId xmlns="AirSync">${deps.escapeXml(serverId)}</ServerId>
         <Options>
             <BodyPreference xmlns="AirSyncBase">
                 <Type>1</Type>
@@ -451,10 +469,21 @@ class EasEmailService internal constructor(
     </Fetch>
 </ItemOperations>""".trimIndent()
 
-        return deps.executeEasCommand("ItemOperations", xml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
-            if (status == 8) return@executeEasCommand emptyList()
-            parseAttachmentsFromXml(responseXml)
+        val result = deps.executeEasCommand("ItemOperations", xml) { responseXml ->
+            val fetchStatus = EasPatterns.ITEM_OPS_FETCH_STATUS
+                .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
+            fetchStatus to parseAttachmentsFromXml(responseXml)
+        }
+        return when (result) {
+            is EasResult.Success -> {
+                val (status, atts) = result.data
+                when {
+                    status == 1 -> EasResult.Success(atts)
+                    status == null -> EasResult.Success(atts)
+                    else -> EasResult.Error("ItemOperations Fetch status=$status")
+                }
+            }
+            is EasResult.Error -> result
         }
     }
 
@@ -481,32 +510,6 @@ class EasEmailService internal constructor(
     }
     
     /**
-     * Исправляет битые <img> теги без src/data-uri
-     * Заменяет на placeholder с сообщением "Изображение недоступно"
-     */
-    private fun fixBrokenImages(html: String): String {
-        // Находим все <img> теги
-        val imgPattern = """<img[^>]*>""".toRegex(RegexOption.IGNORE_CASE)
-        
-        return imgPattern.replace(html) { matchResult ->
-            val imgTag = matchResult.value
-            
-            // Проверяем наличие валидного src
-            val hasSrc = imgTag.contains("""src\s*=\s*["'][^"']+["']""".toRegex(RegexOption.IGNORE_CASE))
-            val hasDataUri = imgTag.contains("""src\s*=\s*["']data:image""".toRegex(RegexOption.IGNORE_CASE))
-            val hasCid = imgTag.contains("""src\s*=\s*["']cid:""".toRegex(RegexOption.IGNORE_CASE))
-            
-            if (!hasSrc || (!hasDataUri && !hasCid && !imgTag.contains("http", ignoreCase = true))) {
-                // Битый <img> без валидного src - заменяем на placeholder
-                """<div style="display:inline-block;padding:8px 12px;background:#f0f0f0;border:1px dashed #ccc;border-radius:4px;color:#666;font-size:12px;font-family:sans-serif;">📷 Изображение недоступно</div>"""
-            } else {
-                // Валидный <img> - оставляем как есть
-                imgTag
-            }
-        }
-    }
-    
-    /**
      * Извлекает inline изображения из MIME данных
      * Возвращает Map<contentId, base64DataUrl>
      */
@@ -530,7 +533,8 @@ class EasEmailService internal constructor(
     /**
      * Рекурсивно извлекает inline-картинки из вложенных multipart-структур MIME
      */
-    private fun extractImagesRecursive(mimeSection: String, images: MutableMap<String, String>) {
+    private fun extractImagesRecursive(mimeSection: String, images: MutableMap<String, String>, depth: Int = 0) {
+        if (depth > 10) return
         val boundaryMatch = BOUNDARY_REGEX.find(mimeSection) ?: return
         val boundary = boundaryMatch.groupValues[1]
         val parts = mimeSection.split("--$boundary")
@@ -540,7 +544,7 @@ class EasEmailService internal constructor(
             val isNestedMultipart = part.contains("Content-Type: multipart/", ignoreCase = true) ||
                                    part.contains("Content-Type:multipart/", ignoreCase = true)
             if (isNestedMultipart) {
-                extractImagesRecursive(part, images)
+                extractImagesRecursive(part, images, depth + 1)
                 continue
             }
             
@@ -549,12 +553,10 @@ class EasEmailService internal constructor(
             
             if (!isImage) continue
             
-            val cidPattern = "Content-ID:\\s*<([^>]+)>".toRegex(RegexOption.IGNORE_CASE)
-            val cidMatch = cidPattern.find(part)
+            val cidMatch = CONTENT_ID_PATTERN.find(part)
             val contentId = cidMatch?.groupValues?.get(1) ?: continue
             
-            val typePattern = "Content-Type:\\s*(image/[^;\\r\\n]+)".toRegex(RegexOption.IGNORE_CASE)
-            val typeMatch = typePattern.find(part)
+            val typeMatch = CONTENT_TYPE_IMAGE_PATTERN.find(part)
             val contentType = typeMatch?.groupValues?.get(1)?.trim() ?: "image/png"
             
             val contentStart = part.indexOf("\r\n\r\n")
@@ -581,13 +583,16 @@ class EasEmailService internal constructor(
         // КРИТИЧНО: Увеличен TruncationSize с 10 МБ до 20 МБ для надёжности.
         // Также добавлена проверка Truncated флага — если MIME обрезан, inline-картинки
         // не будут полностью в MIME и парсинг вернёт пустую карту (неочевидная ошибка).
+        val safeCol = deps.escapeXml(collectionId)
+        val safeSid = deps.escapeXml(serverId)
         val mimeXml = """<?xml version="1.0" encoding="UTF-8"?>
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$collectionId</CollectionId>
-        <ServerId xmlns="AirSync">$serverId</ServerId>
+        <CollectionId xmlns="AirSync">$safeCol</CollectionId>
+        <ServerId xmlns="AirSync">$safeSid</ServerId>
         <Options>
+            <MIMESupport xmlns="AirSync">2</MIMESupport>
             <BodyPreference xmlns="AirSyncBase">
                 <Type>4</Type>
                 <TruncationSize>20971520</TruncationSize>
@@ -611,7 +616,7 @@ class EasEmailService internal constructor(
                 return@executeEasCommand emptyMap()
             }
             
-            val mimeData = unescapeXml(deps.extractValue(responseXml, "Data") 
+            val mimeData = XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
                 ?: run {
                     AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                 }
@@ -691,8 +696,8 @@ class EasEmailService internal constructor(
         if (subject != null) {
             try {
                 markAsReadViaEws(subject, read)
-            } catch (_: Exception) {
-                // EWS не сработал — EAS мог сработать, не ломаем
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
             }
         }
         
@@ -782,6 +787,9 @@ $changesXml
     </m:Restriction>
     <m:ParentFolderIds>
         <t:DistinguishedFolderId Id="inbox"/>
+        <t:DistinguishedFolderId Id="sentitems"/>
+        <t:DistinguishedFolderId Id="drafts"/>
+        <t:DistinguishedFolderId Id="deleteditems"/>
     </m:ParentFolderIds>
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
@@ -896,14 +904,14 @@ $itemChanges
      * @param serverId ItemId письма (формат: "FolderId:ItemId" или просто "ItemId")
      */
     suspend fun deleteEmailPermanentlyViaEWS(
-        serverId: String
+        serverId: String,
+        subject: String = ""
     ): EasResult<Unit> = withContext(Dispatchers.IO) {
         try {
             val ewsUrl = deps.getEwsUrl()
             
-            // Проверяем формат serverId - если это EAS формат (короткий), нужно найти EWS ItemId
             val ewsItemId = if (serverId.length < 50 || serverId.contains(":")) {
-                findEwsEmailItemId(ewsUrl, serverId)
+                findEwsEmailItemId(ewsUrl, subject)
             } else {
                 serverId
             }
@@ -953,140 +961,38 @@ $itemChanges
     }
     
     /**
-     * Находит EWS ItemId письма по EAS ServerId
+     * Находит EWS ItemId письма по Subject (EWS FindItem с Restriction).
+     * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
      */
-    private suspend fun findEwsEmailItemId(ewsUrl: String, easServerId: String): String? {
+    private suspend fun findEwsEmailItemId(ewsUrl: String, subject: String): String? {
+        if (subject.isBlank()) {
+            android.util.Log.w("EasEmailService", "findEwsEmailItemId: empty subject — cannot safely identify email")
+            return null
+        }
+        val escapedSubject = deps.escapeXml(subject)
         val findBody = """<m:FindItem Traversal="Shallow">
     <m:ItemShape>
         <t:BaseShape>IdOnly</t:BaseShape>
     </m:ItemShape>
-    <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
+    <m:Restriction>
+        <t:IsEqualTo>
+            <t:FieldURI FieldURI="item:Subject"/>
+            <t:FieldURIOrConstant>
+                <t:Constant Value="$escapedSubject"/>
+            </t:FieldURIOrConstant>
+        </t:IsEqualTo>
+    </m:Restriction>
     <m:ParentFolderIds>
         <t:DistinguishedFolderId Id="deleteditems"/>
     </m:ParentFolderIds>
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
         
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-        if (ntlmAuth == null) {
-            return null
-        }
-        
-        val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-        if (responseXml == null) {
-            return null
-        }
+        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem") ?: return null
+        val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem") ?: return null
         
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-        val matches = itemIdPattern.findAll(responseXml).toList()
-        
-        val index = easServerId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
-        return matches.getOrNull(index)?.groupValues?.get(1) ?: matches.firstOrNull()?.groupValues?.get(1)
-    }
-    
-    /**
-     * КРИТИЧНО: Batch удаление писем через EWS для Exchange 2007
-     * 
-     * Проблема: При последовательном удалении через deleteEmailPermanentlyViaEWS
-     * после удаления первого письма индексы в папке смещаются.
-     * Если было 3 письма [A:1, B:2, C:3], после удаления B:2 остаётся [A:1, C:2]
-     * и попытка удалить C:3 провалится или удалит не то письмо.
-     * 
-     * Решение: Получаем ВСЕ EWS ItemIds СРАЗУ одним запросом FindItem,
-     * затем удаляем все ОДНИМ запросом DeleteItem.
-     */
-    private suspend fun deleteEmailsBatchViaEWS(serverIds: List<String>): EasResult<String> = withContext(Dispatchers.IO) {
-        try {
-            if (serverIds.isEmpty()) return@withContext EasResult.Success("OK")
-            
-            val ewsUrl = deps.getEwsUrl()
-            
-            // ШАГ 1: Получаем ВСЕ ItemIds из deleteditems одним запросом
-            val findBody = """<m:FindItem Traversal="Shallow">
-    <m:ItemShape>
-        <t:BaseShape>IdOnly</t:BaseShape>
-    </m:ItemShape>
-    <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
-    <m:ParentFolderIds>
-        <t:DistinguishedFolderId Id="deleteditems"/>
-    </m:ParentFolderIds>
-</m:FindItem>""".trimIndent()
-            val findRequest = deps.buildEwsSoapRequest(findBody)
-            
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-            if (ntlmAuth == null) {
-                return@withContext EasResult.Error("NTLM аутентификация не удалась")
-            }
-            
-            val findResponse = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-            if (findResponse == null) {
-                return@withContext EasResult.Error("Не удалось получить список писем")
-            }
-            
-            // Извлекаем ВСЕ ItemIds из ответа
-            val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-            val allItemIds = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
-            
-            if (allItemIds.isEmpty()) {
-                // Нет писем в корзине — не можем найти для удаления
-                android.util.Log.w("EasEmailService", "EWS batch delete: FindItem returned 0 items in deleteditems")
-                return@withContext EasResult.Error("No items found in deleteditems folder")
-            }
-            
-            // ШАГ 2: Выбираем ItemIds соответствующие нашим serverIds (по индексу)
-            val itemIdsToDelete = mutableListOf<String>()
-            for (serverId in serverIds) {
-                val index = serverId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
-                if (index >= 0 && index < allItemIds.size) {
-                    itemIdsToDelete.add(allItemIds[index])
-                } else if (serverId.length >= 50 && !serverId.contains(":")) {
-                    // Это уже EWS ItemId
-                    itemIdsToDelete.add(serverId)
-                }
-            }
-            
-            if (itemIdsToDelete.isEmpty()) {
-                android.util.Log.w("EasEmailService", "EWS batch delete: no matching ItemIds found for ${serverIds.size} serverIds (allItemIds=${allItemIds.size})")
-                return@withContext EasResult.Error("No matching items found for deletion")
-            }
-            
-            // ШАГ 3: Удаляем ВСЕ письма ОДНИМ запросом DeleteItem
-            val itemIdsXml = itemIdsToDelete.joinToString("\n") { itemId ->
-                """    <t:ItemId Id="${deps.escapeXml(itemId)}"/>"""
-            }
-            
-            val deleteBody = """<m:DeleteItem DeleteType="HardDelete">
-  <m:ItemIds>
-$itemIdsXml
-  </m:ItemIds>
-</m:DeleteItem>""".trimIndent()
-            
-            val deleteRequest = deps.buildEwsSoapRequest(deleteBody)
-            
-            val deleteNtlm = deps.performNtlmHandshake(ewsUrl, deleteRequest, "DeleteItem")
-            if (deleteNtlm == null) {
-                return@withContext EasResult.Error("NTLM аутентификация не удалась")
-            }
-            
-            val deleteResponse = deps.executeNtlmRequest(ewsUrl, deleteRequest, deleteNtlm, "DeleteItem")
-            if (deleteResponse == null) {
-                return@withContext EasResult.Error("Не удалось выполнить удаление")
-            }
-            
-            // Проверяем успешность (хотя бы одно Success)
-            val hasSuccess = deleteResponse.contains("ResponseClass=\"Success\"")
-            val hasNoError = deleteResponse.contains("NoError")
-            
-            if (hasSuccess || hasNoError || deleteResponse.contains("ErrorItemNotFound")) {
-                EasResult.Success("OK")
-            } else {
-                val errorMessage = deps.extractEwsError(deleteResponse)
-                EasResult.Error(errorMessage)
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("EWS batch delete error: ${e.message}")
-        }
+        return itemIdPattern.find(responseXml)?.groupValues?.get(1)
     }
     
     /**
@@ -1207,22 +1113,17 @@ $deleteCommands
             return easResult
         }
         
-        // EAS не сработал — для Exchange 2007 пробуем EWS fallback
+        // EAS batch delete не удался — ошибка пробрасывается к caller'у.
+        // Caller (EmailOperationsService) выполнит individual EWS deletes
+        // с Subject-based поиском, что безопаснее batch позиционного подхода.
         if (deps.isExchange2007()) {
-            android.util.Log.w("EasEmailService", "EAS batch delete failed (${(easResult as? EasResult.Error)?.message}), trying EWS fallback")
-            val ewsResult = deleteEmailsBatchViaEWS(serverIds)
-            if (ewsResult is EasResult.Error) {
-                // EWS тоже не сработал — возвращаем ошибку
-                return ewsResult
-            }
-            // EWS удаление успешно — обновляем syncKey
-            return when (val syncResult = sync(collectionId, syncKey)) {
-                is EasResult.Success -> EasResult.Success(syncResult.data.syncKey)
+            android.util.Log.w("EasEmailService", "EAS batch delete failed (${(easResult as? EasResult.Error)?.message}), caller will handle EWS fallback per-item")
+            return when (val resetResult = sync(collectionId, "0")) {
+                is EasResult.Success -> {
+                    EasResult.Error("DELETE_NOT_APPLIED")
+                }
                 is EasResult.Error -> {
-                    when (val resetResult = sync(collectionId, "0")) {
-                        is EasResult.Success -> EasResult.Success(resetResult.data.syncKey)
-                        is EasResult.Error -> EasResult.Error("Sync key refresh failed after EWS delete")
-                    }
+                    EasResult.Error("DELETE_NOT_APPLIED")
                 }
             }
         }
@@ -1302,11 +1203,10 @@ $deleteCommands
         )
         
         if (matches.isEmpty()) {
-            // Нет inline картинок - простой HTML
             sb.append("Content-Type: text/html; charset=UTF-8\r\n")
-            sb.append("Content-Transfer-Encoding: 8bit\r\n")
+            sb.append("Content-Transfer-Encoding: base64\r\n")
             sb.append("\r\n")
-            sb.append(body)
+            sb.append(android.util.Base64.encodeToString(body.toByteArray(Charsets.UTF_8), android.util.Base64.CRLF))
         } else {
             // Есть inline картинки - multipart/related
             val boundary = "----=_Part_${System.currentTimeMillis()}_${System.nanoTime()}"
@@ -1318,7 +1218,7 @@ $deleteCommands
             // Часть 1: HTML body с замененными cid:
             sb.append("--$boundary\r\n")
             sb.append("Content-Type: text/html; charset=UTF-8\r\n")
-            sb.append("Content-Transfer-Encoding: 8bit\r\n")
+            sb.append("Content-Transfer-Encoding: base64\r\n")
             sb.append("\r\n")
             
             var modifiedBody = body
@@ -1326,15 +1226,14 @@ $deleteCommands
                 val fullMatch = match.value
                 val contentId = "image${index + 1}@$deviceId"
                 
-                // Заменяем data: URL на cid:
                 val replacement = fullMatch.replace(
-                    Regex("""src="data:image/[^;]+;base64,[^"]+""""),
+                    DATA_IMAGE_SRC_REGEX,
                     """src="cid:$contentId""""
                 )
                 modifiedBody = modifiedBody.replace(fullMatch, replacement)
             }
             
-            sb.append(modifiedBody)
+            sb.append(android.util.Base64.encodeToString(modifiedBody.toByteArray(Charsets.UTF_8), android.util.Base64.CRLF))
             sb.append("\r\n")
             
             // Часть 2..N: Inline картинки
@@ -1374,61 +1273,40 @@ $deleteCommands
         val deletedIds = mutableListOf<String>()
         val changedEmails = mutableListOf<EasEmailChange>()
         
-        // Парсим добавленные письма (<Add>)
-        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        addPattern.findAll(xml).forEach { match ->
-            val addXml = match.groupValues[1]
+        for (addXml in XmlUtils.extractTopLevelBlocks(xml, "Add")) {
             val email = parseEmailFromXml(addXml)
-            if (email != null) {
-                emails.add(email)
-            }
+            if (email != null) emails.add(email)
         }
         
-        // Парсим изменённые письма (<Change>) — Read, Flag, и Body
-        // MS-ASCMD 2.2.3.24: Change содержит ApplicationData с изменёнными свойствами.
-        // Exchange может включать обновлённый Body при редактировании черновика в Outlook.
-        val changePattern = "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        changePattern.findAll(xml).forEach { match ->
-            val changeXml = match.groupValues[1]
+        for (changeXml in XmlUtils.extractTopLevelBlocks(xml, "Change")) {
             val serverId = deps.extractValue(changeXml, "ServerId")
             if (serverId != null) {
                 val readValue = deps.extractValue(changeXml, "Read")
                 val read = readValue?.let { it == "1" }
                 
-                val flagXml = "<Flag>(.*?)</Flag>".toRegex(RegexOption.DOT_MATCHES_ALL).find(changeXml)?.groupValues?.get(1)
+                val flagXml = XmlUtils.extractTagValue(changeXml, "Flag")
                 val flagStatus = flagXml?.let { deps.extractValue(it, "FlagStatus") }
                 val flagged = flagStatus?.let { it == "2" }
                 
-                // Извлекаем body из Change (для черновиков, отредактированных во внешнем клиенте).
-                // Извлекаем <Type> из секции <Body>, а не из полного XML,
-                // т.к. тег "Type" существует в нескольких code page WBXML
-                // (AirSyncBase, Email/Recurrence, Tasks и др.).
-                val bodySection = "<Body>(.*?)</Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                    .find(changeXml)?.groupValues?.get(1)
+                val bodySection = XmlUtils.extractTagValue(changeXml, "Body")
                 val body = if (bodySection != null) extractBody(changeXml) else ""
                 val bodyType = if (body.isNotBlank() && bodySection != null) {
                     deps.extractValue(bodySection, "Type")?.toIntOrNull() ?: 1
                 } else null
                 
-                if (read != null || flagged != null || body.isNotBlank()) {
-                    changedEmails.add(EasEmailChange(
-                        serverId, read, flagged,
-                        body = body.takeIf { it.isNotBlank() },
-                        bodyType = bodyType
-                    ))
-                }
+                changedEmails.add(EasEmailChange(
+                    serverId, read, flagged,
+                    body = body.takeIf { it.isNotBlank() },
+                    bodyType = bodyType
+                ))
             }
         }
         
-        // Парсим удалённые письма (<Delete> и <SoftDelete>)
-        val deletePattern = "<Delete>(.*?)</Delete>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        deletePattern.findAll(xml).forEach { match ->
-            deps.extractValue(match.groupValues[1], "ServerId")?.let { deletedIds.add(it) }
+        for (block in XmlUtils.extractTopLevelBlocks(xml, "Delete")) {
+            deps.extractValue(block, "ServerId")?.let { deletedIds.add(it) }
         }
-        
-        val softDeletePattern = "<SoftDelete>(.*?)</SoftDelete>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        softDeletePattern.findAll(xml).forEach { match ->
-            deps.extractValue(match.groupValues[1], "ServerId")?.let { deletedIds.add(it) }
+        for (block in XmlUtils.extractTopLevelBlocks(xml, "SoftDelete")) {
+            deps.extractValue(block, "ServerId")?.let { deletedIds.add(it) }
         }
         
         return SyncResponse(
@@ -1450,8 +1328,7 @@ $deleteCommands
         // Извлекаем <Type> из секции <Body>, а не из полного XML,
         // т.к. тег "Type" существует в нескольких code page WBXML
         // (AirSyncBase, Email/Recurrence, Tasks и др.).
-        val bodySectionAdd = "<Body>(.*?)</Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            .find(xml)?.groupValues?.get(1)
+        val bodySectionAdd = XmlUtils.extractTagValue(xml, "Body")
         val bodyType = if (bodySectionAdd != null) {
             deps.extractValue(bodySectionAdd, "Type")?.toIntOrNull() ?: 1
         } else {
@@ -1472,16 +1349,15 @@ $deleteCommands
         val isRead = if (readValue != null) readValue == "1" else true
 
         // MS-ASEMAIL: FlagStatus inside <Flag>. "2" = flagged.
-        val flagSection = "<Flag>(.*?)</Flag>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            .find(xml)?.groupValues?.get(1)
+        val flagSection = XmlUtils.extractTagValue(xml, "Flag")
         val isFlagged = flagSection?.let { deps.extractValue(it, "FlagStatus") == "2" } ?: false
 
         return EasEmail(
             serverId = serverId,
-            from = deps.extractValue(xml, "From") ?: "",
-            to = deps.extractValue(xml, "To") ?: "",
-            cc = deps.extractValue(xml, "Cc") ?: "",
-            subject = deps.extractValue(xml, "Subject") ?: "(No subject)",
+            from = XmlUtils.unescape(deps.extractValue(xml, "From") ?: ""),
+            to = XmlUtils.unescape(deps.extractValue(xml, "To") ?: ""),
+            cc = XmlUtils.unescape(deps.extractValue(xml, "Cc") ?: ""),
+            subject = XmlUtils.unescape(deps.extractValue(xml, "Subject") ?: "(No subject)"),
             dateReceived = deps.extractValue(xml, "DateReceived") ?: "",
             read = isRead,
             importance = deps.extractValue(xml, "Importance")?.toIntOrNull() ?: 1,
@@ -1494,32 +1370,16 @@ $deleteCommands
     
     private fun extractBody(xml: String): String {
         // Пробуем разные варианты извлечения body
-        val patterns = listOf(
-            "<Data>(.*?)</Data>",
-            "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>"
-        )
-        for (pattern in patterns) {
-            val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
+        val patterns = listOf(DATA_PATTERN, AIRSYNC_DATA_REGEX)
+        for (regex in patterns) {
             val match = regex.find(xml)
             if (match != null) {
                 // КРИТИЧНО: XML-данные внутри <Data> содержат escaped entities
                 // (&lt; &gt; &amp; и т.д.) — декодируем обратно в HTML
-                return unescapeXml(match.groupValues[1])
+                return XmlUtils.unescape(match.groupValues[1])
             }
         }
         return ""
-    }
-    
-    /**
-     * Декодирует XML entities (&lt;, &gt;, &quot;, &amp;, &apos;)
-     */
-    private fun unescapeXml(text: String): String {
-        return text
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
     }
     
     /**
@@ -1534,7 +1394,6 @@ $deleteCommands
     }
     
     private fun extractBodyFromMime(mimeData: String): String {
-        // Декодируем base64 если нужно
         val decoded = try {
             if (looksLikeBase64(mimeData)) {
                 String(android.util.Base64.decode(mimeData, android.util.Base64.DEFAULT), Charsets.UTF_8)
@@ -1545,66 +1404,67 @@ $deleteCommands
             mimeData
         }
         
-        // Ищем HTML часть
-        val htmlPattern = "Content-Type:\\s*text/html.*?\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
+        // RFC 2045 §6.1: Content-Transfer-Encoding applies per MIME part independently
+        val htmlPartPattern = "(Content-Type:\\s*text/html[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
         )
-        val htmlMatch = htmlPattern.find(decoded)
+        val htmlMatch = htmlPartPattern.find(decoded)
         if (htmlMatch != null) {
-            var content = htmlMatch.groupValues[1].trim()
-            // Декодируем quoted-printable если нужно
-            if (decoded.contains("Content-Transfer-Encoding: quoted-printable", ignoreCase = true)) {
-                content = decodeQuotedPrintable(content)
-            }
-            return content
+            return decodeMimePartContent(htmlMatch.groupValues[1], htmlMatch.groupValues[2].trim())
         }
         
-        // Fallback на text/plain
-        val textPattern = "Content-Type:\\s*text/plain.*?\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
+        val textPartPattern = "(Content-Type:\\s*text/plain[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
         )
-        val textMatch = textPattern.find(decoded)
+        val textMatch = textPartPattern.find(decoded)
         if (textMatch != null) {
-            var content = textMatch.groupValues[1].trim()
-            if (decoded.contains("Content-Transfer-Encoding: quoted-printable", ignoreCase = true)) {
-                content = decodeQuotedPrintable(content)
-            }
-            return content
+            return decodeMimePartContent(textMatch.groupValues[1], textMatch.groupValues[2].trim())
         }
         
         return decoded
+    }
+    
+    private fun decodeMimePartContent(headers: String, body: String): String {
+        val encodingMatch = "Content-Transfer-Encoding:\\s*(\\S+)".toRegex(RegexOption.IGNORE_CASE).find(headers)
+        val encoding = encodingMatch?.groupValues?.get(1)?.lowercase() ?: "7bit"
+        return when (encoding) {
+            "base64" -> try {
+                String(android.util.Base64.decode(body, android.util.Base64.DEFAULT), Charsets.UTF_8)
+            } catch (_: Exception) { body }
+            "quoted-printable" -> decodeQuotedPrintable(body)
+            else -> body
+        }
     }
     
     /**
      * Декодирует quoted-printable кодировку
      */
     private fun decodeQuotedPrintable(input: String): String {
-        val result = StringBuilder()
+        val text = input.replace("=\r\n", "").replace("=\n", "")
+        val bytes = mutableListOf<Byte>()
         var i = 0
-        val cleaned = input.replace("=\r\n", "").replace("=\n", "")
         
-        while (i < cleaned.length) {
-            val c = cleaned[i]
-            if (c == '=' && i + 2 < cleaned.length) {
-                val hex = cleaned.substring(i + 1, i + 3)
+        while (i < text.length) {
+            if (text[i] == '=' && i + 2 < text.length) {
                 try {
-                    val byte = hex.toInt(16).toByte()
-                    result.append(byte.toInt().toChar())
+                    val hex = text.substring(i + 1, i + 3)
+                    bytes.add(hex.toInt(16).toByte())
                     i += 3
-                    continue
-                } catch (e: Exception) {
-                    // Не hex, добавляем как есть
+                } catch (_: Exception) {
+                    bytes.add(text[i].code.toByte())
+                    i++
                 }
+            } else {
+                bytes.add(text[i].code.toByte())
+                i++
             }
-            result.append(c)
-            i++
         }
-        return result.toString()
-    }
-    
-    private fun extractBodyFromItemOperations(xml: String): String {
-        val raw = AIRSYNC_DATA_REGEX.find(xml)?.groupValues?.get(1) ?: return ""
-        return unescapeXml(raw)
+        
+        return try {
+            String(bytes.toByteArray(), Charsets.UTF_8)
+        } catch (_: Exception) {
+            input
+        }
     }
     
     private fun parseMoveItemsResponse(xml: String): Map<String, String> {

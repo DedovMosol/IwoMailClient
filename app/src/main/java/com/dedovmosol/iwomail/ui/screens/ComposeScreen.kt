@@ -1148,6 +1148,18 @@ fun ComposeScreen(
                         }
                     }
                 }
+                // Обновляем метаданные вложений с сервера перед чтением из БД.
+                // Если вложение добавлено в Outlook на ПК — без этого вызова
+                // его не будет в локальной БД и оно не отобразится.
+                if (draft.serverId.isNotBlank() && !draft.serverId.startsWith("local_draft_")) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            mailRepo.refreshAttachmentMetadata(draftId)
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                        }
+                    }
+                }
                 val draftAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(draftId) }
                 if (draftAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
@@ -1197,11 +1209,16 @@ fun ComposeScreen(
                                                 newAttachmentStrings.add(attInfo.toSaveableString())
                                             }
                                         }
-                                        is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
+                                        is com.dedovmosol.iwomail.eas.EasResult.Error -> {
+                                            android.util.Log.w("ComposeScreen", "downloadDraftAttachment failed for '${att.displayName}': ${result.message}")
+                                        }
                                     }
+                                } else if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                    android.util.Log.w("ComposeScreen", "Inline att '${att.displayName}' has no localPath and no fileReference, cid=${att.contentId}")
                                 }
                             } catch (e: Exception) {
                                 if (e is kotlinx.coroutines.CancellationException) throw e
+                                android.util.Log.w("ComposeScreen", "Error processing att '${att.displayName}': ${e.message}")
                             }
                         }
                     }
@@ -1228,8 +1245,8 @@ fun ComposeScreen(
                         }
                         val collId = draftFolder?.serverId
                         val easServerId = draft.serverId
-                        if (collId != null && easServerId.contains(":") && !easServerId.contains("=")) {
-                            // EAS путь: serverId = "5:17" — fetchInlineImages через ItemOperations
+                        val isEwsItemId = easServerId.length > 50 && easServerId.contains("=")
+                        if (collId != null && !isEwsItemId && !easServerId.startsWith("local_draft_") && easServerId.isNotBlank()) {
                             try {
                                 val fetchResult = withContext(Dispatchers.IO) {
                                     fbClient.fetchInlineImages(collId, easServerId)
@@ -1240,13 +1257,12 @@ fun ComposeScreen(
                                             body = replaceCidWithDataUrl(body, fetchResult.data)
                                         }
                                     }
-                                    is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
+                                    is com.dedovmosol.iwomail.eas.EasResult.Error -> {
+                                        android.util.Log.w("ComposeScreen", "fetchInlineImages EAS failed for sid=$easServerId: ${fetchResult.message}")
+                                    }
                                 }
                             } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
-                        } else if (!easServerId.startsWith("local_draft_") && easServerId.isNotBlank()) {
-                            // EWS путь: длинный ItemId (содержит "=", base64).
-                            // EAS ItemOperations не работает с EWS ItemId.
-                            // Загружаем полный MIME через EWS GetItem и парсим inline-картинки.
+                        } else if (isEwsItemId) {
                             try {
                                 when (val ewsResult = withContext(Dispatchers.IO) { fbClient.fetchInlineImagesEws(easServerId) }) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
@@ -1254,7 +1270,9 @@ fun ComposeScreen(
                                             body = replaceCidWithDataUrl(body, ewsResult.data)
                                         }
                                     }
-                                    is com.dedovmosol.iwomail.eas.EasResult.Error -> {}
+                                    is com.dedovmosol.iwomail.eas.EasResult.Error -> {
+                                        android.util.Log.w("ComposeScreen", "fetchInlineImages EWS failed: ${ewsResult.message}")
+                                    }
                                 }
                             } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         }

@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.data.repository
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
@@ -17,7 +18,8 @@ class FolderSyncService(
     private val folderDao: FolderDao,
     private val emailDao: EmailDao,
     private val accountDao: AccountDao,
-    private val accountRepo: AccountRepository
+    private val accountRepo: AccountRepository,
+    private val database: MailDatabase
 ) {
     /**
      * Безопасное обновление папки без удаления связанных писем
@@ -115,9 +117,11 @@ class FolderSyncService(
         val result = client.deleteFolder(folder.serverId, syncKey ?: "0")
         return result
             .onSuccessResult { newSyncKey ->
-                accountDao.updateFolderSyncKey(accountId, newSyncKey)
-                emailDao.deleteByFolder(folderId)
-                folderDao.delete(folderId)
+                database.withTransaction {
+                    accountDao.updateFolderSyncKey(accountId, newSyncKey)
+                    emailDao.deleteByFolder(folderId)
+                    folderDao.delete(folderId)
+                }
             }
             .flatMapResult { syncFolders(accountId) }
     }
@@ -182,40 +186,42 @@ class FolderSyncService(
                     return syncFoldersEas(accountId, account, retryCount + 1)
                 }
                 
-                accountDao.updateFolderSyncKey(accountId, result.data.syncKey)
-                
-                if (result.data.deletedFolderIds.isNotEmpty()) {
-                    for (serverId in result.data.deletedFolderIds) {
-                        val folderId = "${accountId}_${serverId}"
-                        emailDao.deleteByFolder(folderId)
-                        folderDao.delete(folderId)
-                    }
-                }
-                
-                if (result.data.folders.isNotEmpty()) {
-                    val entities = result.data.folders.map { folder ->
-                        val folderId = "${accountId}_${folder.serverId}"
-                        val existingFolder = folderDao.getFolder(folderId)
-                        if (folder.type == FolderType.DRAFTS && existingFolder != null) {
-                            existingFolder.copy(
-                                displayName = folder.displayName,
-                                parentId = folder.parentId
-                            )
-                        } else {
-                            FolderEntity(
-                                id = folderId,
-                                accountId = accountId,
-                                serverId = folder.serverId,
-                                displayName = folder.displayName,
-                                parentId = folder.parentId,
-                                type = folder.type,
-                                syncKey = existingFolder?.syncKey ?: "0",
-                                totalCount = existingFolder?.totalCount ?: 0,
-                                unreadCount = existingFolder?.unreadCount ?: 0
-                            )
+                database.withTransaction {
+                    accountDao.updateFolderSyncKey(accountId, result.data.syncKey)
+                    
+                    if (result.data.deletedFolderIds.isNotEmpty()) {
+                        for (serverId in result.data.deletedFolderIds) {
+                            val folderId = "${accountId}_${serverId}"
+                            emailDao.deleteByFolder(folderId)
+                            folderDao.delete(folderId)
                         }
                     }
-                    upsertFolders(entities)
+                    
+                    if (result.data.folders.isNotEmpty()) {
+                        val entities = result.data.folders.map { folder ->
+                            val folderId = "${accountId}_${folder.serverId}"
+                            val existingFolder = folderDao.getFolder(folderId)
+                            if (folder.type == FolderType.DRAFTS && existingFolder != null) {
+                                existingFolder.copy(
+                                    displayName = folder.displayName,
+                                    parentId = folder.parentId
+                                )
+                            } else {
+                                FolderEntity(
+                                    id = folderId,
+                                    accountId = accountId,
+                                    serverId = folder.serverId,
+                                    displayName = folder.displayName,
+                                    parentId = folder.parentId,
+                                    type = folder.type,
+                                    syncKey = existingFolder?.syncKey ?: "0",
+                                    totalCount = existingFolder?.totalCount ?: 0,
+                                    unreadCount = existingFolder?.unreadCount ?: 0
+                                )
+                            }
+                        }
+                        upsertFolders(entities)
+                    }
                 }
                 
                 val existingFolders = folderDao.getFoldersByAccountList(accountId)
@@ -235,12 +241,11 @@ class FolderSyncService(
                     return syncFoldersEas(accountId, account, retryCount + 1)
                 }
                 
-                // КРИТИЧНО: Обновляем счетчики из БД после синхронизации папок
-                // FolderSync не возвращает счетчики - берем из локальной БД
+                val folderCounts = emailDao.getCountsByAccount(accountId)
+                val countsMap = folderCounts.associateBy { it.folderId }
                 existingFolders.forEach { folder ->
-                    val totalCount = emailDao.getCountByFolder(folder.id)
-                    val unreadCount = emailDao.getUnreadCount(folder.id)
-                    folderDao.updateCounts(folder.id, unreadCount, totalCount)
+                    val counts = countsMap[folder.id]
+                    folderDao.updateCounts(folder.id, counts?.unreadCount ?: 0, counts?.totalCount ?: 0)
                 }
                 
                 EasResult.Success(Unit)
@@ -273,8 +278,11 @@ class FolderSyncService(
         
         return try {
             client.connect().getOrThrow()
-            val result = client.getFolders()
-            client.disconnect()
+            val result = try {
+                client.getFolders()
+            } finally {
+                try { client.disconnect() } catch (_: Exception) { }
+            }
             
             result.fold(
                 onSuccess = { folders ->

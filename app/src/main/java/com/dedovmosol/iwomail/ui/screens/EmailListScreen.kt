@@ -106,7 +106,7 @@ fun EmailListScreen(
     val scope = rememberCoroutineScope()
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
-    val accountRepo = remember { com.dedovmosol.iwomail.data.repository.AccountRepository(context) }
+    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
     val hapticScreen = LocalHapticFeedback.current
@@ -492,7 +492,13 @@ fun EmailListScreen(
     fun starSelected() {
         scope.launch {
             try {
-                selectedIds.forEach { id -> mailRepo.toggleFlag(id) }
+                selectedIds.forEach { id ->
+                    try {
+                        mailRepo.toggleFlag(id)
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
+                }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
             } finally { selectedIds = emptySet() }
@@ -1327,7 +1333,7 @@ private fun EmailListContent(
             withContext(Dispatchers.IO) {
                 // Batch query вместо N+1
                 val emailIds = emailsWithAttachments.map { it.id }
-                val allAttachments = database.attachmentDao().getAttachmentsForEmails(emailIds)
+                val allAttachments = emailIds.chunked(500).flatMap { database.attachmentDao().getAttachmentsForEmails(it) }
                 val attachmentsByEmail = allAttachments.groupBy { it.emailId }
                 
                 val newPreviews = mutableMapOf<String, String?>()
@@ -1340,7 +1346,10 @@ private fun EmailListContent(
                     }
                     newPreviews[email.id] = imageAttachment?.localPath
                 }
-                imagePreviewCache = imagePreviewCache + newPreviews
+                val combined = imagePreviewCache + newPreviews
+                imagePreviewCache = if (combined.size > 200) {
+                    combined.entries.toList().takeLast(200).associate { it.toPair() }
+                } else combined
             }
         }
     }

@@ -2,6 +2,8 @@ package com.dedovmosol.iwomail.eas
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -50,21 +52,24 @@ class EasClient(
         )
     }
     
-    // Cached client for Ping with extended read timeout (heartbeat + buffer)
-    @Volatile private var pingClientCached: OkHttpClient? = null
-    @Volatile private var pingClientHeartbeat: Int = 0
-    
+    private data class PingClientSnapshot(val client: OkHttpClient, val heartbeat: Int)
+    @Volatile private var pingClientSnapshot: PingClientSnapshot? = null
+    private val pingClientLock = Any()
+
     private fun getPingClient(heartbeatInterval: Int): OkHttpClient {
-        val cached = pingClientCached
-        if (cached != null && pingClientHeartbeat == heartbeatInterval) return cached
-        val newClient = client.newBuilder()
-            .readTimeout((heartbeatInterval + 60).toLong(), TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .build()
-        pingClientCached = newClient
-        pingClientHeartbeat = heartbeatInterval
-        return newClient
+        val snapshot = pingClientSnapshot
+        if (snapshot != null && snapshot.heartbeat == heartbeatInterval) return snapshot.client
+        synchronized(pingClientLock) {
+            val doubleCheck = pingClientSnapshot
+            if (doubleCheck != null && doubleCheck.heartbeat == heartbeatInterval) return doubleCheck.client
+            val newClient = client.newBuilder()
+                .readTimeout((heartbeatInterval + 60).toLong(), TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .build()
+            pingClientSnapshot = PingClientSnapshot(newClient, heartbeatInterval)
+            return newClient
+        }
     }
     
     // Нормализуем URL - добавляем схему и порт
@@ -112,20 +117,21 @@ class EasClient(
      * Exchange 2007 поддерживает только EAS 12.0/12.1
      * Exchange 2010+ поддерживает EAS 14.0+
      */
-    fun isExchange2007(): Boolean {
-        // Если версия не определена - считаем что 2007 (безопасный вариант)
+    fun isExchange2007(): Boolean = synchronized(versionLock) {
         if (!versionDetected || serverSupportedVersions.isEmpty()) {
-            return easVersion.startsWith("12.")
+            return@synchronized easVersion.startsWith("12.")
         }
-        // Если сервер поддерживает только 12.x - это Exchange 2007
-        return serverSupportedVersions.none { it.startsWith("14.") || it.startsWith("16.") }
+        serverSupportedVersions.none { it.startsWith("14.") || it.startsWith("16.") }
     }
     // Кэш ID папок (volatile для видимости между корутинами на Dispatchers.IO)
     @Volatile private var cachedNotesFolderId: String? = null
     @Volatile private var cachedDeletedItemsFolderId: String? = null
     @Volatile private var cachedTasksFolderId: String? = null
     @Volatile private var cachedCalendarFolderId: String? = null
-    private val extractValueCache = ConcurrentHashMap<String, Regex>()
+    @Volatile private var cachedFolderSyncResult: FolderSyncResponse? = null
+    @Volatile private var folderSyncCacheTimeMs: Long = 0L
+    private val folderSyncCacheLock = Any()
+    private val versionLock = Any()
     // DeviceId должен быть стабильным для одного аккаунта
     private val deviceId = generateStableDeviceId(username, deviceIdSuffix)
     // DeviceType - как у Huawei
@@ -199,7 +205,7 @@ class EasClient(
             executeNtlmRequest = { url, request, auth, action -> executeNtlmRequest(url, request, auth, action) },
             tryBasicAuthEws = { url, request, action -> tryBasicAuthEws(url, request, action) },
             getEwsUrl = { ewsUrl },
-            findEwsNoteItemId = { ewsUrl, serverId, searchInDeletedItems -> findEwsNoteItemId(ewsUrl, serverId, searchInDeletedItems) }
+            findEwsNoteItemId = { ewsUrl, serverId, subject, searchInDeletedItems -> findEwsNoteItemId(ewsUrl, serverId, subject, searchInDeletedItems) }
         ))
     }
     
@@ -320,6 +326,8 @@ class EasClient(
     // PolicyKey для авторизованных запросов после Provision
     @Volatile var policyKey: String? = initialPolicyKey
         private set
+    private val provisionMutex = Mutex()
+    @Volatile private var insideSendDeviceSettings = false
 
     // Результат создания папки
     data class FolderCreateResult(val serverId: String, val newSyncKey: String)
@@ -362,6 +370,7 @@ class EasClient(
                         }
                         override fun onResponse(call: Call, response: Response) {
                             if (cont.isActive) cont.resume(response)
+                            else response.close()
                         }
                     })
                 }
@@ -371,37 +380,32 @@ class EasClient(
                         val versionsHeader = resp.header("MS-ASProtocolVersions") ?: ""
                         
                         if (versionsHeader.isNotEmpty()) {
-                            serverSupportedVersions = versionsHeader.split(",").map { it.trim() }
-                            val bestVersion = supportedVersions.firstOrNull { it in serverSupportedVersions }
+                            val versions = versionsHeader.split(",").map { it.trim() }
+                            val bestVersion = supportedVersions.firstOrNull { it in versions }
                             
-                            if (bestVersion != null) {
-                                easVersion = bestVersion
-                                versionDetected = true
+                            synchronized(versionLock) {
+                                serverSupportedVersions = versions
+                                easVersion = bestVersion ?: "12.1"
                                 versionDetectedAt = System.currentTimeMillis()
-                                EasResult.Success(easVersion)
-                            } else {
-                                easVersion = "12.1"
                                 versionDetected = true
-                                versionDetectedAt = System.currentTimeMillis()
-                                EasResult.Success(easVersion)
                             }
+                            EasResult.Success(easVersion)
                         } else {
-                            versionDetected = true
-                            versionDetectedAt = System.currentTimeMillis()
+                            synchronized(versionLock) {
+                                versionDetectedAt = System.currentTimeMillis()
+                                versionDetected = true
+                            }
                             EasResult.Success(easVersion)
                         }
                     } else if (resp.code == 401) {
                         EasResult.Error("Ошибка авторизации (401)")
                     } else {
-                        versionDetected = true
-                        versionDetectedAt = System.currentTimeMillis()
-                        EasResult.Success(easVersion)
+                        EasResult.Error("HTTP ${resp.code}")
                     }
                 }
-            } catch (_: Exception) {
-                versionDetected = true
-                versionDetectedAt = System.currentTimeMillis()
-                EasResult.Success(easVersion)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error(e.message ?: "Network error")
             }
         }
     }
@@ -426,6 +430,8 @@ class EasClient(
     }
     
     companion object {
+        private const val FOLDER_SYNC_CACHE_TTL_MS = 120_000L
+        
         // EWS SOAP константы
         private const val SOAP_ENVELOPE_START = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -518,7 +524,7 @@ class EasClient(
         val userParam = if (domain.isNotEmpty()) {
             java.net.URLEncoder.encode("$domain\\$username", "UTF-8")
         } else {
-            username
+            java.net.URLEncoder.encode(username, "UTF-8")
         }
         // Используем /default.eas как в Huawei
         return "$baseUrl/Microsoft-Server-ActiveSync/default.eas?" +
@@ -557,94 +563,99 @@ class EasClient(
      * Логика вынесена в EasProvisioning (SOLID: Single Responsibility)
      */
     suspend fun provision(): EasResult<String> {
-        val savedPolicyKey = policyKey
-        policyKey = null
-        
-        // Фаза 1: Запрос политик
-        val xml1 = provisioning.buildPhase1Request()
-        var tempPolicyKey: String? = null
-        var phase1Response: EasProvisioning.ProvisionResponse? = null
-        
-        val result1 = executeEasCommand("Provision", xml1) { responseXml ->
-            phase1Response = provisioning.parseResponse(responseXml)
-            tempPolicyKey = phase1Response?.policyKey
-            tempPolicyKey
-        }
-        
-        when (result1) {
-            is EasResult.Success -> {
-                val response = phase1Response ?: return run {
+        val result = provisionMutex.withLock {
+            val savedPolicyKey = policyKey
+            policyKey = null
+            
+            // Фаза 1: Запрос политик
+            val xml1 = provisioning.buildPhase1Request()
+            var tempPolicyKey: String? = null
+            var phase1Response: EasProvisioning.ProvisionResponse? = null
+            
+            val result1 = executeEasCommand("Provision", xml1) { responseXml ->
+                phase1Response = provisioning.parseResponse(responseXml)
+                tempPolicyKey = phase1Response?.policyKey
+                tempPolicyKey
+            }
+            
+            when (result1) {
+                is EasResult.Success -> {
+                    val response = phase1Response ?: return run {
+                        policyKey = savedPolicyKey
+                        EasResult.Error("Failed to parse Provision response")
+                    }
+                    
+                    if (response.policyStatus == 2) {
+                        policyKey = EasProvisioning.NO_POLICY_KEY
+                        return EasResult.Success(EasProvisioning.NO_POLICY_KEY)
+                    }
+                    
+                    val error = provisioning.validatePhase1(response)
+                    if (error != null) {
+                        policyKey = savedPolicyKey
+                        return EasResult.Error(error)
+                    }
+                }
+                is EasResult.Error -> {
                     policyKey = savedPolicyKey
-                    EasResult.Error("Failed to parse Provision response")
+                    return EasResult.Error("Provision phase 1 failed: ${result1.message} (EAS: $easVersion)")
                 }
-                
-                // Проверяем Policy Status = 2 (No policy) — это успех!
-                if (response.policyStatus == 2) {
-                    policyKey = EasProvisioning.NO_POLICY_KEY
-                    return EasResult.Success(EasProvisioning.NO_POLICY_KEY)
-                }
-                
-                // Валидация фазы 1
-                val error = provisioning.validatePhase1(response)
-                if (error != null) {
+            }
+            
+            // Фаза 2: Подтверждение принятия политик
+            val phase1Key = tempPolicyKey
+                ?: return run {
                     policyKey = savedPolicyKey
-                    return EasResult.Error(error)
+                    EasResult.Error("Provision phase 1 did not return PolicyKey (EAS: $easVersion)")
                 }
+            val xml2 = provisioning.buildPhase2Request(phase1Key)
+            var finalKey: String? = null
+            var phase2Response: EasProvisioning.ProvisionResponse? = null
+            
+            val result2 = executeEasCommand("Provision", xml2) { responseXml ->
+                phase2Response = provisioning.parseResponse(responseXml)
+                finalKey = phase2Response?.policyKey
+                finalKey
             }
-            is EasResult.Error -> {
-                policyKey = savedPolicyKey
-                return EasResult.Error("Provision phase 1 failed: ${result1.message} (EAS: $easVersion)")
-            }
-        }
-        
-        // Фаза 2: Подтверждение принятия политик
-        val phase1Key = tempPolicyKey
-            ?: return run {
-                policyKey = savedPolicyKey
-                EasResult.Error("Provision phase 1 did not return PolicyKey (EAS: $easVersion)")
-            }
-        val xml2 = provisioning.buildPhase2Request(phase1Key)
-        var finalKey: String? = null
-        var phase2Response: EasProvisioning.ProvisionResponse? = null
-        
-        val result2 = executeEasCommand("Provision", xml2) { responseXml ->
-            phase2Response = provisioning.parseResponse(responseXml)
-            finalKey = phase2Response?.policyKey
-            finalKey
-        }
-        
-        when (result2) {
-            is EasResult.Success -> {
-                val response = phase2Response ?: return run {
+            
+            when (result2) {
+                is EasResult.Success -> {
+                    val response = phase2Response ?: return run {
+                        policyKey = savedPolicyKey
+                        EasResult.Error("Failed to parse Provision phase 2 response")
+                    }
+                    
+                    val error = provisioning.validatePhase2(response, tempPolicyKey)
+                    if (error != null) {
+                        policyKey = savedPolicyKey
+                        return EasResult.Error(error)
+                    }
+                    
+                    policyKey = finalKey ?: tempPolicyKey
+                }
+                is EasResult.Error -> {
                     policyKey = savedPolicyKey
-                    EasResult.Error("Failed to parse Provision phase 2 response")
+                    return EasResult.Error("Provision phase 2 failed: ${result2.message} (EAS: $easVersion)")
                 }
-                
-                // Валидация фазы 2
-                val error = provisioning.validatePhase2(response, tempPolicyKey)
-                if (error != null) {
-                    policyKey = savedPolicyKey
-                    return EasResult.Error(error)
-                }
-                
-                // Устанавливаем PolicyKey
-                policyKey = finalKey ?: tempPolicyKey
             }
-            is EasResult.Error -> {
-                policyKey = savedPolicyKey
-                return EasResult.Error("Provision phase 2 failed: ${result2.message} (EAS: $easVersion)")
+            
+            val resultKey = finalKey ?: tempPolicyKey
+            if (resultKey != null) {
+                EasResult.Success(resultKey)
+            } else {
+                EasResult.Error("Provision failed: no policy key received (EAS: $easVersion)")
             }
         }
         
-        // Отправляем Settings
-        sendDeviceSettings()
-        
-        val resultKey = finalKey ?: tempPolicyKey
-        return if (resultKey != null) {
-            EasResult.Success(resultKey)
-        } else {
-            EasResult.Error("Provision failed: no policy key received (EAS: $easVersion)")
+        if (result is EasResult.Success && !insideSendDeviceSettings) {
+            insideSendDeviceSettings = true
+            try {
+                sendDeviceSettings()
+            } finally {
+                insideSendDeviceSettings = false
+            }
         }
+        return result
     }
     
     /**
@@ -720,9 +731,21 @@ class EasClient(
     
     /**
      * Синхронизация папок (FolderSync)
-     * Для Exchange 2007 сначала делаем Provision если нет PolicyKey
+     * Для Exchange 2007 сначала делаем Provision если нет PolicyKey.
+     * Результат кэшируется на время жизни EasClient-инстанса (один sync cycle),
+     * т.к. иерархия папок не меняется в рамках одной сессии.
      */
     suspend fun folderSync(syncKey: String = "0"): EasResult<FolderSyncResponse> {
+        if (syncKey == "0") {
+            synchronized(folderSyncCacheLock) {
+                val cached = cachedFolderSyncResult
+                if (cached != null && (System.currentTimeMillis() - folderSyncCacheTimeMs) < FOLDER_SYNC_CACHE_TTL_MS) {
+                    return EasResult.Success(cached)
+                }
+                cachedFolderSyncResult = null
+            }
+        }
+
         if (!versionDetected) {
             detectEasVersion()
         }
@@ -743,6 +766,12 @@ class EasClient(
         val result = doFolderSync(syncKey)
         
         if (result is EasResult.Success && result.data.status == 1) {
+            if (syncKey == "0") {
+                synchronized(folderSyncCacheLock) {
+                    cachedFolderSyncResult = result.data
+                    folderSyncCacheTimeMs = System.currentTimeMillis()
+                }
+            }
             return result
         }
         
@@ -1281,14 +1310,7 @@ class EasClient(
     /**
      * Экранирует XML спецсимволы
      */
-    private fun escapeXml(text: String): String {
-        return text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
-    }
+    private fun escapeXml(text: String): String = XmlUtils.escape(text)
     
     /**
      * Расэкранирует XML entities обратно в символы.
@@ -1298,14 +1320,7 @@ class EasClient(
      * ПОРЯДОК ВАЖЕН: &amp; декодируется ПОСЛЕДНИМ, чтобы не создать
      * ложные entities (например, &amp;lt; → &lt; → <).
      */
-    private fun unescapeXml(text: String): String {
-        return text
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
-    }
+    private fun unescapeXml(text: String): String = XmlUtils.unescape(text)
     
     /**
      * Отправка отчёта о прочтении (MDN - Message Disposition Notification)
@@ -1416,7 +1431,19 @@ $foldersXml
                     requestBuilder.header("X-MS-PolicyKey", key)
                 }
                 
-                val response = pingClient.newCall(requestBuilder.build()).execute()
+                val call = pingClient.newCall(requestBuilder.build())
+                val response = suspendCancellableCoroutine { cont ->
+                    cont.invokeOnCancellation { call.cancel() }
+                    call.enqueue(object : Callback {
+                        override fun onFailure(call: Call, e: IOException) {
+                            if (cont.isActive) cont.resumeWithException(e)
+                        }
+                        override fun onResponse(call: Call, response: Response) {
+                            if (cont.isActive) cont.resume(response)
+                            else response.close()
+                        }
+                    })
+                }
                 
                 response.use { resp ->
                     if (resp.code == 449) {
@@ -1505,8 +1532,9 @@ $foldersXml
      * @see EasEmailService.deleteEmailPermanentlyViaEWS
      */
     suspend fun deleteEmailPermanentlyViaEWS(
-        serverId: String
-    ): EasResult<Unit> = emailService.deleteEmailPermanentlyViaEWS(serverId)
+        serverId: String,
+        subject: String = ""
+    ): EasResult<Unit> = emailService.deleteEmailPermanentlyViaEWS(serverId, subject)
     
     /**
      * Окончательно удалить письмо через EAS Sync Delete
@@ -1555,8 +1583,7 @@ $foldersXml
             val response = executeRequest(request)
             
             response.use { resp ->
-                if (resp.code == 449) {
-                    // Нужен Provision (Exchange 2007 SP1 и выше)
+                if (resp.code == 449 && command != "Provision") {
                     when (val provResult = provision()) {
                         is EasResult.Success -> {
                             val retryRequestBuilder = Request.Builder()
@@ -1579,12 +1606,15 @@ $foldersXml
                                     if (responseBody != null && responseBody.isNotEmpty()) {
                                         val responseXml = wbxmlParser.parse(responseBody)
                                         return@withContext EasResult.Success(parser(responseXml))
-                                    } else {
+                                    } else if (command == "Sync") {
                                         try {
                                             return@withContext EasResult.Success(parser("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Sync><Collections><Collection><Status>1</Status></Collection></Collections></Sync>"))
-                                        } catch (_: Exception) {
-                                            return@withContext EasResult.Error("Пустой ответ от сервера после retry")
+                                        } catch (e: Exception) {
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
+                                            return@withContext EasResult.Error("Пустой ответ от сервера после retry (Sync)")
                                         }
+                                    } else {
+                                        return@withContext EasResult.Error("Пустой ответ от сервера после retry ($command)")
                                     }
                                 } else {
                                     return@withContext EasResult.Error("Provision phase retry failed: HTTP ${retryResp.code} (EAS: $easVersion)")
@@ -1602,15 +1632,27 @@ $foldersXml
                     if (responseBody != null && responseBody.isNotEmpty()) {
                         val responseXml = wbxmlParser.parse(responseBody)
                         EasResult.Success(parser(responseXml))
-                    } else {
-                        // Пустой ответ — нет изменений, вызываем parser с пустым XML
-                        // Это нормально для Sync когда нет новых данных
+                    } else if (command == "Sync") {
+                        // MS-ASCMD: пустой ответ на Sync = нет изменений (документировано)
                         try {
                             EasResult.Success(parser("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Sync><Collections><Collection><Status>1</Status></Collection></Collections></Sync>"))
-                        } catch (_: Exception) {
-                            EasResult.Error("Пустой ответ от сервера")
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            EasResult.Error("Пустой ответ от сервера (Sync)")
                         }
+                    } else {
+                        EasResult.Error("Пустой ответ от сервера ($command)")
                     }
+                } else if (resp.code == 401) {
+                    resp.body?.close()
+                    EasResult.Error("UNAUTHORIZED")
+                } else if (resp.code == 403) {
+                    resp.body?.close()
+                    EasResult.Error("ACCESS_DENIED")
+                } else if (resp.code == 449) {
+                    resp.body?.close()
+                    policyKey = null
+                    EasResult.Error("PROVISION_REQUIRED")
                 } else {
                     val errorBody = resp.body?.string() ?: ""
                     EasResult.Error("HTTP ${resp.code}: ${resp.message}")
@@ -1649,31 +1691,21 @@ $foldersXml
             return FolderSyncResponse(syncKey, folders, status, deletedFolderIds)
         }
         
-        // Папки могут быть внутри <Add><Folder>...</Folder></Add> или напрямую <Add>...</Add>
-        // Сначала пробуем найти <Folder> внутри <Add>
-        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        
-        // Проверяем есть ли теги <Folder>
         val hasFolderTags = FOLDER_REGEX.containsMatchIn(xml)
         
         if (hasFolderTags) {
-            // Старый формат: <Add><Folder>...</Folder></Add>
             FOLDER_REGEX.findAll(xml).forEach { match ->
                 val folderXml = match.groupValues[1]
                 parseFolder(folderXml)?.let { folders.add(it) }
             }
         } else {
-            // Новый формат: данные папки напрямую внутри <Add>
-            addPattern.findAll(xml).forEach { match ->
-                val folderXml = match.groupValues[1]
-                parseFolder(folderXml)?.let { folders.add(it) }
+            for (block in XmlUtils.extractTopLevelBlocks(xml, "Add")) {
+                parseFolder(block)?.let { folders.add(it) }
             }
         }
         
-        // Парсим удалённые папки
-        val deletePattern = "<Delete>(.*?)</Delete>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        deletePattern.findAll(xml).forEach { match ->
-            extractValue(match.groupValues[1], "ServerId")?.let { deletedFolderIds.add(it) }
+        for (block in XmlUtils.extractTopLevelBlocks(xml, "Delete")) {
+            extractValue(block, "ServerId")?.let { deletedFolderIds.add(it) }
         }
         
         return FolderSyncResponse(syncKey, folders, status, deletedFolderIds)
@@ -1681,7 +1713,7 @@ $foldersXml
     
     private fun parseFolder(folderXml: String): EasFolder? {
         val serverId = extractValue(folderXml, "ServerId") ?: return null
-        val displayName = extractValue(folderXml, "DisplayName") ?: ""
+        val displayName = XmlUtils.unescape(extractValue(folderXml, "DisplayName") ?: "")
         val parentId = extractValue(folderXml, "ParentId") ?: "0"
         val type = extractValue(folderXml, "Type")?.toIntOrNull() ?: 1
         
@@ -1698,25 +1730,17 @@ $foldersXml
         // Проверяем наличие MoreAvailable (пустой тег)
         val moreAvailable = xml.contains("<MoreAvailable/>") || xml.contains("<MoreAvailable>")
         
-        // Парсим добавленные письма
-        val addPattern = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        addPattern.findAll(xml).forEach { match ->
-            val emailXml = match.groupValues[1]
-            parseEmail(emailXml)?.let { emails.add(it) }
+        for (block in XmlUtils.extractTopLevelBlocks(xml, "Add")) {
+            parseEmail(block)?.let { emails.add(it) }
         }
         
-        // Парсим изменённые письма (Change) - только Read и Flag
-        val changePattern = "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        changePattern.findAll(xml).forEach { match ->
-            val changeXml = match.groupValues[1]
+        for (changeXml in XmlUtils.extractTopLevelBlocks(xml, "Change")) {
             val serverId = extractValue(changeXml, "ServerId")
             if (serverId != null) {
                 val readValue = extractValue(changeXml, "Read")
                 val read = readValue?.let { it == "1" }
                 
-                // Flag status: 2 = flagged, 0 or absent = not flagged
-                // ИСПРАВЛЕНО: Ищем FlagStatus внутри элемента Flag (WBXML tag 0x3B на code page Email)
-                val flagXml = "<Flag>(.*?)</Flag>".toRegex(RegexOption.DOT_MATCHES_ALL).find(changeXml)?.groupValues?.get(1)
+                val flagXml = XmlUtils.extractTagValue(changeXml, "Flag")
                 val flagStatus = flagXml?.let { extractValue(it, "FlagStatus") }
                 val flagged = flagStatus?.let { it == "2" }
                 
@@ -1726,15 +1750,12 @@ $foldersXml
             }
         }
         
-        // Парсим удалённые письма (Delete и SoftDelete)
-        val deletePattern = "<Delete>(.*?)</Delete>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        deletePattern.findAll(xml).forEach { match ->
-            extractValue(match.groupValues[1], "ServerId")?.let { deletedIds.add(it) }
+        for (block in XmlUtils.extractTopLevelBlocks(xml, "Delete")) {
+            extractValue(block, "ServerId")?.let { deletedIds.add(it) }
         }
         
-        val softDeletePattern = "<SoftDelete>(.*?)</SoftDelete>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        softDeletePattern.findAll(xml).forEach { match ->
-            extractValue(match.groupValues[1], "ServerId")?.let { deletedIds.add(it) }
+        for (block in XmlUtils.extractTopLevelBlocks(xml, "SoftDelete")) {
+            extractValue(block, "ServerId")?.let { deletedIds.add(it) }
         }
         
         return SyncResponse(syncKey, status, emails, moreAvailable, deletedIds, changedEmails)
@@ -1743,13 +1764,10 @@ $foldersXml
     private fun parseEmail(xml: String): EasEmail? {
         val serverId = extractValue(xml, "ServerId") ?: return null
         
-        // Парсим вложения
         val attachments = mutableListOf<EasAttachment>()
-        val attachmentPattern = "<Attachment>(.*?)</Attachment>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        attachmentPattern.findAll(xml).forEach { match ->
-            val attXml = match.groupValues[1]
+        for (attXml in XmlUtils.extractTopLevelBlocks(xml, "Attachment")) {
             val fileRef = extractValue(attXml, "FileReference") ?: ""
-            val displayName = extractValue(attXml, "DisplayName")
+            val displayName = extractValue(attXml, "DisplayName")?.let { XmlUtils.unescape(it) }
             val contentId = extractValue(attXml, "ContentId")
             val isInline = extractValue(attXml, "IsInline") == "1"
             // КРИТИЧНО: Добавляем вложение даже без FileReference (для inline изображений в Sent Items)
@@ -1788,8 +1806,7 @@ $foldersXml
             decodedBody
         }
         
-        // Парсим флаг избранного: <Flag><FlagStatus>2</FlagStatus></Flag>
-        val flagXml = "<Flag>(.*?)</Flag>".toRegex(RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.get(1)
+        val flagXml = XmlUtils.extractTagValue(xml, "Flag")
         val flagged = flagXml?.let { extractValue(it, "FlagStatus") == "2" } ?: false
         
         // MS-ASEMAIL 2.2.2.58: Read — optional. "1" = read, "0" = unread.
@@ -1819,10 +1836,7 @@ $foldersXml
     }
     
     private fun extractValue(xml: String, tag: String): String? {
-        val pattern = extractValueCache.computeIfAbsent(tag) {
-            "<$tag>(.*?)</$tag>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        }
-        return pattern.find(xml)?.groupValues?.get(1)
+        return XmlUtils.extractTagValue(xml, tag)
     }
     
     /**
@@ -1849,6 +1863,9 @@ $SOAP_ENVELOPE_END"""
         }
         return contactsService.syncContacts()
     }
+
+    val contactsIncrementalNoChanges: Boolean
+        get() = contactsService.lastSyncWasIncrementalNoChanges
     
     /**
      * Создание заметки на сервере Exchange
@@ -1922,6 +1939,9 @@ $SOAP_ENVELOPE_END"""
     suspend fun syncNotes(): EasResult<List<EasNote>> {
         return notesService.syncNotes()
     }
+
+    val notesIncrementalNoChanges: Boolean
+        get() = notesService.lastSyncWasIncrementalNoChanges
     
     /**
      * Выполняет NTLM handshake и возвращает auth header
@@ -2066,31 +2086,30 @@ $SOAP_ENVELOPE_END"""
     suspend fun respondToMeetingRequest(
         serverId: String,
         response: String,
-        sendResponse: Boolean = true
+        sendResponse: Boolean = true,
+        subject: String = ""
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
+            val easServerId = if (serverId.contains("_")) {
+                serverId.substringAfter("_")
+            } else {
+                serverId
+            }
             try {
-                // Извлекаем EAS serverId из формата "accountId_serverId"
-                val easServerId = if (serverId.contains("_")) {
-                    serverId.substringAfter("_")
-                } else {
-                    serverId
-                }
-                
-                // Получаем ID папки календаря
+                // MS-ASCMD §2.2.1.11: EAS 12.1 запрещает Calendar folder для MeetingResponse.
+                // CollectionId должен указывать на папку с meeting request (Inbox, type=2).
                 val foldersResult = folderSync("0")
-                val calendarFolderId = when (foldersResult) {
+                val inboxFolderId = when (foldersResult) {
                     is EasResult.Success -> {
-                        foldersResult.data.folders.find { it.type == 8 }?.serverId
+                        foldersResult.data.folders.find { it.type == 2 }?.serverId
                     }
                     is EasResult.Error -> return@withContext EasResult.Error(foldersResult.message)
                 }
                 
-                if (calendarFolderId == null) {
-                    return@withContext EasResult.Error("Папка календаря не найдена")
+                if (inboxFolderId == null) {
+                    return@withContext EasResult.Error("Папка Inbox не найдена")
                 }
                 
-                // Определяем UserResponse: 1=Accept, 2=Tentative, 3=Decline
                 val userResponse = when (response.lowercase()) {
                     "accept" -> 1
                     "tentative" -> 2
@@ -2098,26 +2117,23 @@ $SOAP_ENVELOPE_END"""
                     else -> 1
                 }
                 
-                // Формируем MeetingResponse запрос
                 val meetingResponseXml = """<?xml version="1.0" encoding="UTF-8"?>
 <MeetingResponse xmlns="MeetingResponse">
     <Request>
         <UserResponse>$userResponse</UserResponse>
-        <CollectionId>${escapeXml(calendarFolderId)}</CollectionId>
+        <CollectionId>${escapeXml(inboxFolderId)}</CollectionId>
         <RequestId>${escapeXml(easServerId)}</RequestId>
     </Request>
 </MeetingResponse>""".trimIndent()
                 
                 val result = executeEasCommand("MeetingResponse", meetingResponseXml) { responseXml ->
-                    // Проверяем Status в ответе
                     val status = extractValue(responseXml, "Status")
                     when (status) {
-                        "1" -> true // Success
+                        "1" -> true
                         "2" -> throw Exception("Неверный запрос на собрание")
                         "3" -> throw Exception("Ошибка сервера при обработке запроса")
                         "4" -> throw Exception("Неверный ID запроса на собрание")
                         else -> {
-                            // Проверяем наличие CalendarId - это тоже успех
                             if (responseXml.contains("CalendarId")) {
                                 true
                             } else {
@@ -2130,13 +2146,12 @@ $SOAP_ENVELOPE_END"""
                 when (result) {
                     is EasResult.Success -> EasResult.Success(true)
                     is EasResult.Error -> {
-                        // Если EAS не сработал, пробуем EWS как fallback
-                        respondToMeetingRequestEws(serverId, response, sendResponse)
+                        respondToMeetingRequestEws(easServerId, response, sendResponse, subject)
                     }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                respondToMeetingRequestEws(serverId, response, sendResponse)
+                respondToMeetingRequestEws(easServerId, response, sendResponse, subject)
             }
         }
     }
@@ -2145,8 +2160,7 @@ $SOAP_ENVELOPE_END"""
      * Находит EWS ItemId события календаря с ChangeKey
      * Возвращает пару (ItemId, ChangeKey)
      */
-    private suspend fun findEwsCalendarItemIdWithChangeKey(ewsUrl: String, easServerId: String): Pair<String, String>? {
-        // Если это уже EWS ItemId (длинная строка), пробуем получить ChangeKey через GetItem
+    private suspend fun findEwsCalendarItemIdWithChangeKey(ewsUrl: String, easServerId: String, subject: String = ""): Pair<String, String>? {
         if (easServerId.length > 50 && !easServerId.contains(":")) {
             val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -2182,7 +2196,11 @@ $SOAP_ENVELOPE_END"""
             return Pair(easServerId, "")
         }
         
-        // Для коротких EAS serverId ищем все события и пытаемся найти по индексу
+        if (subject.isBlank()) {
+            android.util.Log.w("EasClient", "findEwsCalendarItemIdWithChangeKey: empty subject — cannot safely identify calendar item")
+            return null
+        }
+        val escapedSubject = escapeXml(subject)
         val findRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -2195,7 +2213,14 @@ $SOAP_ENVELOPE_END"""
             <m:ItemShape>
                 <t:BaseShape>IdOnly</t:BaseShape>
             </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
+            <m:Restriction>
+                <t:IsEqualTo>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURIOrConstant>
+                        <t:Constant Value="$escapedSubject"/>
+                    </t:FieldURIOrConstant>
+                </t:IsEqualTo>
+            </m:Restriction>
             <m:ParentFolderIds>
                 <t:DistinguishedFolderId Id="calendar"/>
             </m:ParentFolderIds>
@@ -2209,12 +2234,8 @@ $SOAP_ENVELOPE_END"""
         val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
             ?: return null
         
-        // Ищем ItemId с ChangeKey
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
-        val matches = itemIdPattern.findAll(responseXml).toList()
-        
-        val index = easServerId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
-        val match = matches.getOrNull(index) ?: matches.firstOrNull()
+        val match = itemIdPattern.find(responseXml)
         return match?.let { Pair(it.groupValues[1], it.groupValues[2]) }
     }
     
@@ -2224,14 +2245,14 @@ $SOAP_ENVELOPE_END"""
     private suspend fun respondToMeetingRequestEws(
         serverId: String,
         response: String,
-        sendResponse: Boolean
+        sendResponse: Boolean,
+        subject: String = ""
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = this@EasClient.ewsUrl
                 
-                // Находим EWS ItemId с ChangeKey
-                val itemInfo = findEwsCalendarItemIdWithChangeKey(ewsUrl, serverId)
+                val itemInfo = findEwsCalendarItemIdWithChangeKey(ewsUrl, serverId, subject)
                 
                 if (itemInfo == null) {
                     return@withContext EasResult.Error("Не удалось найти событие на сервере")
@@ -2488,7 +2509,7 @@ $SOAP_ENVELOPE_END"""
                     }
                 }
                 else -> {
-                    bytes.add(text[i].code.toByte())
+                    bytes.addAll(text[i].toString().toByteArray(Charsets.UTF_8).toList())
                     i++
                 }
             }
@@ -2502,56 +2523,23 @@ $SOAP_ENVELOPE_END"""
     }
     
     /**
-     * Находит EWS ItemId для заметки по её EAS serverId
-     * Используется для операций с заметками через EWS (Exchange 2007)
+     * Находит EWS ItemId для заметки по Subject через EWS FindItem с Restriction.
+     * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
      * @param searchInDeletedItems - искать также в корзине (для restore операций)
      */
-    private suspend fun findEwsNoteItemId(ewsUrl: String, easServerId: String, searchInDeletedItems: Boolean = false): String? {
-        // Сначала ищем в основной папке notes
-        val findRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="Exchange2007_SP1"/>
-    </soap:Header>
-    <soap:Body>
-        <m:FindItem Traversal="Shallow">
-            <m:ItemShape>
-                <t:BaseShape>IdOnly</t:BaseShape>
-            </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
-            <m:ParentFolderIds>
-                <t:DistinguishedFolderId Id="notes"/>
-            </m:ParentFolderIds>
-        </m:FindItem>
-    </soap:Body>
-</soap:Envelope>""".trimIndent()
-        
-        // Используем только NTLM для Exchange 2007
-        val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-        if (ntlmAuth == null) {
+    private suspend fun findEwsNoteItemId(ewsUrl: String, easServerId: String, subject: String, searchInDeletedItems: Boolean = false): String? {
+        if (subject.isBlank()) {
+            android.util.Log.w("EasClient", "findEwsNoteItemId: empty subject — cannot safely identify note")
             return null
         }
-        
-        val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-        if (responseXml == null) {
-            return null
-        }
-        
+        val escapedSubject = escapeXml(subject)
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-        val matches = itemIdPattern.findAll(responseXml).toList()
-        
-        val index = easServerId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
-        val foundInNotes = matches.getOrNull(index)?.groupValues?.get(1) ?: matches.firstOrNull()?.groupValues?.get(1)
-        
-        if (foundInNotes != null) {
-            return foundInNotes
-        }
-        
-        // КРИТИЧНО: Если не нашли в notes И нужен поиск в корзине - ищем в deleteditems
-        if (searchInDeletedItems) {
-            val findInDeletedRequest = """<?xml version="1.0" encoding="utf-8"?>
+
+        val foldersToSearch = mutableListOf("notes")
+        if (searchInDeletedItems) foldersToSearch.add("deleteditems")
+
+        for (folder in foldersToSearch) {
+            val findRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
                xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
@@ -2563,32 +2551,26 @@ $SOAP_ENVELOPE_END"""
             <m:ItemShape>
                 <t:BaseShape>IdOnly</t:BaseShape>
             </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
+            <m:Restriction>
+                <t:IsEqualTo>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURIOrConstant>
+                        <t:Constant Value="$escapedSubject"/>
+                    </t:FieldURIOrConstant>
+                </t:IsEqualTo>
+            </m:Restriction>
             <m:ParentFolderIds>
-                <t:DistinguishedFolderId Id="deleteditems"/>
+                <t:DistinguishedFolderId Id="$folder"/>
             </m:ParentFolderIds>
         </m:FindItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-            
-            val ntlmAuth2 = performNtlmHandshake(ewsUrl, findInDeletedRequest, "FindItem")
-            if (ntlmAuth2 == null) {
-                return null
-            }
-            
-            val deletedResponseXml = executeNtlmRequest(ewsUrl, findInDeletedRequest, ntlmAuth2, "FindItem")
-            if (deletedResponseXml == null) {
-                return null
-            }
-            
-            val deletedMatches = itemIdPattern.findAll(deletedResponseXml).toList()
-            val foundInDeleted = deletedMatches.getOrNull(index)?.groupValues?.get(1) ?: deletedMatches.firstOrNull()?.groupValues?.get(1)
-            
-            if (foundInDeleted != null) {
-                return foundInDeleted
-            }
+
+            val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem") ?: continue
+            val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem") ?: continue
+            val found = itemIdPattern.find(responseXml)?.groupValues?.get(1)
+            if (found != null) return found
         }
-        
         return null
     }
     
@@ -2808,12 +2790,21 @@ $SOAP_ENVELOPE_END"""
             }
             
             val mimeBytes = mimeMessage.toByteArray(Charsets.UTF_8)
-            val url = buildUrl("SendMail") + "&SaveInSent=T"
-            val contentType = "message/rfc822"
+            val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+            val url = buildUrl("SendMail") +
+                if (majorVersion < 14) "&SaveInSent=T" else ""
+            
+            val (requestBody, contentType) = if (majorVersion >= 14) {
+                val clientId = System.currentTimeMillis().toString()
+                val wbxml = wbxmlParser.generateSendMail(clientId, mimeBytes)
+                Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
+            } else {
+                Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
+            }
             
             val requestBuilder = Request.Builder()
                 .url(url)
-                .post(mimeBytes.toRequestBody(contentType.toMediaType()))
+                .post(requestBody)
                 .header("Authorization", getAuthHeader())
                 .header("MS-ASProtocolVersion", easVersion)
                 .header("Content-Type", contentType)
@@ -2826,21 +2817,29 @@ $SOAP_ENVELOPE_END"""
             val request = requestBuilder.build()
             val response = executeRequest(request)
             
-            if (response.isSuccessful || response.code == 200) {
-                // Для SendMail успешный ответ — пустое тело
-                val responseBody = response.body?.bytes()
-                if (responseBody != null && responseBody.isNotEmpty()) {
-                    if (responseBody[0] == 0x03.toByte()) {
-                        val xml = wbxmlParser.parse(responseBody)
-                        val status = extractValue(xml, "Status")
-                        if (status != null && status != "1") {
-                            return@withContext EasResult.Error("Ошибка отправки: Status=$status")
+            val firstResult = response.use { resp ->
+                if (resp.isSuccessful || resp.code == 200) {
+                    val responseBody = resp.body?.bytes()
+                    if (responseBody != null && responseBody.isNotEmpty()) {
+                        if (responseBody[0] == 0x03.toByte()) {
+                            val xml = wbxmlParser.parse(responseBody)
+                            val status = extractValue(xml, "Status")
+                            if (status != null && status != "1") {
+                                return@withContext EasResult.Error("Ошибка отправки: Status=$status")
+                            }
                         }
                     }
+                    EasResult.Success(true)
+                } else if (resp.code == 449) {
+                    null
+                } else {
+                    EasResult.Error("Ошибка отправки: HTTP ${resp.code}")
                 }
-                EasResult.Success(true)
-            } else if (response.code == 449) {
-                // Provision required
+            }
+            
+            if (firstResult != null) {
+                firstResult
+            } else {
                 when (val provResult = provision()) {
                     is EasResult.Success -> {
                         val retryRequest = Request.Builder()
@@ -2853,17 +2852,16 @@ $SOAP_ENVELOPE_END"""
                             .apply { policyKey?.let { header("X-MS-PolicyKey", it) } }
                             .build()
                         
-                        val retryResponse = executeRequest(retryRequest)
-                        if (retryResponse.isSuccessful) {
-                            EasResult.Success(true)
-                        } else {
-                            EasResult.Error("Ошибка отправки: HTTP ${retryResponse.code}")
+                        executeRequest(retryRequest).use { retryResp ->
+                            if (retryResp.isSuccessful) {
+                                EasResult.Success(true)
+                            } else {
+                                EasResult.Error("Ошибка отправки: HTTP ${retryResp.code}")
+                            }
                         }
                     }
                     is EasResult.Error -> EasResult.Error(provResult.message)
                 }
-            } else {
-                EasResult.Error("Ошибка отправки: HTTP ${response.code}")
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -2924,8 +2922,8 @@ $SOAP_ENVELOPE_END"""
      * Перемещает задачу из Deleted Items обратно в Tasks
      * @see EasTasksService.restoreTask
      */
-    suspend fun restoreTask(serverId: String): EasResult<String> {
-        return tasksService.restoreTask(serverId)
+    suspend fun restoreTask(serverId: String, subject: String? = null): EasResult<String> {
+        return tasksService.restoreTask(serverId, subject)
     }
     
     /**
@@ -3064,25 +3062,26 @@ $SOAP_ENVELOPE_END"""
     }
     
     /**
-     * Находит EWS ItemId черновика в папке Drafts по EAS-индексу.
-     * Аналог findEwsEmailItemId (который ищет в deleteditems),
-     * но для папки черновиков.
-     *
-     * КРИТИЧНО для Exchange 2007: EAS serverId вида "5:3" не является валидным
-     * EWS ItemId. Нужно выполнить FindItem в папке Drafts и получить реальный
-     * EWS ItemId, чтобы затем удалить через EWS HardDelete.
-     *
-     * @param easServerId EAS serverId вида "FolderId:Index" (например "5:3")
-     * @return Полный EWS ItemId или null если не найден
+     * Находит EWS ItemId черновика в папке Drafts по Subject (EWS FindItem с Restriction).
+     * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
      */
-    suspend fun findDraftItemIdByIndex(easServerId: String): String? {
+    suspend fun findDraftItemIdBySubject(subject: String): String? {
+        if (subject.isBlank()) return null
         return withContext(Dispatchers.IO) {
             try {
+                val escapedSubject = escapeXml(subject)
                 val findBody = """<m:FindItem Traversal="Shallow">
     <m:ItemShape>
         <t:BaseShape>IdOnly</t:BaseShape>
     </m:ItemShape>
-    <m:IndexedPageItemView MaxEntriesReturned="500" Offset="0" BasePoint="Beginning"/>
+    <m:Restriction>
+        <t:IsEqualTo>
+            <t:FieldURI FieldURI="item:Subject"/>
+            <t:FieldURIOrConstant>
+                <t:Constant Value="$escapedSubject"/>
+            </t:FieldURIOrConstant>
+        </t:IsEqualTo>
+    </m:Restriction>
     <m:ParentFolderIds>
         <t:DistinguishedFolderId Id="drafts"/>
     </m:ParentFolderIds>
@@ -3098,12 +3097,7 @@ $SOAP_ENVELOPE_END"""
                 }
                 
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-                val matches = itemIdPattern.findAll(responseXml).toList()
-                
-                // EAS serverId = "FolderId:Index" (1-based), переводим в 0-based
-                val index = easServerId.substringAfter(":").toIntOrNull()?.minus(1) ?: 0
-                matches.getOrNull(index)?.groupValues?.get(1)
-                    ?: matches.firstOrNull()?.groupValues?.get(1)
+                itemIdPattern.find(responseXml)?.groupValues?.get(1)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 null
@@ -3227,7 +3221,8 @@ data class GalContact(
     val jobTitle: String = "",
     val phone: String = "",
     val mobilePhone: String = "",
-    val alias: String = ""
+    val alias: String = "",
+    val easServerId: String = ""
 )
 
 /**

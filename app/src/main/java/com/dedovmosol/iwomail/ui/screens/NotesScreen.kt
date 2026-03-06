@@ -160,7 +160,7 @@ fun NotesScreen(
     val editingNote = remember(editingNoteId, notes) {
         editingNoteId?.let { id -> notes.find { it.id == id } }
     }
-    var isCreating by rememberSaveable { mutableStateOf(false) }
+    var isCreating by remember { mutableStateOf(false) }
     var showEmptyTrashConfirm by rememberSaveable { mutableStateOf(false) }
     var showDeleteSelectedDialog by rememberSaveable { mutableStateOf(false) }
     var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
@@ -1022,12 +1022,12 @@ private fun NoteDetailDialog(
                     // Очищаем body от дубликатов
                     val cleanBody = remember(note.body) {
                         val lines = note.body.lines()
-                        val seen = mutableSetOf<String>()
+                        var prev = ""
                         lines.mapNotNull { line ->
                             val trimmed = line.trim()
                             if (trimmed.isBlank()) null
-                            else if (seen.add(trimmed.lowercase())) trimmed
-                            else null
+                            else if (trimmed.lowercase() == prev) null
+                            else { prev = trimmed.lowercase(); trimmed }
                         }.joinToString("\n")
                     }
                     

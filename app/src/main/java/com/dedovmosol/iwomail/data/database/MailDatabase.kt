@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 35,
+    version = 36,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -124,16 +124,8 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
         
-        private val MIGRATION_33_34 = object : Migration(33, 34) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                // Режим черновиков per-account: SERVER (по умолчанию) или LOCAL
-                db.execSQL("ALTER TABLE accounts ADD COLUMN draftMode TEXT NOT NULL DEFAULT 'SERVER'")
-            }
-        }
-        
         private val MIGRATION_32_33 = object : Migration(32, 33) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // Недостающие поля MS-ASCAL для полной совместимости с Exchange
                 db.execSQL("ALTER TABLE calendar_events ADD COLUMN organizerName TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE calendar_events ADD COLUMN uid TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE calendar_events ADD COLUMN timezone TEXT NOT NULL DEFAULT ''")
@@ -148,10 +140,22 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
         
+        private val MIGRATION_33_34 = object : Migration(33, 34) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE accounts ADD COLUMN draftMode TEXT NOT NULL DEFAULT 'SERVER'")
+            }
+        }
+        
         private val MIGRATION_34_35 = object : Migration(34, 35) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE tasks ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE tasks ADD COLUMN assignTo TEXT NOT NULL DEFAULT ''")
+            }
+        }
+        
+        private val MIGRATION_35_36 = object : Migration(35, 36) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_lastModified ON calendar_events(lastModified)")
             }
         }
 
@@ -167,7 +171,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_31_32,
             MIGRATION_32_33,
             MIGRATION_33_34,
-            MIGRATION_34_35
+            MIGRATION_34_35,
+            MIGRATION_35_36
         )
         
         fun getInstance(context: Context): MailDatabase {
@@ -206,7 +211,11 @@ class Converters {
     fun fromContactSource(source: ContactSource): String = source.name
     
     @TypeConverter
-    fun toContactSource(value: String): ContactSource = ContactSource.valueOf(value)
+    fun toContactSource(value: String): ContactSource = try {
+        ContactSource.valueOf(value)
+    } catch (_: IllegalArgumentException) {
+        ContactSource.LOCAL
+    }
 }
 
 // === ENTITIES ===

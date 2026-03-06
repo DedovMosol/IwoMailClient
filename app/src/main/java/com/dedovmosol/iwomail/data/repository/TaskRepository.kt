@@ -1,12 +1,14 @@
 package com.dedovmosol.iwomail.data.repository
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.withEasRetry
 import com.dedovmosol.iwomail.sync.TaskReminderReceiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -17,6 +19,12 @@ class TaskRepository(private val context: Context) {
     private val database = MailDatabase.getInstance(context)
     private val taskDao = database.taskDao()
     private val accountRepo = RepositoryProvider.getAccountRepository(context)
+    private val consecutiveEmptySyncs = java.util.concurrent.ConcurrentHashMap<Long, Int>()
+    
+    companion object {
+        private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
+        private fun getSyncMutex(accountId: Long) = syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
+    }
     
     // === Получение задач ===
     
@@ -72,7 +80,8 @@ class TaskRepository(private val context: Context) {
     
     suspend fun searchTasks(accountId: Long, query: String): List<TaskEntity> {
         if (query.isBlank()) return getTasksList(accountId)
-        return taskDao.searchTasks(accountId, query)
+        val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return taskDao.searchTasks(accountId, escaped)
     }
     
     // === Создание/Редактирование/Удаление ===
@@ -242,9 +251,6 @@ class TaskRepository(private val context: Context) {
                         
                         taskDao.update(updatedTask)
                         
-                        // Проверяем что запись действительно обновилась
-                        val verifyTask = taskDao.getTask(updatedTask.id)
-                        
                         // Перепланируем напоминание
                         TaskReminderReceiver.cancelReminder(context, task.id)
                         if (reminderSet && reminderTime > 0 && !complete) {
@@ -267,6 +273,7 @@ class TaskRepository(private val context: Context) {
                             try {
                                 easClient.sendTaskNotification(assignTo, subject, body, dueDate, importance)
                             } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
                             }
                         }
                         
@@ -318,17 +325,21 @@ class TaskRepository(private val context: Context) {
                 val easClient = accountRepo.createEasClient(task.accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
-                // КРИТИЧНО: Синхронизируем задачи ПЕРЕД удалением чтобы получить актуальный serverId
-                // Exchange 2007 SP1 меняет serverId после UpdateItem!
-                syncTasks(task.accountId, skipRecentDeleteCheck = true)
+                var actualTask: TaskEntity? = task
+                var actualServerId = task.serverId
                 
-                // Получаем актуальную версию задачи из БД (с обновлённым serverId)
-                val actualTask = taskDao.getTask(task.id) ?: taskDao.getTasksByAccountList(task.accountId)
-                    .find { it.subject == task.subject && !it.isDeleted }
-                val actualServerId = actualTask?.serverId ?: task.serverId
+                var result = withEasRetry { easClient.deleteTask(actualServerId) }
                 
-                // Удаляем на сервере (перемещает в корзину Exchange)
-                val result = withEasRetry { easClient.deleteTask(actualServerId) }
+                if (result is EasResult.Error) {
+                    syncTasks(task.accountId, skipRecentDeleteCheck = true)
+                    val fresh = taskDao.getTask(task.id) ?: taskDao.getTasksByAccountList(task.accountId)
+                        .find { it.subject == task.subject && it.dueDate == task.dueDate && !it.isDeleted }
+                    if (fresh != null && fresh.serverId != task.serverId) {
+                        actualTask = fresh
+                        actualServerId = fresh.serverId
+                        result = withEasRetry { easClient.deleteTask(actualServerId) }
+                    }
+                }
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -376,20 +387,21 @@ class TaskRepository(private val context: Context) {
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
                 // КРИТИЧНО: Восстанавливаем на сервере (MoveItem из Deleted Items в Tasks)
-                val result = easClient.restoreTask(task.serverId)
+                val result = easClient.restoreTask(task.serverId, task.subject)
                 
                 when (result) {
                     is EasResult.Success -> {
                         val newServerId = result.data
-                        // Если сервер вернул новый ItemId - обновляем локально
                         if (newServerId != task.serverId) {
-                            taskDao.delete(task.id)
                             val restoredTask = task.copy(
                                 id = "${task.accountId}_$newServerId",
                                 serverId = newServerId,
                                 isDeleted = false
                             )
-                            taskDao.insert(restoredTask)
+                            database.withTransaction {
+                                taskDao.delete(task.id)
+                                taskDao.insert(restoredTask)
+                            }
                             
                             // Восстанавливаем напоминание если было
                             if (restoredTask.reminderSet && restoredTask.reminderTime > System.currentTimeMillis() && !restoredTask.complete) {
@@ -541,6 +553,7 @@ class TaskRepository(private val context: Context) {
      */
     suspend fun syncTasks(accountId: Long, skipRecentDeleteCheck: Boolean = false): EasResult<Int> {
         return withContext(Dispatchers.IO) {
+            getSyncMutex(accountId).withLock {
             try {
                 val account = accountRepo.getAccount(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
@@ -589,18 +602,19 @@ class TaskRepository(private val context: Context) {
                         val allExistingServerIds = currentExistingTasks.map { it.serverId }.toSet()
                         val deletedServerIds = allExistingServerIds - serverIds
                         
-                        // КРИТИЧНО: Защита от массового удаления при неполном ответе сервера.
-                        // Если сервер вернул подозрительно мало задач (0 или намного меньше локальных),
-                        // НЕ удаляем — вероятно, ошибка синхронизации/парсинга, а не реальное удаление.
                         val activeLocalTasks = currentExistingTasks.filter { !it.isDeleted && !it.serverId.startsWith("pending_sync_") }
                         val activeServerTasks = serverTasks.filter { !it.isDeleted }
-                        val shouldDeleteFromServer = if (activeLocalTasks.size > 3 && activeServerTasks.isEmpty()) {
-                            android.util.Log.w("TaskRepository", "syncTasks: server returned 0 active tasks but local has ${activeLocalTasks.size}, skipping deletion")
+                        val emptyCount = consecutiveEmptySyncs[accountId] ?: 0
+                        val shouldDeleteFromServer = if (activeLocalTasks.size > 3 && activeServerTasks.isEmpty() && emptyCount < 1) {
+                            android.util.Log.w("TaskRepository", "syncTasks: server returned 0 active tasks but local has ${activeLocalTasks.size}, skipping deletion (attempt ${emptyCount + 1})")
+                            consecutiveEmptySyncs[accountId] = emptyCount + 1
                             false
-                        } else if (activeLocalTasks.size >= 5 && activeServerTasks.size == 1 && deletedServerIds.size >= 3) {
-                            android.util.Log.w("TaskRepository", "syncTasks: server returned only ${activeServerTasks.size} active tasks but local has ${activeLocalTasks.size}, skipping mass deletion of ${deletedServerIds.size}")
+                        } else if (activeLocalTasks.size >= 5 && activeServerTasks.size == 1 && deletedServerIds.size >= 3 && emptyCount < 1) {
+                            android.util.Log.w("TaskRepository", "syncTasks: server returned only ${activeServerTasks.size} active tasks but local has ${activeLocalTasks.size}, skipping (attempt ${emptyCount + 1})")
+                            consecutiveEmptySyncs[accountId] = emptyCount + 1
                             false
                         } else {
+                            consecutiveEmptySyncs.remove(accountId)
                             true
                         }
                         
@@ -720,7 +734,9 @@ class TaskRepository(private val context: Context) {
                         }
                         
                         if (taskEntities.isNotEmpty()) {
-                            taskDao.insertAll(taskEntities)
+                            for (chunk in taskEntities.chunked(500)) {
+                                taskDao.insertAll(chunk)
+                            }
                             // Планируем напоминания только для НЕ удалённых задач
                             val activeTaskEntities = taskEntities.filter { !it.isDeleted }
                             TaskReminderReceiver.rescheduleAllReminders(context, activeTaskEntities)
@@ -734,6 +750,7 @@ class TaskRepository(private val context: Context) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.TASK_SYNC_ERROR)
             }
+            } // end withLock
         }
     }
 }

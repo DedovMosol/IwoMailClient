@@ -45,7 +45,7 @@ class EasCalendarService internal constructor(
     )
     
     companion object {
-        private val DELETE_SERVER_ID_PATTERN = "<(?:Delete|SoftDelete)>\\s*<ServerId>(.*?)</ServerId>\\s*</(?:Delete|SoftDelete)>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val DELETE_SERVER_ID_PATTERN = "<(?:Delete|SoftDelete)>.*?<ServerId>(.*?)</ServerId>.*?</(?:Delete|SoftDelete)>".toRegex(RegexOption.DOT_MATCHES_ALL)
 
         // Предкомпилированные regex для hot paths (sync parsing)
         private val RESPONSES_PATTERN = "<Responses>(.*?)</Responses>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -583,7 +583,7 @@ class EasCalendarService internal constructor(
                     append("<soap:Body>")
                     append("""<m:UpdateItem ConflictResolution="AlwaysOverwrite" SendMeetingInvitationsOrCancellations="SendToNone">""")
                     append("<m:ItemChanges><t:ItemChange>")
-                    append("""<t:ItemId Id="$bestItemId" ChangeKey="$bestChangeKey"/>""")
+                    append("""<t:ItemId Id="${deps.escapeXml(bestItemId)}" ChangeKey="${deps.escapeXml(bestChangeKey ?: "")}"/>""")
                     append("<t:Updates>")
 
                     append("<t:SetItemField>")
@@ -684,7 +684,8 @@ class EasCalendarService internal constructor(
                             (0 until arr.length()).mapNotNull { idx ->
                                 arr.getJSONObject(idx).optString("fileReference", "").takeIf { it.isNotBlank() }
                             }.toSet()
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
                             emptySet()
                         }
                         val safeIdsToDelete = removedAttachmentIds.filter { it in idsOnOccurrence }
@@ -1010,7 +1011,7 @@ class EasCalendarService internal constructor(
             }
         }
         val deleteBody = """
-    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="$sendCancellations">
+    <m:DeleteItem DeleteType="HardDelete" SendMeetingCancellations="${deps.escapeXml(sendCancellations)}">
         <m:ItemIds>
 $itemIdsXml
         </m:ItemIds>
@@ -1457,7 +1458,7 @@ $itemIdsXml
             }
             
             val tzBlob = if (allDayEvent) android.util.Base64.encodeToString(ByteArray(172), android.util.Base64.NO_WRAP) else buildDeviceTimezoneBlob()
-            append("<calendar:TimeZone>$tzBlob</calendar:TimeZone>")
+            append("<calendar:Timezone>$tzBlob</calendar:Timezone>")
             append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
@@ -1577,7 +1578,7 @@ $itemIdsXml
             
             if (majorVersion >= 14) {
                 val tzBlob = if (allDayEvent) android.util.Base64.encodeToString(ByteArray(172), android.util.Base64.NO_WRAP) else buildDeviceTimezoneBlob()
-                append("<calendar:TimeZone>$tzBlob</calendar:TimeZone>")
+                append("<calendar:Timezone>$tzBlob</calendar:Timezone>")
             }
             append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
@@ -2227,7 +2228,7 @@ $itemIdsXml
             val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>"
                 .toRegex(RegexOption.DOT_MATCHES_ALL)
                 .find(xml)?.groupValues?.getOrNull(1)?.trim() ?: ""
-            val body = removeDuplicateLines(unescapeXml(rawBody))
+            val body = removeDuplicateLines(XmlUtils.unescape(rawBody))
             val startMs = parseEwsDateTime(XmlValueExtractor.extractEws(xml, "Start")) ?: 0L
             val endMs = parseEwsDateTime(XmlValueExtractor.extractEws(xml, "End")) ?: 0L
             val location = XmlValueExtractor.extractEws(xml, "Location") ?: ""
@@ -2553,11 +2554,11 @@ $itemIdsXml
                     append("""<m:UpdateItem ConflictResolution="AlwaysOverwrite" SendMeetingInvitationsOrCancellations="$sendMode">""")
                     append("<m:ItemChanges>")
                     append("<t:ItemChange>")
-                    // КРИТИЧНО: Добавляем ChangeKey если есть!
+                    val safeItemId = deps.escapeXml(itemId)
                     if (changeKey != null) {
-                        append("""<t:ItemId Id="$itemId" ChangeKey="$changeKey"/>""")
+                        append("""<t:ItemId Id="$safeItemId" ChangeKey="${deps.escapeXml(changeKey)}"/>""")
                     } else {
-                        append("""<t:ItemId Id="$itemId"/>""")
+                        append("""<t:ItemId Id="$safeItemId"/>""")
                     }
                     append("<t:Updates>")
                     
@@ -2756,7 +2757,7 @@ $itemIdsXml
         sendCancellations: String
     ): EasResult<Boolean> {
         val deleteBody = """
-            <m:DeleteItem DeleteType="$deleteType" SendMeetingCancellations="$sendCancellations">
+            <m:DeleteItem DeleteType="${deps.escapeXml(deleteType)}" SendMeetingCancellations="${deps.escapeXml(sendCancellations)}">
                 <m:ItemIds>
                     $itemIdXml
                 </m:ItemIds>
@@ -3087,9 +3088,9 @@ $itemIdsXml
             val onlineMeetingLink = extractCalendarValue(dataXml, "OnlineMeetingExternalLink") 
                 ?: extractCalendarValue(dataXml, "OnlineMeetingConfLink") ?: ""
             
-            // Парсинг вложений (airsyncbase:Attachments)
-            val hasAttachments = dataXml.contains("<Attachments>") || dataXml.contains("<airsyncbase:Attachments>")
-            val attachmentsJson = if (hasAttachments) parseEasAttachments(dataXml) else ""
+            val attachmentsJson = if (dataXml.contains("<Attachment>") || dataXml.contains("<airsyncbase:Attachment>"))
+                parseEasAttachments(dataXml) else ""
+            val hasAttachments = attachmentsJson.isNotBlank()
             
             // Парсинг правила повторения и исключений
             val recurrenceRuleJson = if (isRecurring) parseEasRecurrence(dataXml) else ""
@@ -3160,7 +3161,7 @@ $itemIdsXml
                 ?.getOrNull(1)
                 ?.trim()
                 ?: ""
-            val body = removeDuplicateLines(unescapeXml(rawBody))
+            val body = removeDuplicateLines(XmlUtils.unescape(rawBody))
             
             val startStr = "<(?:t:)?Start>(.*?)</(?:t:)?Start>"
                 .toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -3358,7 +3359,6 @@ $itemIdsXml
     }
     
     private fun extractCalendarValue(xml: String, tag: String): String? {
-        // Пробуем оба варианта: с namespace и без (как в старой версии)
         val patterns = listOf(
             "<calendar:$tag>(.*?)</calendar:$tag>",
             "<$tag>(.*?)</$tag>"
@@ -3367,7 +3367,7 @@ $itemIdsXml
             val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
             val match = regex.find(xml)
             if (match != null) {
-                return match.groupValues[1].trim()
+                return XmlUtils.unescape(match.groupValues[1].trim())
             }
         }
         return null
@@ -3387,25 +3387,13 @@ $itemIdsXml
             val regex = pattern.toRegex(RegexOption.DOT_MATCHES_ALL)
             val match = regex.find(xml)
             if (match != null) {
-                val rawBody = unescapeXml(match.groupValues[1].trim())
+                val rawBody = XmlUtils.unescape(match.groupValues[1].trim())
                 if (rawBody.isNotBlank()) return removeDuplicateLines(rawBody)
             }
         }
         return ""
     }
 
-    /**
-     * Декодирует XML entities (&lt;, &gt;, &quot;, &amp;, &apos;)
-     */
-    private fun unescapeXml(text: String): String {
-        return text
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
-    }
-    
     /**
      * Извлекает категории события
      */
@@ -3584,6 +3572,15 @@ $itemIdsXml
                     append("<DayOfMonth>$dayOfMonth</DayOfMonth>")
                     append("</AbsoluteMonthlyRecurrence>")
                 }
+                3 -> {
+                    val ewsDayName = ewsDayNameFromIso(startTimeStr)
+                    val dayOfWeekIndex = localCal?.let { ewsDayOfWeekIndex(it) } ?: "First"
+                    append("<RelativeMonthlyRecurrence>")
+                    append("<Interval>1</Interval>")
+                    append("<DaysOfWeek>$ewsDayName</DaysOfWeek>")
+                    append("<DayOfWeekIndex>$dayOfWeekIndex</DayOfWeekIndex>")
+                    append("</RelativeMonthlyRecurrence>")
+                }
                 5 -> {
                     val dayOfMonth = localCal?.get(java.util.Calendar.DAY_OF_MONTH) ?: 1
                     val monthNum = localCal?.let { it.get(java.util.Calendar.MONTH) + 1 } ?: 1
@@ -3592,6 +3589,17 @@ $itemIdsXml
                     append("<DayOfMonth>$dayOfMonth</DayOfMonth>")
                     append("<Month>$monthName</Month>")
                     append("</AbsoluteYearlyRecurrence>")
+                }
+                6 -> {
+                    val ewsDayName = ewsDayNameFromIso(startTimeStr)
+                    val dayOfWeekIndex = localCal?.let { ewsDayOfWeekIndex(it) } ?: "First"
+                    val monthNum = localCal?.let { it.get(java.util.Calendar.MONTH) + 1 } ?: 1
+                    val monthName = ewsMonthName(monthNum)
+                    append("<RelativeYearlyRecurrence>")
+                    append("<DaysOfWeek>$ewsDayName</DaysOfWeek>")
+                    append("<DayOfWeekIndex>$dayOfWeekIndex</DayOfWeekIndex>")
+                    append("<Month>$monthName</Month>")
+                    append("</RelativeYearlyRecurrence>")
                 }
             }
             
@@ -3638,6 +3646,15 @@ $itemIdsXml
                     append("<t:DayOfMonth>$dayOfMonth</t:DayOfMonth>")
                     append("</t:AbsoluteMonthlyRecurrence>")
                 }
+                3 -> {
+                    val ewsDayName = ewsDayNameFromIso(startTimeStr)
+                    val dayOfWeekIndex = localCal?.let { ewsDayOfWeekIndex(it) } ?: "First"
+                    append("<t:RelativeMonthlyRecurrence>")
+                    append("<t:Interval>1</t:Interval>")
+                    append("<t:DaysOfWeek>$ewsDayName</t:DaysOfWeek>")
+                    append("<t:DayOfWeekIndex>$dayOfWeekIndex</t:DayOfWeekIndex>")
+                    append("</t:RelativeMonthlyRecurrence>")
+                }
                 5 -> {
                     val dayOfMonth = localCal?.get(java.util.Calendar.DAY_OF_MONTH) ?: 1
                     val monthNum = localCal?.let { it.get(java.util.Calendar.MONTH) + 1 } ?: 1
@@ -3646,6 +3663,17 @@ $itemIdsXml
                     append("<t:DayOfMonth>$dayOfMonth</t:DayOfMonth>")
                     append("<t:Month>$monthName</t:Month>")
                     append("</t:AbsoluteYearlyRecurrence>")
+                }
+                6 -> {
+                    val ewsDayName = ewsDayNameFromIso(startTimeStr)
+                    val dayOfWeekIndex = localCal?.let { ewsDayOfWeekIndex(it) } ?: "First"
+                    val monthNum = localCal?.let { it.get(java.util.Calendar.MONTH) + 1 } ?: 1
+                    val monthName = ewsMonthName(monthNum)
+                    append("<t:RelativeYearlyRecurrence>")
+                    append("<t:DaysOfWeek>$ewsDayName</t:DaysOfWeek>")
+                    append("<t:DayOfWeekIndex>$dayOfWeekIndex</t:DayOfWeekIndex>")
+                    append("<t:Month>$monthName</t:Month>")
+                    append("</t:RelativeYearlyRecurrence>")
                 }
             }
             
@@ -3710,7 +3738,7 @@ $itemIdsXml
     }
 
     /**
-     * EAS <calendar:TimeZone> blob from device timezone.
+     * EAS <calendar:Timezone> blob from device timezone.
      * TIME_ZONE_INFORMATION struct (172 bytes): Bias + StandardName + StandardDate +
      * StandardBias + DaylightName + DaylightDate + DaylightBias.
      */
@@ -3878,7 +3906,7 @@ $itemIdsXml
                         bestTimeDiff = diff
                     }
                     val fiveMinMs = 5L * 60 * 1000
-                    if (diff <= fiveMinMs) {
+                    if (diff <= fiveMinMs && subj.equals(searchSubject, ignoreCase = true)) {
                         fallbackCandidates.add(id to diff)
                     }
                 }
@@ -3936,6 +3964,17 @@ $itemIdsXml
         }
     }
     
+    /** Calendar.DAY_OF_WEEK_IN_MONTH → EWS DayOfWeekIndex (First/Second/Third/Fourth/Last) */
+    private fun ewsDayOfWeekIndex(cal: java.util.Calendar): String {
+        return when (cal.get(java.util.Calendar.DAY_OF_WEEK_IN_MONTH)) {
+            1 -> "First"
+            2 -> "Second"
+            3 -> "Third"
+            4 -> "Fourth"
+            else -> "Last"
+        }
+    }
+
     /** Номер месяца (1-12) → EWS имя месяца */
     private fun ewsMonthName(month: Int): String = when (month) {
         1 -> "January"; 2 -> "February"; 3 -> "March"; 4 -> "April"
@@ -4081,7 +4120,7 @@ $itemIdsXml
         )
         for (pattern in patterns) {
             val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(exXml)
-            if (match != null && match.groupValues[1].isNotBlank()) return removeDuplicateLines(unescapeXml(match.groupValues[1].trim()))
+            if (match != null && match.groupValues[1].isNotBlank()) return removeDuplicateLines(XmlUtils.unescape(match.groupValues[1].trim()))
         }
         return ""
     }
@@ -4140,20 +4179,32 @@ $itemIdsXml
     }
     
     private fun escapeJsonString(value: String): String {
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
+        val sb = StringBuilder(value.length)
+        for (ch in value) {
+            when (ch) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                '\b' -> sb.append("\\b")
+                '\u000C' -> sb.append("\\f")
+                else -> if (ch.code < 0x20) sb.append("\\u%04x".format(ch.code)) else sb.append(ch)
+            }
+        }
+        return sb.toString()
     }
     
     private fun parseEwsDateTime(dateStr: String?): Long? {
         if (dateStr.isNullOrEmpty()) return null
         return try {
+            val cleaned = dateStr
+                .replace(Regex("\\.\\d+"), "")
+                .replace("Z", "")
+                .replace(Regex("[+-]\\d{2}:\\d{2}$"), "")
             val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
             format.timeZone = TimeZone.getTimeZone("UTC")
-            format.parse(dateStr.replace("Z", ""))?.time
+            format.parse(cleaned)?.time
         } catch (e: Exception) {
             null
         }

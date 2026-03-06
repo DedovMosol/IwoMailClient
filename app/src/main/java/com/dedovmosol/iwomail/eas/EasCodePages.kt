@@ -6,6 +6,7 @@ package com.dedovmosol.iwomail.eas
 object EasCodePages {
     
     // Code Page 0: AirSync
+    // Verified against MS-ASWBXML v24.0 spec (May 2025)
     private val PAGE_AIRSYNC = mapOf(
         0x05 to "Sync",
         0x06 to "Responses",
@@ -26,6 +27,7 @@ object EasCodePages {
         0x16 to "Commands",
         0x17 to "Options",
         0x18 to "FilterType",
+        0x19 to "Truncation",
         0x1B to "Conflict",
         0x1C to "Collections",
         0x1D to "ApplicationData",
@@ -40,51 +42,71 @@ object EasCodePages {
     )
     
     // Code Page 1: Contacts
+    // Verified against MS-ASWBXML v24.0 spec (May 2025)
     private val PAGE_CONTACTS = mapOf(
         0x05 to "Anniversary",
         0x06 to "AssistantName",
         0x07 to "AssistantPhoneNumber",
         0x08 to "Birthday",
+        0x09 to "Body",
+        0x0A to "BodySize",
+        0x0B to "BodyTruncated",
         0x0C to "Business2PhoneNumber",
-        0x0D to "BusinessCity",
-        0x0E to "BusinessCountry",
-        0x0F to "BusinessPostalCode",
-        0x10 to "BusinessState",
-        0x11 to "BusinessStreet",
+        0x0D to "BusinessAddressCity",
+        0x0E to "BusinessAddressCountry",
+        0x0F to "BusinessAddressPostalCode",
+        0x10 to "BusinessAddressState",
+        0x11 to "BusinessAddressStreet",
         0x12 to "BusinessFaxNumber",
         0x13 to "BusinessPhoneNumber",
-        0x15 to "CompanyName",
-        0x16 to "Department",
-        0x17 to "Email1Address",
-        0x18 to "Email2Address",
-        0x19 to "Email3Address",
-        0x1A to "FileAs",
-        0x1B to "FirstName",
-        0x1D to "Home2PhoneNumber",
-        0x1E to "HomeCity",
-        0x1F to "HomeCountry",
-        0x20 to "HomePostalCode",
-        0x21 to "HomeState",
-        0x22 to "HomeStreet",
-        0x23 to "HomeFaxNumber",
-        0x24 to "HomePhoneNumber",
-        0x25 to "JobTitle",
-        0x26 to "LastName",
-        0x27 to "MiddleName",
-        0x28 to "MobilePhoneNumber",
-        0x2A to "OtherCity",
-        0x2B to "OtherCountry",
-        0x2C to "OtherPostalCode",
-        0x2D to "OtherState",
-        0x2E to "OtherStreet",
-        0x30 to "Spouse",
-        0x31 to "Suffix",
-        0x32 to "Title",
-        0x33 to "WebPage",
-        0x36 to "Picture"
+        0x14 to "CarPhoneNumber",
+        0x15 to "Categories",
+        0x16 to "Category",
+        0x17 to "Children",
+        0x18 to "Child",
+        0x19 to "CompanyName",
+        0x1A to "Department",
+        0x1B to "Email1Address",
+        0x1C to "Email2Address",
+        0x1D to "Email3Address",
+        0x1E to "FileAs",
+        0x1F to "FirstName",
+        0x20 to "Home2PhoneNumber",
+        0x21 to "HomeAddressCity",
+        0x22 to "HomeAddressCountry",
+        0x23 to "HomeAddressPostalCode",
+        0x24 to "HomeAddressState",
+        0x25 to "HomeAddressStreet",
+        0x26 to "HomeFaxNumber",
+        0x27 to "HomePhoneNumber",
+        0x28 to "JobTitle",
+        0x29 to "LastName",
+        0x2A to "MiddleName",
+        0x2B to "MobilePhoneNumber",
+        0x2C to "OfficeLocation",
+        0x2D to "OtherAddressCity",
+        0x2E to "OtherAddressCountry",
+        0x2F to "OtherAddressPostalCode",
+        0x30 to "OtherAddressState",
+        0x31 to "OtherAddressStreet",
+        0x32 to "PagerNumber",
+        0x33 to "RadioPhoneNumber",
+        0x34 to "Spouse",
+        0x35 to "Suffix",
+        0x36 to "Title",
+        0x37 to "WebPage",
+        0x38 to "YomiCompanyName",
+        0x39 to "YomiFirstName",
+        0x3A to "YomiLastName",
+        0x3B to "CompressedRTF",
+        0x3C to "Picture",
+        0x3D to "Alias",
+        0x3E to "WeightedRank"
     )
     
     // Code Page 2: Email
+    // Verified against MS-ASWBXML + AOSP Tags.java
+    // 0x3B is "Status" per newer spec, but kept as "FlagStatus" to disambiguate (10+ code references).
     private val PAGE_EMAIL = mapOf(
         0x05 to "Attachment",
         0x06 to "Attachments",
@@ -135,9 +157,9 @@ object EasCodePages {
         0x33 to "TimeZone",
         0x34 to "GlobalObjId",
         0x35 to "ThreadTopic",
-        0x36 to "MimeData",
-        0x37 to "MimeTruncated",
-        0x38 to "MimeSize",
+        0x36 to "MIMEData",
+        0x37 to "MIMETruncated",
+        0x38 to "MIMESize",
         0x39 to "InternetCPID",
         0x3A to "Flag",
         0x3B to "FlagStatus",
@@ -160,16 +182,20 @@ object EasCodePages {
     )
     
     // Code Page 4: Calendar
+    // Verified against MS-ASWBXML + AOSP Tags.java
     private val PAGE_CALENDAR = mapOf(
-        0x05 to "TimeZone",
+        0x05 to "Timezone",
         0x06 to "AllDayEvent",
         0x07 to "Attendees",
         0x08 to "Attendee",
         0x09 to "Email",
         0x0A to "Name",
+        0x0B to "Body",
+        0x0C to "BodyTruncated",
         0x0D to "BusyStatus",
         0x0E to "Categories",
         0x0F to "Category",
+        0x10 to "CompressedRTF",
         0x11 to "DtStamp",
         0x12 to "EndTime",
         0x13 to "Exception",
@@ -193,7 +219,26 @@ object EasCodePages {
         0x25 to "Sensitivity",
         0x26 to "Subject",
         0x27 to "StartTime",
-        0x28 to "UID"
+        0x28 to "UID",
+        0x29 to "AttendeeStatus",
+        0x2A to "AttendeeType",
+        0x2B to "Attachment",
+        0x2C to "Attachments",
+        0x2D to "AttName",
+        0x2E to "AttSize",
+        0x2F to "AttOid",
+        0x30 to "AttMethod",
+        0x31 to "AttRemoved",
+        0x32 to "DisplayName",
+        0x33 to "DisallowNewTimeProposal",
+        0x34 to "ResponseRequested",
+        0x35 to "AppointmentReplyTime",
+        0x36 to "ResponseType",
+        0x37 to "CalendarType",
+        0x38 to "IsLeapMonth",
+        0x39 to "FirstDayOfWeek",
+        0x3A to "OnlineMeetingConfLink",
+        0x3B to "OnlineMeetingExternalLink"
     )
     
     // Code Page 7: FolderHierarchy
@@ -272,6 +317,74 @@ object EasCodePages {
         0x0E to "Status"
     )
     
+    // Code Page 8: MeetingResponse (EAS 2.5+, Exchange 2007 SP1)
+    // Verified against MS-ASWBXML v24.0 spec — 0x0D is unassigned, InstanceId is 0x0E
+    private val PAGE_MEETINGRESPONSE = mapOf(
+        0x05 to "CalendarId",
+        0x06 to "CollectionId",
+        0x07 to "MeetingResponse",
+        0x08 to "RequestId",
+        0x09 to "Request",
+        0x0A to "Result",
+        0x0B to "Status",
+        0x0C to "UserResponse",
+        0x0E to "InstanceId"
+    )
+
+    // Code Page 10: ResolveRecipients (EAS 2.5+, Exchange 2007 SP1)
+    // Verified against MS-ASWBXML spec and AOSP Tags.java
+    private val PAGE_RESOLVERECIPIENTS = mapOf(
+        0x05 to "ResolveRecipients",
+        0x06 to "Response",
+        0x07 to "Status",
+        0x08 to "Type",
+        0x09 to "Recipient",
+        0x0A to "DisplayName",
+        0x0B to "EmailAddress",
+        0x0C to "Certificates",
+        0x0D to "Certificate",
+        0x0E to "MiniCertificate",
+        0x0F to "Options",
+        0x10 to "To",
+        0x11 to "CertificateRetrieval",
+        0x12 to "RecipientCount",
+        0x13 to "MaxCertificates",
+        0x14 to "MaxAmbiguousRecipients",
+        0x15 to "CertificateCount",
+        0x16 to "Availability",
+        0x17 to "StartTime",
+        0x18 to "EndTime",
+        0x19 to "MergedFreeBusy",
+        0x1A to "Picture",
+        0x1B to "MaxSize",
+        0x1C to "Data",
+        0x1D to "MaxPictures"
+    )
+
+    // Code Page 11: ValidateCert (EAS 2.5+, Exchange 2007 SP1)
+    private val PAGE_VALIDATECERT = mapOf(
+        0x05 to "ValidateCert",
+        0x06 to "Certificates",
+        0x07 to "Certificate",
+        0x08 to "CertificateChain",
+        0x09 to "CheckCRL",
+        0x0A to "Status"
+    )
+
+    // Code Page 12: Contacts2 (EAS 2.5+, Exchange 2007 SP1)
+    private val PAGE_CONTACTS2 = mapOf(
+        0x05 to "CustomerId",
+        0x06 to "GovernmentId",
+        0x07 to "IMAddress",
+        0x08 to "IMAddress2",
+        0x09 to "IMAddress3",
+        0x0A to "ManagerName",
+        0x0B to "CompanyMainPhone",
+        0x0C to "AccountName",
+        0x0D to "NickName",
+        0x0E to "MMS"
+    )
+
     // Code Page 13: Ping
     private val PAGE_PING = mapOf(
         0x05 to "Ping",
@@ -286,8 +399,8 @@ object EasCodePages {
     )
     
     // Code Page 14: Provision
-    // Согласно AOSP Tags.java - PROVISION_STATUS = 0x0B
-    // ВАЖНО: Имя тега должно быть "Status" (как в XML), но на code page 14!
+    // Verified against MS-ASWBXML v24.0 spec (May 2025)
+    // EAS 12.0+ policy tags (0x0E-0x3A) needed for Exchange 2007 SP1
     private val PAGE_PROVISION = mapOf(
         0x05 to "Provision",
         0x06 to "Policies",
@@ -295,14 +408,59 @@ object EasCodePages {
         0x08 to "PolicyType",
         0x09 to "PolicyKey",
         0x0A to "Data",
-        0x0B to "Status",  // Status в контексте Provision (code page 14)
+        0x0B to "Status",
         0x0C to "RemoteWipe",
-        0x0D to "EASProvisionDoc"
+        0x0D to "EASProvisionDoc",
+        0x0E to "DevicePasswordEnabled",
+        0x0F to "AlphanumericDevicePasswordRequired",
+        0x10 to "RequireStorageCardEncryption",
+        0x11 to "PasswordRecoveryEnabled",
+        0x13 to "AttachmentsEnabled",
+        0x14 to "MinDevicePasswordLength",
+        0x15 to "MaxInactivityTimeDeviceLock",
+        0x16 to "MaxDevicePasswordFailedAttempts",
+        0x17 to "MaxAttachmentSize",
+        0x18 to "AllowSimpleDevicePassword",
+        0x19 to "DevicePasswordExpiration",
+        0x1A to "DevicePasswordHistory",
+        0x1B to "AllowStorageCard",
+        0x1C to "AllowCamera",
+        0x1D to "RequireDeviceEncryption",
+        0x1E to "AllowUnsignedApplications",
+        0x1F to "AllowUnsignedInstallationPackages",
+        0x20 to "MinDevicePasswordComplexCharacters",
+        0x21 to "AllowWiFi",
+        0x22 to "AllowTextMessaging",
+        0x23 to "AllowPOPIMAPEmail",
+        0x24 to "AllowBluetooth",
+        0x25 to "AllowIrDA",
+        0x26 to "RequireManualSyncWhenRoaming",
+        0x27 to "AllowDesktopSync",
+        0x28 to "MaxCalendarAgeFilter",
+        0x29 to "AllowHTMLEmail",
+        0x2A to "MaxEmailAgeFilter",
+        0x2B to "MaxEmailBodyTruncationSize",
+        0x2C to "MaxEmailHTMLBodyTruncationSize",
+        0x2D to "RequireSignedSMIMEMessages",
+        0x2E to "RequireEncryptedSMIMEMessages",
+        0x2F to "RequireSignedSMIMEAlgorithm",
+        0x30 to "RequireEncryptionSMIMEAlgorithm",
+        0x31 to "AllowSMIMEEncryptionAlgorithmNegotiation",
+        0x32 to "AllowSMIMESoftCerts",
+        0x33 to "AllowBrowser",
+        0x34 to "AllowConsumerEmail",
+        0x35 to "AllowRemoteDesktop",
+        0x36 to "AllowInternetSharing",
+        0x37 to "UnapprovedInROMApplicationList",
+        0x38 to "ApplicationName",
+        0x39 to "ApprovedApplicationList",
+        0x3A to "Hash"
     )
     
     // Code Page 15: Search
     private val PAGE_SEARCH = mapOf(
         0x05 to "Search",
+        0x06 to "Stores",
         0x07 to "Store",
         0x08 to "Name",
         0x09 to "Query",
@@ -394,7 +552,7 @@ object EasCodePages {
         0x1C to "PhoneNumber",
         0x1D to "UserInformation",
         0x1E to "EmailAddresses",
-        0x1F to "SmtpAddress",
+        0x1F to "SMTPAddress",
         0x20 to "UserAgent"
     )
     
@@ -435,20 +593,52 @@ object EasCodePages {
         0x19 to "MoveAlways"
     )
     
-    // Code Page 21: ComposeMail
-    // Согласно AOSP Tags.java
+    // Code Page 21: ComposeMail (EAS 14.0+)
+    // Verified against MS-ASWBXML v24.0 spec (May 2025)
+    // Note: 0x0A and 0x14 are gaps (not assigned)
     private val PAGE_COMPOSEMAIL = mapOf(
         0x05 to "SendMail",
         0x06 to "SmartForward",
         0x07 to "SmartReply",
         0x08 to "SaveInSentItems",
         0x09 to "ReplaceMime",
-        0x0A to "Source",
-        0x0B to "FolderId",
-        0x0C to "Mime",
-        0x0D to "ClientId",
-        0x0E to "Status",
-        0x0F to "AccountId"
+        0x0B to "Source",
+        0x0C to "FolderId",
+        0x0D to "ItemId",
+        0x0E to "LongId",
+        0x0F to "InstanceId",
+        0x10 to "Mime",
+        0x11 to "ClientId",
+        0x12 to "Status",
+        0x13 to "AccountId"
+    )
+
+    // Code Page 22: Email2 (EAS 14.0+)
+    private val PAGE_EMAIL2 = mapOf(
+        0x05 to "UmCallerID",
+        0x06 to "UmUserNotes",
+        0x07 to "UmAttDuration",
+        0x08 to "UmAttOrder",
+        0x09 to "ConversationId",
+        0x0A to "ConversationIndex",
+        0x0B to "LastVerbExecuted",
+        0x0C to "LastVerbExecutionTime",
+        0x0D to "ReceivedAsBcc",
+        0x0E to "Sender",
+        0x0F to "CalendarType",
+        0x10 to "IsLeapMonth",
+        0x11 to "AccountId",
+        0x12 to "FirstDayOfWeek",
+        0x13 to "MeetingMessageType"
+    )
+
+    // Code Page 23: Notes (EAS 14.0+)
+    private val PAGE_NOTES = mapOf(
+        0x05 to "Subject",
+        0x06 to "MessageClass",
+        0x07 to "LastModifiedDate",
+        0x08 to "Categories",
+        0x09 to "Category"
     )
     
     private val allPages = mapOf(
@@ -459,7 +649,11 @@ object EasCodePages {
         5 to PAGE_MOVE,
         6 to PAGE_ESTIMATE,
         7 to PAGE_FOLDER,
+        8 to PAGE_MEETINGRESPONSE,
         9 to PAGE_TASKS,
+        10 to PAGE_RESOLVERECIPIENTS,
+        11 to PAGE_VALIDATECERT,
+        12 to PAGE_CONTACTS2,
         13 to PAGE_PING,
         14 to PAGE_PROVISION,
         15 to PAGE_SEARCH,
@@ -468,18 +662,28 @@ object EasCodePages {
         18 to PAGE_SETTINGS,
         19 to PAGE_DOCUMENTLIBRARY,
         20 to PAGE_ITEMOPERATIONS,
-        21 to PAGE_COMPOSEMAIL
+        21 to PAGE_COMPOSEMAIL,
+        22 to PAGE_EMAIL2,
+        23 to PAGE_NOTES
     )
     
     private val reversePages: Map<String, Pair<Int, Int>> by lazy {
         val map = mutableMapOf<String, Pair<Int, Int>>()
         allPages.forEach { (pageId, tags) ->
             tags.forEach { (tagId, tagName) ->
-                // Для FolderSync используем 0x15 (первый), не перезаписываем на 0x16
-                if (tagName == "FolderSync" && map.containsKey(tagName)) {
-                    return@forEach
+                if (!map.containsKey(tagName)) {
+                    map[tagName] = pageId to tagId
                 }
-                map[tagName] = pageId to tagId
+            }
+        }
+        map
+    }
+    
+    private val reversePagesFull: Map<String, List<Pair<Int, Int>>> by lazy {
+        val map = mutableMapOf<String, MutableList<Pair<Int, Int>>>()
+        allPages.forEach { (pageId, tags) ->
+            tags.forEach { (tagId, tagName) ->
+                map.getOrPut(tagName) { mutableListOf() }.add(pageId to tagId)
             }
         }
         map
@@ -489,8 +693,13 @@ object EasCodePages {
         return allPages[codePage]?.get(tagId) ?: "Unknown_${codePage}_${tagId}"
     }
     
-    fun getTagId(tagName: String): Pair<Int, Int> {
-        return reversePages[tagName] ?: (0 to 0x05)
+    fun getTagId(tagName: String, currentPage: Int = -1): Pair<Int, Int> {
+        if (currentPage >= 0) {
+            val onCurrent = getTagIdOnPage(tagName, currentPage)
+            if (onCurrent != null) return onCurrent
+        }
+        return reversePages[tagName]
+            ?: throw IllegalArgumentException("Unknown WBXML tag: $tagName")
     }
     
     /**

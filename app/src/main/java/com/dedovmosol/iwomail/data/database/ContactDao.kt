@@ -20,8 +20,17 @@ interface ContactDao {
     @Query("SELECT * FROM contacts WHERE accountId = :accountId AND source = 'EXCHANGE' ORDER BY displayName COLLATE NOCASE")
     suspend fun getExchangeContactsList(accountId: Long): List<ContactEntity>
     
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND id LIKE :accountId || '_exchange_%' ORDER BY displayName COLLATE NOCASE")
+    fun getExchangeFolderContacts(accountId: Long): Flow<List<ContactEntity>>
+    
+    @Query("SELECT * FROM contacts WHERE accountId = :accountId AND id LIKE :accountId || '_gal_%' ORDER BY displayName COLLATE NOCASE")
+    fun getGalContacts(accountId: Long): Flow<List<ContactEntity>>
+    
     @Query("SELECT * FROM contacts WHERE accountId = :accountId ORDER BY displayName COLLATE NOCASE")
     suspend fun getContactsByAccountList(accountId: Long): List<ContactEntity>
+    
+    @Query("SELECT email, displayName as name FROM contacts WHERE accountId = :accountId AND email != '' AND displayName != '' AND displayName NOT LIKE '%@%'")
+    suspend fun getContactEmailNames(accountId: Long): List<com.dedovmosol.iwomail.data.database.EmailHistoryResult>
     
     @Query("SELECT * FROM contacts WHERE id = :id")
     suspend fun getContact(id: String): ContactEntity?

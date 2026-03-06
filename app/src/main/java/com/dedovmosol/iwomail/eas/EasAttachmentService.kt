@@ -39,18 +39,10 @@ class EasAttachmentService internal constructor(
         val getNormalizedServerUrl: () -> String
     )
     
-    private fun escapeXml(text: String): String = text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&apos;")
-    
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         
         // Regex для парсинга ItemOperations ответов
-        private val ITEM_OPS_GLOBAL_STATUS_REGEX get() = EasPatterns.ITEM_OPS_GLOBAL_STATUS
         private val ITEM_OPS_FETCH_STATUS_REGEX get() = EasPatterns.ITEM_OPS_FETCH_STATUS
         private val ITEM_OPS_DATA_REGEX get() = EasPatterns.ITEM_OPS_DATA
         private val ITEM_OPS_PROPS_DATA_REGEX get() = EasPatterns.ITEM_OPS_PROPS_DATA
@@ -88,9 +80,10 @@ class EasAttachmentService internal constructor(
                 return@withContext EasResult.Error("Размер письма ($sizeMB МБ) превышает лимит сервера (10 МБ)")
             }
             
-            val url = deps.buildUrl("SendMail") + "&SaveInSent=T"
             val easVersion = deps.getEasVersion()
             val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+            val url = deps.buildUrl("SendMail") +
+                if (majorVersion < 14) "&SaveInSent=T" else ""
             
             // Для EAS 14.0+ используем WBXML формат, для 12.x - message/rfc822
             val (requestBody, contentType) = if (majorVersion >= 14) {
@@ -413,7 +406,7 @@ class EasAttachmentService internal constructor(
     }
     
     private suspend fun tryItemOperations(fileRef: String): EasResult<ByteArray> {
-        val safeRef = escapeXml(fileRef)
+        val safeRef = XmlUtils.escape(fileRef)
         // Вариант 1: FileReference в namespace AirSyncBase
         val xml1 = """<?xml version="1.0" encoding="UTF-8"?>
 <ItemOperations xmlns="ItemOperations">
@@ -528,9 +521,10 @@ class EasAttachmentService internal constructor(
 <ItemOperations xmlns="ItemOperations">
     <Fetch>
         <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">${escapeXml(collectionId)}</CollectionId>
-        <ServerId xmlns="AirSync">${escapeXml(serverId)}</ServerId>
+        <CollectionId xmlns="AirSync">${XmlUtils.escape(collectionId)}</CollectionId>
+        <ServerId xmlns="AirSync">${XmlUtils.escape(serverId)}</ServerId>
         <Options>
+            <MIMESupport xmlns="AirSync">2</MIMESupport>
             <BodyPreference xmlns="AirSyncBase">
                 <Type>4</Type>
             </BodyPreference>
@@ -574,8 +568,9 @@ class EasAttachmentService internal constructor(
                 val deviceId = deps.getDeviceId()
                 val deviceType = deps.getDeviceType()
                 
+                val encodedUser = java.net.URLEncoder.encode(username, "UTF-8")
                 val url = "$serverUrl/Microsoft-Server-ActiveSync?" +
-                    "Cmd=GetAttachment&AttachmentName=$attachmentName&User=$username&DeviceId=$deviceId&DeviceType=$deviceType"
+                    "Cmd=GetAttachment&AttachmentName=$attachmentName&User=$encodedUser&DeviceId=$deviceId&DeviceType=$deviceType"
                 
                 val requestBuilder = Request.Builder()
                     .url(url)

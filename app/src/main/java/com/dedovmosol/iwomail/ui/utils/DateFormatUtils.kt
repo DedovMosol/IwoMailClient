@@ -1,15 +1,16 @@
 package com.dedovmosol.iwomail.ui.utils
 
-import java.text.SimpleDateFormat
-import java.util.Calendar
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private val timeFormat = ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-private val dayFormat = ThreadLocal.withInitial { SimpleDateFormat("EEE", Locale.getDefault()) }
-private val dateFormat = ThreadLocal.withInitial { SimpleDateFormat("d MMM", Locale.getDefault()) }
-private val fullDateFormat = ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yy", Locale.getDefault()) }
+private val timeFormat = DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault())
+private val dayFormat = DateTimeFormatter.ofPattern("EEE", Locale.getDefault())
+private val dateFormat = DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())
+private val fullDateFormat = DateTimeFormatter.ofPattern("dd.MM.yy", Locale.getDefault())
 
-private val reusableCalendar = ThreadLocal.withInitial { Calendar.getInstance() }
+private val zoneId = ZoneId.systemDefault()
 
 @Volatile private var cachedTodayDayOfYear = -1
 @Volatile private var cachedTodayYear = -1
@@ -18,29 +19,28 @@ private val reusableCalendar = ThreadLocal.withInitial { Calendar.getInstance() 
 private fun ensureTodayCached() {
     val now = System.currentTimeMillis()
     if (now - cachedTodayTimestamp > 60_000) {
-        val today = Calendar.getInstance()
-        cachedTodayDayOfYear = today.get(Calendar.DAY_OF_YEAR)
-        cachedTodayYear = today.get(Calendar.YEAR)
+        val today = java.time.LocalDate.now(zoneId)
+        cachedTodayDayOfYear = today.dayOfYear
+        cachedTodayYear = today.year
         cachedTodayTimestamp = now
     }
 }
 
 fun formatRelativeDate(timestamp: Long): String {
     ensureTodayCached()
-    val now = cachedTodayTimestamp
-    val diff = now - timestamp
-    val calendar = reusableCalendar.get()!!.apply { timeInMillis = timestamp }
+    val diff = cachedTodayTimestamp - timestamp
+    val dateTime = Instant.ofEpochMilli(timestamp).atZone(zoneId)
 
     return when {
         diff < 24 * 60 * 60 * 1000
-                && calendar.get(Calendar.DAY_OF_YEAR) == cachedTodayDayOfYear
-                && calendar.get(Calendar.YEAR) == cachedTodayYear ->
-            timeFormat.get()!!.format(timestamp)
+                && dateTime.dayOfYear == cachedTodayDayOfYear
+                && dateTime.year == cachedTodayYear ->
+            dateTime.format(timeFormat)
         diff < 7 * 24 * 60 * 60 * 1000 ->
-            dayFormat.get()!!.format(timestamp)
-        calendar.get(Calendar.YEAR) == cachedTodayYear ->
-            dateFormat.get()!!.format(timestamp)
+            dateTime.format(dayFormat)
+        dateTime.year == cachedTodayYear ->
+            dateTime.format(dateFormat)
         else ->
-            fullDateFormat.get()!!.format(timestamp)
+            dateTime.format(fullDateFormat)
     }
 }

@@ -221,6 +221,9 @@ class EmailOperationsService(
         } // for byAccount
         
         updateMailWidget(context)
+        if (read) {
+            byAccount.keys.forEach { cancelNotificationForAccount(it) }
+        }
         return if (lastError != null) EasResult.Error(lastError) else EasResult.Success(true)
     }
     
@@ -322,24 +325,29 @@ class EmailOperationsService(
     }
     
     /**
-     * Обновляет FileReference вложений конкретного письма через ItemOperations
-     * Вызывается при открытии письма — предотвращает ошибки скачивания из-за устаревших FileReference
+     * Синхронизирует вложения конкретного письма с сервером через ItemOperations.
+     * Делегирует в EmailSyncService.reconcileAttachments (DRY) — единая
+     * транзакционная логика для sync worker и UI.
+     *
+     * Exchange 2007 SP1 / EAS 12.1: Attachment metadata поддерживается
+     * через ItemOperations Fetch (MS-ASAIRS 2.2.2.7).
      */
     suspend fun refreshAttachmentMetadata(emailId: String) {
         try {
             val email = emailDao.getEmail(emailId) ?: return
             val account = accountRepo.getAccount(email.accountId) ?: return
             if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) return
+
+            val sid = email.serverId
+            if (sid.startsWith("local_draft_") || sid.isBlank()) return
+            if (sid.contains("=") && !sid.contains(":")) return
+
             val client = accountRepo.createEasClient(email.accountId) ?: return
             val folderServerId = email.folderId.substringAfter("_")
             
-            val attResult = client.fetchAttachmentMetadata(folderServerId, email.serverId)
-            if (attResult is EasResult.Success && attResult.data.isNotEmpty()) {
-                for (att in attResult.data) {
-                    if (att.fileReference.isNotEmpty()) {
-                        attachmentDao.updateFileReference(emailId, att.displayName, att.fileReference)
-                    }
-                }
+            val attResult = client.fetchAttachmentMetadata(folderServerId, sid)
+            if (attResult is EasResult.Success) {
+                emailSyncService.reconcileAttachments(emailId, attResult.data)
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -445,8 +453,8 @@ class EmailOperationsService(
      * Удалить письмо локально (с транзакцией для целостности данных)
      */
     suspend fun deleteEmail(emailId: String) {
+        EmailSyncService.registerDeletedEmail(emailId, context)
         database.withTransaction {
-            EmailSyncService.registerDeletedEmail(emailId, context)
             attachmentDao.deleteByEmail(emailId)
             emailDao.delete(emailId)
         }
@@ -482,8 +490,8 @@ class EmailOperationsService(
             ?: return EasResult.Error("Email not found")
         
         val allEmails = emailIds.mapNotNull { emailDao.getEmail(it) }
-        require(allEmails.all { it.accountId == firstEmail.accountId }) {
-            "All emails must belong to the same account"
+        if (!allEmails.all { it.accountId == firstEmail.accountId }) {
+            return EasResult.Error("All emails must belong to the same account")
         }
         
         val account = accountRepo.getAccount(firstEmail.accountId)
@@ -609,12 +617,16 @@ class EmailOperationsService(
                             folderId = targetFolderId,
                             originalFolderId = newOriginalFolderId
                         )
-                        // Регистрируем старый emailId — защита от восстановления при sync
                         EmailSyncService.registerDeletedEmail(emailId, context)
-                        // delete + insert атомарно
                         database.withTransaction {
+                            val oldAttachments = attachmentDao.getAttachmentsList(emailId)
                             emailDao.delete(emailId)
                             emailDao.insert(updatedEmail)
+                            if (oldAttachments.isNotEmpty()) {
+                                attachmentDao.insertAll(oldAttachments.map {
+                                    it.copy(id = 0, emailId = newEmailId)
+                                })
+                            }
                         }
                         movedCount++
                     }
@@ -684,12 +696,8 @@ class EmailOperationsService(
                 if (result is EasResult.Success) {
                     totalDeleted++
                 } else {
-                    // Сервер не принял удаление — удаляем локально,
-                    // при следующей синхронизации черновик восстановится если он ещё жив
-                    attachmentDao.deleteByEmail(emailId)
-                    emailDao.delete(emailId)
-                    totalDeleted++
-                    android.util.Log.w("EmailOps", "Draft server delete failed, removed locally: ${email.serverId}")
+                    regularEmails.add(emailId)
+                    android.util.Log.w("EmailOps", "Draft server delete failed, moving to trash instead: ${email.serverId}")
                 }
             }
             
@@ -740,213 +748,8 @@ class EmailOperationsService(
         return moveEmails(emailIds, targetFolderId)
     }
     
-    /**
-     * Окончательное удаление писем
-     */
     suspend fun deleteEmailsPermanently(emailIds: List<String>): EasResult<Int> {
-        if (emailIds.isEmpty()) return EasResult.Success(0)
-        
-        return try {
-            val affectedFolderIds = mutableSetOf<String>()
-            var deletedCount = 0
-            
-            // Ищем хотя бы одно существующее письмо для определения аккаунта
-            var firstEmail: com.dedovmosol.iwomail.data.database.EmailEntity? = null
-            for (id in emailIds) {
-                firstEmail = emailDao.getEmail(id)
-                if (firstEmail != null) break
-            }
-            if (firstEmail == null) {
-                // Все письма уже удалены из БД (например, черновики пересинхронизировались с новым ID)
-                // Очищаем вложения на всякий случай и считаем удалёнными
-                emailIds.forEach { attachmentDao.deleteByEmail(it) }
-                return EasResult.Success(emailIds.size)
-            }
-            
-            val account = accountRepo.getAccount(firstEmail.accountId)
-                ?: return EasResult.Error("Account not found")
-            
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                emailIds.forEach { emailId ->
-                    val email = emailDao.getEmail(emailId)
-                    if (email != null) {
-                        affectedFolderIds.add(email.folderId)
-                    }
-                    attachmentDao.deleteByEmail(emailId)
-                    emailDao.delete(emailId)
-                    deletedCount++
-                }
-                for (folderId in affectedFolderIds) {
-                    updateFolderCounts(folderId)
-                }
-                return EasResult.Success(deletedCount)
-            }
-            
-            val client = accountRepo.createEasClient(firstEmail.accountId)
-                ?: return EasResult.Error("Failed to create client")
-            
-            // === BATCH DELETE: группируем письма по папкам и удаляем пачкой ===
-            
-            data class EmailInfo(val emailId: String, val folderId: String, val serverId: String)
-            val emailInfos = mutableListOf<EmailInfo>()
-            
-            for (emailId in emailIds) {
-                val email = emailDao.getEmail(emailId)
-                if (email == null) {
-                    attachmentDao.deleteByEmail(emailId)
-                    deletedCount++
-                    continue
-                }
-                affectedFolderIds.add(email.folderId)
-                emailInfos.add(EmailInfo(emailId, email.folderId, email.serverId))
-            }
-            
-            // Группируем по folderServerId для batch-операций
-            val groupedByFolder = emailInfos.groupBy { info ->
-                if (info.serverId.contains(":")) {
-                    info.serverId.substringBefore(":")
-                } else {
-                    info.folderId.substringAfter("_")
-                }
-            }
-            
-            for ((folderServerId, emails) in groupedByFolder) {
-                val folderId = emails.first().folderId
-                var syncKey = folderDao.getFolder(folderId)?.syncKey ?: "0"
-                
-                // Инициализация syncKey если "0"
-                if (syncKey == "0") {
-                    val initResult = client.sync(folderServerId, "0")
-                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
-                        syncKey = initResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-                    }
-                }
-                
-                // Если syncKey всё ещё "0" — EWS fallback
-                if (syncKey == "0") {
-                    if (client.isExchange2007()) {
-                        for (info in emails) {
-                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId)
-                            if (ewsResult is EasResult.Success) {
-                                attachmentDao.deleteByEmail(info.emailId)
-                                emailDao.delete(info.emailId)
-                                deletedCount++
-                            }
-                        }
-                    }
-                    continue
-                }
-                
-                // Полностью обновляем syncKey ОДИН РАЗ перед batch-удалением
-                var refreshSucceeded = false
-                for (refreshLoop in 0 until 10) {
-                    val refreshResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                    if (refreshResult is EasResult.Success) {
-                        syncKey = refreshResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-                        if (!refreshResult.data.moreAvailable) {
-                            refreshSucceeded = true
-                            break
-                        }
-                    } else {
-                        // Refresh failed — полный сброс syncKey с "0"
-                        val initResult = client.sync(folderServerId, "0")
-                        if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
-                            syncKey = initResult.data.syncKey
-                            folderDao.updateSyncKey(folderId, syncKey)
-                            for (innerLoop in 0 until 10) {
-                                val innerResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                                if (innerResult is EasResult.Success) {
-                                    syncKey = innerResult.data.syncKey
-                                    folderDao.updateSyncKey(folderId, syncKey)
-                                    if (!innerResult.data.moreAvailable) {
-                                        refreshSucceeded = true
-                                        break
-                                    }
-                                } else {
-                                    break
-                                }
-                            }
-                        }
-                        break
-                    }
-                }
-                
-                // Если syncKey refresh полностью провалился — EWS fallback
-                if (!refreshSucceeded && client.isExchange2007()) {
-                    for (info in emails) {
-                        val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId)
-                        if (ewsResult is EasResult.Success) {
-                            attachmentDao.deleteByEmail(info.emailId)
-                            emailDao.delete(info.emailId)
-                            deletedCount++
-                        }
-                    }
-                    continue
-                }
-                
-                // BATCH DELETE: все письма из этой папки одним запросом
-                val serverIds = emails.map { it.serverId }
-                var batchResult = client.deleteEmailsPermanentlyBatch(folderServerId, serverIds, syncKey)
-                
-                // Retry: INVALID_SYNCKEY или DELETE_NOT_APPLIED → сброс и повтор batch
-                if (batchResult is EasResult.Error && 
-                    (batchResult.message.contains("INVALID_SYNCKEY") || batchResult.message.contains("DELETE_NOT_APPLIED"))) {
-                    val initResult = client.sync(folderServerId, "0")
-                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
-                        syncKey = initResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-                        for (refreshLoop in 0 until 10) {
-                            val refreshResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                            if (refreshResult is EasResult.Success) {
-                                syncKey = refreshResult.data.syncKey
-                                folderDao.updateSyncKey(folderId, syncKey)
-                                if (!refreshResult.data.moreAvailable) break
-                            } else {
-                                break
-                            }
-                        }
-                        batchResult = client.deleteEmailsPermanentlyBatch(folderServerId, serverIds, syncKey)
-                    }
-                }
-                
-                // Обработка результата batch-удаления
-                when {
-                    batchResult is EasResult.Success -> {
-                        folderDao.updateSyncKey(folderId, batchResult.data)
-                        for (info in emails) {
-                            // КРИТИЧНО: Регистрируем ПЕРЕД удалением для защиты от восстановления
-                            EmailSyncService.registerDeletedEmail(info.emailId, context)
-                            attachmentDao.deleteByEmail(info.emailId)
-                            emailDao.delete(info.emailId)
-                            deletedCount++
-                        }
-                    }
-                    batchResult is EasResult.Error -> {
-                        // EWS fallback по одному при любой ошибке batch
-                        for (info in emails) {
-                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId)
-                            if (ewsResult is EasResult.Success) {
-                                EmailSyncService.registerDeletedEmail(info.emailId, context)
-                                attachmentDao.deleteByEmail(info.emailId)
-                                emailDao.delete(info.emailId)
-                                deletedCount++
-                            }
-                        }
-                    }
-                }
-            }
-            
-            for (folderId in affectedFolderIds) {
-                updateFolderCounts(folderId)
-            }
-            
-            EasResult.Success(deletedCount)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Delete error: ${e.message}")
-        }
+        return deleteEmailsPermanentlyWithProgress(emailIds) { _, _ -> }
     }
     
     /**
@@ -1001,21 +804,19 @@ class EmailOperationsService(
             
             // === BATCH DELETE: группируем письма по папкам и удаляем пачкой ===
             
-            // Собираем все письма и группируем по folderServerId
-            data class EmailInfo(val emailId: String, val folderId: String, val serverId: String)
+            data class EmailInfo(val emailId: String, val folderId: String, val serverId: String, val subject: String)
             val emailInfos = mutableListOf<EmailInfo>()
             val alreadyDeleted = mutableListOf<String>()
             
             for (emailId in emailIds) {
                 val email = emailDao.getEmail(emailId)
                 if (email == null) {
-                    // Письмо уже удалено из БД
                     attachmentDao.deleteByEmail(emailId)
                     alreadyDeleted.add(emailId)
                     continue
                 }
                 affectedFolderIds.add(email.folderId)
-                emailInfos.add(EmailInfo(emailId, email.folderId, email.serverId))
+                emailInfos.add(EmailInfo(emailId, email.folderId, email.serverId, email.subject))
             }
             deletedCount += alreadyDeleted.size
             onProgress(deletedCount, total)
@@ -1046,8 +847,9 @@ class EmailOperationsService(
                 if (syncKey == "0") {
                     if (client.isExchange2007()) {
                         for (info in emails) {
-                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId)
+                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId, info.subject)
                             if (ewsResult is EasResult.Success) {
+                                EmailSyncService.registerDeletedEmail(info.emailId, context)
                                 attachmentDao.deleteByEmail(info.emailId)
                                 emailDao.delete(info.emailId)
                                 deletedCount++
@@ -1058,52 +860,23 @@ class EmailOperationsService(
                     continue
                 }
                 
-                // Обновляем syncKey перед batch-удалением (один раз для всей группы)
-                for (refreshLoop in 0 until 10) {
-                    val refreshResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                    if (refreshResult is EasResult.Success) {
-                        syncKey = refreshResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-                        if (!refreshResult.data.moreAvailable) break
-                    } else {
-                        break
-                    }
-                }
-                
-                // BATCH DELETE: все письма из этой папки одним запросом
                 val serverIds = emails.map { it.serverId }
                 var batchResult = client.deleteEmailsPermanentlyBatch(folderServerId, serverIds, syncKey)
                 
-                // Retry: INVALID_SYNCKEY или DELETE_NOT_APPLIED → сброс и повтор batch
                 if (batchResult is EasResult.Error && 
                     (batchResult.message.contains("INVALID_SYNCKEY") || batchResult.message.contains("DELETE_NOT_APPLIED"))) {
                     val initResult = client.sync(folderServerId, "0")
                     if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
                         syncKey = initResult.data.syncKey
                         folderDao.updateSyncKey(folderId, syncKey)
-                        for (refreshLoop in 0 until 10) {
-                            val refreshResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                            if (refreshResult is EasResult.Success) {
-                                syncKey = refreshResult.data.syncKey
-                                folderDao.updateSyncKey(folderId, syncKey)
-                                if (!refreshResult.data.moreAvailable) break
-                            } else {
-                                break
-                            }
-                        }
                         batchResult = client.deleteEmailsPermanentlyBatch(folderServerId, serverIds, syncKey)
                     }
                 }
                 
-                // Обработка результата batch-удаления
                 when {
                     batchResult is EasResult.Success -> {
                         folderDao.updateSyncKey(folderId, batchResult.data)
                         for (info in emails) {
-                            // КРИТИЧНО: Регистрируем ПЕРЕД локальным удалением!
-                            // Защита от восстановления: если фоновый sync (PushService/SyncWorker)
-                            // запустится между серверным и локальным удалением — он увидит
-                            // emailId в deletedEmailIds и не вставит его обратно.
                             EmailSyncService.registerDeletedEmail(info.emailId, context)
                             attachmentDao.deleteByEmail(info.emailId)
                             emailDao.delete(info.emailId)
@@ -1112,9 +885,8 @@ class EmailOperationsService(
                         }
                     }
                     batchResult is EasResult.Error -> {
-                        // EWS fallback по одному при любой ошибке batch
                         for (info in emails) {
-                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId)
+                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId, info.subject)
                             if (ewsResult is EasResult.Success) {
                                 EmailSyncService.registerDeletedEmail(info.emailId, context)
                                 attachmentDao.deleteByEmail(info.emailId)

@@ -17,7 +17,7 @@ object XmlValueExtractor {
      */
     fun extract(xml: String, tag: String): String? {
         val pattern = EasPatterns.getTagPattern(tag)
-        return pattern.find(xml)?.groupValues?.get(1)?.trim()
+        return pattern.find(xml)?.groupValues?.get(1)?.trim()?.let { XmlUtils.unescape(it) }
     }
     
     /**
@@ -35,7 +35,7 @@ object XmlValueExtractor {
             val pattern = EasPatterns.getTagPatternWithNs(ns, tag)
             val match = pattern.find(xml)
             if (match != null) {
-                return match.groupValues[1].trim()
+                return XmlUtils.unescape(match.groupValues[1].trim())
             }
         }
         

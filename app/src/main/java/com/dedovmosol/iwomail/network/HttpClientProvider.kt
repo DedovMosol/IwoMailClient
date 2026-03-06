@@ -17,6 +17,17 @@ import javax.net.ssl.*
  */
 object HttpClientProvider {
     
+    // Bundled Conscrypt provider для TLS 1.0 (Exchange 2007 SP1).
+    // На Android 14+ системный Conscrypt может не поддерживать TLS 1.0,
+    // но bundled org.conscrypt:conscrypt-android — поддерживает.
+    private val bundledConscryptProvider: java.security.Provider? by lazy {
+        try {
+            org.conscrypt.Conscrypt.newProvider()
+        } catch (_: Exception) {
+            null
+        }
+    }
+    
     // Базовый клиент с дефолтными настройками
     private val baseClient: OkHttpClient by lazy {
         createBaseClient()
@@ -291,14 +302,9 @@ object HttpClientProvider {
                 ConnectionSpec.COMPATIBLE_TLS
             ))
         
-        // Настраиваем TLS с поддержкой старых версий
+        // Настраиваем TLS с поддержкой старых версий (TLS 1.0 для Exchange 2007 SP1)
         try {
-            val sslContext = try {
-                SSLContext.getInstance("TLS", "Conscrypt")
-            } catch (_: Exception) {
-                SSLContext.getInstance("TLS")
-            }
-            
+            val sslContext = createSslContext()
             val systemTrustManager = createSystemTrustManager()
             sslContext.init(null, arrayOf(systemTrustManager), SecureRandom())
             builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), systemTrustManager)
@@ -316,11 +322,7 @@ object HttpClientProvider {
         
         try {
             val trustAllManager = createTrustAllManager()
-            val sslContext = try {
-                SSLContext.getInstance("TLS", "Conscrypt")
-            } catch (_: Exception) {
-                SSLContext.getInstance("TLS")
-            }
+            val sslContext = createSslContext()
             sslContext.init(null, arrayOf(trustAllManager), SecureRandom())
             builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), trustAllManager)
         } catch (_: Exception) {
@@ -347,7 +349,8 @@ object HttpClientProvider {
             .connectTimeout(connectTimeout, TimeUnit.SECONDS)
             .readTimeout(readTimeout, TimeUnit.SECONDS)
             .writeTimeout(writeTimeout, TimeUnit.SECONDS)
-            // Hostname verification: отключаем только для самоподписанных или пользовательских сертификатов
+            // Hostname verification: отключаем для самоподписанных или пользовательских сертификатов,
+            // т.к. CN в самоподписанном серте часто не совпадает с hostname сервера
             .apply {
                 if (acceptAllCerts || certificatePath != null) {
                     hostnameVerifier { _, _ -> true }
@@ -381,12 +384,7 @@ object HttpClientProvider {
                 throw IllegalArgumentException("CLIENT_CERT_LOAD_FAILED")
             }
             
-            // Инициализируем SSLContext
-            val sslContext = try {
-                SSLContext.getInstance("TLS", "Conscrypt")
-            } catch (_: Exception) {
-                SSLContext.getInstance("TLS")
-            }
+            val sslContext = createSslContext()
             
             sslContext.init(
                 if (keyManager != null) arrayOf(keyManager) else null,  // KeyManager
@@ -520,6 +518,23 @@ object HttpClientProvider {
             override fun getAcceptedIssuers(): Array<X509Certificate> {
                 return baseTrustManager.acceptedIssuers
             }
+        }
+    }
+    
+    /**
+     * Создаёт SSLContext используя BUNDLED Conscrypt (поддерживает TLS 1.0 для Exchange 2007 SP1).
+     * Fallback на системный провайдер если bundled недоступен.
+     */
+    private fun createSslContext(): SSLContext {
+        val provider = bundledConscryptProvider
+        return if (provider != null) {
+            try {
+                SSLContext.getInstance("TLS", provider)
+            } catch (_: Exception) {
+                SSLContext.getInstance("TLS")
+            }
+        } else {
+            SSLContext.getInstance("TLS")
         }
     }
     

@@ -575,6 +575,8 @@ object Strings {
     
     // Контакты
     val personalContacts: String @Composable get() = if (isRussian()) "Личные" else "Personal"
+    val exchangeContacts: String @Composable get() = if (isRussian()) "Exchange" else "Exchange"
+    val galContacts: String @Composable get() = if (isRussian()) "GAL" else "GAL"
     val organization: String @Composable get() = if (isRussian()) "Организация" else "Organization"
     val selectContacts: String @Composable get() = if (isRussian()) "Выбор контактов" else "Select contacts"
     val selectContact: String @Composable get() = if (isRussian()) "Выбрать контакт" else "Select contact"
@@ -985,8 +987,6 @@ object Strings {
     // Статусы событий
     val completed: String @Composable get() = if (isRussian()) "Завершено" else "Completed"
     val recurringEvent: String @Composable get() = if (isRussian()) "Повторяющееся событие" else "Recurring event"
-    val exchangeContacts: String @Composable get() = if (isRussian()) "Контакты Exchange" else "Exchange contacts"
-    val exchangeContactsDesc: String @Composable get() = if (isRussian()) "Контакты с сервера (только чтение)" else "Server contacts (read-only)"
     @Composable
     fun contactsSyncedCount(count: Int): String = if (isRussian()) {
         when {

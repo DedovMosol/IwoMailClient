@@ -130,6 +130,17 @@ private fun expandRecurringForRange(
     return result.sortedBy { it.startTime }
 }
 
+private fun buildRecurringOccurrenceSelectionId(
+    event: CalendarEventEntity,
+    masterId: String = event.id
+): String? {
+    return when {
+        event.id.contains("_occ_") -> event.id
+        event.startTime > 0L -> "${masterId}_occ_${event.startTime}"
+        else -> null
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CalendarScreen(
@@ -200,7 +211,7 @@ fun CalendarScreen(
     val editingEvent = remember(editingEventId, events) {
         editingEventId?.let { id -> events.find { it.id == id } }
     }
-    var isCreating by rememberSaveable { mutableStateOf(false) }
+    var isCreating by remember { mutableStateOf(false) }
 
     // Редактирование одного вхождения повторяющегося события
     var editingOccurrenceStartTime by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -374,6 +385,41 @@ fun CalendarScreen(
                 }
         }
     }
+    val singleSelectedEditableId = remember(selectedEventIds, hasDeletedSelected) {
+        selectedEventIds.singleOrNull()?.takeIf { !hasDeletedSelected }
+    }
+    val openSelectedEventForEditing: () -> Unit = {
+        singleSelectedEditableId?.let { selectedId ->
+            val selectedEventForEdit = filteredEvents.find { it.id == selectedId }
+                ?: deletedEvents.find { it.id == selectedId }
+                ?: events.find { it.id == selectedId }
+                ?: if (selectedId.contains("_occ_")) {
+                    events.find { it.id == selectedId.substringBefore("_occ_") }
+                } else {
+                    null
+                }
+                ?: return@let
+
+            val originalEvent = if (selectedId.contains("_occ_")) {
+                events.find { it.id == selectedId.substringBefore("_occ_") } ?: selectedEventForEdit
+            } else {
+                selectedEventForEdit
+            }
+
+            selectedEventIds = emptySet()
+            selectedEventId = null
+            if (selectedId.contains("_occ_") && originalEvent.isRecurring) {
+                pendingEditOccurrenceId = selectedId
+                showEditChoiceDialog = true
+            } else {
+                pendingEditOccurrenceId = null
+                editingEventId = originalEvent.id
+                editingOccurrenceStartTime = null
+                cachedOccurrenceEvent = null
+                showCreateDialog = true
+            }
+        }
+    }
 
     // Диалог просмотра события
     selectedEvent?.let { event ->
@@ -470,9 +516,9 @@ fun CalendarScreen(
                     }
                 },
                 onDeleteClick = {
-                    val isOccurrence = event.id.contains("_occ_") && originalEvent.isRecurring
-                    if (isOccurrence) {
-                        pendingOccurrenceIds = setOf(event.id)
+                    val occurrenceDeleteId = buildRecurringOccurrenceSelectionId(event, originalEvent.id)
+                    if (originalEvent.isRecurring && occurrenceDeleteId != null) {
+                        pendingOccurrenceIds = setOf(occurrenceDeleteId)
                         deleteConfirmTargetIds = setOf(originalEvent.id)
                         selectedEventId = null
                         showOccurrenceDeleteChoice = true
@@ -785,6 +831,11 @@ fun CalendarScreen(
         val invitationSentText = Strings.invitationSent
         val eventDeletedText = Strings.error
         val eventAttachmentsMayNotUploadText = Strings.eventAttachmentsMayNotUpload
+        val recurringConversionHintText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) {
+            "Событие стало повторяющимся. Используйте фильтр \"${Strings.allDates}\", чтобы увидеть все вхождения."
+        } else {
+            "Event is now recurring. Use the \"${Strings.allDates}\" filter to view all occurrences."
+        }
         val isEditing = editingEvent != null
         val dialogEvent = if (editingOccurrenceStartTime != null && editingEventId != null) {
             cachedOccurrenceEvent ?: editingEvent?.let { master ->
@@ -913,8 +964,15 @@ fun CalendarScreen(
                                 } else {
                                     messageBase
                                 }
+                                val showRecurringConversionHint = eventToEdit != null &&
+                                    occStartTime == null &&
+                                    !eventToEdit.isRecurring &&
+                                    recurrenceType >= 0
 
                                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                if (showRecurringConversionHint) {
+                                    Toast.makeText(context, recurringConversionHintText, Toast.LENGTH_LONG).show()
+                                }
                                 showCreateDialog = false
                                 editingEventId = null
                                 editingOccurrenceStartTime = null
@@ -948,8 +1006,10 @@ fun CalendarScreen(
                 CalendarSelectionTopBar(
                     selectedCount = resolvedSelectedIds.size,
                     showRestore = hasDeletedSelected,
+                    showEdit = singleSelectedEditableId != null,
                     deleteIsPermanent = deletePermanently,
                     onClearSelection = { selectedEventIds = emptySet() },
+                    onEdit = openSelectedEventForEditing,
                     onRestore = {
                         if (hasDeletedSelected) {
                             val eventsToRestore = deletedEvents.filter { it.id in selectedDeletedResolvedIds }
@@ -992,9 +1052,25 @@ fun CalendarScreen(
                         val deleteTargetIds = if (deletePermanently) selectedDeletedResolvedIds else selectedActiveResolvedIds
                         if (deleteTargetIds.isEmpty()) return@CalendarSelectionTopBar
 
+                        val eventsSnapshot = events + deletedEvents
                         val allOccIds = selectedEventIds.filter { it.contains("_occ_") }.toSet()
                         val renamedSelected = allOccIds.filter { it in renamedOccurrenceIds }.toSet()
                         val seriesOccurrences = allOccIds - renamedSelected
+                        val directRecurringOccurrenceIds = if (deletePermanently) {
+                            emptySet()
+                        } else {
+                            selectedEventIds
+                                .filter { it in deleteTargetIds && !it.contains("_occ_") }
+                                .mapNotNull { selectedId ->
+                                    val recurringMaster = eventsSnapshot.find { it.id == selectedId }
+                                    if (recurringMaster?.isRecurring == true) {
+                                        buildRecurringOccurrenceSelectionId(recurringMaster)
+                                    } else {
+                                        null
+                                    }
+                                }
+                                .toSet()
+                        }
 
                         val renamedOnlyMasterIds = renamedSelected.map { it.substringBefore("_occ_") }.toSet() -
                             seriesOccurrences.map { it.substringBefore("_occ_") }.toSet()
@@ -1002,7 +1078,6 @@ fun CalendarScreen(
                         if (renamedSelected.isNotEmpty()) {
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                             val renamedToProcess = renamedSelected.toList()
-                            val eventsSnapshot = events + deletedEvents
                             val filteredSnapshot = filteredEvents.toList()
                             val deletedText = renamedDeletedText
                             selectedEventIds = selectedEventIds - renamedSelected
@@ -1035,8 +1110,9 @@ fun CalendarScreen(
                             }
                         }
 
-                        if (!deletePermanently && seriesOccurrences.isNotEmpty()) {
-                            pendingOccurrenceIds = seriesOccurrences
+                        val occurrenceDeleteIds = seriesOccurrences + directRecurringOccurrenceIds
+                        if (!deletePermanently && occurrenceDeleteIds.isNotEmpty()) {
+                            pendingOccurrenceIds = occurrenceDeleteIds
                             deleteConfirmTargetIds = deleteTargetIds - renamedOnlyMasterIds
                             showOccurrenceDeleteChoice = true
                         } else {
@@ -1749,6 +1825,10 @@ private fun RecurringSeriesFolder(
         else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
         label = "seriesBg"
     )
+    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+    val ruleDescription = remember(event.recurrenceRule, isRussian) {
+        RecurrenceHelper.describeRule(event.recurrenceRule, isRussian)
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1792,6 +1872,16 @@ private fun RecurringSeriesFolder(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (ruleDescription.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = ruleDescription,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             Surface(
                 shape = CircleShape,
@@ -2050,12 +2140,19 @@ private fun CalendarGrid(
         
         val eventDays = remember(events, year, month) {
             val reuseCal = Calendar.getInstance()
+            reuseCal.set(year, month, 1, 0, 0, 0)
+            reuseCal.set(Calendar.MILLISECOND, 0)
+            val monthStart = reuseCal.timeInMillis
+            reuseCal.add(Calendar.MONTH, 1)
+            val monthEnd = reuseCal.timeInMillis
             val days = mutableSetOf<Int>()
             for (event in events) {
-                reuseCal.timeInMillis = event.startTime
-                if (reuseCal.get(Calendar.YEAR) == year && reuseCal.get(Calendar.MONTH) == month) {
-                    days.add(reuseCal.get(Calendar.DAY_OF_MONTH))
-                }
+                if (event.endTime <= monthStart || event.startTime >= monthEnd) continue
+                reuseCal.timeInMillis = maxOf(event.startTime, monthStart)
+                val from = reuseCal.get(Calendar.DAY_OF_MONTH)
+                reuseCal.timeInMillis = minOf(maxOf(event.endTime - 1, event.startTime), monthEnd - 1)
+                val to = reuseCal.get(Calendar.DAY_OF_MONTH)
+                for (d in from..to) days.add(d)
             }
             days
         }
@@ -2895,7 +2992,10 @@ private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
                     conn?.disconnect()
                 }
             }
-        } catch (e: Exception) { error = true }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            error = true
+        }
         isLoading = false
     }
     
@@ -3810,8 +3910,10 @@ private fun parseDateTime(dateText: String, timeText: String): Long {
 private fun CalendarSelectionTopBar(
     selectedCount: Int,
     showRestore: Boolean,
+    showEdit: Boolean,
     deleteIsPermanent: Boolean,
     onClearSelection: () -> Unit,
+    onEdit: () -> Unit,
     onRestore: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -3826,6 +3928,11 @@ private fun CalendarSelectionTopBar(
             if (showRestore) {
                 IconButton(onClick = onRestore) {
                     Icon(AppIcons.Restore, Strings.restore, tint = Color.White)
+                }
+            }
+            if (showEdit) {
+                IconButton(onClick = onEdit) {
+                    Icon(AppIcons.EditCalendar, Strings.editEvent, tint = Color.White)
                 }
             }
             IconButton(onClick = onDelete) {
@@ -4028,6 +4135,7 @@ private fun CalendarAttachmentsList(
                     is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
             } finally {
                 downloadingRef = null
@@ -4110,6 +4218,7 @@ private fun CalendarAttachmentsList(
                             is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                         }
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         Toast.makeText(context, e.message ?: (if (isRussian) "Ошибка просмотра" else "Preview error"), Toast.LENGTH_LONG).show()
                     } finally {
                         downloadingRef = null
@@ -4218,6 +4327,7 @@ private fun CalendarAttachmentsList(
                                         is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                                     }
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
                                 } finally {
                                     downloadingRef = null

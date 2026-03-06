@@ -62,7 +62,7 @@ class MailWidget : GlanceAppWidget() {
             return WidgetData(emptyList(), null, false, "", 0, 0, emptyList())
         }
 
-        val accounts = try { db.accountDao().getAllAccountsSync() } catch (e: Exception) {
+        val accounts = try { db.accountDao().getAllAccountsList() } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; emptyList()
         }
         val unreadCounts = try { db.emailDao().getUnreadCountsByAccount() } catch (e: Exception) {

@@ -388,7 +388,9 @@ object RecurrenceHelper {
         // Fast-forward: пропускаем месяцы до rangeStart
         var skippedCount = 0
         if (cal.timeInMillis < rangeStart && interval > 0) {
-            val diffMonths = ((rangeStart - cal.timeInMillis) / (30L * 24 * 60 * 60 * 1000)).toInt()
+            val targetCal = Calendar.getInstance().apply { timeInMillis = rangeStart }
+            val diffMonths = (targetCal.get(Calendar.YEAR) - cal.get(Calendar.YEAR)) * 12 +
+                (targetCal.get(Calendar.MONTH) - cal.get(Calendar.MONTH))
             val skipIntervals = diffMonths / interval
             if (skipIntervals > 1) {
                 cal.add(Calendar.MONTH, (skipIntervals - 1) * interval)

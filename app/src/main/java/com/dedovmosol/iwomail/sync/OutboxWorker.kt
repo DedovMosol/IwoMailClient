@@ -27,6 +27,8 @@ class OutboxWorker(
         private const val OUTBOX_FILE = "outbox.json"
         private const val OUTBOX_TEMP_FILE = "outbox.json.tmp"
         private const val WORK_NAME = "outbox_send"
+        private const val MAX_QUEUE_SIZE = 100
+        private const val MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
         
         // Общий lock для всех операций с файлом очереди
         // Защищает от гонки между enqueue() (UI) и doWork() (Worker thread)
@@ -47,6 +49,7 @@ class OutboxWorker(
         ) {
             synchronized(outboxLock) {
                 val outbox = loadOutboxInternal(context)
+                pruneStaleEntries(outbox)
                 val email = JSONObject().apply {
                     put("accountId", accountId)
                     put("to", to)
@@ -58,6 +61,7 @@ class OutboxWorker(
                     put("timestamp", System.currentTimeMillis())
                 }
                 outbox.put(email)
+                while (outbox.length() > MAX_QUEUE_SIZE) outbox.remove(0)
                 saveOutboxInternal(context, outbox)
             }
             
@@ -107,6 +111,16 @@ class OutboxWorker(
             saveOutboxInternal(context, outbox)
         }
         
+        private fun pruneStaleEntries(outbox: JSONArray) {
+            val now = System.currentTimeMillis()
+            var i = outbox.length() - 1
+            while (i >= 0) {
+                val ts = outbox.optJSONObject(i)?.optLong("timestamp", 0L) ?: 0L
+                if (now - ts > MAX_AGE_MS) outbox.remove(i)
+                i--
+            }
+        }
+
         private fun loadOutboxInternal(context: Context): JSONArray {
             val file = File(context.filesDir, OUTBOX_FILE)
             return if (file.exists()) {
@@ -194,9 +208,26 @@ class OutboxWorker(
             }
         }
         
-        // Сохраняем только неотправленные (под lock)
         synchronized(outboxLock) {
-            saveOutboxLocked(applicationContext, failedEmails)
+            val current = loadOutboxLocked(applicationContext)
+            val emailKey = { json: org.json.JSONObject ->
+                "${json.optLong("accountId")}_${json.optLong("timestamp")}"
+            }
+            val failedKeys = (0 until failedEmails.length()).map {
+                emailKey(failedEmails.getJSONObject(it))
+            }.toSet()
+            val sentKeys = (0 until outbox.length())
+                .map { emailKey(outbox.getJSONObject(it)) }
+                .filter { it !in failedKeys }
+                .toSet()
+            val merged = JSONArray()
+            for (i in 0 until current.length()) {
+                val item = current.getJSONObject(i)
+                if (emailKey(item) !in sentKeys) {
+                    merged.put(item)
+                }
+            }
+            saveOutboxLocked(applicationContext, merged)
         }
         
         // Показываем уведомление и воспроизводим звук если что-то отправилось
@@ -215,7 +246,7 @@ class OutboxWorker(
                     val sentFolder = database.folderDao().getFoldersByAccountList(accountId)
                         .find { it.type == 5 } // FolderType.SENT_ITEMS
                     if (sentFolder != null) {
-                        delay(3000) // Даём серверу время обработать (только если есть папка Sent)
+                        delay(1000)
                         mailRepo.syncEmails(accountId, sentFolder.id)
                     }
                 } catch (e: Exception) {

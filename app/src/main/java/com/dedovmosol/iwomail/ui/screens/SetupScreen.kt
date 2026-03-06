@@ -91,7 +91,7 @@ fun SetupScreen(
     var email by rememberSaveable { mutableStateOf("") }
     var serverUrl by rememberSaveable { mutableStateOf("") }
     var username by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var domain by rememberSaveable { mutableStateOf("") }
     var acceptAllCerts by rememberSaveable { mutableStateOf(false) }
     var selectedColor by rememberSaveable { mutableStateOf(ACCOUNT_COLORS[0]) }
@@ -143,7 +143,7 @@ fun SetupScreen(
     // Клиентский сертификат (.p12/.pfx)
     var clientCertificatePath by rememberSaveable { mutableStateOf<String?>(null) }
     var clientCertificateFileName by rememberSaveable { mutableStateOf<String?>(null) }
-    var clientCertificatePassword by rememberSaveable { mutableStateOf("") }
+    var clientCertificatePassword by remember { mutableStateOf("") }
     var clientCertPasswordVisible by rememberSaveable { mutableStateOf(false) }
     
     // Трекер cert-файлов, созданных во время сессии (для очистки при выходе без сохранения)
@@ -171,19 +171,19 @@ fun SetupScreen(
         uri?.let { selectedUri ->
             scope.launch {
                 try {
-                    // Получаем имя файла
                     var originalFileName: String? = null
-                    val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                    cursor?.use {
-                        if (it.moveToFirst()) {
-                            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            if (nameIndex >= 0) {
-                                originalFileName = it.getString(nameIndex)
+                    withContext(Dispatchers.IO) {
+                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                if (nameIndex >= 0) {
+                                    originalFileName = it.getString(nameIndex)
+                                }
                             }
                         }
                     }
                     
-                    // Проверяем расширение
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
                     if (extension !in validCertExtensions) {
                         errorMessage = if (isRussianLang) 
@@ -230,19 +230,19 @@ fun SetupScreen(
         uri?.let { selectedUri ->
             scope.launch {
                 try {
-                    // Получаем имя файла
                     var originalFileName: String? = null
-                    val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                    cursor?.use {
-                        if (it.moveToFirst()) {
-                            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            if (nameIndex >= 0) {
-                                originalFileName = it.getString(nameIndex)
+                    withContext(Dispatchers.IO) {
+                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                if (nameIndex >= 0) {
+                                    originalFileName = it.getString(nameIndex)
+                                }
                             }
                         }
                     }
                     
-                    // Проверяем расширение (только .p12/.pfx для клиентских сертификатов)
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
                     if (extension !in listOf("p12", "pfx")) {
                         errorMessage = if (isRussianLang) 

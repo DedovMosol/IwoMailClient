@@ -11,7 +11,24 @@ data class DraftAttachmentData(
     val data: ByteArray,
     val isInline: Boolean = false,
     val contentId: String? = null
-)
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is DraftAttachmentData) return false
+        return name == other.name && mimeType == other.mimeType &&
+                data.contentEquals(other.data) && isInline == other.isInline &&
+                contentId == other.contentId
+    }
+
+    override fun hashCode(): Int {
+        var result = name.hashCode()
+        result = 31 * result + mimeType.hashCode()
+        result = 31 * result + data.contentHashCode()
+        result = 31 * result + isInline.hashCode()
+        result = 31 * result + (contentId?.hashCode() ?: 0)
+        return result
+    }
+}
 
 private data class DraftEwsDetails(
     val attachments: List<EasAttachment>,
@@ -33,6 +50,25 @@ private data class DraftEwsDetails(
 class EasDraftsService internal constructor(
     private val deps: DraftsServiceDependencies
 ) {
+
+    companion object {
+        private val MESSAGE_PATTERN = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val ITEM_PATTERN = "<t:Item>(.*?)</t:Item>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val SUBJECT_PATTERN = "<t:Subject>(.*?)</t:Subject>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val DATE_TIME_CREATED_PATTERN = "<t:DateTimeCreated>(.*?)</t:DateTimeCreated>".toRegex()
+        private val TO_RECIPIENTS_PATTERN = "<t:ToRecipients>(.*?)</t:ToRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val CC_RECIPIENTS_PATTERN = "<t:CcRecipients>(.*?)</t:CcRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val BCC_RECIPIENTS_PATTERN = "<t:BccRecipients>(.*?)</t:BccRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EMAIL_ADDRESS_PATTERN = "<t:EmailAddress>(.*?)</t:EmailAddress>".toRegex()
+        private val HAS_ATTACHMENTS_PATTERN = "<t:HasAttachments>(.*?)</t:HasAttachments>".toRegex()
+        private val ATTACHMENTS_PATTERN = "<(?:t:)?Attachments>(.*?)</(?:t:)?Attachments>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val FILE_ATTACHMENT_PATTERN = "<(?:t:)?FileAttachment>(.*?)</(?:t:)?FileAttachment>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val ATTACHMENT_ID_PATTERN = """<(?:t:)?AttachmentId[^>]*Id="([^"]+)"""".toRegex()
+        private val ROOT_ITEM_CHANGE_KEY_REGEX = """RootItemChangeKey="([^"]+)"""".toRegex()
+        private val CHANGE_KEY_REGEX = """ChangeKey="([^"]+)"""".toRegex()
+        private val BRACKET_EMAIL_REGEX = """<([^>]+)>""".toRegex()
+        private val EMAIL_ADDR_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+    }
     
     interface EasCommandExecutor {
         suspend operator fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T>
@@ -57,8 +93,6 @@ class EasDraftsService internal constructor(
         val getDraftsFolderId: suspend () -> String?
     )
     
-    // Кэш ID папки черновиков
-    @Volatile private var cachedDraftsFolderId: String? = null
     
 suspend fun createDraft(
     to: String,
@@ -86,7 +120,10 @@ suspend fun createDraft(
             if (subject.isBlank()) return null
             return try {
                 findDraftItemIdBySubject(subject)
-            } catch (_: Exception) { null }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            }
         }
         
         // MIME-подход: тело + вложения в одном MIME-сообщении через CreateItem.
@@ -238,7 +275,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
 
             // Exchange 2007 SP1 может вернуть как raw HTML, так и XML-escaped body.
             val body = if (rawBody.startsWith("&lt;") || (!rawBody.startsWith("<") && rawBody.contains("&lt;"))) {
-                unescapeXml(rawBody)
+                XmlUtils.unescape(rawBody)
             } else {
                 rawBody
             }
@@ -425,11 +462,12 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val ewsUrl = deps.getEwsUrl()
             val ewsVersion = resolveEwsVersion()
             
-            // 1. Собираем MIME-сообщение через JavaMail
-            val mimeBytes = buildMimeMessage(to, cc, bcc, subject, body, attachments)
-            val mimeBase64 = Base64.encodeToString(mimeBytes, Base64.NO_WRAP)
-            
-            // 2. SOAP: CreateItem с MIMEContent
+            val tempFile = java.io.File.createTempFile("mime_draft_", ".tmp")
+            try {
+            tempFile.outputStream().buffered().use {
+                buildMimeMessageToStream(to, cc, bcc, subject, body, attachments, it)
+            }
+
             val sb = StringBuilder()
             sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
             sb.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"")
@@ -446,7 +484,22 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             sb.append("<m:Items>")
             sb.append("<t:Message>")
             sb.append("<t:MimeContent CharacterSet=\"UTF-8\">")
-            sb.append(mimeBase64)
+
+            val chunkSize = 3 * 1024
+            val buffer = ByteArray(chunkSize)
+            tempFile.inputStream().buffered().use { input ->
+                while (true) {
+                    var totalRead = 0
+                    while (totalRead < chunkSize) {
+                        val read = input.read(buffer, totalRead, chunkSize - totalRead)
+                        if (read == -1) break
+                        totalRead += read
+                    }
+                    if (totalRead == 0) break
+                    sb.append(Base64.encodeToString(buffer, 0, totalRead, Base64.NO_WRAP))
+                }
+            }
+
             sb.append("</t:MimeContent>")
             sb.append("</t:Message>")
             sb.append("</m:Items>")
@@ -479,7 +532,9 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             if (itemId == null && !hasError && subject.isNotBlank()) {
                 try {
                     itemId = findDraftItemIdBySubject(subject)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                }
             }
             
             if (itemId != null) {
@@ -488,6 +543,9 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
                 val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(responseXml)?.groupValues?.get(1)
                 val details = messageText ?: if (hasError) "Server error" else "ItemId not found"
                 EasResult.Error("MIME CreateItem: $details")
+            }
+            } finally {
+                tempFile.delete()
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -499,19 +557,19 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
      * Строит MIME-сообщение (multipart/related для inline, multipart/mixed для файлов).
      * RFC 2387 (multipart/related), RFC 2392 (cid: URLs).
      */
-    private fun buildMimeMessage(
+    private fun buildMimeMessageToStream(
         to: String,
         cc: String,
         bcc: String,
         subject: String,
         body: String,
-        attachments: List<DraftAttachmentData>
-    ): ByteArray {
+        attachments: List<DraftAttachmentData>,
+        output: java.io.OutputStream
+    ) {
         val props = java.util.Properties()
         val session = javax.mail.Session.getInstance(props)
         val message = javax.mail.internet.MimeMessage(session)
         
-        // Заголовки
         if (to.isNotBlank()) {
             message.setRecipients(
                 javax.mail.Message.RecipientType.TO,
@@ -572,10 +630,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         }
         
         message.saveChanges()
-        
-        val outputStream = java.io.ByteArrayOutputStream()
-        message.writeTo(outputStream)
-        return outputStream.toByteArray()
+        message.writeTo(output)
     }
     
     private fun makeHtmlPart(html: String): javax.mail.internet.MimeBodyPart {
@@ -729,16 +784,6 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         return EasResult.Success(allIds)
     }
     
-    private suspend fun getDraftsFolderId(): String? {
-        if (cachedDraftsFolderId != null) {
-            return cachedDraftsFolderId
-        }
-        
-        val folderId = deps.getDraftsFolderId()
-        cachedDraftsFolderId = folderId
-        return folderId
-    }
-    
     // === EWS методы ===
     
 private suspend fun createDraftEws(
@@ -785,7 +830,9 @@ private suspend fun createDraftEws(
                     try {
                         val changeKey = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "ChangeKey")
                         attachFilesEws(ewsUrl, itemId, changeKey, attachments, ewsVersion)
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                    }
                 }
                 EasResult.Success(itemId)
             } else {
@@ -836,7 +883,9 @@ private suspend fun createDraftEws(
                         try {
                             val changeKey = XmlValueExtractor.extractAttribute(response, "ItemId", "ChangeKey")
                             attachFilesEws(ewsUrl, itemId, changeKey, attachments, ewsVersion)
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                        }
                     }
                     EasResult.Success(itemId)
                 } else {
@@ -848,7 +897,7 @@ private suspend fun createDraftEws(
                         // Черновик создан — ищем его по subject через FindItem.
                         // Аналогично fallback в createDraftMime().
                         val foundItemId = if (subject.isNotBlank()) {
-                            try { findDraftItemIdBySubject(subject) } catch (_: Exception) { null }
+                            try { findDraftItemIdBySubject(subject) } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; null }
                         } else null
                         
                         if (foundItemId != null) {
@@ -866,96 +915,6 @@ private suspend fun createDraftEws(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка создания черновика: ${e.message}")
             }
-        }
-    }
-    
-private suspend fun createDraftEas(
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    draftsFolderId: String
-): EasResult<String> {
-        // Получаем SyncKey
-        // ИСПРАВЛЕНО: порядок аргументов - (folderId, syncKey)
-        val syncKeyResult = deps.refreshSyncKey(draftsFolderId, "0")
-        val syncKey = when (syncKeyResult) {
-            is EasResult.Success -> syncKeyResult.data
-            is EasResult.Error -> return EasResult.Error(syncKeyResult.message)
-        }
-        
-        if (syncKey == "0") {
-            return EasResult.Error("Не удалось получить SyncKey")
-        }
-        
-        val clientId = UUID.randomUUID().toString()
-        val escapedSubject = deps.escapeXml(subject)
-        val escapedBody = deps.escapeXml(body)
-        
-        // Форматируем получателей в формате EAS (с кавычками и угловыми скобками)
-        val toFormatted = to.split(",", ";")
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .joinToString(", ") { email ->
-                if (email.contains("<")) email else "\"$email\" <$email>"
-            }
-        
-        val ccFormatted = cc.split(",", ";")
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .joinToString(", ") { email ->
-                if (email.contains("<")) email else "\"$email\" <$email>"
-            }
-        
-        val bccFormatted = bcc.split(",", ";")
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .joinToString(", ") { email ->
-                if (email.contains("<")) email else "\"$email\" <$email>"
-            }
-        
-        val esc = deps.escapeXml
-        // ВАЖНО: namespace с двоеточием - Email:, AirSyncBase:, Email2:
-        val createXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync" xmlns:email="Email:" xmlns:airsyncbase="AirSyncBase:" xmlns:email2="Email2:">
-    <Collections>
-        <Collection>
-            <SyncKey>${esc(syncKey)}</SyncKey>
-            <CollectionId>${esc(draftsFolderId)}</CollectionId>
-            <GetChanges>0</GetChanges>
-            <Commands>
-                <Add>
-                    <ClientId>${esc(clientId)}</ClientId>
-                    <ApplicationData>
-                        ${if (toFormatted.isNotBlank()) "<email:To>$toFormatted</email:To>" else ""}
-                        ${if (ccFormatted.isNotBlank()) "<email:CC>$ccFormatted</email:CC>" else ""}
-                        ${if (bccFormatted.isNotBlank()) "<email2:Bcc>$bccFormatted</email2:Bcc>" else ""}
-                        <email:Subject>$escapedSubject</email:Subject>
-                        <airsyncbase:Body>
-                            <airsyncbase:Type>2</airsyncbase:Type>
-                            <airsyncbase:Data>$escapedBody</airsyncbase:Data>
-                        </airsyncbase:Body>
-                        <email:Importance>1</email:Importance>
-                        <email:Read>0</email:Read>
-                        <email:Flag/>
-                    </ApplicationData>
-                </Add>
-            </Commands>
-        </Collection>
-                </Collections>
-            </Sync>
-        """.trimIndent()
-        
-        return deps.executeEasCommand("Sync", createXml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")
-            if (status != "1") {
-                throw Exception("Sync Add failed with status: $status")
-            }
-            // Извлекаем ServerId созданного черновика
-            val serverIdPattern = "<ServerId>([^<]+)</ServerId>".toRegex()
-            val responsesSection = responseXml.substringAfter("<Responses>", "").substringBefore("</Responses>")
-            serverIdPattern.find(responsesSection)?.groupValues?.get(1) ?: clientId
         }
     }
     
@@ -1226,9 +1185,9 @@ private suspend fun updateDraftEws(
             }
             
             // Обновляем ChangeKey из ответа — каждый CreateAttachment меняет ChangeKey элемента
-            val newChangeKey = """RootItemChangeKey="([^"]+)"""".toRegex()
+            val newChangeKey = ROOT_ITEM_CHANGE_KEY_REGEX
                 .find(response)?.groupValues?.get(1)
-                ?: """ChangeKey="([^"]+)"""".toRegex().find(response)?.groupValues?.get(1)
+                ?: CHANGE_KEY_REGEX.find(response)?.groupValues?.get(1)
             if (newChangeKey != null) {
                 currentChangeKey = newChangeKey
             }
@@ -1422,30 +1381,6 @@ private suspend fun updateDraftEws(
         """.trimIndent()
     }
     
-    private fun buildFindDraftsRequest2013(): String {
-        val ewsVersion = resolveEwsVersion()
-        return """
-            <?xml version="1.0" encoding="utf-8"?>
-            <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-                           xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
-                <soap:Header>
-                    <t:RequestServerVersion Version="$ewsVersion"/>
-                </soap:Header>
-                <soap:Body>
-                    <FindItem xmlns="http://schemas.microsoft.com/exchange/services/2006/messages"
-                              Traversal="Shallow">
-                        <ItemShape>
-                            <t:BaseShape>AllProperties</t:BaseShape>
-                        </ItemShape>
-                        <ParentFolderIds>
-                            <t:DistinguishedFolderId Id="drafts"/>
-                        </ParentFolderIds>
-                    </FindItem>
-                </soap:Body>
-            </soap:Envelope>
-        """.trimIndent()
-    }
-    
     private fun formatRecipients(recipients: String): String {
         return recipients.split(",", ";")
             .map { it.trim() }
@@ -1458,13 +1393,8 @@ private suspend fun updateDraftEws(
     private fun parseDraftsResponse(xml: String): List<EasDraft> {
     val drafts = mutableListOf<EasDraft>()
 
-    val messagePattern = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
-    val itemBlocks = messagePattern.findAll(xml).map { it.groupValues[1] }.toList().ifEmpty {
-        // Fallback для серверов/сборок, где возвращается базовый <t:Item>.
-        "<t:Item>(.*?)</t:Item>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            .findAll(xml)
-            .map { it.groupValues[1] }
-            .toList()
+    val itemBlocks = MESSAGE_PATTERN.findAll(xml).map { it.groupValues[1] }.toList().ifEmpty {
+        ITEM_PATTERN.findAll(xml).map { it.groupValues[1] }.toList()
     }
 
     itemBlocks.forEach { messageXml ->
@@ -1472,40 +1402,34 @@ private suspend fun updateDraftEws(
         val itemId = XmlValueExtractor.extractAttribute(messageXml, "ItemId", "Id") ?: return@forEach
         val changeKey = XmlValueExtractor.extractAttribute(messageXml, "ItemId", "ChangeKey") ?: ""
 
-        val subjectMatch = "<t:Subject>(.*?)</t:Subject>".toRegex(RegexOption.DOT_MATCHES_ALL).find(messageXml)
-        val subject = subjectMatch?.groupValues?.get(1)?.let { unescapeXml(it) } ?: ""
+        val subjectMatch = SUBJECT_PATTERN.find(messageXml)
+        val subject = subjectMatch?.groupValues?.get(1)?.let { XmlUtils.unescape(it) } ?: ""
 
-        val dateMatch = "<t:DateTimeCreated>(.*?)</t:DateTimeCreated>".toRegex().find(messageXml)
+        val dateMatch = DATE_TIME_CREATED_PATTERN.find(messageXml)
         val dateStr = dateMatch?.groupValues?.get(1) ?: ""
 
         val toRecipients = mutableListOf<String>()
-        val toPattern = "<t:ToRecipients>(.*?)</t:ToRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        toPattern.find(messageXml)?.let { toMatch ->
-            val emailPattern = "<t:EmailAddress>(.*?)</t:EmailAddress>".toRegex()
-            emailPattern.findAll(toMatch.groupValues[1]).forEach { emailMatch ->
-                toRecipients.add(unescapeXml(emailMatch.groupValues[1]))
+        TO_RECIPIENTS_PATTERN.find(messageXml)?.let { toMatch ->
+            EMAIL_ADDRESS_PATTERN.findAll(toMatch.groupValues[1]).forEach { emailMatch ->
+                toRecipients.add(XmlUtils.unescape(emailMatch.groupValues[1]))
             }
         }
 
         val ccRecipients = mutableListOf<String>()
-        val ccPattern = "<t:CcRecipients>(.*?)</t:CcRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        ccPattern.find(messageXml)?.let { ccMatch ->
-            val emailPattern = "<t:EmailAddress>(.*?)</t:EmailAddress>".toRegex()
-            emailPattern.findAll(ccMatch.groupValues[1]).forEach { emailMatch ->
-                ccRecipients.add(unescapeXml(emailMatch.groupValues[1]))
+        CC_RECIPIENTS_PATTERN.find(messageXml)?.let { ccMatch ->
+            EMAIL_ADDRESS_PATTERN.findAll(ccMatch.groupValues[1]).forEach { emailMatch ->
+                ccRecipients.add(XmlUtils.unescape(emailMatch.groupValues[1]))
             }
         }
 
         val bccRecipients = mutableListOf<String>()
-        val bccPattern = "<t:BccRecipients>(.*?)</t:BccRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        bccPattern.find(messageXml)?.let { bccMatch ->
-            val emailPattern = "<t:EmailAddress>(.*?)</t:EmailAddress>".toRegex()
-            emailPattern.findAll(bccMatch.groupValues[1]).forEach { emailMatch ->
-                bccRecipients.add(unescapeXml(emailMatch.groupValues[1]))
+        BCC_RECIPIENTS_PATTERN.find(messageXml)?.let { bccMatch ->
+            EMAIL_ADDRESS_PATTERN.findAll(bccMatch.groupValues[1]).forEach { emailMatch ->
+                bccRecipients.add(XmlUtils.unescape(emailMatch.groupValues[1]))
             }
         }
 
-        val hasAttachmentsMatch = "<t:HasAttachments>(.*?)</t:HasAttachments>".toRegex().find(messageXml)
+        val hasAttachmentsMatch = HAS_ATTACHMENTS_PATTERN.find(messageXml)
         val hasAttachments = hasAttachmentsMatch?.groupValues?.get(1)
             ?.trim()
             ?.let { it.equals("true", ignoreCase = true) || it == "1" }
@@ -1620,16 +1544,11 @@ private suspend fun updateDraftEws(
         }
 
         val result = mutableMapOf<String, DraftEwsDetails>()
-        val itemBlocks = "<t:Message>(.*?)</t:Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            .findAll(response)
+        val itemBlocks = MESSAGE_PATTERN.findAll(response)
             .map { it.groupValues[1] }
             .toList()
             .ifEmpty {
-                // Fallback для серверов/сборок, где GetItem может вернуть <t:Item>.
-                "<t:Item>(.*?)</t:Item>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                    .findAll(response)
-                    .map { it.groupValues[1] }
-                    .toList()
+                ITEM_PATTERN.findAll(response).map { it.groupValues[1] }.toList()
             }
 
         itemBlocks.forEach { itemXml ->
@@ -1639,17 +1558,14 @@ private suspend fun updateDraftEws(
             // unescapeXml нужен ТОЛЬКО если body escaped (начинается с &lt; вместо <).
             val rawBody = EasPatterns.EWS_BODY.find(itemXml)?.groupValues?.get(1)?.trim().orEmpty()
             val body = if (rawBody.startsWith("&lt;") || (!rawBody.startsWith("<") && rawBody.contains("&lt;"))) {
-                unescapeXml(rawBody)
+                XmlUtils.unescape(rawBody)
             } else {
                 rawBody
             }
             // Извлекаем получателей (GetItem возвращает EmailAddress, в отличие от FindItem)
-            val toXml = "<t:ToRecipients>(.*?)</t:ToRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                .find(itemXml)?.groupValues?.get(1) ?: ""
-            val ccXml = "<t:CcRecipients>(.*?)</t:CcRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                .find(itemXml)?.groupValues?.get(1) ?: ""
-            val bccXml = "<t:BccRecipients>(.*?)</t:BccRecipients>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                .find(itemXml)?.groupValues?.get(1) ?: ""
+            val toXml = TO_RECIPIENTS_PATTERN.find(itemXml)?.groupValues?.get(1) ?: ""
+            val ccXml = CC_RECIPIENTS_PATTERN.find(itemXml)?.groupValues?.get(1) ?: ""
+            val bccXml = BCC_RECIPIENTS_PATTERN.find(itemXml)?.groupValues?.get(1) ?: ""
             val toStr = if (toXml.isNotBlank()) parseRecipients(toXml) else ""
             val ccStr = if (ccXml.isNotBlank()) parseRecipients(ccXml) else ""
             val bccStr = if (bccXml.isNotBlank()) parseRecipients(bccXml) else ""
@@ -1665,10 +1581,9 @@ private suspend fun updateDraftEws(
     }
     
     private fun parseRecipients(xml: String): String {
-        val emailPattern = """<t:EmailAddress>(.*?)</t:EmailAddress>""".toRegex()
         val seen = linkedSetOf<String>()
-        emailPattern.findAll(xml).forEach { match ->
-            val raw = unescapeXml(match.groupValues[1].trim())
+        EMAIL_ADDRESS_PATTERN.findAll(xml).forEach { match ->
+            val raw = XmlUtils.unescape(match.groupValues[1].trim())
             val cleaned = extractEmailOnly(raw)
             if (cleaned.isNotBlank()) {
                 seen.add(cleaned)
@@ -1678,23 +1593,19 @@ private suspend fun updateDraftEws(
     }
 
     private fun extractEmailOnly(value: String): String {
-        val bracketMatch = """<([^>]+)>""".toRegex().find(value)?.groupValues?.get(1)
+        val bracketMatch = BRACKET_EMAIL_REGEX.find(value)?.groupValues?.get(1)
         val emailCandidate = (bracketMatch ?: value).replace("\"", "").trim()
-        val emailRegex = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
-        return emailRegex.find(emailCandidate)?.value ?: emailCandidate
+        return EMAIL_ADDR_REGEX.find(emailCandidate)?.value ?: emailCandidate
     }
 
     private fun parseEwsAttachments(itemXml: String): List<EasAttachment> {
         val attachments = mutableListOf<EasAttachment>()
-        val attachmentsXml = "<(?:t:)?Attachments>(.*?)</(?:t:)?Attachments>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            .find(itemXml)?.groupValues?.get(1)
+        val attachmentsXml = ATTACHMENTS_PATTERN.find(itemXml)?.groupValues?.get(1)
             ?: return attachments
 
-        val fileAttachmentPattern = "<(?:t:)?FileAttachment>(.*?)</(?:t:)?FileAttachment>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        fileAttachmentPattern.findAll(attachmentsXml).forEach { match ->
+        FILE_ATTACHMENT_PATTERN.findAll(attachmentsXml).forEach { match ->
             val attXml = match.groupValues[1]
-            val attachmentId = """<(?:t:)?AttachmentId[^>]*Id="([^"]+)"""".toRegex()
-                .find(attXml)?.groupValues?.get(1) ?: ""
+            val attachmentId = ATTACHMENT_ID_PATTERN.find(attXml)?.groupValues?.get(1) ?: ""
             val displayName = XmlValueExtractor.extractEws(attXml, "Name")
                 ?: XmlValueExtractor.extractEws(attXml, "DisplayName")
                 ?: "attachment"
@@ -1728,17 +1639,6 @@ private suspend fun updateDraftEws(
         return attachments
     }
     
-    /**
-     * Декодирует XML entities (&lt;, &gt;, &quot;, &amp;, &apos;)
-     */
-    private fun unescapeXml(text: String): String {
-        return text
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&")
-    }
 }
 
 // EasDraft определён в EasClient.kt

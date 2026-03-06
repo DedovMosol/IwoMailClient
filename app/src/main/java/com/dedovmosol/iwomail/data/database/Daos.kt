@@ -11,9 +11,6 @@ interface AccountDao {
     @Query("SELECT * FROM accounts ORDER BY id ASC")
     suspend fun getAllAccountsList(): List<AccountEntity>
     
-    @Query("SELECT * FROM accounts ORDER BY id ASC")
-    fun getAllAccountsSync(): List<AccountEntity>
-    
     @Query("SELECT * FROM accounts WHERE isActive = 1 LIMIT 1")
     fun getActiveAccount(): Flow<AccountEntity?>
     
@@ -181,7 +178,9 @@ interface FolderDao {
      */
     @Transaction
     suspend fun upsertFolders(folders: List<FolderEntity>) {
-        insertAll(folders)
+        for (chunk in folders.chunked(500)) {
+            insertAll(chunk)
+        }
         for (folder in folders) {
             updateFolder(folder.id, folder.displayName, folder.parentId, folder.type)
         }
@@ -204,6 +203,9 @@ interface EmailDao {
     
     @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC")
     suspend fun getEmailsByFolderList(folderId: String): List<EmailEntity>
+
+    @Query("SELECT id FROM emails WHERE folderId = :folderId")
+    suspend fun getEmailIdsByFolder(folderId: String): List<String>
     
     @Query("SELECT id, serverId, subject, `from`, dateReceived FROM emails WHERE folderId = :folderId")
     suspend fun getDedupInfoByFolder(folderId: String): List<EmailDedupInfo>
@@ -265,9 +267,6 @@ interface EmailDao {
     
     @Query("UPDATE emails SET mdnRequestedBy = :mdnRequestedBy WHERE id = :id")
     suspend fun updateMdnRequestedBy(id: String, mdnRequestedBy: String)
-    
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(emails: List<EmailEntity>)
     
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAllIgnore(emails: List<EmailEntity>)
@@ -626,7 +625,10 @@ interface AttachmentDao {
     
     @Query("UPDATE attachments SET fileReference = :fileReference WHERE emailId = :emailId AND displayName = :displayName")
     suspend fun updateFileReference(emailId: String, displayName: String, fileReference: String)
-    
+
+    @Query("UPDATE attachments SET contentId = :contentId, isInline = :isInline WHERE id = :id")
+    suspend fun updateContentId(id: Long, contentId: String, isInline: Boolean)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(attachments: List<AttachmentEntity>)
     
@@ -636,15 +638,25 @@ interface AttachmentDao {
     @Query("DELETE FROM attachments WHERE emailId IN (:emailIds)")
     suspend fun deleteByEmailIds(emailIds: List<String>)
     
+    @Query("DELETE FROM attachments WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+    
     /**
      * Удаляет дубликаты вложений, оставляя для каждой комбинации
-     * (emailId, displayName, fileReference) запись с наибольшим id.
-     * Если есть скачанная копия (downloaded=1) — сохраняет именно её.
+     * (emailId, displayName, fileReference) лучшую запись:
+     * приоритет — downloaded=1, затем наибольший id.
      */
     @Query("""
         DELETE FROM attachments WHERE id NOT IN (
-            SELECT MAX(id) FROM attachments 
-            GROUP BY emailId, displayName, fileReference
+            SELECT a1.id FROM attachments a1
+            WHERE NOT EXISTS (
+                SELECT 1 FROM attachments a2
+                WHERE a2.emailId = a1.emailId
+                AND a2.displayName = a1.displayName
+                AND COALESCE(a2.fileReference, '') = COALESCE(a1.fileReference, '')
+                AND (a2.downloaded > a1.downloaded
+                     OR (a2.downloaded = a1.downloaded AND a2.id > a1.id))
+            )
         )
     """)
     suspend fun removeDuplicates()
@@ -673,8 +685,14 @@ abstract class SyncDao {
     @Query("DELETE FROM attachments WHERE emailId = :emailId")
     abstract suspend fun deleteAttachmentsByEmail(emailId: String)
     
+    @Query("DELETE FROM attachments WHERE emailId IN (:emailIds)")
+    abstract suspend fun deleteAttachmentsByEmails(emailIds: List<String>)
+    
     @Query("DELETE FROM emails WHERE id = :id")
     abstract suspend fun deleteEmail(id: String)
+    
+    @Query("DELETE FROM emails WHERE id IN (:ids)")
+    abstract suspend fun deleteEmails(ids: List<String>)
     
     @Query("UPDATE folders SET unreadCount = :unread, totalCount = :total WHERE id = :id")
     abstract suspend fun updateFolderCounts(id: String, unread: Int, total: Int)
@@ -709,9 +727,9 @@ abstract class SyncDao {
      */
     @Transaction
     open suspend fun deleteEmailsWithAttachments(emailIds: List<String>) {
-        for (emailId in emailIds) {
-            deleteAttachmentsByEmail(emailId)
-            deleteEmail(emailId)
+        for (chunk in emailIds.chunked(500)) {
+            deleteAttachmentsByEmails(chunk)
+            deleteEmails(chunk)
         }
     }
     

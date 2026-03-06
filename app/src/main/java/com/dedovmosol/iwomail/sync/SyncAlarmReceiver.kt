@@ -29,6 +29,12 @@ class SyncAlarmReceiver : BroadcastReceiver() {
     
     
     private fun showSyncStartedNotification(context: Context) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.POST_NOTIFICATIONS
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        
         val settingsRepo = SettingsRepository.getInstance(context)
         val isRussian = settingsRepo.getLanguageSync() == "ru"
         
@@ -107,8 +113,8 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                         .build()
                     androidx.work.WorkManager.getInstance(context)
                         .enqueueUniqueWork(
-                            "sync_alarm_triggered",
-                            androidx.work.ExistingWorkPolicy.KEEP, // Не дублируем если уже запущен
+                            "sync_alarm_work",
+                            androidx.work.ExistingWorkPolicy.KEEP,
                             workRequest
                         )
                     
@@ -117,7 +123,8 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                     val intervalMinutes = if (minInterval > 0) minInterval else 5
                     PushService.scheduleSyncAlarm(context, intervalMinutes)
                     
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     PushService.scheduleSyncAlarm(context, 5)
                 } finally {
                     localScope.cancel()

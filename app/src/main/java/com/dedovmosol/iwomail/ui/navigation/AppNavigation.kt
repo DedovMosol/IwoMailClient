@@ -40,14 +40,19 @@ import java.net.URLEncoder
  */
 object VerificationSecrets {
     @Volatile
-    var password: String? = null
+    var password: CharArray? = null
     @Volatile
-    var clientCertificatePassword: String? = null
+    var clientCertificatePassword: CharArray? = null
     
     fun clear() {
+        password?.fill('\u0000')
         password = null
+        clientCertificatePassword?.fill('\u0000')
         clientCertificatePassword = null
     }
+    
+    fun getPasswordString(): String? = password?.let { String(it) }
+    fun getClientCertPasswordString(): String? = clientCertificatePassword?.let { String(it) }
 }
 
 private const val VERIFICATION_PASSWORD_KEY = "verification_password"
@@ -60,6 +65,37 @@ private const val VERIFICATION_CLIENT_CERT_PASSWORD_KEY = "verification_client_c
 object ShareIntentData {
     @Volatile
     var attachments: List<android.net.Uri> = emptyList()
+    
+    fun copyToLocal(context: android.content.Context, uris: List<android.net.Uri>): List<android.net.Uri> = synchronized(this) {
+        val shareDir = java.io.File(context.cacheDir, "share_attachments")
+        shareDir.mkdirs()
+        val usedNames = mutableSetOf<String>()
+        uris.mapNotNull { uri ->
+            try {
+                val baseName = context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    if (c.moveToFirst()) {
+                        val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (idx >= 0) c.getString(idx) else null
+                    } else null
+                } ?: "share_${System.nanoTime()}"
+                val name = if (usedNames.add(baseName)) baseName else {
+                    val dot = baseName.lastIndexOf('.')
+                    val stem = if (dot > 0) baseName.substring(0, dot) else baseName
+                    val ext = if (dot > 0) baseName.substring(dot) else ""
+                    var unique = "${stem}_${System.nanoTime()}$ext"
+                    while (!usedNames.add(unique)) unique = "${stem}_${System.nanoTime()}$ext"
+                    unique
+                }
+                val localFile = java.io.File(shareDir, name)
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    localFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                androidx.core.content.FileProvider.getUriForFile(
+                    context, "${context.packageName}.fileprovider", localFile
+                )
+            } catch (_: Exception) { null }
+        }
+    }
     
     fun clear() {
         attachments = emptyList()
@@ -147,8 +183,8 @@ sealed class Screen(val route: String) {
             isFirstAccount: Boolean = false
         ): String {
             // Секреты передаём через in-memory carrier, НЕ через route
-            VerificationSecrets.password = password
-            VerificationSecrets.clientCertificatePassword = clientCertificatePassword
+            VerificationSecrets.password = password?.toCharArray()
+            VerificationSecrets.clientCertificatePassword = clientCertificatePassword?.toCharArray()
             
             val certPathEncoded = certificatePath ?: ""
             val clientCertPathEncoded = clientCertificatePath ?: ""
@@ -346,6 +382,7 @@ fun AppNavigation(
             }
             hasCheckedAccounts = true
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             startDestination = Screen.Setup.route
             hasCheckedAccounts = true
         }
@@ -368,7 +405,8 @@ fun AppNavigation(
                 kotlinx.coroutines.delay(100)
                 accountSwitchCompleted = true
                 onAccountSwitched()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 accountSwitchCompleted = true
             }
         } else if (switchToAccountId == null && hasCheckedAccounts) {
@@ -392,7 +430,7 @@ fun AppNavigation(
             
             // Сохраняем вложения в глобальное хранилище
             if (composeAttachments.isNotEmpty()) {
-                ShareIntentData.attachments = composeAttachments
+                ShareIntentData.attachments = ShareIntentData.copyToLocal(context, composeAttachments)
             }
             
             withTimeoutOrNull(2000L) {
@@ -409,6 +447,7 @@ fun AppNavigation(
                 }
                 onComposeHandled()
             } catch (e1: Exception) {
+                if (e1 is kotlinx.coroutines.CancellationException) throw e1
                 android.util.Log.w("AppNavigation", "Compose navigate failed, retrying", e1)
                 kotlinx.coroutines.delay(500)
                 try {
@@ -421,6 +460,7 @@ fun AppNavigation(
                     }
                     onComposeHandled()
                 } catch (e2: Exception) {
+                    if (e2 is kotlinx.coroutines.CancellationException) throw e2
                     android.util.Log.e("AppNavigation", "Compose navigate retry also failed", e2)
                 }
             }
@@ -478,11 +518,12 @@ fun AppNavigation(
                     }
                     
                     // Открываем письмо (даже если inbox не найден — пользователь должен увидеть письмо)
-                    navController.navigate(Screen.EmailDetail.createRoute(openEmailId)) {
+                        navController.navigate(Screen.EmailDetail.createRoute(openEmailId)) {
                         launchSingleTop = true
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e("AppNavigation", "Failed to navigate to email from notification", e)
             }
         }
@@ -509,6 +550,7 @@ fun AppNavigation(
                             popUpTo(Screen.Main.route) { inclusive = false }
                         }
                     } catch (e1: Exception) {
+                        if (e1 is kotlinx.coroutines.CancellationException) throw e1
                         android.util.Log.w("AppNavigation", "Unread navigate failed, retrying", e1)
                         kotlinx.coroutines.delay(500)
                         try {
@@ -516,6 +558,7 @@ fun AppNavigation(
                                 popUpTo(Screen.Main.route) { inclusive = false }
                             }
                         } catch (e2: Exception) {
+                            if (e2 is kotlinx.coroutines.CancellationException) throw e2
                             android.util.Log.e("AppNavigation", "Unread navigate retry failed", e2)
                         }
                     }
@@ -585,6 +628,7 @@ fun AppNavigation(
                                     launchSingleTop = true
                                 }
                             } catch (e1: Exception) {
+                                if (e1 is kotlinx.coroutines.CancellationException) throw e1
                                 android.util.Log.w("AppNavigation", "Shortcut email navigate failed, retrying", e1)
                                 kotlinx.coroutines.delay(500)
                                 try {
@@ -593,21 +637,25 @@ fun AppNavigation(
                                         launchSingleTop = true
                                     }
                                 } catch (e2: Exception) {
+                                    if (e2 is kotlinx.coroutines.CancellationException) throw e2
                                     android.util.Log.e("AppNavigation", "Shortcut email navigate retry failed", e2)
                                 }
                             }
                         }
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     android.util.Log.e("AppNavigation", "Shortcut with inbox navigate failed", e)
                 }
             } else {
                 try {
                     doNavigate()
                 } catch (e1: Exception) {
+                    if (e1 is kotlinx.coroutines.CancellationException) throw e1
                     android.util.Log.w("AppNavigation", "Shortcut navigate failed, retrying", e1)
                     kotlinx.coroutines.delay(500)
                     try { doNavigate() } catch (e2: Exception) {
+                        if (e2 is kotlinx.coroutines.CancellationException) throw e2
                         android.util.Log.e("AppNavigation", "Shortcut navigate retry failed", e2)
                     }
                 }
@@ -628,6 +676,7 @@ fun AppNavigation(
                     launchSingleTop = true
                 }
             } catch (e1: Exception) {
+                if (e1 is kotlinx.coroutines.CancellationException) throw e1
                 android.util.Log.w("AppNavigation", "Updates navigate failed, retrying", e1)
                 kotlinx.coroutines.delay(500)
                 try {
@@ -635,6 +684,7 @@ fun AppNavigation(
                         launchSingleTop = true
                     }
                 } catch (e2: Exception) {
+                    if (e2 is kotlinx.coroutines.CancellationException) throw e2
                     android.util.Log.e("AppNavigation", "Updates navigate retry failed", e2)
                 }
             }
@@ -794,13 +844,8 @@ fun AppNavigation(
                     }
                 },
                 onNavigateToVerification = { email, displayName, serverUrl, username, password, domain, acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode, certificatePath, clientCertificatePath, clientCertificatePassword ->
-                    // Дублируем секреты в SavedStateHandle как fallback,
-                    // если in-memory carrier будет очищен до чтения в Verification.
-                    navController.currentBackStackEntry?.savedStateHandle?.set(VERIFICATION_PASSWORD_KEY, password)
-                    navController.currentBackStackEntry?.savedStateHandle?.set(
-                        VERIFICATION_CLIENT_CERT_PASSWORD_KEY,
-                        clientCertificatePassword
-                    )
+                    // Секреты только in-memory через VerificationSecrets.
+                    // SavedStateHandle НЕ используем — он сериализуется на диск.
                     // Проверяем, первый ли это аккаунт (нет previousBackStackEntry = пришли с Onboarding)
                     val isFirstAccount = navController.previousBackStackEntry == null
                     navController.navigate(
@@ -844,15 +889,13 @@ fun AppNavigation(
             // Секреты читаем один раз при первом входе на экран.
             // Иначе после onSuccess/onError (где секреты очищаются) возможна
             // ложная ветка "Verification session expired" на промежуточной рекомпозиции.
-            val initialPassword = remember(backStackEntry.id) {
-                VerificationSecrets.password
-                    ?: setupBackStackEntry?.savedStateHandle?.get<String>(VERIFICATION_PASSWORD_KEY)
+            val passwordAvailable = remember(backStackEntry.id) {
+                VerificationSecrets.password?.isNotEmpty() == true
             }
-            val initialClientCertificatePassword = remember(backStackEntry.id) {
-                VerificationSecrets.clientCertificatePassword
-                    ?: setupBackStackEntry?.savedStateHandle?.get<String>(VERIFICATION_CLIENT_CERT_PASSWORD_KEY)
+            DisposableEffect(backStackEntry.id) {
+                onDispose { VerificationSecrets.clear() }
             }
-            if (initialPassword.isNullOrEmpty()) {
+            if (!passwordAvailable) {
                 VerificationSecrets.clear()
                 setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_PASSWORD_KEY)
                 setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_CLIENT_CERT_PASSWORD_KEY)
@@ -881,7 +924,7 @@ fun AppNavigation(
                     displayName = parts[1],
                     serverUrl = parts[2],
                     username = parts[3],
-                    password = initialPassword,
+                    password = VerificationSecrets.getPasswordString() ?: "",
                     domain = parts[4],
                     acceptAllCerts = parts[5].toBoolean(),
                     color = parts[6].toIntOrNull() ?: 0xFF1976D2.toInt(),
@@ -892,7 +935,7 @@ fun AppNavigation(
                     syncMode = try { com.dedovmosol.iwomail.data.database.SyncMode.valueOf(parts[11]) } catch (e: Exception) { com.dedovmosol.iwomail.data.database.SyncMode.SCHEDULED },
                     certificatePath = certificatePath,
                     clientCertificatePath = clientCertificatePath,
-                    clientCertificatePassword = initialClientCertificatePassword,
+                    clientCertificatePassword = VerificationSecrets.getClientCertPasswordString(),
                     onSuccess = {
                         VerificationSecrets.clear()
                         setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_PASSWORD_KEY)

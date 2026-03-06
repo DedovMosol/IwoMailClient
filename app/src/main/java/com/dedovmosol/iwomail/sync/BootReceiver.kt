@@ -51,64 +51,27 @@ class BootReceiver : BroadcastReceiver() {
                     }
                     
                     if (hasExchangePushAccounts) {
-                        // Задержка 30 сек после загрузки — даём системе стабилизироваться
-                        // (много процессов конкурируют за CPU сразу после boot)
-                        // Используем Handler вместо delay() т.к. goAsync() имеет лимит ~10 сек
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            try {
-                                PushService.start(context)
-                            } catch (e: Exception) {
-                                android.util.Log.w(TAG, "Failed to start PushService after boot delay", e)
-                            }
-                        }, 30_000)
+                        try {
+                            PushService.start(context)
+                        } catch (e: Exception) {
+                            android.util.Log.w(TAG, "Failed to start PushService after boot", e)
+                        }
                     }
                     
-                    // Перепланируем напоминания календаря для всех аккаунтов
-                    rescheduleCalendarReminders(context, database)
-                    
-                    // Перепланируем напоминания задач (также теряются при перезагрузке)
-                    rescheduleTaskReminders(context, database)
+                    RescheduleRemindersWorker.enqueue(context)
                     
                 } catch (e: Exception) {
                     android.util.Log.e(TAG, "Failed to handle boot completed", e)
                 } finally {
+                    scope.cancel()
                     try {
                         pendingResult.finish()
                     } catch (e: Exception) {
                         android.util.Log.w(TAG, "Failed to finish pending result", e)
                     }
-                    scope.cancel()
                 }
             }
         }
     }
     
-    /**
-     * Перепланирует напоминания календаря после перезагрузки.
-     * AlarmManager теряет все alarm'ы при перезагрузке.
-     */
-    private suspend fun rescheduleCalendarReminders(context: Context, database: MailDatabase) {
-        try {
-            val now = System.currentTimeMillis()
-            // Получаем все будущие события с напоминаниями
-            val events = database.calendarEventDao().getAllFutureEventsWithReminders(now)
-            CalendarReminderReceiver.rescheduleAllReminders(context, events)
-        } catch (e: Exception) {
-            android.util.Log.w(TAG, "Failed to reschedule calendar reminders", e)
-        }
-    }
-    
-    /**
-     * Перепланирует напоминания задач после перезагрузки.
-     * AlarmManager теряет все alarm'ы при перезагрузке.
-     */
-    private suspend fun rescheduleTaskReminders(context: Context, database: MailDatabase) {
-        try {
-            val now = System.currentTimeMillis()
-            val tasks = database.taskDao().getTasksWithReminders(now)
-            TaskReminderReceiver.rescheduleAllReminders(context, tasks)
-        } catch (e: Exception) {
-            android.util.Log.w(TAG, "Failed to reschedule task reminders", e)
-        }
-    }
 }

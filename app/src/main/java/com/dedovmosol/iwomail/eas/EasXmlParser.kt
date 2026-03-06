@@ -50,6 +50,8 @@ import java.io.StringReader
  */
 object EasXmlParser {
 
+    private const val TAG = "EasXmlParser"
+
     // ═══════════════════════════════════════════════════════════════
     // Drop-in замены для extractValue / XmlValueExtractor
     // ═══════════════════════════════════════════════════════════════
@@ -68,7 +70,8 @@ object EasXmlParser {
         return try {
             val parser = createParser(xml)
             findTagValue(parser, tag, nsPrefixes)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "extractValue($tag) failed: ${e.message}")
             null
         }
     }
@@ -92,7 +95,8 @@ object EasXmlParser {
         return try {
             val parser = createParser(xml)
             findAttribute(parser, element, attribute, nsPrefixes)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "extractAttribute($element.$attribute) failed: ${e.message}")
             null
         }
     }
@@ -107,7 +111,8 @@ object EasXmlParser {
         return try {
             val parser = createParser(xml)
             findAllTagValues(parser, tag, nsPrefixes)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "extractAll($tag) failed: ${e.message}")
             emptyList()
         }
     }
@@ -125,7 +130,8 @@ object EasXmlParser {
         return try {
             val parser = createParser(xml)
             findAllAttributes(parser, element, attribute, nsPrefixes)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "extractAllAttributes($element.$attribute) failed: ${e.message}")
             emptyList()
         }
     }
@@ -153,7 +159,9 @@ object EasXmlParser {
         try {
             val parser = createParser(xml)
             iterateElements(parser, tag, nsPrefixes, block)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "forEachElement($tag) failed: ${e.message}")
+        }
     }
 
     /**
@@ -191,12 +199,13 @@ object EasXmlParser {
         try {
             val parser = createParser(xml)
             val scope = XmlScope(parser)
-            // Перемещаемся к первому START_TAG
             while (parser.eventType != XmlPullParser.START_TAG) {
                 parser.next()
             }
             scope.block()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "parse() failed: ${e.message}")
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -242,10 +251,9 @@ object EasXmlParser {
 
     private fun createParser(xml: String): XmlPullParser {
         val parser = Xml.newPullParser()
-        // НЕ включаем namespace processing — работаем с raw prefix:name,
-        // т.к. EAS XML после WBXML-декодирования не всегда имеет xmlns declarations.
-        // Exchange 2007 SP1 EWS всегда объявляет xmlns, но EAS — нет.
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+        try { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) } catch (_: Exception) {}
+        try { parser.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) } catch (_: Exception) {}
         parser.setInput(StringReader(xml))
         return parser
     }
@@ -329,7 +337,7 @@ object EasXmlParser {
             if (eventType == XmlPullParser.START_TAG && matchesTag(parser.name, element, nsPrefixes)) {
                 for (i in 0 until parser.attributeCount) {
                     if (parser.getAttributeName(i) == attribute) {
-                        results.add(parser.getAttributeValue(i))
+                        results.add(parser.getAttributeValue(i) ?: "")
                         break
                     }
                 }
@@ -400,7 +408,7 @@ object EasXmlParser {
                     val isEmpty = parser.isEmptyElementTag
                     sb.append("<${parser.name}")
                     for (i in 0 until parser.attributeCount) {
-                        sb.append(" ${parser.getAttributeName(i)}=\"${escapeXmlAttr(parser.getAttributeValue(i))}\"")
+                        sb.append(" ${parser.getAttributeName(i)}=\"${escapeXmlAttr(parser.getAttributeValue(i) ?: "")}\"")
                     }
                     if (isEmpty) {
                         sb.append("/>")
@@ -466,7 +474,8 @@ object EasXmlParser {
                 eventType = parser.next()
             }
             false
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "hasElement($tag) failed: ${e.message}")
             false
         }
     }

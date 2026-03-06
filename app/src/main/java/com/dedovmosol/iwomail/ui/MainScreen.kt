@@ -71,29 +71,31 @@ private data class FolderColorsData(val icon: ImageVector, val gradientColors: L
  * Кэш папок для ускорения работы UI
  */
 object FoldersCache {
-    private val cache = java.util.concurrent.ConcurrentHashMap<Long, List<FolderEntity>>()
-    
-    fun get(accountId: Long): List<FolderEntity> = cache[accountId] ?: emptyList()
-    
+    private const val MAX_ACCOUNTS = 10
+    private val cache = object : LinkedHashMap<Long, List<FolderEntity>>(MAX_ACCOUNTS, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<FolderEntity>>?) = size > MAX_ACCOUNTS
+    }
+
+    fun get(accountId: Long): List<FolderEntity> = synchronized(cache) { cache[accountId] } ?: emptyList()
+
     fun set(accountId: Long, folders: List<FolderEntity>) {
-        cache[accountId] = folders
+        synchronized(cache) { cache[accountId] = folders }
     }
-    
+
     fun clear() {
-        cache.clear()
+        synchronized(cache) { cache.clear() }
     }
-    
+
     fun clearAccount(accountId: Long) {
-        cache.remove(accountId)
+        synchronized(cache) { cache.remove(accountId) }
     }
 }
 
 object InitialSyncController {
-    // Отслеживаем синхронизацию для каждого аккаунта отдельно
     private val syncingAccounts = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private val syncedAccounts = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private val syncJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
-    private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    @Volatile private var syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     
     // Счётчик попыток синхронизации для защиты от бесконечных повторов при timeout
     private val syncAttempts = java.util.concurrent.ConcurrentHashMap<Long, Int>()
@@ -130,7 +132,7 @@ object InitialSyncController {
         accountId: Long,
         mailRepo: MailRepository,
         settingsRepo: SettingsRepository
-    ) {
+    ) { @Suppress("NAME_SHADOWING") val context = context.applicationContext
         // Пропускаем если этот аккаунт уже синхронизирован в этой сессии
         if (accountId in syncedAccounts) return
         
@@ -157,6 +159,12 @@ object InitialSyncController {
         syncingAccounts.add(accountId)
         syncAttempts[accountId] = attempts + 1
         updateState()
+        
+        syncJobs.entries.removeIf { !it.value.isActive }
+        
+        if (!syncScope.isActive) {
+            syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        }
         
         syncJobs[accountId] = syncScope.launch {
             try {
@@ -389,10 +397,12 @@ object InitialSyncController {
         }
     }
     fun reset() {
-        syncJobs.values.forEach { it.cancel() }
+        syncScope.cancel()
+        syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         syncJobs.clear()
         syncedAccounts.clear()
         syncingAccounts.clear()
+        syncAttempts.clear()
         noNetwork = false
         updateState()
     }
@@ -752,51 +762,45 @@ fun MainScreen(
     }
     
     // Загрузка счётчиков — отдельные эффекты
+    // Room Flows автоматически обновляются при изменениях в БД — НЕ зависят от lastSyncTime.
+    // КРИТИЧНО: Во время первичной синхронизации счётчики могут только расти
+    // (Sync делает DELETE + INSERT — между ними Room Flow кратковременно отдаёт 0).
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        mailRepo.getFlaggedCount(accountId).collect { newCount ->
-            if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
-                if (newCount >= flaggedCount) flaggedCount = newCount
-            } else {
-                flaggedCount = newCount
+        launch {
+            mailRepo.getFlaggedCount(accountId).collect { newCount ->
+                if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
+                    if (newCount >= flaggedCount) flaggedCount = newCount
+                } else {
+                    flaggedCount = newCount
+                }
             }
         }
-    }
-    
-    // Room Flows автоматически обновляются при изменениях в БД — НЕ зависят от lastSyncTime
-    // (lastSyncTime вызывал лишний restart collect → кратковременный сброс счётчиков при синхронизации)
-    // КРИТИЧНО: Во время первичной синхронизации счётчики могут только расти.
-    // Sync делает DELETE + INSERT — между ними Room Flow кратковременно отдаёт 0.
-    // После завершения первичной синхронизации — штатная работа.
-    LaunchedEffect(activeAccount?.id) {
-        val accountId = activeAccount?.id ?: return@LaunchedEffect
-        noteRepo.getNotesCount(accountId).collect { newCount ->
-            if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
-                if (newCount >= notesCount) notesCount = newCount
-            } else {
-                notesCount = newCount
+        launch {
+            noteRepo.getNotesCount(accountId).collect { newCount ->
+                if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
+                    if (newCount >= notesCount) notesCount = newCount
+                } else {
+                    notesCount = newCount
+                }
             }
         }
-    }
-    
-    LaunchedEffect(activeAccount?.id) {
-        val accountId = activeAccount?.id ?: return@LaunchedEffect
-        calendarRepo.getEventsCount(accountId).collect { newCount ->
-            if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
-                if (newCount >= eventsCount) eventsCount = newCount
-            } else {
-                eventsCount = newCount
+        launch {
+            calendarRepo.getEventsCount(accountId).collect { newCount ->
+                if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
+                    if (newCount >= eventsCount) eventsCount = newCount
+                } else {
+                    eventsCount = newCount
+                }
             }
         }
-    }
-    
-    LaunchedEffect(activeAccount?.id) {
-        val accountId = activeAccount?.id ?: return@LaunchedEffect
-        taskRepo.getActiveTasksCount(accountId).collect { newCount ->
-            if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
-                if (newCount >= tasksCount) tasksCount = newCount
-            } else {
-                tasksCount = newCount
+        launch {
+            taskRepo.getActiveTasksCount(accountId).collect { newCount ->
+                if (InitialSyncController.isSyncing && !InitialSyncController.syncDone) {
+                    if (newCount >= tasksCount) tasksCount = newCount
+                } else {
+                    tasksCount = newCount
+                }
             }
         }
     }
@@ -804,25 +808,28 @@ fun MainScreen(
     // Загрузка статистики за сегодня (при смене аккаунта и после синхронизации)
     LaunchedEffect(activeAccount?.id, lastSyncTime) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
-        todayEmailsCount = mailRepo.getTodayEmailsCount(accountId)
-        todayEventsCount = calendarRepo.getEventsCountForDay(accountId, java.util.Date())
-        todayTasksCount = taskRepo.getTodayTasksCount(accountId)
-    }
-    
-    // Дополнительно подписываемся на изменения событий календаря
-    LaunchedEffect(activeAccount?.id) {
-        val accountId = activeAccount?.id ?: return@LaunchedEffect
-        calendarRepo.getEventsCount(accountId).collect {
-            // При изменении общего количества событий — обновляем статистику за сегодня
-            todayEventsCount = calendarRepo.getEventsCountForDay(accountId, java.util.Date())
+        val (emails, events, tasks) = withContext(Dispatchers.IO) {
+            Triple(
+                mailRepo.getTodayEmailsCount(accountId),
+                calendarRepo.getEventsCountForDay(accountId, java.util.Date()),
+                taskRepo.getTodayTasksCount(accountId)
+            )
         }
+        todayEmailsCount = emails
+        todayEventsCount = events
+        todayTasksCount = tasks
     }
-
     
-    // Запускаем первичную синхронизацию (для PUSH после входа)
-    // Обновляем состояния синхронизации для UI
     LaunchedEffect(activeAccount?.id) {
         val account = activeAccount ?: return@LaunchedEffect
+        launch {
+            calendarRepo.getEventsCount(account.id).collect {
+                val count = withContext(Dispatchers.IO) {
+                    calendarRepo.getEventsCountForDay(account.id, java.util.Date())
+                }
+                todayEventsCount = count
+            }
+        }
         InitialSyncController.startSyncIfNeeded(context, account.id, mailRepo, settingsRepo)
     }
     
@@ -2406,23 +2413,6 @@ private fun TodayStatItem(
     }
 }
 
-@Composable
-private fun StatItem(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.8f)
-        )
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderCard(
@@ -2625,15 +2615,6 @@ private fun FolderCardDisplay(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun FeatureItem(emoji: String, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(emoji, style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

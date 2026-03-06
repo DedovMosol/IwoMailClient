@@ -58,6 +58,7 @@ class Pop3Client(
             }
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Result.failure(e)
         }
     }
@@ -116,6 +117,7 @@ class Pop3Client(
             
             Result.success(emails)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Result.failure(e)
         }
     }
