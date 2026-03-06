@@ -1294,10 +1294,13 @@ $deleteCommands
                     deps.extractValue(bodySection, "Type")?.toIntOrNull() ?: 1
                 } else null
                 
+                val attachments = parseAttachmentsFromXml(changeXml)
+                
                 changedEmails.add(EasEmailChange(
                     serverId, read, flagged,
                     body = body.takeIf { it.isNotBlank() },
-                    bodyType = bodyType
+                    bodyType = bodyType,
+                    attachments = attachments
                 ))
             }
         }

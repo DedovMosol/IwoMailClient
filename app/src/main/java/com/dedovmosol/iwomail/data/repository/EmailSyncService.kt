@@ -1405,7 +1405,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         }
                     }
                 }
-                draftEmailIdsToRefreshAtts.add(emailId to change.serverId)
+                if (change.attachments.isNotEmpty()) {
+                    reconcileAttachments(emailId, change.attachments)
+                } else {
+                    draftEmailIdsToRefreshAtts.add(emailId to change.serverId)
+                }
             }
         }
         

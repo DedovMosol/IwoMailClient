@@ -1215,6 +1215,8 @@ fun ComposeScreen(
                                     }
                                 } else if (att.isInline && !att.contentId.isNullOrBlank()) {
                                     android.util.Log.w("ComposeScreen", "Inline att '${att.displayName}' has no localPath and no fileReference, cid=${att.contentId}")
+                                } else {
+                                    android.util.Log.w("ComposeScreen", "Att '${att.displayName}' skipped: localPath=${att.localPath}, fileRef='${att.fileReference}', isInline=${att.isInline}")
                                 }
                             } catch (e: Exception) {
                                 if (e is kotlinx.coroutines.CancellationException) throw e

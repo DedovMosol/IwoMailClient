@@ -3173,7 +3173,8 @@ data class EasEmailChange(
     val read: Boolean? = null,
     val flagged: Boolean? = null,
     val body: String? = null,
-    val bodyType: Int? = null
+    val bodyType: Int? = null,
+    val attachments: List<EasAttachment> = emptyList()
 )
 
 data class EasEmail(
