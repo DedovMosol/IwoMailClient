@@ -1,12 +1,10 @@
 package com.dedovmosol.iwomail.sync
 
-import android.Manifest
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -14,7 +12,6 @@ import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import com.dedovmosol.iwomail.MainActivity
 import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.data.database.AccountEntity
@@ -64,6 +61,9 @@ class PushService : Service() {
     // MS-ASCMD: При Ping Status=6 сервер возвращает MaxFolders — адаптивный лимит
     private val maxPingFoldersPerAccount = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
     
+    @Volatile
+    private var cachedMinSyncIntervalMinutes: Int = 5
+    
     // Per-account debounce: предотвращает блокировку sync аккаунта B из-за аккаунта A
     private val lastAccountSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     // Per-account notification checkpoint: предотвращает пропуск писем аккаунта B
@@ -76,10 +76,6 @@ class PushService : Service() {
     
     companion object {
         private const val TAG = "PushService"
-        
-        // Shared Mutex: атомарный check+show+mark уведомлений
-        // Используется из PushService И SyncWorker для предотвращения потери shown_notifications
-        internal val notificationMutex = kotlinx.coroutines.sync.Mutex()
         
         // Адаптивный heartbeat: начинаем с большого значения, уменьшаем при ошибках
         private const val MIN_HEARTBEAT = 120      // Минимум 2 минуты
@@ -352,14 +348,14 @@ class PushService : Service() {
             
             startPushForAllAccounts()
             
-            // Планируем AlarmManager как fallback сразу при старте
             try {
                 val minInterval = SyncWorker.getMinSyncInterval(applicationContext)
                 val intervalMinutes = if (minInterval > 0) minInterval else 5
+                cachedMinSyncIntervalMinutes = intervalMinutes
                 scheduleSyncAlarm(applicationContext, intervalMinutes)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                scheduleSyncAlarm(applicationContext, 5)
+                scheduleSyncAlarm(applicationContext, cachedMinSyncIntervalMinutes)
             }
         }
         
@@ -462,19 +458,7 @@ class PushService : Service() {
         
         android.util.Log.i(TAG, "Task removed - ensuring service continues")
         
-        val ctx = applicationContext
-        val intervalMinutes = try {
-            kotlinx.coroutines.runBlocking {
-                kotlinx.coroutines.withTimeoutOrNull(2000L) {
-                    val min = SyncWorker.getMinSyncInterval(ctx)
-                    if (min > 0) min else 5
-                } ?: 5
-            }
-        } catch (e: Exception) {
-            5
-        }
-        scheduleSyncAlarm(ctx, intervalMinutes)
-        
+        scheduleSyncAlarm(applicationContext, cachedMinSyncIntervalMinutes)
         scheduleRestart()
     }
     
@@ -748,10 +732,10 @@ class PushService : Service() {
             if (allFolders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
             
             // КРИТИЧНО: Не конкурируем с InitialSyncController
-            if (com.dedovmosol.iwomail.ui.InitialSyncController.isSyncingAccount(account.id)) {
+            if (com.dedovmosol.iwomail.sync.InitialSyncController.isSyncingAccount(account.id)) {
                 // Ждём завершения первичной синхронизации вместо конкуренции
                 var waited = 0
-                while (com.dedovmosol.iwomail.ui.InitialSyncController.isSyncingAccount(account.id) && waited < 60) {
+                while (com.dedovmosol.iwomail.sync.InitialSyncController.isSyncingAccount(account.id) && waited < 60) {
                     kotlinx.coroutines.delay(5000)
                     waited += 5
                 }
@@ -803,18 +787,11 @@ class PushService : Service() {
         }
     }
     
-    private data class NewEmailInfo(
-        val id: String,
-        val senderName: String?,
-        val senderEmail: String?,
-        val subject: String?
-    )
-    
     private suspend fun syncAccount(account: AccountEntity) {
         // КРИТИЧНО: Не конкурируем с InitialSyncController — он управляет первичной синхронизацией.
         // Без этого PushService может сбросить syncKey (forceFullSync) пока InitialSyncController
         // ещё синхронизирует папку → Status=3 → потеря данных → застревание на ~100 письмах.
-        if (com.dedovmosol.iwomail.ui.InitialSyncController.isSyncingAccount(account.id)) {
+        if (com.dedovmosol.iwomail.sync.InitialSyncController.isSyncingAccount(account.id)) {
             return
         }
         
@@ -884,24 +861,26 @@ class PushService : Service() {
             }
         }
 
-        notificationMutex.withLock {
+        NotificationHelper.notificationMutex.withLock {
             val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
             
-            val shownNotifications = getShownNotifications()
+            val shownNotifications = NotificationHelper.getShownNotifications(this)
             val filteredEmails = newEmailEntities.filter { email ->
                 val notifKey = "${account.id}_${email.id}"
                 !shownNotifications.contains(notifKey)
             }
             
             val newEmails = filteredEmails.map { email ->
-                NewEmailInfo(email.id, email.fromName, email.from, email.subject)
+                NotificationHelper.NewEmailInfo(email.id, email.fromName, email.from, email.subject, email.dateReceived)
             }
             
             if (newEmails.isNotEmpty()) {
                 val notificationsEnabled = settingsRepo.notificationsEnabled.first()
                 if (notificationsEnabled) {
-                    showNewMailNotification(newEmails, account.id, account.email)
-                    markNotificationsAsShown(newEmails.map { "${account.id}_${it.id}" })
+                    getSharedPreferences("push_service", Context.MODE_PRIVATE)
+                        .edit().putLong("last_notification_time", System.currentTimeMillis()).apply()
+                    NotificationHelper.showNewMailNotification(this, newEmails, account.id, account.email, settingsRepo)
+                    NotificationHelper.markNotificationsAsShown(this, newEmails.map { "${account.id}_${it.id}" })
                 }
             }
             
@@ -912,125 +891,5 @@ class PushService : Service() {
     
     private suspend fun syncFolders(account: AccountEntity) {
         mailRepo.syncFolders(account.id)
-    }
-    
-    /**
-     * Получить список показанных уведомлений (для предотвращения дублей)
-     */
-    private fun getShownNotifications(): Set<String> {
-        val prefs = getSharedPreferences("push_notifications", Context.MODE_PRIVATE)
-        return prefs.getStringSet("shown_notifications", emptySet())?.toSet() ?: emptySet()
-    }
-    
-    /**
-     * Пометить уведомления как показанные
-     * КРИТИЧНО: Предотвращает повторные уведомления на разных устройствах
-     * Очищаем старые записи (>7 дней) для экономии памяти
-     */
-    private fun markNotificationsAsShown(notificationKeys: List<String>) {
-        val prefs = getSharedPreferences("push_notifications", Context.MODE_PRIVATE)
-        val current = LinkedHashSet(prefs.getStringSet("shown_notifications", emptySet()) ?: emptySet())
-        current.addAll(notificationKeys)
-        
-        if (current.size > 500) {
-            val excess = current.size - 500
-            val iter = current.iterator()
-            repeat(excess) { if (iter.hasNext()) { iter.next(); iter.remove() } }
-        }
-        prefs.edit().putStringSet("shown_notifications", current).apply()
-    }
-    
-    private suspend fun showNewMailNotification(newEmails: List<NewEmailInfo>, accountId: Long, accountEmail: String) {
-        val count = newEmails.size
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val hasPermission = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!hasPermission) return
-        }
-        
-        getSharedPreferences("push_service", Context.MODE_PRIVATE)
-            .edit().putLong("last_notification_time", System.currentTimeMillis()).apply()
-        
-        val languageCode = settingsRepo.language.first()
-        val isRussian = languageCode == "ru"
-        
-        val latestEmail = newEmails.firstOrNull()
-        val senderName = latestEmail?.senderName?.takeIf { it.isNotBlank() } 
-            ?: latestEmail?.senderEmail?.substringBefore("@")
-        val subject = latestEmail?.subject?.takeIf { it.isNotBlank() }
-        
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(MainActivity.EXTRA_SWITCH_ACCOUNT_ID, accountId)
-            if (count == 1 && latestEmail != null) {
-                putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, latestEmail.id)
-            } else {
-                putExtra(MainActivity.EXTRA_OPEN_INBOX_UNREAD, true)
-            }
-        }
-        
-        // КРИТИЧНО: Используем уникальный requestCode для каждого уведомления
-        // Иначе на заблокированном экране extras теряются из-за FLAG_UPDATE_CURRENT
-        // Берём hashCode от emailId (или accountId для множественных писем)
-        val uniqueRequestCode = if (count == 1 && latestEmail != null) {
-            latestEmail.id.hashCode()
-        } else {
-            100_000 + accountId.toInt()
-        }
-        
-        val pendingIntent = PendingIntent.getActivity(
-            this, uniqueRequestCode, intent, 
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        
-        val builder = NotificationCompat.Builder(this, MailApplication.CHANNEL_NEW_MAIL)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
-            .setContentTitle(NotificationStrings.getNewMailTitle(count, senderName, isRussian))
-            .setContentText(NotificationStrings.getNewMailText(count, subject, isRussian))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setSubText(accountEmail)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // Показывать на заблокированном экране
-            .setCategory(NotificationCompat.CATEGORY_EMAIL) // Категория для правильной обработки системой
-        
-        if (count > 1) {
-            val senders = newEmails.mapNotNull { email ->
-                email.senderName?.takeIf { it.isNotBlank() } 
-                    ?: email.senderEmail?.substringBefore("@")
-            }
-            if (senders.isNotEmpty()) {
-                builder.setStyle(NotificationCompat.BigTextStyle()
-                    .bigText(NotificationStrings.getNewMailBigText(senders, isRussian)))
-            }
-        } else if (count == 1 && !subject.isNullOrBlank()) {
-            builder.setStyle(NotificationCompat.BigTextStyle().bigText(subject))
-        }
-        
-        // Кнопка «Прочитано» — помечает письма как прочитанные на сервере
-        val notificationId = 200_000 + accountId.toInt()
-        val markReadIntent = Intent(this, MailNotificationActionReceiver::class.java).apply {
-            action = MailNotificationActionReceiver.ACTION_MARK_READ
-            putExtra(MailNotificationActionReceiver.EXTRA_ACCOUNT_ID, accountId)
-            putExtra(MailNotificationActionReceiver.EXTRA_EMAIL_IDS, newEmails.map { it.id }.toTypedArray())
-            putExtra(MailNotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
-        }
-        val markReadPendingIntent = PendingIntent.getBroadcast(
-            this,
-            MailNotificationActionReceiver.requestCodeForAccount(accountId),
-            markReadIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        builder.addAction(com.dedovmosol.iwomail.R.drawable.ic_check, getString(com.dedovmosol.iwomail.R.string.notification_mark_read), markReadPendingIntent)
-        
-        notificationManager.notify(notificationId, builder.build())
-        
-        // Воспроизводим звук получения письма
-        com.dedovmosol.iwomail.util.SoundPlayer.playReceiveSound(applicationContext)
     }
 }

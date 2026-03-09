@@ -280,10 +280,10 @@ class AccountRepository(private val context: Context) {
         com.dedovmosol.iwomail.sync.PushService.clearAccountCache(context, accountId)
         
         // Очищаем кэш папок UI
-        com.dedovmosol.iwomail.ui.FoldersCache.clearAccount(accountId)
+        com.dedovmosol.iwomail.data.repository.FoldersCache.clearAccount(accountId)
         
         // Сбрасываем состояние синхронизации для этого аккаунта
-        com.dedovmosol.iwomail.ui.InitialSyncController.resetAccount(accountId)
+        com.dedovmosol.iwomail.sync.InitialSyncController.resetAccount(accountId)
         
         // Очищаем флаг первой синхронизации
         val settingsRepo = SettingsRepository.getInstance(context)
@@ -443,13 +443,15 @@ class AccountRepository(private val context: Context) {
      */
     fun clearEasClientCache(accountId: Long) {
         easClientCache.remove(accountId)
+        easClientLocks.remove(accountId)
     }
-    
+
     /**
      * Очищает весь кэш клиентов
      */
     fun clearAllEasClientCache() {
         easClientCache.clear()
+        easClientLocks.clear()
     }
     
     /**

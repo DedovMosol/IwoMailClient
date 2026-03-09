@@ -24,15 +24,15 @@ com.dedovmosol.iwomail/
 │   ├── Localization.kt                # Bilingual localization (RU/EN)
 │   ├── navigation/
 │   │   └── AppNavigation.kt           # Screen navigation
-│   ├── screens/                       # 21 screens + 2 utilities
+│   ├── screens/                       # 19 top-level screens + 3 supporting files + 4 subpackages
 │   │   ├── AboutScreen.kt             # About + easter egg
 │   │   ├── AccountSettingsScreen.kt   # Account settings
 │   │   ├── AddAnotherAccountScreen.kt # Add account
-│   │   ├── CalendarScreen.kt          # Calendar with events
-│   │   ├── ComposeScreen.kt           # Compose/reply/forward email
+│   │   ├── CalendarScreen.kt          # Calendar (orchestrator, delegates to calendar/)
+│   │   ├── ComposeScreen.kt           # Compose/reply/forward email (delegates to compose/)
 │   │   ├── ComposeUtils.kt            # ComposeScreen utilities
-│   │   ├── ContactsScreen.kt          # Contacts (personal + GAL)
-│   │   ├── EmailDetailScreen.kt       # Email viewer
+│   │   ├── ContactsScreen.kt          # Contacts orchestrator (delegates to contacts/)
+│   │   ├── EmailDetailScreen.kt       # Email viewer (delegates to emaildetail/)
 │   │   ├── EmailListScreen.kt         # Email list in folder
 │   │   ├── NotesScreen.kt             # Notes
 │   │   ├── OnboardingScreen.kt        # Onboarding for new users
@@ -46,7 +46,25 @@ com.dedovmosol.iwomail/
 │   │   ├── TasksScreen.kt             # Tasks
 │   │   ├── UpdatesScreen.kt           # Update check (GitHub)
 │   │   ├── UserFoldersScreen.kt       # Folder management
-│   │   └── VerificationScreen.kt      # Server connection verification
+│   │   ├── VerificationScreen.kt      # Server connection verification
+│   │   ├── calendar/                  # Calendar subpackage (6 files)
+│   │   │   ├── AgendaView.kt          # Agenda list + event cards + drag select
+│   │   │   ├── CalendarAttachmentsList.kt # Attachment display for events
+│   │   │   ├── CalendarSelectionTopBar.kt # Multi-select top bar
+│   │   │   ├── CreateEventDialog.kt   # Create/edit event dialog
+│   │   │   ├── EventDetailDialog.kt   # Event detail + deleted event dialogs
+│   │   │   └── MonthView.kt           # Month grid + year view + day cells
+│   │   ├── compose/                   # Compose subpackage (2 files)
+│   │   │   ├── ComposeModels.kt       # EmailSuggestion, SuggestionSource, ImageQuality, AttachmentInfo
+│   │   │   └── ComposeTextUtils.kt    # Saver, regex, formatHtmlSignature/Quote, CID replacement
+│   │   ├── contacts/                  # Contacts subpackage (4 files)
+│   │   │   ├── ContactDetailsDialog.kt # Contact details + export dialog
+│   │   │   ├── ContactEditDialog.kt   # Contact create/edit dialog
+│   │   │   ├── ContactListViews.kt    # PersonalContactsList, OrganizationContactsList, ContactItem
+│   │   │   └── ContactUtils.kt        # Regex, GROUP_COLORS, cleanContactEmail, shareFile
+│   │   └── emaildetail/              # Email detail subpackage (2 files)
+│   │       ├── AttachmentsSection.kt  # Attachment list composable
+│   │       └── EmailDetailActions.kt  # Business logic state holder
 │   ├── components/                    # 8 reusable components
 │   │   ├── ComposableUtils.kt         # Common Compose utilities
 │   │   ├── ContactPickerDialog.kt     # Contact picker
@@ -68,7 +86,7 @@ com.dedovmosol.iwomail/
 │
 ├── data/                              # Data Layer
 │   ├── database/                      # Room Database
-│   │   ├── MailDatabase.kt            # Database (migrations up to v34)
+│   │   ├── MailDatabase.kt            # Database (migrations up to v37)
 │   │   ├── Daos.kt                    # EmailDao, FolderDao, AccountDao
 │   │   ├── CalendarEventDao.kt        # Calendar event DAO
 │   │   ├── CalendarEventEntity.kt     # Entity (11+ fields from MS-ASCAL)
@@ -96,13 +114,24 @@ com.dedovmosol.iwomail/
 │       ├── RepositoryProvider.kt      # Manual DI (singleton)
 │       ├── RepositoryExtensions.kt    # Extension functions
 │       ├── RepositoryErrors.kt        # Error handling
-│       └── RecurrenceHelper.kt        # Recurring event helper
+│       ├── RecurrenceHelper.kt        # Recurring event helper
+│       └── FoldersCache.kt            # Thread-safe LRU folder cache (shared across UI/sync)
 │
 ├── eas/                               # Protocol Layer — Exchange
 │   ├── EasClient.kt                   # EAS facade (delegates to services)
+│   ├── EasTransport.kt               # HTTP/WBXML transport + Provision
+│   ├── EasVersionDetector.kt         # OPTIONS / version negotiation
+│   ├── EasFolderSyncService.kt       # FolderSync + CRUD + folder ID cache
 │   ├── EwsClient.kt                   # Exchange Web Services (NTLM/Basic)
 │   ├── EasEmailService.kt            # Mail: sync, send, fetch body
-│   ├── EasCalendarService.kt         # Calendar: sync, CRUD (EAS + EWS)
+│   ├── EasCalendarService.kt         # Calendar: sync, CRUD orchestration (EAS + EWS)
+│   ├── CalendarDateUtils.kt          # Calendar date/time/timezone utilities
+│   ├── CalendarXmlParser.kt          # Calendar XML parsing (EAS + EWS events, attendees, attachments)
+│   ├── CalendarRecurrenceBuilder.kt  # Calendar recurrence XML building (EAS + EWS)
+│   ├── CalendarExceptionService.kt   # Recurring exception handling (EAS Sync + EWS supplement)
+│   ├── CalendarAttachmentService.kt  # Calendar EWS attachment CRUD + supplement
+│   ├── EasCalendarSyncService.kt     # Calendar sync orchestration (EAS loop + EWS + SyncKey + folder cache)
+│   ├── EasCalendarCrudService.kt     # Calendar CRUD operations (EAS + EWS paths, helpers)
 │   ├── EasContactsService.kt         # Contacts: sync, GAL search
 │   ├── EasNotesService.kt            # Notes: sync, CRUD (EAS + EWS)
 │   ├── EasTasksService.kt            # Tasks: sync, CRUD (EAS + EWS)
@@ -149,14 +178,21 @@ com.dedovmosol.iwomail/
 │   ├── CalendarReminderReceiver.kt   # Calendar event reminders
 │   ├── TaskReminderReceiver.kt       # Task reminders
 │   ├── MarkEmailReadWorker.kt       # Worker to mark emails as read
-│   └── MarkTaskCompleteWorker.kt    # Worker to mark tasks as complete
+│   ├── MarkTaskCompleteWorker.kt    # Worker to mark tasks as complete
+│   ├── NotificationHelper.kt       # Unified notification logic (DRY: PushService + SyncWorker)
+│   ├── InitialSyncController.kt    # Initial/manual sync orchestrator (reactive Compose state)
+│   └── RescheduleRemindersWorker.kt # Re-schedule calendar/task reminders after reboot
 │
 ├── update/
 │   └── UpdateChecker.kt              # Update check (GitHub API)
 │
 ├── util/                              # Utilities
 │   ├── DateUtils.kt                   # Date formatting
-│   ├── HtmlUtils.kt                   # HTML processing
+│   ├── HtmlUtils.kt                   # HTML processing + escapeHtml + sanitizeEmailHtml (DRY)
+│   ├── EmailUtils.kt                  # Shared email helpers (extractName, stripHtml, CN_REGEX)
+│   ├── MimeHtmlProcessor.kt          # MIME/HTML body processing
+│   ├── ICalParser.kt                  # iCalendar (.ics) parser
+│   ├── DeletedIdsTracker.kt           # Anti-resurrection tracker (SharedPreferences + ConcurrentHashMap)
 │   └── SoundPlayer.kt                # Sound effects (send/receive/delete)
 │
 └── widget/                            # Home-screen widget
@@ -171,7 +207,8 @@ com.dedovmosol.iwomail/
 `
 ┌─────────────────────────────────────────────────────────┐
 │  UI Layer (Jetpack Compose)                             │
-│  21 screens, 8 components, 1 Navigation, 3 Theme files │
+│  22 screens + 4 subpackages (14 extracted components)   │
+│  8 shared components, 1 Navigation, 3 Theme files       │
 │  Material Design 3, 4 color schemes                     │
 └────────────────────────┬────────────────────────────────┘
                          │
@@ -187,14 +224,18 @@ com.dedovmosol.iwomail/
                          │
 ┌────────────────────────▼────────────────────────────────┐
 │  Protocol Layer                                          │
-│  EAS/EWS: EasClient → 7 services + EwsClient            │
+│  EAS/EWS: EasClient (Facade) →                          │
+│    Transport + VersionDetector + FolderSync              │
+│    + 7 services (Email/Calendar/Contacts/Notes/          │
+│      Tasks/Drafts/Attachment) + EwsClient                │
+│  Calendar: Facade → 7 decomposed services                │
 │  IMAP: ImapClient  │  POP3: Pop3Client                   │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────┐
 │  Database Layer              │  Network Layer            │
 │  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
-│  MailDatabase (v34)          │  NetworkMonitor           │
+│  MailDatabase (v37)          │  NetworkMonitor           │
 │                              │  NtlmAuthenticator        │
 └──────────────────────────────┴──────────────────────────┘
                          │
@@ -202,8 +243,9 @@ com.dedovmosol.iwomail/
 │  Background Services                                     │
 │  PushService, SyncWorker, OutboxWorker                   │
 │  BootReceiver, SyncAlarmReceiver, PushRestartWorker      │
-│  ServiceWatchdogReceiver                                 │
+│  ServiceWatchdogReceiver, NotificationHelper             │
 │  CalendarReminderReceiver, TaskReminderReceiver          │
+│  InitialSyncController, RescheduleRemindersWorker        │
 └─────────────────────────────────────────────────────────┘
 `
 
@@ -221,7 +263,7 @@ com.dedovmosol.iwomail/
 | Settings | DataStore | — |
 | HTTP | OkHttp | 4.12.0 |
 | TLS | Conscrypt | 2.5.2 |
-| Protocols | EAS 12.0-14.1, EWS (NTLM), IMAP, POP3 | — |
+| Protocols | EAS 12.1-14.1, EWS (NTLM/Basic), IMAP, POP3 | — |
 | Mail | JavaMail (com.sun.mail) | — |
 | DI | Manual (RepositoryProvider) | — |
 | Background | WorkManager, AlarmManager, Foreground Service | — |
@@ -232,16 +274,16 @@ com.dedovmosol.iwomail/
 
 ### Exchange 2007 SP1 Compatibility
 
-Exchange 2007 SP1 supports EAS 12.0 only. Limitations and fallback mechanisms:
+Exchange 2007 SP1 supports EAS 12.1 ([MS-ASHTTP] Appendix A, <2>: "Exchange 2007 SP1 sets the Protocol version field to 121"). Limitations and fallback mechanisms:
 
-| Feature | EAS 12.0 | Fallback (EWS) |
+| Feature | EAS 12.1 | Fallback (EWS) |
 |---------|----------|----------------|
 | Mail: sync/send/delete/move/flag | ✅ | EWS HardDelete (fallback when syncKey=0) |
 | Contacts: sync, GAL search | ✅ | — |
 | Folders: sync/create/rename/delete | ✅ | — |
 | Provisioning (security policies) | ✅ | — |
 | Direct Push (Ping) | ✅ | — |
-| Notes: create/update | Limited | EWS CreateItem/UpdateItem (NTLMv2) |
+| Notes: sync (EAS Notes class) | ❌ (14.0+ only) | EWS CreateItem/UpdateItem (NTLMv2) |
 | Tasks: create/delete | Limited | EWS CreateItem/DeleteItem (NTLMv2) |
 | Calendar: single occurrence edit | ❌ | EWS FindItem(CalendarView) + UpdateItem |
 | Calendar invitations (iCalendar) | ❌ | EWS CreateItem (MeetingRequest) |
@@ -301,31 +343,10 @@ All data is stored in Room DB. UI reads data via Flow. Background sync updates t
 | `res/values/` | strings.xml (EN), themes.xml |
 | `res/values-ru/` | strings.xml (RU) |
 
----
+### XmlPullParser Migration (planned v1.7.0)
 
-### Code Quality (Audit v1.6.2, 03.03.2026)
-
-Full security, reliability, and code quality audit completed. Results: 122 findings.
-
-| | Total | Fixed | Remaining |
-|---|---|---|---|
-| CRITICAL | 24 | 23 + C13a | 1 (partial) |
-| HIGH | 24 | 23 | 1 |
-| MEDIUM | 35 | 25 | 10 |
-| LOW | 38 | 20 | 18 |
-| DRY | 1 | 1 | 0 |
-| **Total** | **122** | **92** | **30** |
-
-Key fixes:
-- **Security:** XML injection in 6 points, NTLM locale fix, hostname verification, URL encoding for User parameter
-- **Stability:** CancellationException rethrow in 28 suspend functions, 7 transaction wraps
-- **WBXML:** Root cause fix — unescape XML entities in SimpleXmlParser (W3C WBXML §5.8.4.6)
-- **DRY:** `XmlUtils.kt` — single source of truth for XML escape/unescape (replaced 10+ duplicates)
-- **Performance:** Regex compilation moved to companion objects in 6 EAS services (~35 patterns); Density memoized with `remember`
-- **Dead code:** Removed 11 unused private functions/variables/composables
-- **Bug fixes:** Integer overflow in notification IDs (CalendarReminderReceiver, TaskReminderReceiver)
-
-Full report: `docs/audit-03.03.2026-v1.6.2.md`
+`EasXmlParser.kt` utility ready. Migration plan: 190 regex → XmlPullParser in 8 services.
+Status: utility created, migration not yet started. See `docs/XMLPULLPARSER_MIGRATION_PLAN.md`.
 
 ---
 
@@ -336,9 +357,8 @@ Full report: `docs/audit-03.03.2026-v1.6.2.md`
 | docs/ARCHITECTURE.md | This document — project architecture |
 | docs/CHANGELOG_RU.md | Detailed changelog in Russian |
 | docs/CHANGELOG_EN.md | Detailed changelog in English |
-| docs/XMLPULLPARSER_MIGRATION_PLAN.md | XmlPullParser migration plan |
+| docs/XMLPULLPARSER_MIGRATION_PLAN.md | XmlPullParser migration plan (v1.7.0) |
 | docs/PRIVACY_POLICY.md | Privacy policy (EN + RU) |
-| docs/audit-03.03.2026-v1.6.2.md | Security and code quality audit v1.6.2 |
 | README.md | README in Russian |
 | README_EN.md | README in English |
 
@@ -359,15 +379,15 @@ com.dedovmosol.iwomail/
 │   ├── Localization.kt                # Двуязычная локализация (RU/EN)
 │   ├── navigation/
 │   │   └── AppNavigation.kt           # Навигация между экранами
-│   ├── screens/                       # 21 экран + 2 утилиты
+│   ├── screens/                       # 19 верхнеуровневых экранов + 3 вспомогательных файла + 4 подпакета
 │   │   ├── AboutScreen.kt             # О приложении + пасхалка
 │   │   ├── AccountSettingsScreen.kt   # Настройки аккаунта
 │   │   ├── AddAnotherAccountScreen.kt # Добавление аккаунта
-│   │   ├── CalendarScreen.kt          # Календарь с событиями
-│   │   ├── ComposeScreen.kt           # Написание/ответ/пересылка письма
+│   │   ├── CalendarScreen.kt          # Календарь (оркестратор, делегирует в calendar/)
+│   │   ├── ComposeScreen.kt           # Написание/ответ/пересылка (делегирует в compose/)
 │   │   ├── ComposeUtils.kt            # Утилиты для ComposeScreen
-│   │   ├── ContactsScreen.kt          # Контакты (личные + GAL)
-│   │   ├── EmailDetailScreen.kt       # Просмотр письма
+│   │   ├── ContactsScreen.kt          # Контакты (оркестратор, делегирует в contacts/)
+│   │   ├── EmailDetailScreen.kt       # Просмотр письма (делегирует в emaildetail/)
 │   │   ├── EmailListScreen.kt         # Список писем в папке
 │   │   ├── NotesScreen.kt             # Заметки
 │   │   ├── OnboardingScreen.kt        # Онбординг для новых пользователей
@@ -381,7 +401,25 @@ com.dedovmosol.iwomail/
 │   │   ├── TasksScreen.kt             # Задачи
 │   │   ├── UpdatesScreen.kt           # Проверка обновлений (GitHub)
 │   │   ├── UserFoldersScreen.kt       # Управление папками
-│   │   └── VerificationScreen.kt      # Верификация подключения к серверу
+│   │   ├── VerificationScreen.kt      # Верификация подключения к серверу
+│   │   ├── calendar/                  # Подпакет календаря (6 файлов)
+│   │   │   ├── AgendaView.kt          # Список повестки + карточки событий + drag select
+│   │   │   ├── CalendarAttachmentsList.kt # Отображение вложений событий
+│   │   │   ├── CalendarSelectionTopBar.kt # Верхняя панель мультивыбора
+│   │   │   ├── CreateEventDialog.kt   # Диалог создания/редактирования события
+│   │   │   ├── EventDetailDialog.kt   # Детали события + удалённые события
+│   │   │   └── MonthView.kt           # Месячная сетка + годовой вид + ячейки дней
+│   │   ├── compose/                   # Подпакет написания писем (2 файла)
+│   │   │   ├── ComposeModels.kt       # EmailSuggestion, SuggestionSource, ImageQuality, AttachmentInfo
+│   │   │   └── ComposeTextUtils.kt    # Saver, regex, formatHtmlSignature/Quote, CID-замена
+│   │   ├── contacts/                  # Подпакет контактов (4 файла)
+│   │   │   ├── ContactDetailsDialog.kt # Детали контакта + диалог экспорта
+│   │   │   ├── ContactEditDialog.kt   # Диалог создания/редактирования контакта
+│   │   │   ├── ContactListViews.kt    # PersonalContactsList, OrganizationContactsList, ContactItem
+│   │   │   └── ContactUtils.kt        # Regex, GROUP_COLORS, cleanContactEmail, shareFile
+│   │   └── emaildetail/              # Подпакет деталей письма (2 файла)
+│   │       ├── AttachmentsSection.kt  # Composable списка вложений
+│   │       └── EmailDetailActions.kt  # Бизнес-логика (state holder)
 │   ├── components/                    # 8 переиспользуемых компонентов
 │   │   ├── ComposableUtils.kt         # Общие Compose-утилиты
 │   │   ├── ContactPickerDialog.kt     # Выбор контактов
@@ -403,7 +441,7 @@ com.dedovmosol.iwomail/
 │
 ├── data/                              # Data Layer
 │   ├── database/                      # Room Database
-│   │   ├── MailDatabase.kt            # База данных (миграции до v34)
+│   │   ├── MailDatabase.kt            # База данных (миграции до v37)
 │   │   ├── Daos.kt                    # EmailDao, FolderDao, AccountDao
 │   │   ├── CalendarEventDao.kt        # DAO для событий календаря
 │   │   ├── CalendarEventEntity.kt     # Entity (11+ полей из MS-ASCAL)
@@ -431,13 +469,24 @@ com.dedovmosol.iwomail/
 │       ├── RepositoryProvider.kt      # Manual DI (singleton)
 │       ├── RepositoryExtensions.kt    # Extension-функции
 │       ├── RepositoryErrors.kt        # Обработка ошибок
-│       └── RecurrenceHelper.kt        # Помощник повторяющихся событий
+│       ├── RecurrenceHelper.kt        # Помощник повторяющихся событий
+│       └── FoldersCache.kt            # Потокобезопасный LRU кэш папок (общий UI/sync)
 │
 ├── eas/                               # Protocol Layer — Exchange
 │   ├── EasClient.kt                   # Фасад EAS (делегирует в сервисы)
+│   ├── EasTransport.kt               # HTTP/WBXML транспорт + Provision
+│   ├── EasVersionDetector.kt         # OPTIONS / определение версии
+│   ├── EasFolderSyncService.kt       # FolderSync + CRUD + кэш ID папок
 │   ├── EwsClient.kt                   # Exchange Web Services (NTLM/Basic)
 │   ├── EasEmailService.kt            # Почта: sync, send, fetch body
-│   ├── EasCalendarService.kt         # Календарь: sync, CRUD (EAS + EWS)
+│   ├── EasCalendarService.kt         # Календарь: sync, CRUD оркестрация (EAS + EWS)
+│   ├── CalendarDateUtils.kt          # Утилиты дат/времени/таймзон для календаря
+│   ├── CalendarXmlParser.kt          # Парсинг XML для календаря (EAS + EWS events, attendees, attachments)
+│   ├── CalendarRecurrenceBuilder.kt  # Построение XML повторений (EAS + EWS)
+│   ├── CalendarExceptionService.kt   # Обработка исключений повторений (EAS Sync + EWS дополнение)
+│   ├── CalendarAttachmentService.kt  # Работа с вложениями через EWS (CRUD + supplement)
+│   ├── EasCalendarSyncService.kt     # Синхронизация календаря (EAS цикл + EWS + SyncKey + кеш папок)
+│   ├── EasCalendarCrudService.kt     # CRUD операции календаря (EAS + EWS пути, хелперы)
 │   ├── EasContactsService.kt         # Контакты: sync, GAL search
 │   ├── EasNotesService.kt            # Заметки: sync, CRUD (EAS + EWS)
 │   ├── EasTasksService.kt            # Задачи: sync, CRUD (EAS + EWS)
@@ -484,14 +533,21 @@ com.dedovmosol.iwomail/
 │   ├── CalendarReminderReceiver.kt   # Напоминания о событиях
 │   ├── TaskReminderReceiver.kt       # Напоминания о задачах
 │   ├── MarkEmailReadWorker.kt       # Worker для пометки писем прочитанными
-│   └── MarkTaskCompleteWorker.kt    # Worker для пометки задач выполненными
+│   ├── MarkTaskCompleteWorker.kt    # Worker для пометки задач выполненными
+│   ├── NotificationHelper.kt       # Единая логика уведомлений (DRY: PushService + SyncWorker)
+│   ├── InitialSyncController.kt    # Оркестратор первичной/ручной синхронизации (Compose state)
+│   └── RescheduleRemindersWorker.kt # Перепланирование напоминаний после перезагрузки
 │
 ├── update/
 │   └── UpdateChecker.kt              # Проверка обновлений (GitHub API)
 │
 ├── util/                              # Утилиты
 │   ├── DateUtils.kt                   # Форматирование дат
-│   ├── HtmlUtils.kt                   # Обработка HTML
+│   ├── HtmlUtils.kt                   # Обработка HTML + escapeHtml + sanitizeEmailHtml (DRY)
+│   ├── EmailUtils.kt                  # Общие email-хелперы (extractName, stripHtml, CN_REGEX)
+│   ├── MimeHtmlProcessor.kt          # MIME/HTML обработка body
+│   ├── ICalParser.kt                  # iCalendar (.ics) парсер
+│   ├── DeletedIdsTracker.kt           # Anti-resurrection трекер (SharedPreferences + ConcurrentHashMap)
 │   └── SoundPlayer.kt                # Звуковые эффекты (send/receive/delete)
 │
 └── widget/                            # Виджет на домашнем экране
@@ -506,7 +562,8 @@ com.dedovmosol.iwomail/
 `
 ┌─────────────────────────────────────────────────────────┐
 │  UI Layer (Jetpack Compose)                             │
-│  21 экран, 8 компонентов, 1 Navigation, 3 Theme files  │
+│  22 экрана + 4 подпакета (14 извлечённых компонентов)   │
+│  8 общих компонентов, 1 Navigation, 3 Theme files       │
 │  Material Design 3, 4 цветовые схемы                     │
 └────────────────────────┬────────────────────────────────┘
                          │
@@ -522,14 +579,18 @@ com.dedovmosol.iwomail/
                          │
 ┌────────────────────────▼────────────────────────────────┐
 │  Protocol Layer                                          │
-│  EAS/EWS: EasClient → 7 сервисов + EwsClient            │
+│  EAS/EWS: EasClient (Фасад) →                           │
+│    Transport + VersionDetector + FolderSync              │
+│    + 7 сервисов (Email/Calendar/Contacts/Notes/          │
+│      Tasks/Drafts/Attachment) + EwsClient                │
+│  Calendar: Фасад → 7 декомпозированных сервисов          │
 │  IMAP: ImapClient  │  POP3: Pop3Client                   │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────┐
 │  Database Layer              │  Network Layer            │
 │  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
-│  MailDatabase (v34)          │  NetworkMonitor           │
+│  MailDatabase (v37)          │  NetworkMonitor           │
 │                              │  NtlmAuthenticator        │
 └──────────────────────────────┴──────────────────────────┘
                          │
@@ -537,8 +598,9 @@ com.dedovmosol.iwomail/
 │  Background Services                                     │
 │  PushService, SyncWorker, OutboxWorker                   │
 │  BootReceiver, SyncAlarmReceiver, PushRestartWorker      │
-│  ServiceWatchdogReceiver                                 │
+│  ServiceWatchdogReceiver, NotificationHelper             │
 │  CalendarReminderReceiver, TaskReminderReceiver          │
+│  InitialSyncController, RescheduleRemindersWorker        │
 └─────────────────────────────────────────────────────────┘
 `
 
@@ -556,7 +618,7 @@ com.dedovmosol.iwomail/
 | Настройки | DataStore | — |
 | HTTP | OkHttp | 4.12.0 |
 | TLS | Conscrypt | 2.5.2 |
-| Протоколы | EAS 12.0-14.1, EWS (NTLM), IMAP, POP3 | — |
+| Протоколы | EAS 12.1-14.1, EWS (NTLM/Basic), IMAP, POP3 | — |
 | JavaMail | JavaMail (com.sun.mail) | — |
 | DI | Manual (RepositoryProvider) | — |
 | Background | WorkManager, AlarmManager, Foreground Service | — |
@@ -567,20 +629,22 @@ com.dedovmosol.iwomail/
 
 ## Совместимость с Exchange 2007 SP1
 
-Exchange 2007 SP1 поддерживает только EAS 12.0. Ограничения и fallback-механизмы:
+Exchange 2007 SP1 поддерживает EAS 12.1 ([MS-ASHTTP] Appendix A, <2>: "Exchange 2007 SP1 sets the Protocol version field to 121"). Ограничения и fallback-механизмы:
 
-| Функция | EAS 12.0 | Fallback (EWS) |
+| Функция | EAS 12.1 | Fallback (EWS) |
 |---------|----------|---------------------|
 | Почта: sync, send, delete, move, flag | ✅ | EWS HardDelete (fallback при syncKey=0) |
 | Контакты: sync, GAL search | ✅ | — |
 | Папки: sync, create, rename, delete | ✅ | — |
 | Provisioning (политики безопасности) | ✅ | — |
 | Direct Push (Ping) | ✅ | — |
-| Заметки: создание и редактирование | Ограничено | EWS CreateItem/UpdateItem с NTLMv2 |
+| Заметки: sync (EAS Notes class) | ❌ (14.0+) | EWS CreateItem/UpdateItem с NTLMv2 |
 | Задачи: создание и удаление | Ограничено | EWS CreateItem/DeleteItem с NTLMv2 |
 | Календарь: редактирование одного вхождения | ❌ | EWS FindItem(CalendarView) + UpdateItem |
 | Приглашения в календарь (iCalendar) | ❌ | EWS CreateItem (MeetingRequest) |
 | Черновики на сервере | Ограничено | EWS CreateItem (MimeContent) + 4-шаговый fallback удаления |
+
+Заметки через EAS НЕ поддерживаются на EAS 12.1 — Notes class требует EAS 14.0+ ([MS-ASCMD] 2.2.3.27.6). На Exchange 2007 SP1 заметки работают только через EWS (IPM.StickyNote).
 
 Conscrypt 2.5.2 обеспечивает TLS-совместимость со старыми серверами Exchange 2007.
 
@@ -636,31 +700,10 @@ Conscrypt 2.5.2 обеспечивает TLS-совместимость со с�
 | `res/values/` | strings.xml (EN), themes.xml |
 | `res/values-ru/` | strings.xml (RU) |
 
----
+### Миграция на XmlPullParser (план v1.7.0)
 
-## Качество кода (Audit v1.6.2, 03.03.2026)
-
-Проведён полный аудит безопасности, надёжности и качества кода. Результаты: 122 находки.
-
-| | Всего | Исправлено | Осталось |
-|---|---|---|---|
-| CRITICAL | 24 | 23 + C13a | 1 (partial) |
-| HIGH | 24 | 23 | 1 |
-| MEDIUM | 35 | 25 | 10 |
-| LOW | 38 | 20 | 18 |
-| DRY | 1 | 1 | 0 |
-| **Итого** | **122** | **92** | **30** |
-
-Ключевые исправления:
-- **Безопасность:** XML injection в 6 точках, NTLM locale fix, hostname verification, URL encoding для User parameter
-- **Стабильность:** CancellationException rethrow в 28 suspend функциях, 7 transaction wraps
-- **WBXML:** Root cause fix — unescape XML entities в SimpleXmlParser (W3C WBXML §5.8.4.6)
-- **DRY:** `XmlUtils.kt` — единое место для escape/unescape XML (замена 10+ дубликатов)
-- **Производительность:** Regex компиляция вынесена в companion objects 6 EAS-сервисов (~35 паттернов); Density мемоизирован через `remember`
-- **Мёртвый код:** Удалены 11 неиспользуемых private функций/переменных/composables
-- **Баг-фиксы:** Integer overflow в notification IDs (CalendarReminderReceiver, TaskReminderReceiver)
-
-Полный отчёт: `docs/audit-03.03.2026-v1.6.2.md`
+Утилита `EasXmlParser.kt` готова. План миграции: 190 regex → XmlPullParser в 8 сервисах.
+Статус: утилита создана, миграция не начата. См. `docs/XMLPULLPARSER_MIGRATION_PLAN.md`.
 
 ---
 
@@ -671,8 +714,7 @@ Conscrypt 2.5.2 обеспечивает TLS-совместимость со с�
 | docs/ARCHITECTURE.md | Этот документ — архитектура проекта |
 | docs/CHANGELOG_RU.md | Подробный changelog на русском |
 | docs/CHANGELOG_EN.md | Подробный changelog на английском |
-| docs/XMLPULLPARSER_MIGRATION_PLAN.md | План миграции на XmlPullParser |
+| docs/XMLPULLPARSER_MIGRATION_PLAN.md | План миграции на XmlPullParser (v1.7.0) |
 | docs/PRIVACY_POLICY.md | Политика конфиденциальности (EN + RU) |
-| docs/audit-03.03.2026-v1.6.2.md | Аудит безопасности и качества кода v1.6.2 |
 | README.md | README на русском |
 | README_EN.md | README на английском |

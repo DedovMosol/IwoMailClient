@@ -175,7 +175,7 @@ fun VerificationScreen(
                         scope.launch {
                             val mailRepo = com.dedovmosol.iwomail.data.repository.MailRepository(context)
                             val settingsRepo = com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
-                            com.dedovmosol.iwomail.ui.InitialSyncController.startSyncIfNeeded(
+                            com.dedovmosol.iwomail.sync.InitialSyncController.startSyncIfNeeded(
                                 context, accountId, mailRepo, settingsRepo
                             )
                         }

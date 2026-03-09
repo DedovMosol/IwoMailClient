@@ -422,21 +422,18 @@ class EwsClient(
         return tryBasicAuth(soapRequest, action)
     }
     
-    /**
-     * Проверяет успешность ответа
-     */
-    fun isSuccessResponse(responseXml: String): Boolean {
-        val hasSuccess = RESPONSE_SUCCESS_PATTERN.containsMatchIn(responseXml)
-        val hasNoError = RESPONSE_NO_ERROR_PATTERN.containsMatchIn(responseXml)
-        return hasSuccess && hasNoError
-    }
-
     companion object {
         private const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
         private const val SOAP_ACTION_PREFIX = "http://schemas.microsoft.com/exchange/services/2006/messages/"
         const val VERSION_2007 = "Exchange2007_SP1"
-        private val RESPONSE_SUCCESS_PATTERN = Regex("""<\w+[^>]+ResponseClass="Success"""")
-        private val RESPONSE_NO_ERROR_PATTERN = Regex("""<(?:m:)?ResponseCode>NoError</(?:m:)?ResponseCode>""")
+
+        fun isEwsSuccess(xml: String): Boolean =
+            xml.contains("ResponseClass=\"Success\"") &&
+                (xml.contains("<ResponseCode>NoError</ResponseCode>") ||
+                    xml.contains("<m:ResponseCode>NoError</m:ResponseCode>"))
+
+        fun isEwsSuccessOrNotFound(xml: String): Boolean =
+            isEwsSuccess(xml) || xml.contains("ErrorItemNotFound")
     }
     
     /**

@@ -130,6 +130,56 @@ object EasXmlTemplates {
     <SyncKey>${XmlUtils.escape(syncKey)}</SyncKey>
 </FolderSync>""".trimIndent()
     
+    // ==================== ItemOperations шаблоны ====================
+
+    /**
+     * ItemOperations Fetch для скачивания вложения по FileReference.
+     * MS-ASCMD 2.2.3.67.1: airsyncbase:FileReference — EAS 12.0+.
+     * MS-ASCMD 2.2.3.143.2: Range — "m-n", zero-indexed, EAS 12.0+.
+     *
+     * @param fileRef XML-экранированная FileReference вложения
+     * @param withAirSyncBaseNs true → xmlns="AirSyncBase" на FileReference (стандарт)
+     * @param range опциональный byte-range ("0-999999999"); null → весь файл
+     */
+    fun itemOperationsFetchAttachment(
+        fileRef: String,
+        withAirSyncBaseNs: Boolean = true,
+        range: String? = null
+    ): String {
+        val nsAttr = if (withAirSyncBaseNs) """ xmlns="AirSyncBase"""" else ""
+        val optionsBlock = if (range != null) """
+        <Options>
+            <Range>$range</Range>
+        </Options>""" else ""
+        return """<?xml version="1.0" encoding="UTF-8"?>
+<ItemOperations xmlns="ItemOperations">
+    <Fetch>
+        <Store>Mailbox</Store>
+        <FileReference$nsAttr>$fileRef</FileReference>$optionsBlock
+    </Fetch>
+</ItemOperations>""".trimIndent()
+    }
+
+    /**
+     * ItemOperations Fetch для скачивания целого письма (MIME) по CollectionId + ServerId.
+     * Используется как fallback для извлечения вложения из MIME тела.
+     * MS-ASCMD 2.2.3.67.1: airsync:CollectionId + airsync:ServerId — EAS 12.0+.
+     */
+    fun itemOperationsFetchEmail(collectionId: String, serverId: String): String = """<?xml version="1.0" encoding="UTF-8"?>
+<ItemOperations xmlns="ItemOperations">
+    <Fetch>
+        <Store>Mailbox</Store>
+        <CollectionId xmlns="AirSync">${XmlUtils.escape(collectionId)}</CollectionId>
+        <ServerId xmlns="AirSync">${XmlUtils.escape(serverId)}</ServerId>
+        <Options>
+            <MIMESupport xmlns="AirSync">2</MIMESupport>
+            <BodyPreference xmlns="AirSyncBase">
+                <Type>4</Type>
+            </BodyPreference>
+        </Options>
+    </Fetch>
+</ItemOperations>""".trimIndent()
+
     // ==================== Search шаблоны ====================
     
     /**
@@ -320,6 +370,7 @@ $SOAP_ENVELOPE_END"""
         </SavedItemFolderId>
         <Items>
             <t:Message>
+                <t:ItemClass>IPM.StickyNote</t:ItemClass>
                 <t:Subject>${XmlUtils.escape(subject)}</t:Subject>
                 <t:Body BodyType="Text">${XmlUtils.escape(body)}</t:Body>
             </t:Message>

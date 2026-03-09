@@ -1,17 +1,13 @@
 package com.dedovmosol.iwomail.eas
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import android.util.Base64
@@ -40,15 +36,14 @@ class EasClient(
     private val wbxmlParser = WbxmlParser()
     private val ntlmAuth = NtlmAuthenticator(domain, username, password)
     
-    // Ленивая инициализация HttpClient (требует валидации сертификатов в init)
     private val client: OkHttpClient by lazy {
         com.dedovmosol.iwomail.network.HttpClientProvider.getClient(
             acceptAllCerts = acceptAllCerts,
             certificatePath = certificatePath,
             clientCertificatePath = if (clientCertificatePassword.isNullOrBlank()) null else clientCertificatePath,
             clientCertificatePassword = clientCertificatePassword,
-            pinnedCertInfo = pinnedCertInfo,  // Передаём информацию для Certificate Pinning
-            accountId = accountId  // Передаём ID для отслеживания изменений
+            pinnedCertInfo = pinnedCertInfo,
+            accountId = accountId
         )
     }
     
@@ -72,10 +67,8 @@ class EasClient(
         }
     }
     
-    // Нормализуем URL - добавляем схему и порт
     private val normalizedServerUrl: String = normalizeUrl(serverUrl, port, useHttps)
     
-    /** Централизованный EWS клиент для Exchange 2007+ */
     val ewsClient: EwsClient by lazy {
         EwsClient(
             ewsUrl = ewsUrl,
@@ -87,7 +80,6 @@ class EasClient(
         )
     }
     
-    // URL для EWS (Exchange Web Services) - вычисляется лениво
     private val ewsUrl: String by lazy {
         normalizedServerUrl
             .replace("/Microsoft-Server-ActiveSync", "")
@@ -95,66 +87,62 @@ class EasClient(
             .trimEnd('/') + "/EWS/Exchange.asmx"
     }
     
-    // Версия EAS - по умолчанию 12.1, но может быть изменена после OPTIONS
-    @Volatile private var easVersion = "12.1"
-    // Приоритет версий для ПЕРЕГОВОРОВ с сервером (от новых к старым).
-    // ВАЖНО: НЕ включаем 16.x! Хотя Exchange 2016/2019 поддерживают EAS 16.0/16.1,
-    // наш WBXML парсер и XML parsing не реализуют 16.x code pages и элементы.
-    // Если отправить MS-ASProtocolVersion: 16.1, сервер ответит в формате 16.1,
-    // что может сломать парсинг. Используем 14.1 как максимум — он обратно совместим.
-    // Для ОПРЕДЕЛЕНИЯ типа сервера (2010 vs 2013 vs 2016) используем serverSupportedVersions.
-    private val supportedVersions = listOf("14.1", "14.0", "12.1", "12.0")
-    // Версии поддерживаемые сервером (заполняется после OPTIONS)
-    @Volatile private var serverSupportedVersions: List<String> = emptyList()
-    // Флаг что версия уже определена
-    @Volatile private var versionDetected = false
-    // Время последнего определения версии (для TTL — периодическая перепроверка)
-    @Volatile private var versionDetectedAt: Long = 0
-    private val VERSION_TTL_MS = 24 * 60 * 60 * 1000L // 24 часа
-    
-    /**
-     * Проверяет, является ли сервер Exchange 2007
-     * Exchange 2007 поддерживает только EAS 12.0/12.1
-     * Exchange 2010+ поддерживает EAS 14.0+
-     */
-    fun isExchange2007(): Boolean = synchronized(versionLock) {
-        if (!versionDetected || serverSupportedVersions.isEmpty()) {
-            return@synchronized easVersion.startsWith("12.")
-        }
-        serverSupportedVersions.none { it.startsWith("14.") || it.startsWith("16.") }
+    /** Centralized transport layer (SRP: HTTP/WBXML/Provision) */
+    val transport: EasTransport by lazy {
+        EasTransport(
+            client = client,
+            wbxmlParser = wbxmlParser,
+            normalizedServerUrl = normalizedServerUrl,
+            username = username,
+            password = password,
+            domain = domain,
+            deviceId = deviceId,
+            deviceType = deviceType,
+            ntlmAuth = ntlmAuth,
+            ewsClient = ewsClient,
+            certificatePath = certificatePath,
+            initialPolicyKey = initialPolicyKey
+        )
     }
-    // Кэш ID папок (volatile для видимости между корутинами на Dispatchers.IO)
-    @Volatile private var cachedNotesFolderId: String? = null
-    @Volatile private var cachedDeletedItemsFolderId: String? = null
-    @Volatile private var cachedTasksFolderId: String? = null
-    @Volatile private var cachedCalendarFolderId: String? = null
-    @Volatile private var cachedFolderSyncResult: FolderSyncResponse? = null
-    @Volatile private var folderSyncCacheTimeMs: Long = 0L
-    private val folderSyncCacheLock = Any()
-    private val versionLock = Any()
+    
+    val versionDetector: EasVersionDetector by lazy {
+        EasVersionDetector(transport)
+    }
+    
+    private var easVersion: String
+        get() = transport.easVersion
+        set(value) { transport.easVersion = value }
+    
+    private val versionDetected: Boolean
+        get() = versionDetector.versionDetected
+    
+    private val serverSupportedVersions: List<String>
+        get() = versionDetector.serverSupportedVersions
+    
+    fun isExchange2007(): Boolean = versionDetector.isExchange2007()
+
+    val folderSyncService: EasFolderSyncService by lazy {
+        EasFolderSyncService(transport, versionDetector)
+    }
+
     // DeviceId должен быть стабильным для одного аккаунта
     private val deviceId = generateStableDeviceId(username, deviceIdSuffix)
     // DeviceType - как у Huawei
     private val deviceType = "Android"
     
-    // Provisioning handler (SOLID: Single Responsibility)
-    private val provisioning by lazy { EasProvisioning(deviceId, easVersion) }
-    
     // === Сервисы (SOLID: Single Responsibility) ===
     
-    /** Сервис для работы с контактами */
     val contactsService: EasContactsService by lazy {
         EasContactsService(
             executeCommand = { cmd, xml, parser -> 
-                executeEasCommand(cmd, xml, parser = parser)
+                transport.executeEasCommand(cmd, xml, parser = parser)
             },
             folderSync = { syncKey -> folderSync(syncKey) },
             extractValue = { xml, tag -> extractValue(xml, tag) },
-            getEasVersion = { easVersion }
+            getEasVersion = { transport.easVersion }
         )
     }
     
-    /** Сервис для работы с задачами */
     val tasksService: EasTasksService by lazy {
         EasTasksService(EasTasksService.TasksServiceDependencies(
             executeEasCommand = object : EasTasksService.EasCommandExecutor {
@@ -162,27 +150,26 @@ class EasClient(
                     command: String,
                     xml: String,
                     parser: (String) -> T
-                ): EasResult<T> = executeEasCommand(command, xml, parser = parser)
+                ): EasResult<T> = transport.executeEasCommand(command, xml, parser = parser)
             },
             folderSync = { syncKey -> folderSync(syncKey) },
             extractValue = { xml, tag -> extractValue(xml, tag) },
             escapeXml = { text -> escapeXml(text) },
-            getEasVersion = { easVersion },
+            getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
             getTasksFolderId = { getTasksFolderId() },
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
-            performNtlmHandshake = { url, request, action -> performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { ewsUrl },
+            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
+            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
+            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
+            getEwsUrl = { transport.ewsUrl },
             sendMail = { to, subject, body, cc, bcc, importance -> 
                 sendMail(to, subject, body, cc, bcc, importance) 
             }
         ))
     }
     
-    /** Сервис для работы с заметками */
     val notesService: EasNotesService by lazy {
         EasNotesService(EasNotesService.NotesServiceDependencies(
             executeEasCommand = object : EasNotesService.EasCommandExecutor {
@@ -190,26 +177,25 @@ class EasClient(
                     command: String,
                     xml: String,
                     parser: (String) -> T
-                ): EasResult<T> = executeEasCommand(command, xml, parser = parser)
+                ): EasResult<T> = transport.executeEasCommand(command, xml, parser = parser)
             },
             folderSync = { syncKey -> folderSync(syncKey) },
             refreshSyncKey = { folderId, initialKey -> refreshSyncKey(folderId, initialKey) },
             extractValue = { xml, tag -> extractValue(xml, tag) },
             escapeXml = { text -> escapeXml(text) },
-            getEasVersion = { easVersion },
+            getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
             getNotesFolderId = { getNotesFolderId() },
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
-            performNtlmHandshake = { url, request, action -> performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { ewsUrl },
+            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
+            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
+            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
+            getEwsUrl = { transport.ewsUrl },
             findEwsNoteItemId = { ewsUrl, serverId, subject, searchInDeletedItems -> findEwsNoteItemId(ewsUrl, serverId, subject, searchInDeletedItems) }
         ))
     }
     
-    /** Сервис для работы с календарём */
     val calendarService: EasCalendarService by lazy {
         EasCalendarService(EasCalendarService.CalendarServiceDependencies(
             executeEasCommand = object : EasCalendarService.EasCommandExecutor {
@@ -217,24 +203,23 @@ class EasClient(
                     command: String,
                     xml: String,
                     parser: (String) -> T
-                ): EasResult<T> = executeEasCommand(command, xml, parser = parser)
+                ): EasResult<T> = transport.executeEasCommand(command, xml, parser = parser)
             },
             folderSync = { syncKey -> folderSync(syncKey) },
             refreshSyncKey = { folderId, initialKey -> refreshSyncKey(folderId, initialKey) },
             extractValue = { xml, tag -> extractValue(xml, tag) },
             escapeXml = { text -> escapeXml(text) },
-            getEasVersion = { easVersion },
+            getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
-            performNtlmHandshake = { url, request, action -> performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { ewsUrl },
+            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
+            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
+            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
+            getEwsUrl = { transport.ewsUrl },
             parseEasDate = { dateStr -> parseCalendarDate(dateStr) }
         ))
     }
     
-    /** Сервис для работы с черновиками */
     val draftsService: EasDraftsService by lazy {
         EasDraftsService(EasDraftsService.DraftsServiceDependencies(
             executeEasCommand = object : EasDraftsService.EasCommandExecutor {
@@ -242,24 +227,23 @@ class EasClient(
                     command: String,
                     xml: String,
                     parser: (String) -> T
-                ): EasResult<T> = executeEasCommand(command, xml, parser = parser)
+                ): EasResult<T> = transport.executeEasCommand(command, xml, parser = parser)
             },
             folderSync = { syncKey -> folderSync(syncKey) },
             refreshSyncKey = { folderId, initialKey -> refreshSyncKey(folderId, initialKey) },
             extractValue = { xml, tag -> extractValue(xml, tag) },
             escapeXml = { text -> escapeXml(text) },
-            getEasVersion = { easVersion },
+            getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
-            performNtlmHandshake = { url, request, action -> performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { ewsUrl },
+            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
+            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
+            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
+            getEwsUrl = { transport.ewsUrl },
             getDraftsFolderId = { getDraftsFolderId() }
         ))
     }
     
-    /** Сервис для работы с email */
     val emailService: EasEmailService by lazy {
         EasEmailService(EasEmailService.EmailServiceDependencies(
             executeEasCommand = object : EasEmailService.EasCommandExecutor {
@@ -267,16 +251,16 @@ class EasClient(
                     command: String,
                     xml: String,
                     parser: (String) -> T
-                ): EasResult<T> = executeEasCommand(command, xml, parser = parser)
+                ): EasResult<T> = transport.executeEasCommand(command, xml, parser = parser)
             },
-            executeRequest = { request -> executeRequest(request) },
-            buildUrl = { command -> buildUrl(command) },
-            getAuthHeader = { getAuthHeader() },
-            getPolicyKey = { policyKey },
-            getEasVersion = { easVersion },
+            executeRequest = { request -> transport.executeRequest(request) },
+            buildUrl = { command -> transport.buildUrl(command) },
+            getAuthHeader = { transport.getAuthHeader() },
+            getPolicyKey = { transport.policyKey },
+            getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
-            provision = { provision() },
+            provision = { transport.provision() },
             extractValue = { xml, tag -> extractValue(xml, tag) },
             escapeXml = { text -> escapeXml(text) },
             wbxmlParser = wbxmlParser,
@@ -286,30 +270,27 @@ class EasClient(
                 else username
             },
             getDeviceId = { deviceId },
-            performNtlmHandshake = { url, request, action -> performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> executeNtlmRequest(url, request, auth, action) },
-            getEwsUrl = { ewsUrl },
+            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
+            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
+            getEwsUrl = { transport.ewsUrl },
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
-            // Новые зависимости для delete операций
             isExchange2007 = { isExchange2007() },
-            buildEwsSoapRequest = { body -> buildEwsSoapRequest(body) },
-            parseSyncResponse = { xml -> parseSyncResponse(xml) },
-            extractEwsError = { xml -> extractEwsError(xml) }
+            buildEwsSoapRequest = { body -> transport.buildEwsSoapRequest(body) },
+            extractEwsError = { xml -> transport.extractEwsError(xml) }
         ))
     }
     
-    /** Сервис для работы с вложениями */
     val attachmentService: EasAttachmentService by lazy {
         EasAttachmentService(EasAttachmentService.AttachmentServiceDependencies(
-            executeRequest = { request -> executeRequest(request) },
+            executeRequest = { request -> transport.executeRequest(request) },
             executeEasCommand = { command, xml, parser -> 
-                executeEasCommand(command, xml) { responseXml -> parser(responseXml) }
+                transport.executeEasCommand(command, xml) { responseXml -> parser(responseXml) }
             },
-            buildUrl = { command -> buildUrl(command) },
-            getAuthHeader = { getAuthHeader() },
-            getPolicyKey = { policyKey },
-            getEasVersion = { easVersion },
-            provision = { provision() },
+            buildUrl = { command -> transport.buildUrl(command) },
+            getAuthHeader = { transport.getAuthHeader() },
+            getPolicyKey = { transport.policyKey },
+            getEasVersion = { transport.easVersion },
+            provision = { transport.provision() },
             wbxmlGenerateSendMail = { clientId, mimeBytes -> wbxmlParser.generateSendMail(clientId, mimeBytes) },
             getFromEmail = { 
                 if (deviceIdSuffix.contains("@")) deviceIdSuffix
@@ -323,103 +304,15 @@ class EasClient(
         ))
     }
     
-    // PolicyKey для авторизованных запросов после Provision
-    @Volatile var policyKey: String? = initialPolicyKey
-        private set
-    private val provisionMutex = Mutex()
-    @Volatile private var insideSendDeviceSettings = false
+    var policyKey: String?
+        get() = transport.policyKey
+        set(value) { transport.policyKey = value }
 
-    // Результат создания папки
     data class FolderCreateResult(val serverId: String, val newSyncKey: String)
     
-    /**
-     * Устанавливает PolicyKey (например, из сохранённого аккаунта)
-     */
-    fun setPolicyKey(key: String?) {
-        policyKey = key
-    }
+    suspend fun detectEasVersion(): EasResult<String> = versionDetector.detect()
     
-    /**
-     * Определяет поддерживаемую версию EAS через OPTIONS запрос
-     * Возвращает список поддерживаемых версий и выбирает лучшую
-     */
-    suspend fun detectEasVersion(): EasResult<String> {
-        val now = System.currentTimeMillis()
-        if (versionDetected && serverSupportedVersions.isNotEmpty()
-            && (now - versionDetectedAt) < VERSION_TTL_MS) {
-            return EasResult.Success(easVersion)
-        }
-        
-        return withContext(Dispatchers.IO) {
-            try {
-                val url = "$normalizedServerUrl/Microsoft-Server-ActiveSync"
-                
-                val request = Request.Builder()
-                    .url(url)
-                    .method("OPTIONS", null)
-                    .header("Authorization", getAuthHeader())
-                    .header("User-Agent", "Android/12-EAS-2.0")
-                    .build()
-                
-                val call = client.newCall(request)
-                val response = suspendCancellableCoroutine { cont ->
-                    cont.invokeOnCancellation { call.cancel() }
-                    call.enqueue(object : Callback {
-                        override fun onFailure(call: Call, e: IOException) {
-                            if (cont.isActive) cont.resumeWithException(e)
-                        }
-                        override fun onResponse(call: Call, response: Response) {
-                            if (cont.isActive) cont.resume(response)
-                            else response.close()
-                        }
-                    })
-                }
-                
-                response.use { resp ->
-                    if (resp.code == 200) {
-                        val versionsHeader = resp.header("MS-ASProtocolVersions") ?: ""
-                        
-                        if (versionsHeader.isNotEmpty()) {
-                            val versions = versionsHeader.split(",").map { it.trim() }
-                            val bestVersion = supportedVersions.firstOrNull { it in versions }
-                            
-                            synchronized(versionLock) {
-                                serverSupportedVersions = versions
-                                easVersion = bestVersion ?: "12.1"
-                                versionDetectedAt = System.currentTimeMillis()
-                                versionDetected = true
-                            }
-                            EasResult.Success(easVersion)
-                        } else {
-                            synchronized(versionLock) {
-                                versionDetectedAt = System.currentTimeMillis()
-                                versionDetected = true
-                            }
-                            EasResult.Success(easVersion)
-                        }
-                    } else if (resp.code == 401) {
-                        EasResult.Error("Ошибка авторизации (401)")
-                    } else {
-                        EasResult.Error("HTTP ${resp.code}")
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error(e.message ?: "Network error")
-            }
-        }
-    }
-    
-    /**
-     * Возвращает информацию о сервере
-     */
-    fun getServerInfo(): Map<String, Any> {
-        return mapOf(
-            "easVersion" to easVersion,
-            "serverVersions" to serverSupportedVersions,
-            "versionDetected" to versionDetected
-        )
-    }
+    fun getServerInfo(): Map<String, Any> = versionDetector.getServerInfo()
     
     init {
         // Валидация клиентского сертификата
@@ -430,18 +323,6 @@ class EasClient(
     }
     
     companion object {
-        private const val FOLDER_SYNC_CACHE_TTL_MS = 120_000L
-        
-        // EWS SOAP константы
-        private const val SOAP_ENVELOPE_START = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">"""
-        private const val SOAP_ENVELOPE_END = "</soap:Envelope>"
-        private const val SOAP_HEADER_2007 = """<soap:Header>
-    <t:RequestServerVersion Version="Exchange2007_SP1"/>
-</soap:Header>"""
-        
         // Content-Type константы
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         private const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
@@ -497,42 +378,9 @@ class EasClient(
         return "androidc${String.format("%010d", hash % 10000000000L)}"
     }
     
-    private fun getAuthHeader(): String {
-        val credentials = if (domain.isNotEmpty()) {
-            "$domain\\$username:$password"
-        } else {
-            "$username:$password"
-        }
-        return "Basic " + Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
-    }
+    private fun getAuthHeader(): String = transport.getAuthHeader()
     
-    private fun buildUrl(command: String): String {
-        val baseUrl = normalizedServerUrl.trimEnd('/')
-        
-        // Проверка что URL содержит схему
-        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-            android.util.Log.e("EasClient", "Invalid baseUrl (no scheme): $baseUrl, normalizing...")
-            val fixedUrl = if (useHttps) "https://$baseUrl" else "http://$baseUrl"
-            return buildUrlInternal(fixedUrl, command)
-        }
-        
-        return buildUrlInternal(baseUrl, command)
-    }
-    
-    private fun buildUrlInternal(baseUrl: String, command: String): String {
-        // User в URL должен быть с доменом (URL-encoded)
-        val userParam = if (domain.isNotEmpty()) {
-            java.net.URLEncoder.encode("$domain\\$username", "UTF-8")
-        } else {
-            java.net.URLEncoder.encode(username, "UTF-8")
-        }
-        // Используем /default.eas как в Huawei
-        return "$baseUrl/Microsoft-Server-ActiveSync/default.eas?" +
-            "Cmd=$command&" +
-            "User=$userParam&" +
-            "DeviceId=$deviceId&" +
-            "DeviceType=$deviceType"
-    }
+    private fun buildUrl(command: String): String = transport.buildUrl(command)
     
     /**
      * Проверка подключения к серверу и определение версии EAS
@@ -556,116 +404,7 @@ class EasClient(
         }
     }
 
-    /**
-     * Provisioning - получение политик безопасности от сервера
-     * Требуется для EAS 12.0+ перед FolderSync
-     * 
-     * Логика вынесена в EasProvisioning (SOLID: Single Responsibility)
-     */
-    suspend fun provision(): EasResult<String> {
-        val result = provisionMutex.withLock {
-            val savedPolicyKey = policyKey
-            policyKey = null
-            
-            // Фаза 1: Запрос политик
-            val xml1 = provisioning.buildPhase1Request()
-            var tempPolicyKey: String? = null
-            var phase1Response: EasProvisioning.ProvisionResponse? = null
-            
-            val result1 = executeEasCommand("Provision", xml1) { responseXml ->
-                phase1Response = provisioning.parseResponse(responseXml)
-                tempPolicyKey = phase1Response?.policyKey
-                tempPolicyKey
-            }
-            
-            when (result1) {
-                is EasResult.Success -> {
-                    val response = phase1Response ?: return run {
-                        policyKey = savedPolicyKey
-                        EasResult.Error("Failed to parse Provision response")
-                    }
-                    
-                    if (response.policyStatus == 2) {
-                        policyKey = EasProvisioning.NO_POLICY_KEY
-                        return EasResult.Success(EasProvisioning.NO_POLICY_KEY)
-                    }
-                    
-                    val error = provisioning.validatePhase1(response)
-                    if (error != null) {
-                        policyKey = savedPolicyKey
-                        return EasResult.Error(error)
-                    }
-                }
-                is EasResult.Error -> {
-                    policyKey = savedPolicyKey
-                    return EasResult.Error("Provision phase 1 failed: ${result1.message} (EAS: $easVersion)")
-                }
-            }
-            
-            // Фаза 2: Подтверждение принятия политик
-            val phase1Key = tempPolicyKey
-                ?: return run {
-                    policyKey = savedPolicyKey
-                    EasResult.Error("Provision phase 1 did not return PolicyKey (EAS: $easVersion)")
-                }
-            val xml2 = provisioning.buildPhase2Request(phase1Key)
-            var finalKey: String? = null
-            var phase2Response: EasProvisioning.ProvisionResponse? = null
-            
-            val result2 = executeEasCommand("Provision", xml2) { responseXml ->
-                phase2Response = provisioning.parseResponse(responseXml)
-                finalKey = phase2Response?.policyKey
-                finalKey
-            }
-            
-            when (result2) {
-                is EasResult.Success -> {
-                    val response = phase2Response ?: return run {
-                        policyKey = savedPolicyKey
-                        EasResult.Error("Failed to parse Provision phase 2 response")
-                    }
-                    
-                    val error = provisioning.validatePhase2(response, tempPolicyKey)
-                    if (error != null) {
-                        policyKey = savedPolicyKey
-                        return EasResult.Error(error)
-                    }
-                    
-                    policyKey = finalKey ?: tempPolicyKey
-                }
-                is EasResult.Error -> {
-                    policyKey = savedPolicyKey
-                    return EasResult.Error("Provision phase 2 failed: ${result2.message} (EAS: $easVersion)")
-                }
-            }
-            
-            val resultKey = finalKey ?: tempPolicyKey
-            if (resultKey != null) {
-                EasResult.Success(resultKey)
-            } else {
-                EasResult.Error("Provision failed: no policy key received (EAS: $easVersion)")
-            }
-        }
-        
-        if (result is EasResult.Success && !insideSendDeviceSettings) {
-            insideSendDeviceSettings = true
-            try {
-                sendDeviceSettings()
-            } finally {
-                insideSendDeviceSettings = false
-            }
-        }
-        return result
-    }
-    
-    /**
-     * Отправляет информацию об устройстве (Settings command)
-     * Требуется после Provision для Exchange 2007
-     */
-    private suspend fun sendDeviceSettings(): EasResult<Unit> {
-        val xml = provisioning.buildSettingsRequest()
-        return executeEasCommand("Settings", xml) { }
-    }
+    suspend fun provision(): EasResult<String> = transport.provision()
     
     /**
      * Получает одно письмо из папки для верификации email (без сохранения в БД)
@@ -724,8 +463,8 @@ class EasClient(
 </Sync>""".trimIndent()
         
         return executeEasCommand("Sync", syncXml) { responseXml ->
-            val response = parseSyncResponse(responseXml)
-            response.emails.firstOrNull()
+            XmlUtils.extractTopLevelBlocks(responseXml, "Add")
+                .firstNotNullOfOrNull { parseEmail(it) }
         }
     }
     
@@ -735,171 +474,21 @@ class EasClient(
      * Результат кэшируется на время жизни EasClient-инстанса (один sync cycle),
      * т.к. иерархия папок не меняется в рамках одной сессии.
      */
-    suspend fun folderSync(syncKey: String = "0"): EasResult<FolderSyncResponse> {
-        if (syncKey == "0") {
-            synchronized(folderSyncCacheLock) {
-                val cached = cachedFolderSyncResult
-                if (cached != null && (System.currentTimeMillis() - folderSyncCacheTimeMs) < FOLDER_SYNC_CACHE_TTL_MS) {
-                    return EasResult.Success(cached)
-                }
-                cachedFolderSyncResult = null
-            }
-        }
-
-        if (!versionDetected) {
-            detectEasVersion()
-        }
-        
-        if (syncKey == "0" || policyKey == null) {
-            if (syncKey == "0") {
-                policyKey = null
-            }
-            
-            when (val provResult = provision()) {
-                is EasResult.Success -> { }
-                is EasResult.Error -> {
-                    return provResult
-                }
-            }
-        }
-        
-        val result = doFolderSync(syncKey)
-        
-        if (result is EasResult.Success && result.data.status == 1) {
-            if (syncKey == "0") {
-                synchronized(folderSyncCacheLock) {
-                    cachedFolderSyncResult = result.data
-                    folderSyncCacheTimeMs = System.currentTimeMillis()
-                }
-            }
-            return result
-        }
-        
-        val status = if (result is EasResult.Success) result.data.status else -1
-        return EasResult.Error("Не удалось синхронизировать папки. Status: $status. DeviceId: $deviceId")
-    }
+    suspend fun folderSync(syncKey: String = "0"): EasResult<FolderSyncResponse> =
+        folderSyncService.folderSync(syncKey)
     
-    private suspend fun doFolderSync(syncKey: String): EasResult<FolderSyncResponse> {
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
-<FolderSync xmlns="FolderHierarchy">
-    <SyncKey>${escapeXml(syncKey)}</SyncKey>
-</FolderSync>""".trimIndent()
-        
-        val skipPolicyKey = (policyKey == null)
-        
-        return executeEasCommand("FolderSync", xml, skipPolicyKey = skipPolicyKey) { responseXml ->
-            parseFolderSyncResponse(responseXml)
-        }
-    }
-    
-    /**
-     * Создание новой папки (FolderCreate)
-     */
     suspend fun createFolder(
         displayName: String,
         parentId: String = "0",
         folderType: Int = 12,
         syncKey: String
-    ): EasResult<FolderCreateResult> {
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
-<FolderCreate xmlns="FolderHierarchy">
-    <SyncKey>${escapeXml(syncKey)}</SyncKey>
-    <ParentId>${escapeXml(parentId)}</ParentId>
-    <DisplayName>${escapeXml(displayName)}</DisplayName>
-    <Type>$folderType</Type>
-</FolderCreate>""".trimIndent()
-        
-        return executeEasCommand("FolderCreate", xml) { responseXml ->
-            val status = extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
-            val serverId = extractValue(responseXml, "ServerId") ?: ""
-            val newSyncKey = extractValue(responseXml, "SyncKey") ?: syncKey
-            
-            if (status == 1 && serverId.isNotEmpty()) {
-                FolderCreateResult(serverId, newSyncKey)
-            } else {
-                val errorMsg = when (status) {
-                    2 -> "Папка с таким именем уже существует"
-                    3 -> "Системную папку нельзя создать"
-                    5 -> "Родительская папка не найдена"
-                    6 -> "Ошибка сервера"
-                    9 -> "Неверный SyncKey, попробуйте синхронизировать папки"
-                    10 -> "Неверный формат запроса"
-                    11 -> "Неизвестная ошибка"
-                    else -> "Ошибка создания папки: status=$status"
-                }
-                throw Exception(errorMsg)
-            }
-        }
-    }
+    ): EasResult<FolderCreateResult> = folderSyncService.createFolder(displayName, parentId, folderType, syncKey)
     
-    /**
-     * Удаление папки с сервера (FolderDelete)
-     */
-    suspend fun deleteFolder(
-        serverId: String,
-        syncKey: String
-    ): EasResult<String> {
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
-<FolderDelete xmlns="FolderHierarchy">
-    <SyncKey>${escapeXml(syncKey)}</SyncKey>
-    <ServerId>${escapeXml(serverId)}</ServerId>
-</FolderDelete>""".trimIndent()
-        
-        return executeEasCommand("FolderDelete", xml) { responseXml ->
-            val status = extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
-            val newSyncKey = extractValue(responseXml, "SyncKey") ?: syncKey
-            
-            if (status == 1) {
-                newSyncKey
-            } else {
-                val errorMsg = when (status) {
-                    3 -> "Системную папку нельзя удалить"
-                    4 -> "Папка не существует"
-                    6 -> "Ошибка сервера"
-                    9 -> "Неверный SyncKey"
-                    else -> "Ошибка удаления папки: status=$status"
-                }
-                throw Exception(errorMsg)
-            }
-        }
-    }
+    suspend fun deleteFolder(serverId: String, syncKey: String): EasResult<String> =
+        folderSyncService.deleteFolder(serverId, syncKey)
     
-    /**
-     * Переименование папки на сервере (FolderUpdate)
-     */
-    suspend fun renameFolder(
-        serverId: String,
-        newDisplayName: String,
-        syncKey: String
-    ): EasResult<String> {
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
-<FolderUpdate xmlns="FolderHierarchy">
-    <SyncKey>${escapeXml(syncKey)}</SyncKey>
-    <ServerId>${escapeXml(serverId)}</ServerId>
-    <ParentId>0</ParentId>
-    <DisplayName>${escapeXml(newDisplayName)}</DisplayName>
-</FolderUpdate>""".trimIndent()
-        
-        return executeEasCommand("FolderUpdate", xml) { responseXml ->
-            val status = extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
-            val newSyncKey = extractValue(responseXml, "SyncKey") ?: syncKey
-            
-            if (status == 1) {
-                newSyncKey
-            } else {
-                val errorMsg = when (status) {
-                    2 -> "Папка с таким именем уже существует"
-                    3 -> "Системную папку нельзя переименовать"
-                    4 -> "Папка не существует"
-                    5 -> "Родительская папка не существует"
-                    6 -> "Ошибка сервера"
-                    9 -> "Неверный SyncKey"
-                    else -> "Ошибка переименования папки: status=$status"
-                }
-                throw Exception(errorMsg)
-            }
-        }
-    }
+    suspend fun renameFolder(serverId: String, newDisplayName: String, syncKey: String): EasResult<String> =
+        folderSyncService.renameFolder(serverId, newDisplayName, syncKey)
     
     /**
      * Перемещение писем между папками (MoveItems)
@@ -1161,18 +750,8 @@ class EasClient(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
                 
-                // Пробуем Basic Auth, затем NTLM
-                var findResponse = tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
-                if (findResponse == null) {
-                    val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                    if (ntlmAuth != null) {
-                        findResponse = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-                    }
-                }
-                
-                if (findResponse == null) {
-                    return@withContext EasResult.Error("FindItem request failed")
-                }
+                val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+                    ?: return@withContext EasResult.Error("FindItem request failed")
                 
                 // Извлекаем ItemId из ответа
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
@@ -1205,17 +784,8 @@ class EasClient(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
                 
-                var getItemResponse = tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
-                if (getItemResponse == null) {
-                    val ntlmAuth = performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
-                    if (ntlmAuth != null) {
-                        getItemResponse = executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem")
-                    }
-                }
-                
-                if (getItemResponse == null) {
-                    return@withContext EasResult.Error("GetItem request failed")
-                }
+                val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
+                    ?: return@withContext EasResult.Error("GetItem request failed")
                 
                 // Извлекаем Body
                 val bodyPattern = "<t:Body[^>]*>([\\s\\S]*?)</t:Body>".toRegex()
@@ -1341,7 +911,7 @@ class EasClient(
     // buildMdnMessage перенесён в EasAttachmentService
     
     /**
-     * Скачивание вложения
+     * Скачивание вложения в память (ByteArray).
      * @see EasAttachmentService.downloadAttachment
      */
     suspend fun downloadAttachment(
@@ -1349,6 +919,17 @@ class EasClient(
         collectionId: String? = null, 
         serverId: String? = null
     ): EasResult<ByteArray> = attachmentService.downloadAttachment(fileReference, collectionId, serverId)
+    
+    /**
+     * Скачивание вложения в файл (streaming, без OOM для больших файлов).
+     * @see EasAttachmentService.downloadAttachmentToFile
+     */
+    suspend fun downloadAttachmentToFile(
+        fileReference: String,
+        destFile: java.io.File,
+        collectionId: String? = null,
+        serverId: String? = null
+    ): EasResult<java.io.File> = attachmentService.downloadAttachmentToFile(fileReference, destFile, collectionId, serverId)
 
     suspend fun downloadDraftAttachment(fileReference: String): EasResult<ByteArray> {
         return if (fileReference.contains(":")) {
@@ -1414,20 +995,20 @@ $foldersXml
         
         return withContext(Dispatchers.IO) {
             try {
-                val url = buildUrl("Ping")
+                val url = transport.buildUrl("Ping")
                 val wbxmlBody = wbxmlParser.generate(xml)
                 
                 val pingClient = getPingClient(heartbeatInterval)
                 
                 val requestBuilder = Request.Builder()
                     .url(url)
-                    .post(wbxmlBody.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()))
-                    .header("Authorization", getAuthHeader())
-                    .header("MS-ASProtocolVersion", easVersion)
-                    .header("Content-Type", CONTENT_TYPE_WBXML)
+                    .post(wbxmlBody.toRequestBody(EasTransport.CONTENT_TYPE_WBXML.toMediaType()))
+                    .header("Authorization", transport.getAuthHeader())
+                    .header("MS-ASProtocolVersion", transport.easVersion)
+                    .header("Content-Type", EasTransport.CONTENT_TYPE_WBXML)
                     .header("User-Agent", "Android/12-EAS-2.0")
                 
-                policyKey?.let { key ->
+                transport.policyKey?.let { key ->
                     requestBuilder.header("X-MS-PolicyKey", key)
                 }
                 
@@ -1561,205 +1142,10 @@ $foldersXml
         xml: String,
         skipPolicyKey: Boolean = false,
         parser: (String) -> T
-    ): EasResult<T> = withContext(Dispatchers.IO) {
-        try {
-            val wbxml = wbxmlParser.generate(xml)
-            
-            val requestBuilder = Request.Builder()
-                .url(buildUrl(command))
-                .post(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()))
-                .header("Authorization", getAuthHeader())
-                .header("MS-ASProtocolVersion", easVersion)
-                .header("Content-Type", CONTENT_TYPE_WBXML)
-                .header("User-Agent", "Android/12-EAS-2.0")
-            
-            if (!skipPolicyKey) {
-                policyKey?.let { key ->
-                    requestBuilder.header("X-MS-PolicyKey", key)
-                }
-            }
-            
-            val request = requestBuilder.build()
-            val response = executeRequest(request)
-            
-            response.use { resp ->
-                if (resp.code == 449 && command != "Provision") {
-                    when (val provResult = provision()) {
-                        is EasResult.Success -> {
-                            val retryRequestBuilder = Request.Builder()
-                                .url(buildUrl(command))
-                                .post(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()))
-                                .header("Authorization", getAuthHeader())
-                                .header("MS-ASProtocolVersion", easVersion)
-                                .header("Content-Type", CONTENT_TYPE_WBXML)
-                                .header("User-Agent", "Android/12-EAS-2.0")
-                            
-                            policyKey?.let { key ->
-                                retryRequestBuilder.header("X-MS-PolicyKey", key)
-                            }
-                            
-                            val retryResponse = executeRequest(retryRequestBuilder.build())
-                            
-                            retryResponse.use { retryResp ->
-                                if (retryResp.isSuccessful) {
-                                    val responseBody = retryResp.body?.bytes()
-                                    if (responseBody != null && responseBody.isNotEmpty()) {
-                                        val responseXml = wbxmlParser.parse(responseBody)
-                                        return@withContext EasResult.Success(parser(responseXml))
-                                    } else if (command == "Sync") {
-                                        try {
-                                            return@withContext EasResult.Success(parser("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Sync><Collections><Collection><Status>1</Status></Collection></Collections></Sync>"))
-                                        } catch (e: Exception) {
-                                            if (e is kotlinx.coroutines.CancellationException) throw e
-                                            return@withContext EasResult.Error("Пустой ответ от сервера после retry (Sync)")
-                                        }
-                                    } else {
-                                        return@withContext EasResult.Error("Пустой ответ от сервера после retry ($command)")
-                                    }
-                                } else {
-                                    return@withContext EasResult.Error("Provision phase retry failed: HTTP ${retryResp.code} (EAS: $easVersion)")
-                                }
-                            }
-                        }
-                        is EasResult.Error -> {
-                            return@withContext provResult
-                        }
-                    }
-                }
-                
-                if (resp.isSuccessful) {
-                    val responseBody = resp.body?.bytes()
-                    if (responseBody != null && responseBody.isNotEmpty()) {
-                        val responseXml = wbxmlParser.parse(responseBody)
-                        EasResult.Success(parser(responseXml))
-                    } else if (command == "Sync") {
-                        // MS-ASCMD: пустой ответ на Sync = нет изменений (документировано)
-                        try {
-                            EasResult.Success(parser("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Sync><Collections><Collection><Status>1</Status></Collection></Collections></Sync>"))
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            EasResult.Error("Пустой ответ от сервера (Sync)")
-                        }
-                    } else {
-                        EasResult.Error("Пустой ответ от сервера ($command)")
-                    }
-                } else if (resp.code == 401) {
-                    resp.body?.close()
-                    EasResult.Error("UNAUTHORIZED")
-                } else if (resp.code == 403) {
-                    resp.body?.close()
-                    EasResult.Error("ACCESS_DENIED")
-                } else if (resp.code == 449) {
-                    resp.body?.close()
-                    policyKey = null
-                    EasResult.Error("PROVISION_REQUIRED")
-                } else {
-                    val errorBody = resp.body?.string() ?: ""
-                    EasResult.Error("HTTP ${resp.code}: ${resp.message}")
-                }
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            // Добавляем информацию о сертификате для отладки SSL ошибок
-            val certInfo = if (certificatePath != null) " [cert: $certificatePath]" else ""
-            EasResult.Error("Ошибка: ${e.javaClass.simpleName}: ${e.message}$certInfo")
-        }
-    }
+    ): EasResult<T> = transport.executeEasCommand(command, xml, skipPolicyKey, parser)
     
-    private suspend fun executeRequest(request: Request): Response = suspendCancellableCoroutine { cont ->
-        val call = client.newCall(request)
-        cont.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (cont.isActive) cont.resumeWithException(e)
-            }
-            override fun onResponse(call: Call, response: Response) {
-                if (cont.isActive) cont.resume(response)
-                else response.close() // Закрываем response если корутина уже отменена
-            }
-        })
-    }
+    private suspend fun executeRequest(request: Request): Response = transport.executeRequest(request)
     
-    private fun parseFolderSyncResponse(xml: String): FolderSyncResponse {
-        val status = extractValue(xml, "Status")?.toIntOrNull() ?: 1
-        val syncKey = extractValue(xml, "SyncKey") ?: "0"
-        val folders = mutableListOf<EasFolder>()
-        val deletedFolderIds = mutableListOf<String>()
-        
-        // Если Status != 1, возвращаем ошибку
-        if (status != 1) {
-            return FolderSyncResponse(syncKey, folders, status, deletedFolderIds)
-        }
-        
-        val hasFolderTags = FOLDER_REGEX.containsMatchIn(xml)
-        
-        if (hasFolderTags) {
-            FOLDER_REGEX.findAll(xml).forEach { match ->
-                val folderXml = match.groupValues[1]
-                parseFolder(folderXml)?.let { folders.add(it) }
-            }
-        } else {
-            for (block in XmlUtils.extractTopLevelBlocks(xml, "Add")) {
-                parseFolder(block)?.let { folders.add(it) }
-            }
-        }
-        
-        for (block in XmlUtils.extractTopLevelBlocks(xml, "Delete")) {
-            extractValue(block, "ServerId")?.let { deletedFolderIds.add(it) }
-        }
-        
-        return FolderSyncResponse(syncKey, folders, status, deletedFolderIds)
-    }
-    
-    private fun parseFolder(folderXml: String): EasFolder? {
-        val serverId = extractValue(folderXml, "ServerId") ?: return null
-        val displayName = XmlUtils.unescape(extractValue(folderXml, "DisplayName") ?: "")
-        val parentId = extractValue(folderXml, "ParentId") ?: "0"
-        val type = extractValue(folderXml, "Type")?.toIntOrNull() ?: 1
-        
-        return EasFolder(serverId, displayName, parentId, type)
-    }
-    
-    private fun parseSyncResponse(xml: String): SyncResponse {
-        val syncKey = extractValue(xml, "SyncKey") ?: "0"
-        val status = extractValue(xml, "Status")?.toIntOrNull() ?: 1
-        val emails = mutableListOf<EasEmail>()
-        val deletedIds = mutableListOf<String>()
-        val changedEmails = mutableListOf<EasEmailChange>()
-        
-        // Проверяем наличие MoreAvailable (пустой тег)
-        val moreAvailable = xml.contains("<MoreAvailable/>") || xml.contains("<MoreAvailable>")
-        
-        for (block in XmlUtils.extractTopLevelBlocks(xml, "Add")) {
-            parseEmail(block)?.let { emails.add(it) }
-        }
-        
-        for (changeXml in XmlUtils.extractTopLevelBlocks(xml, "Change")) {
-            val serverId = extractValue(changeXml, "ServerId")
-            if (serverId != null) {
-                val readValue = extractValue(changeXml, "Read")
-                val read = readValue?.let { it == "1" }
-                
-                val flagXml = XmlUtils.extractTagValue(changeXml, "Flag")
-                val flagStatus = flagXml?.let { extractValue(it, "FlagStatus") }
-                val flagged = flagStatus?.let { it == "2" }
-                
-                if (read != null || flagged != null) {
-                    changedEmails.add(EasEmailChange(serverId, read, flagged))
-                }
-            }
-        }
-        
-        for (block in XmlUtils.extractTopLevelBlocks(xml, "Delete")) {
-            extractValue(block, "ServerId")?.let { deletedIds.add(it) }
-        }
-        
-        for (block in XmlUtils.extractTopLevelBlocks(xml, "SoftDelete")) {
-            extractValue(block, "ServerId")?.let { deletedIds.add(it) }
-        }
-        
-        return SyncResponse(syncKey, status, emails, moreAvailable, deletedIds, changedEmails)
-    }
     
     private fun parseEmail(xml: String): EasEmail? {
         val serverId = extractValue(xml, "ServerId") ?: return null
@@ -1842,14 +1228,7 @@ $foldersXml
     /**
      * Строит EWS SOAP запрос с Exchange2007_SP1 header
      */
-    private fun buildEwsSoapRequest(bodyContent: String): String {
-        return """$SOAP_ENVELOPE_START
-  $SOAP_HEADER_2007
-  <soap:Body>
-$bodyContent
-  </soap:Body>
-$SOAP_ENVELOPE_END"""
-    }
+    private fun buildEwsSoapRequest(bodyContent: String): String = transport.buildEwsSoapRequest(bodyContent)
     
     /**
      * Синхронизация контактов из папки Contacts на сервере Exchange
@@ -1903,18 +1282,7 @@ $SOAP_ENVELOPE_END"""
     suspend fun deleteNotesPermanentlyBatch(serverIds: List<String>): EasResult<Int> =
         notesService.deleteNotesPermanentlyBatch(serverIds)
 
-    private suspend fun getDeletedItemsFolderId(): String? {
-        cachedDeletedItemsFolderId?.let { return it }
-        val foldersResult = folderSync("0")
-        return when (foldersResult) {
-            is EasResult.Success -> {
-                val folderId = foldersResult.data.folders.find { it.type == FolderType.DELETED_ITEMS }?.serverId
-                if (folderId != null) cachedDeletedItemsFolderId = folderId
-                folderId
-            }
-            is EasResult.Error -> null
-        }
-    }
+    private suspend fun getDeletedItemsFolderId(): String? = folderSyncService.getDeletedItemsFolderId()
     
     /**
      * Обновление заметки на сервере Exchange
@@ -1943,29 +1311,17 @@ $SOAP_ENVELOPE_END"""
     val notesIncrementalNoChanges: Boolean
         get() = notesService.lastSyncWasIncrementalNoChanges
     
-    /**
-     * Выполняет NTLM handshake и возвращает auth header
-     * Делегирует в централизованный EwsClient (с кэшированием токенов)
-     */
-    private suspend fun performNtlmHandshake(ewsUrl: String, soapRequest: String, action: String): String? {
-        return ewsClient.performNtlmHandshake(soapRequest, action)
-    }
+    private suspend fun performNtlmHandshake(ewsUrl: String, soapRequest: String, action: String): String? =
+        transport.performNtlmHandshake(ewsUrl, soapRequest, action)
     
-    /**
-     * Выполняет запрос с NTLM auth header
-     * Делегирует в централизованный EwsClient
-     */
-    private suspend fun executeNtlmRequest(ewsUrl: String, soapRequest: String, authHeader: String, action: String): String? {
-        return ewsClient.executeNtlmRequest(soapRequest, authHeader, action)
-    }
+    private suspend fun executeNtlmRequest(ewsUrl: String, soapRequest: String, authHeader: String, action: String): String? =
+        transport.executeNtlmRequest(ewsUrl, soapRequest, authHeader, action)
     
-    /**
-     * Пробует Basic аутентификацию для EWS запроса
-     * Делегирует в централизованный EwsClient
-     */
-    private suspend fun tryBasicAuthEws(ewsUrl: String, soapRequest: String, action: String): String? {
-        return ewsClient.tryBasicAuth(soapRequest, action)
-    }
+    private suspend fun tryBasicAuthEws(ewsUrl: String, soapRequest: String, action: String): String? =
+        transport.tryBasicAuthEws(ewsUrl, soapRequest, action)
+
+    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? =
+        transport.executeEwsWithAuth(ewsUrl, soapRequest, operation)
     
     /**
      * Создание события календаря на сервере Exchange
@@ -2300,11 +1656,7 @@ $SOAP_ENVELOPE_END"""
                     return@withContext EasResult.Error("Не удалось выполнить запрос")
                 }
                 
-                // КРИТИЧНО: Проверяем ОБА условия
-                val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-                val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                                responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-                if (hasSuccess && hasNoError) {
+                if (EwsClient.isEwsSuccess(responseXml)) {
                     return@withContext EasResult.Success(true)
                 }
                 
@@ -2374,40 +1726,14 @@ $SOAP_ENVELOPE_END"""
      * Получает ID папки задач с кэшированием и автоматической инвалидацией при ошибке
      * @param forceRefresh принудительно обновить кэш
      */
-    private suspend fun getTasksFolderId(forceRefresh: Boolean = false): String? {
-        if (forceRefresh) cachedTasksFolderId = null
-        
-        return cachedTasksFolderId ?: run {
-            val foldersResult = folderSync("0")
-            when (foldersResult) {
-                is EasResult.Success -> {
-                    val folderId = foldersResult.data.folders.find { it.type == 7 }?.serverId
-                    if (folderId != null) cachedTasksFolderId = folderId
-                    folderId
-                }
-                is EasResult.Error -> null
-            }
-        }
-    }
+    private suspend fun getTasksFolderId(forceRefresh: Boolean = false): String? =
+        folderSyncService.getTasksFolderId(forceRefresh)
     
     /**
      * Получение ID папки Notes с кэшированием
      */
-    private suspend fun getNotesFolderId(forceRefresh: Boolean = false): String? {
-        if (forceRefresh) cachedNotesFolderId = null
-        
-        return cachedNotesFolderId ?: run {
-            val foldersResult = folderSync("0")
-            when (foldersResult) {
-                is EasResult.Success -> {
-                    val folderId = foldersResult.data.folders.find { it.type == FolderType.NOTES }?.serverId
-                    if (folderId != null) cachedNotesFolderId = folderId
-                    folderId
-                }
-                is EasResult.Error -> null
-            }
-        }
-    }
+    private suspend fun getNotesFolderId(forceRefresh: Boolean = false): String? =
+        folderSyncService.getNotesFolderId(forceRefresh)
     
     /**
      * Получение ID папки черновиков
@@ -2574,21 +1900,7 @@ $SOAP_ENVELOPE_END"""
         return null
     }
     
-    private suspend fun getDraftsFolderId(): String? {
-        cachedDraftsFolderId?.let { return it }
-        val foldersResult = folderSync("0")
-        return when (foldersResult) {
-            is EasResult.Success -> {
-                val folderId = foldersResult.data.folders.find { it.type == FolderType.DRAFTS }?.serverId
-                if (folderId != null) cachedDraftsFolderId = folderId
-                folderId
-            }
-            is EasResult.Error -> null
-        }
-    }
-    
-    // Кэш ID папки черновиков
-    @Volatile private var cachedDraftsFolderId: String? = null
+    private suspend fun getDraftsFolderId(): String? = folderSyncService.getDraftsFolderId()
     
     /**
      * Синхронизация задач из папки Tasks на сервере Exchange
@@ -3036,14 +2348,8 @@ $SOAP_ENVELOPE_END"""
     </soap:Body>
 </soap:Envelope>""".trimIndent()
                 
-                var responseXml = tryBasicAuthEws(ewsUrl, getItemRequest, "FindItem")
-                
-                if (responseXml == null) {
-                    val ntlmAuth = performNtlmHandshake(ewsUrl, getItemRequest, "FindItem")
-                        ?: return@withContext EasResult.Error("NTLM handshake failed")
-                    responseXml = executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "FindItem")
-                        ?: return@withContext EasResult.Error("Failed to execute FindItem")
-                }
+                val responseXml = executeEwsWithAuth(ewsUrl, getItemRequest, "FindItem")
+                    ?: return@withContext EasResult.Error("Failed to execute FindItem")
                 
                 // Извлекаем ItemId из ответа
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
@@ -3088,13 +2394,8 @@ $SOAP_ENVELOPE_END"""
 </m:FindItem>""".trimIndent()
                 val findRequest = buildEwsSoapRequest(findBody)
                 
-                var responseXml = tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
-                if (responseXml == null) {
-                    val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                        ?: return@withContext null
-                    responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-                        ?: return@withContext null
-                }
+                val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+                    ?: return@withContext null
                 
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
                 itemIdPattern.find(responseXml)?.groupValues?.get(1)
@@ -3111,14 +2412,7 @@ $SOAP_ENVELOPE_END"""
      */
     suspend fun deleteDraft(serverId: String): EasResult<Boolean> = draftsService.deleteDraft(serverId)
     
-    /**
-     * Извлекает текст ошибки из EWS ответа
-     */
-    private fun extractEwsError(xml: String): String {
-        val messageText = EWS_MESSAGE_TEXT_REGEX.find(xml)?.groupValues?.get(1)
-        val responseCode = EWS_RESPONSE_CODE_REGEX.find(xml)?.groupValues?.get(1)
-        return messageText ?: responseCode ?: "Unknown error"
-    }
+    private fun extractEwsError(xml: String): String = transport.extractEwsError(xml)
     
     /**
      * Unescape XML entities

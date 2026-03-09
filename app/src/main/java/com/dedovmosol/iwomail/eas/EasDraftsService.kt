@@ -155,7 +155,7 @@ suspend fun createDraft(
             return EasResult.Success("local_draft_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}")
         }
         
-        if (majorVersion == 14 && minorVersion >= 1 || majorVersion > 14) {
+        if ((majorVersion == 14 && minorVersion >= 1) || majorVersion > 14) {
             val ewsResult = createDraftEws2013(to, cc, bcc, subject, body, attachments)
             if (ewsResult is EasResult.Success) {
                 return ewsResult
@@ -252,18 +252,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "GetItem")
-            
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "GetItem")
-                if (ntlmAuth != null) {
-                    responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "GetItem")
-                }
-            }
-            
-            if (responseXml == null) {
-                return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "GetItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
             
             // Извлекаем Body c учётом атрибутов (<t:Body BodyType="HTML">...</t:Body>)
             val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -302,16 +292,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
 
             // 1. FindItem — получаем список черновиков (заголовки)
             val findRequest = buildFindDraftsRequest(exchangeVersion)
-            var findResponse = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
-            if (findResponse == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                if (ntlmAuth != null) {
-                    findResponse = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-                }
-            }
-            if (findResponse == null) {
-                return@withContext EasResult.Error("EWS FindItem: нет ответа от сервера")
-            }
+            val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+                ?: return@withContext EasResult.Error("EWS FindItem: нет ответа от сервера")
             if (findResponse.contains("ResponseClass=\"Error\"")) {
                 val msg = EasPatterns.EWS_MESSAGE_TEXT.find(findResponse)?.groupValues?.get(1) ?: "FindItem error"
                 return@withContext EasResult.Error("EWS FindItem: $msg")
@@ -376,17 +358,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "GetItem")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "GetItem")
-                if (ntlmAuth != null) {
-                    responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "GetItem")
-                }
-            }
-            
-            if (responseXml == null) {
-                return@withContext EasResult.Error("Не удалось выполнить EWS GetItem")
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "GetItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS GetItem")
             
             // КРИТИЧНО: XmlValueExtractor.extractEws использует regex
             // <t:MimeContent>(.*?)</t:MimeContent> — он НЕ обрабатывает атрибуты.
@@ -422,13 +395,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val ewsUrl = deps.getEwsUrl()
             val request = buildGetAttachmentRequest(attachmentId, resolveEwsVersion())
 
-            var response = deps.tryBasicAuthEws(ewsUrl, request, "GetAttachment")
-            if (response == null) {
-                val authHeader = deps.performNtlmHandshake(ewsUrl, request, "GetAttachment")
-                    ?: return@withContext EasResult.Error("NTLM handshake failed")
-                response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "GetAttachment")
-                    ?: return@withContext EasResult.Error("Ошибка выполнения EWS запроса")
-            }
+            val response = executeEwsWithAuth(ewsUrl, request, "GetAttachment")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS GetAttachment")
 
             val contentBase64 = XmlValueExtractor.extractEws(response, "Content")
                 ?: return@withContext EasResult.Error("Нет данных вложения")
@@ -509,17 +477,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val soapRequest = sb.toString()
             
             // 3. Отправляем
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "CreateItem")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
-                if (ntlmAuth != null) {
-                    responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
-                }
-            }
-            
-            if (responseXml == null) {
-                return@withContext EasResult.Error("MIME CreateItem: нет ответа от сервера")
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
+                ?: return@withContext EasResult.Error("MIME CreateItem: нет ответа от сервера")
             
             // 4. Извлекаем ItemId
             var itemId = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "Id")
@@ -663,6 +622,19 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     // === Вспомогательные методы ===
     
     /**
+     * Basic Auth → NTLM fallback для EWS SOAP запросов.
+     * DRY: единая точка авторизации вместо inline-повторений.
+     */
+    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? {
+        var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, operation)
+        if (responseXml == null) {
+            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
+            responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+        }
+        return responseXml
+    }
+
+    /**
      * Ищет черновик по теме через EWS FindItem в папке Drafts.
      * Используется как fallback, когда CreateItem не вернул ItemId.
      * Возвращает ItemId самого свежего совпадения или null.
@@ -704,16 +676,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         findSb.append("</soap:Envelope>")
         val findRequest = findSb.toString()
         
-        var findResponse = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
-        if (findResponse == null) {
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-            if (ntlmAuth != null) {
-                findResponse = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-            }
-        }
-        
-        if (findResponse == null) return null
-        
+        val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem") ?: return null
+
         // Извлекаем первый (самый свежий) ItemId
         return XmlValueExtractor.extractAttribute(findResponse, "ItemId", "Id")
             ?: EasPatterns.EWS_ITEM_ID.find(findResponse)?.groupValues?.get(1)
@@ -760,16 +724,9 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         findSb.append("</soap:Envelope>")
         val findRequest = findSb.toString()
         
-        var findResponse = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
-        if (findResponse == null) {
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-            if (ntlmAuth != null) {
-                findResponse = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-            }
-        }
-        
-        if (findResponse == null) return EasResult.Error("EWS FindItem failed")
-        
+        val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+            ?: return EasResult.Error("EWS FindItem failed")
+
         // Извлекаем ВСЕ ItemId из ответа
         val itemIdPattern = """<t:ItemId\s+Id="([^"]+)"""".toRegex()
         val allIds = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
@@ -800,18 +757,8 @@ private suspend fun createDraftEws(
             val ewsVersion = resolveEwsVersion()
             val soapRequest = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
 
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "CreateItem")
-
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
-                if (ntlmAuth != null) {
-                    responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
-                }
-            }
-
-            if (responseXml == null) {
-                return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
 
             val itemId = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "Id")
                 ?: EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
@@ -862,18 +809,8 @@ private suspend fun createDraftEws(
                 val ewsVersion = resolveEwsVersion()
                 val request = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
                 
-                var response = deps.tryBasicAuthEws(ewsUrl, request, "CreateItem")
-                
-                if (response == null) {
-                    val authHeader = deps.performNtlmHandshake(ewsUrl, request, "CreateItem")
-                    if (authHeader != null) {
-                        response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "CreateItem")
-                    }
-                }
-                
-                if (response == null) {
-                    return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-                }
+                val response = executeEwsWithAuth(ewsUrl, request, "CreateItem")
+                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
                 
                 val itemId = XmlValueExtractor.extractAttribute(response, "ItemId", "Id")
                     ?: EasPatterns.EWS_ITEM_ID.find(response)?.groupValues?.get(1)
@@ -950,14 +887,9 @@ private suspend fun updateDraftEws(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var getItemResponse = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
-            if (getItemResponse == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                getItemResponse = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem")
-                    ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
-            }
-            
+            val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
+                ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
+
             // Извлекаем ChangeKey из ответа
             val changeKey = XmlValueExtractor.extractAttribute(getItemResponse, "ItemId", "ChangeKey") ?: ""
 
@@ -1021,25 +953,10 @@ private suspend fun updateDraftEws(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "UpdateItem")
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "UpdateItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
 
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "UpdateItem")
-                if (ntlmAuth != null) {
-                    responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "UpdateItem")
-                }
-            }
-
-            if (responseXml == null) {
-                return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-            }
-
-            // КРИТИЧНО: Проверяем ResponseClass И ResponseCode
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-            
-            if (hasSuccess && hasNoError) {
+            if (EwsClient.isEwsSuccess(responseXml)) {
                 EasResult.Success(true)
             } else {
                 val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(responseXml)?.groupValues?.get(1)
@@ -1080,22 +997,14 @@ private suspend fun updateDraftEws(
                         </soap:Envelope>
                     """.trimIndent()
 
-                    var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
-
-                    if (responseXml == null) {
-                        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                        if (ntlmAuth != null) {
-                            responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                        }
-                    }
-
+                    val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
                     if (responseXml == null) {
                         lastError = "Не удалось выполнить запрос к EWS"
                         if (attempt < maxRetries) {
                             kotlinx.coroutines.delay(1000L * attempt)
                             continue
                         }
-                        return@withContext EasResult.Error(lastError)
+                        return@withContext EasResult.Error(lastError!!)
                     }
 
                     if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
@@ -1148,17 +1057,10 @@ private suspend fun updateDraftEws(
                 itemId, currentChangeKey, listOf(att), exchangeVersion
             )
 
-            var response = deps.tryBasicAuthEws(ewsUrl, request, "CreateAttachment")
-            if (response == null) {
-                val authHeader = deps.performNtlmHandshake(ewsUrl, request, "CreateAttachment")
-                    ?: return@withContext EasResult.Error(
-                        "NTLM handshake failed для вложения ${index + 1}/${attachments.size} (${att.name})"
-                    )
-                response = deps.executeNtlmRequest(ewsUrl, request, authHeader, "CreateAttachment")
-                    ?: return@withContext EasResult.Error(
-                        "Ошибка EWS запроса для вложения ${index + 1}/${attachments.size} (${att.name})"
-                    )
-            }
+            val response = executeEwsWithAuth(ewsUrl, request, "CreateAttachment")
+                ?: return@withContext EasResult.Error(
+                    "Не удалось прикрепить вложение ${index + 1}/${attachments.size} (${att.name})"
+                )
 
             // Проверяем ответ — ищем ошибку (более надёжно, чем искать Success)
             val hasError = response.contains("ResponseClass=\"Error\"")
@@ -1537,11 +1439,7 @@ private suspend fun updateDraftEws(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        var response = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
-        if (response == null) {
-            val authHeader = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
-            response = deps.executeNtlmRequest(ewsUrl, getItemRequest, authHeader, "GetItem") ?: return emptyMap()
-        }
+        val response = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
 
         val result = mutableMapOf<String, DraftEwsDetails>()
         val itemBlocks = MESSAGE_PATTERN.findAll(response)

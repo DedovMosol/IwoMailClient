@@ -26,8 +26,6 @@ class EasNotesService internal constructor(
         private val APPLICATION_DATA_PATTERN = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val NOTES_CATEGORIES_PATTERN = "<notes:Categories>(.*?)</notes:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val EWS_ITEM_PATTERN = "<t:(?:PostItem|Message)[^>]*>(.*?)</t:(?:PostItem|Message)>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val RESULT_PATTERN = "<Result>(.*?)</Result>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val PROPERTIES_PATTERN = "<Properties>(.*?)</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val BODY_T_PATTERN = "<t:Body[^>]*>(.*?)</t:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val BODY_PATTERN = "<Body[^>]*>(.*?)</Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val BODY_M_PATTERN = "<m:Body[^>]*>(.*?)</m:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -327,46 +325,6 @@ class EasNotesService internal constructor(
         return EasResult.Success(allNotes)
     }
 
-    /**
-     * Legacy синхронизация заметок для EAS 12.x (Exchange 2007)
-     * Exchange 2007 не поддерживает Sync для Notes, используем Search
-     */
-    private suspend fun syncNotesLegacy(folders: List<EasFolder>): EasResult<List<EasNote>> {
-        val notesFolderId = folders.find {
-            it.displayName.equals("Notes", ignoreCase = true) ||
-                it.displayName.equals("Заметки", ignoreCase = true)
-        }?.serverId
-
-        if (notesFolderId == null) {
-            return EasResult.Success(emptyList())
-        }
-
-        val searchXml = EasXmlTemplates.searchMailbox(notesFolderId)
-        val searchResult = deps.executeEasCommand("Search", searchXml) { responseXml ->
-            parseNotesSearchResponse(responseXml)
-        }
-
-        val activeNotes: List<EasNote> = if (searchResult is EasResult.Error ||
-            (searchResult is EasResult.Success && searchResult.data.isEmpty())
-        ) {
-            val syncResult = syncNotesLegacySync(notesFolderId)
-            if (syncResult is EasResult.Success && syncResult.data.isEmpty()) {
-                return syncNotesEws()
-            }
-            (syncResult as? EasResult.Success)?.data ?: emptyList()
-        } else {
-            (searchResult as? EasResult.Success)?.data ?: emptyList()
-        }
-
-        val allNotes = activeNotes.toMutableList()
-        val deletedNotes = syncDeletedNotesEws()
-        if (deletedNotes is EasResult.Success) {
-            allNotes.addAll(deletedNotes.data)
-        }
-
-        return EasResult.Success(allNotes)
-    }
-    
     private suspend fun syncNotesFromFolder(folderId: String, isDeleted: Boolean): EasResult<List<EasNote>> {
         val initialXml = EasXmlTemplates.syncInitial(folderId)
         
@@ -570,75 +528,46 @@ class EasNotesService internal constructor(
     }
     
     private suspend fun deleteNoteEas(serverId: String): EasResult<Boolean> {
-        val notesFolderId = cachedNotesFolderId ?: deps.getNotesFolderId()
+        val folderId = cachedNotesFolderId ?: deps.getNotesFolderId()
             ?: return EasResult.Error("Папка Notes не найдена")
-
-        for (attempt in 0..1) {
-            val syncKey = getValidSyncKey(notesFolderId)
-            if (syncKey == null) {
-                if (attempt < 1) continue
-                return EasResult.Error("Не удалось получить SyncKey")
-            }
-
-            val deleteXml = EasXmlTemplates.syncDelete(syncKey, notesFolderId, serverId, deletesAsMoves = true)
-
-            val result = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
-                val status = deps.extractValue(responseXml, "Status")
-                when (status) {
-                    "1" -> {
-                        val newKey = deps.extractValue(responseXml, "SyncKey")
-                        if (newKey != null) syncKeyCache[notesFolderId] = newKey
-                        true
-                    }
-                    "8" -> true
-                    "3", "12" -> {
-                        syncKeyCache.remove(notesFolderId)
-                        throw InvalidSyncKeyException(status ?: "3")
-                    }
-                    else -> false
-                }
-            }
-
-            when (result) {
-                is EasResult.Success -> {
-                    if (result.data) return EasResult.Success(true)
-                    if (attempt < 1) continue
-                    return EasResult.Error("Не удалось удалить заметку")
-                }
-                is EasResult.Error -> {
-                    if (attempt == 0 && result.message.contains("InvalidSyncKey")) continue
-                    return result
-                }
-            }
-        }
-
-        return EasResult.Error("Не удалось удалить заметку после retry")
+        return deleteNoteEasImpl(serverId, folderId, deletesAsMoves = true)
     }
-    
-    private suspend fun deleteNotePermanentlyEas(serverId: String): EasResult<Boolean> {
-        val deletedItemsFolderId = deps.getDeletedItemsFolderId()
-            ?: return EasResult.Error("Папка Deleted Items не найдена")
 
+    private suspend fun deleteNotePermanentlyEas(serverId: String): EasResult<Boolean> {
+        val folderId = deps.getDeletedItemsFolderId()
+            ?: return EasResult.Error("Папка Deleted Items не найдена")
+        return deleteNoteEasImpl(serverId, folderId, deletesAsMoves = false)
+    }
+
+    /**
+     * MS-ASCMD 2.2.1.21 Sync — Delete command.
+     * deletesAsMoves=true перемещает в Deleted Items; false — окончательное удаление.
+     */
+    private suspend fun deleteNoteEasImpl(
+        serverId: String,
+        folderId: String,
+        deletesAsMoves: Boolean
+    ): EasResult<Boolean> {
         for (attempt in 0..1) {
-            val syncKey = getValidSyncKey(deletedItemsFolderId)
+            val syncKey = getValidSyncKey(folderId)
             if (syncKey == null) {
                 if (attempt < 1) continue
                 return EasResult.Error("Не удалось получить SyncKey")
             }
 
-            val deleteXml = EasXmlTemplates.syncDelete(syncKey, deletedItemsFolderId, serverId, deletesAsMoves = false)
+            val deleteXml = EasXmlTemplates.syncDelete(syncKey, folderId, serverId, deletesAsMoves)
 
             val result = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
                 val status = deps.extractValue(responseXml, "Status")
                 when (status) {
                     "1" -> {
                         val newKey = deps.extractValue(responseXml, "SyncKey")
-                        if (newKey != null) syncKeyCache[deletedItemsFolderId] = newKey
+                        if (newKey != null) syncKeyCache[folderId] = newKey
                         true
                     }
                     "8" -> true
                     "3", "12" -> {
-                        syncKeyCache.remove(deletedItemsFolderId)
+                        syncKeyCache.remove(folderId)
                         throw InvalidSyncKeyException(status ?: "3")
                     }
                     else -> false
@@ -796,11 +725,7 @@ class EasNotesService internal constructor(
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: SUCCESS itemId=$itemId")
                 EasResult.Success(itemId)
             } else {
-                // КРИТИЧНО: Проверяем ОБА условия
-                val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-                val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                                responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-                if (hasSuccess && hasNoError) {
+                if (EwsClient.isEwsSuccess(responseXml)) {
                     val uuid = java.util.UUID.randomUUID().toString()
                     if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: SUCCESS (no itemId, generated=$uuid)")
                     EasResult.Success(uuid)
@@ -906,13 +831,7 @@ class EasNotesService internal constructor(
                 return@withContext EasResult.Error("Аутентификация не удалась")
             }
             
-            // КРИТИЧНО: Проверяем ОБА условия (ResponseClass="Success" И ResponseCode="NoError")
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-            val success = hasSuccess && hasNoError
-            
-            if (!success) {
+            if (!EwsClient.isEwsSuccess(responseXml)) {
                 val errorCode = Regex("<ResponseCode>([^<]+)</ResponseCode>").find(responseXml)?.groupValues?.get(1)
                 val errorMsg = Regex("MessageText>([^<]+)</").find(responseXml)?.groupValues?.get(1)
                 return@withContext EasResult.Error(errorMsg ?: "Ошибка обновления заметки")
@@ -949,14 +868,7 @@ class EasNotesService internal constructor(
             val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
                 ?: return EasResult.Error("Аутентификация не удалась")
             
-            // КРИТИЧНО: Для delete проверяем Success+NoError ИЛИ ErrorItemNotFound (уже удалено)
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-            val hasNotFound = responseXml.contains("ErrorItemNotFound")
-            val success = (hasSuccess && hasNoError) || hasNotFound
-            
-            EasResult.Success(success)
+            EasResult.Success(EwsClient.isEwsSuccessOrNotFound(responseXml))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка EWS: ${e.message}")
@@ -1009,11 +921,7 @@ $itemIdsXml
             if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService",
                 "deleteNotesBatchEws: ${ewsItemIds.size} items, deleteType=$deleteType, response len=${responseXml.length}")
 
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("NoError")
-            val hasNotFound = responseXml.contains("ErrorItemNotFound")
-
-            if ((hasSuccess && hasNoError) || hasNotFound) {
+            if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
                 EasResult.Success(ewsItemIds.size)
             } else {
                 val errorCode = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>"
@@ -1076,11 +984,7 @@ $itemIdsXml
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: SUCCESS, newItemId=${newItemId.take(50)}...")
                 EasResult.Success(newItemId)
             } else {
-                // КРИТИЧНО: Проверяем ОБА условия
-                val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-                val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                                responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-                if (hasSuccess && hasNoError) {
+                if (EwsClient.isEwsSuccess(responseXml)) {
                     if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: SUCCESS (no new ItemId, using original)")
                     EasResult.Success(serverId)
                 } else {
@@ -1097,7 +1001,7 @@ $itemIdsXml
     
     // ==================== Parsing ====================
     
-    private fun parseNotesResponse(xml: String, legacy: Boolean = false): List<EasNote> {
+    private fun parseNotesResponse(xml: String): List<EasNote> {
         val notes = mutableListOf<EasNote>()
         
         val patterns = listOf(ADD_PATTERN, CHANGE_PATTERN)
@@ -1105,9 +1009,6 @@ $itemIdsXml
         for (pattern in patterns) {
             pattern.findAll(xml).forEach { match ->
                 val itemXml = match.groupValues[1]
-                if (legacy && !isNoteItem(itemXml)) {
-                    return@forEach
-                }
                 val note = parseNoteFromXml(itemXml)
                 if (note != null) notes.add(note)
             }
@@ -1267,75 +1168,6 @@ $itemIdsXml
     private fun stripHtmlIfNeeded(text: String): String =
         com.dedovmosol.iwomail.util.stripHtmlIfNeeded(text)
 
-    private fun parseNotesSearchResponse(xml: String): List<EasNote> {
-        val notes = mutableListOf<EasNote>()
-
-        RESULT_PATTERN.findAll(xml).forEach { match ->
-            val resultXml = match.groupValues[1]
-
-            val serverId = deps.extractValue(resultXml, "LongId")
-                ?: deps.extractValue(resultXml, "ServerId")
-                ?: return@forEach
-
-            val propertiesMatch = PROPERTIES_PATTERN.find(resultXml) ?: return@forEach
-            val propsXml = propertiesMatch.groupValues[1]
-
-            val messageClass = deps.extractValue(propsXml, "MessageClass") ?: ""
-            if (messageClass.isNotEmpty() && !messageClass.contains("StickyNote", ignoreCase = true)) {
-                return@forEach
-            }
-
-            val subject = XmlUtils.unescape(deps.extractValue(propsXml, "Subject") ?: "")
-            val body = extractNoteBody(propsXml)
-            val lastModified = parseNoteDate(deps.extractValue(propsXml, "DateReceived"))
-
-            if (subject.isEmpty() && body.isEmpty()) return@forEach
-
-            notes.add(
-                EasNote(
-                    serverId = serverId,
-                    subject = subject.ifEmpty { "No subject" },
-                    body = body,
-                    categories = emptyList(),
-                    lastModified = lastModified
-                )
-            )
-        }
-
-        return notes
-    }
-
-    private suspend fun syncNotesLegacySync(notesFolderId: String): EasResult<List<EasNote>> {
-        val initialXml = EasXmlTemplates.syncInitial(notesFolderId)
-
-        var syncKey = "0"
-        when (val result = deps.executeEasCommand("Sync", initialXml) { deps.extractValue(it, "SyncKey") ?: "0" }) {
-            is EasResult.Success -> syncKey = result.data
-            is EasResult.Error -> return EasResult.Success(emptyList())
-        }
-
-        if (syncKey == "0") return EasResult.Success(emptyList())
-
-        val syncXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
-            <CollectionId>${deps.escapeXml(notesFolderId)}</CollectionId>
-            <GetChanges/>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-
-        return deps.executeEasCommand("Sync", syncXml) { responseXml ->
-            if (responseXml.contains("<Add>")) {
-                parseNotesResponse(responseXml, legacy = true)
-            } else {
-                emptyList()
-            }
-        }
-    }
-
     private suspend fun syncDeletedNotesEws(): EasResult<List<EasNote>> {
         return withContext(Dispatchers.IO) {
             try {
@@ -1381,14 +1213,6 @@ $itemIdsXml
         }
     }
 
-    private fun isNoteItem(itemXml: String): Boolean {
-        val dataXml = APPLICATION_DATA_PATTERN.find(itemXml)?.groupValues?.get(1) ?: itemXml
-        val messageClass = XmlValueExtractor.extractNote(dataXml, "MessageClass")
-            ?: deps.extractValue(dataXml, "MessageClass")
-            ?: ""
-        return messageClass.isBlank() || messageClass.contains("StickyNote", ignoreCase = true)
-    }
-    
     private fun extractNoteCategories(xml: String): List<String> {
         val categories = mutableListOf<String>()
         val categoriesMatch = NOTES_CATEGORIES_PATTERN.find(xml)

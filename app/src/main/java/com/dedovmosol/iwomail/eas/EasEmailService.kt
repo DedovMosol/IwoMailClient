@@ -49,15 +49,14 @@ class EasEmailService internal constructor(
         val executeNtlmRequest: suspend (String, String, String, String) -> String?,
         val getEwsUrl: () -> String,
         val getDeletedItemsFolderId: suspend () -> String?,
-        // Новые зависимости для delete операций
         val isExchange2007: () -> Boolean,
         val buildEwsSoapRequest: (String) -> String,
-        val parseSyncResponse: (String) -> SyncResponse,
         val extractEwsError: (String) -> String
     )
     
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
+        private const val SENTINEL_NOT_FOUND = "OBJECT_NOT_FOUND"
 
         private val EMAIL_PATTERN = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
         
@@ -263,53 +262,15 @@ class EasEmailService internal constructor(
      */
     suspend fun fetchEmailBodyWithMdn(collectionId: String, serverId: String): EasResult<EmailBodyResult> {
         return withTimeoutOrNull(45_000L) {
-            // Сначала пробуем получить полный MIME (Type=4) для парсинга заголовков.
-            // КРИТИЧНО: Увеличен TruncationSize с 1 МБ до 5 МБ.
-            // При отправке писем с inline-картинками + файловыми вложениями MIME легко
-            // превышает 1 МБ (base64 картинки раздуваются ~33%). С лимитом 1 МБ сервер
-            // возвращал Truncated=1 → откатывался к HTML (Type=2) с cid: ссылками без данных →
-            // inline-картинки не отображались в Отправленных.
-            // 5 МБ покрывает большинство писем с 2-3 inline-картинками + файлами.
-            val safeCollectionId = deps.escapeXml(collectionId)
-            val safeServerId = deps.escapeXml(serverId)
-            val mimeXml = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$safeCollectionId</CollectionId>
-        <ServerId xmlns="AirSync">$safeServerId</ServerId>
-        <Options>
-            <MIMESupport xmlns="AirSync">2</MIMESupport>
-            <BodyPreference xmlns="AirSyncBase">
-                <Type>4</Type>
-                <TruncationSize>5242880</TruncationSize>
-            </BodyPreference>
-        </Options>
-    </Fetch>
-</ItemOperations>""".trimIndent()
+            // MIME (Type=4): TruncationSize=5МБ (base64 +33%, inline-картинки + вложения)
+            val mimeResult = fetchItemBody(
+                collectionId, serverId,
+                bodyType = 4, truncationSize = 5_242_880,
+                mimeSupport = 2, includeBodyFallback = false
+            )
             
-            val mimeResult = deps.executeEasCommand("ItemOperations", mimeXml) { responseXml ->
-                val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
-                if (status == 8) {
-                    return@executeEasCommand "OBJECT_NOT_FOUND"
-                }
-                
-                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Проверяем флаг Truncated
-                // Если Truncated=1, значит тело обрезано или не отдано (Outlook уже получил)
-                val truncated = deps.extractValue(responseXml, "Truncated")
-                if (truncated == "1") {
-                    return@executeEasCommand ""  // Возвращаем пустую строку, попробуем другие типы
-                }
-                
-                XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
-                    ?: run {
-                        AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
-                    }
-                    ?: "")
-            }
-            
-            if (mimeResult is EasResult.Success && mimeResult.data == "OBJECT_NOT_FOUND") {
-                return@withTimeoutOrNull EasResult.Error("OBJECT_NOT_FOUND")
+            if (mimeResult is EasResult.Success && mimeResult.data == SENTINEL_NOT_FOUND) {
+                return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
             }
             
             var mdnRequestedBy: String? = null
@@ -318,51 +279,18 @@ class EasEmailService internal constructor(
             if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty()) {
                 val mimeData = mimeResult.data
                 mdnRequestedBy = parseMdnHeader(mimeData)
-                
-                // Извлекаем тело из MIME
                 bodyContent = extractBodyFromMime(mimeData)
             }
             
-            // Если MIME не сработал или тело пустое - fallback на обычный запрос
+            // HTML fallback (Type=2)
             if (bodyContent.isEmpty()) {
-                // Пробуем HTML (Type=2)
-                val htmlXml = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$safeCollectionId</CollectionId>
-        <ServerId xmlns="AirSync">$safeServerId</ServerId>
-        <Options>
-            <BodyPreference xmlns="AirSyncBase">
-                <Type>2</Type>
-                <TruncationSize>512000</TruncationSize>
-            </BodyPreference>
-        </Options>
-    </Fetch>
-</ItemOperations>""".trimIndent()
+                val htmlResult = fetchItemBody(
+                    collectionId, serverId,
+                    bodyType = 2, truncationSize = 512_000
+                )
                 
-                val htmlResult = deps.executeEasCommand("ItemOperations", htmlXml) { responseXml ->
-                    val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
-                    if (status == 8) {
-                        return@executeEasCommand "OBJECT_NOT_FOUND"
-                    }
-                    
-                    // Проверяем флаг Truncated
-                    val truncated = deps.extractValue(responseXml, "Truncated")
-                    if (truncated == "1") {
-                        return@executeEasCommand ""
-                    }
-                    
-                    XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
-                        ?: deps.extractValue(responseXml, "Body")
-                        ?: run {
-                            AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
-                        }
-                        ?: "")
-                }
-                
-                if (htmlResult is EasResult.Success && htmlResult.data == "OBJECT_NOT_FOUND") {
-                    return@withTimeoutOrNull EasResult.Error("OBJECT_NOT_FOUND")
+                if (htmlResult is EasResult.Success && htmlResult.data == SENTINEL_NOT_FOUND) {
+                    return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
                 }
                 
                 if (htmlResult is EasResult.Success && htmlResult.data.isNotBlank()) {
@@ -370,45 +298,15 @@ class EasEmailService internal constructor(
                 }
             }
             
-            // Если HTML не сработал - пробуем plain text (Type=1)
+            // Plain text fallback (Type=1)
             if (bodyContent.isEmpty()) {
-                val plainXml = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">$safeCollectionId</CollectionId>
-        <ServerId xmlns="AirSync">$safeServerId</ServerId>
-        <Options>
-            <BodyPreference xmlns="AirSyncBase">
-                <Type>1</Type>
-                <TruncationSize>512000</TruncationSize>
-            </BodyPreference>
-        </Options>
-    </Fetch>
-</ItemOperations>""".trimIndent()
+                val plainResult = fetchItemBody(
+                    collectionId, serverId,
+                    bodyType = 1, truncationSize = 512_000
+                )
                 
-                val plainResult = deps.executeEasCommand("ItemOperations", plainXml) { responseXml ->
-                    val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
-                    if (status == 8) {
-                        return@executeEasCommand "OBJECT_NOT_FOUND"
-                    }
-                    
-                    // Проверяем флаг Truncated
-                    val truncated = deps.extractValue(responseXml, "Truncated")
-                    if (truncated == "1") {
-                        return@executeEasCommand ""
-                    }
-                    
-                    XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
-                        ?: deps.extractValue(responseXml, "Body")
-                        ?: run {
-                            AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
-                        }
-                        ?: "")
-                }
-                
-                if (plainResult is EasResult.Success && plainResult.data == "OBJECT_NOT_FOUND") {
-                    return@withTimeoutOrNull EasResult.Error("OBJECT_NOT_FOUND")
+                if (plainResult is EasResult.Success && plainResult.data == SENTINEL_NOT_FOUND) {
+                    return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
                 }
                 
                 if (plainResult is EasResult.Success) {
@@ -423,6 +321,61 @@ class EasEmailService internal constructor(
     }
     
     /**
+     * Выполняет ItemOperations Fetch для получения тела письма заданного типа.
+     * Поддерживает EAS 12.1+: BodyPreference (Type + TruncationSize) и MIMESupport.
+     *
+     * @param includeBodyFallback true для HTML/Plain (где Data может быть в <Body>), false для MIME
+     * @return EasResult.Success с телом (или SENTINEL_NOT_FOUND / пустая строка при Truncated)
+     */
+    private suspend fun fetchItemBody(
+        collectionId: String,
+        serverId: String,
+        bodyType: Int,
+        truncationSize: Int,
+        mimeSupport: Int? = null,
+        includeBodyFallback: Boolean = true
+    ): EasResult<String> {
+        val safeCollectionId = deps.escapeXml(collectionId)
+        val safeServerId = deps.escapeXml(serverId)
+        val mimeSupportXml = if (mimeSupport != null)
+            "\n            <MIMESupport xmlns=\"AirSync\">$mimeSupport</MIMESupport>"
+        else ""
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+<ItemOperations xmlns="ItemOperations">
+    <Fetch>
+        <Store>Mailbox</Store>
+        <CollectionId xmlns="AirSync">$safeCollectionId</CollectionId>
+        <ServerId xmlns="AirSync">$safeServerId</ServerId>
+        <Options>$mimeSupportXml
+            <BodyPreference xmlns="AirSyncBase">
+                <Type>$bodyType</Type>
+                <TruncationSize>$truncationSize</TruncationSize>
+            </BodyPreference>
+        </Options>
+    </Fetch>
+</ItemOperations>""".trimIndent()
+
+        return deps.executeEasCommand("ItemOperations", xml) { responseXml ->
+            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
+            if (status == 8) {
+                return@executeEasCommand SENTINEL_NOT_FOUND
+            }
+
+            val truncated = deps.extractValue(responseXml, "Truncated")
+            if (truncated == "1") {
+                return@executeEasCommand ""
+            }
+
+            XmlUtils.unescape(
+                deps.extractValue(responseXml, "Data")
+                    ?: (if (includeBodyFallback) deps.extractValue(responseXml, "Body") else null)
+                    ?: AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
+                    ?: ""
+            )
+        }
+    }
+    
+    /**
      * Парсит вложения из XML (Sync или ItemOperations ответ)
      * Поддерживает оба варианта: с namespace prefix (airsyncbase:) и без
      */
@@ -433,18 +386,18 @@ class EasEmailService internal constructor(
             val displayName = deps.extractValue(attXml, "DisplayName")?.let { XmlUtils.unescape(it) }
             val contentId = deps.extractValue(attXml, "ContentId")
             val isInline = deps.extractValue(attXml, "IsInline") == "1"
-            // КРИТИЧНО: Добавляем вложение даже без FileReference (для inline изображений в Sent Items)
-            // FileReference может быть пустым, но contentId важен для inline
-            if (displayName != null) {
-                attachments.add(EasAttachment(
-                    fileReference = fileRef,
-                    displayName = displayName,
-                    contentType = deps.extractValue(attXml, "ContentType") ?: "application/octet-stream",
-                    estimatedSize = deps.extractValue(attXml, "EstimatedDataSize")?.toLongOrNull() ?: 0,
-                    isInline = isInline,
-                    contentId = contentId
-                ))
-            }
+            val name = displayName
+                ?: contentId
+                ?: fileRef.substringAfterLast("/").ifBlank { null }
+                ?: "attachment"
+            attachments.add(EasAttachment(
+                fileReference = fileRef,
+                displayName = name,
+                contentType = deps.extractValue(attXml, "ContentType") ?: "application/octet-stream",
+                estimatedSize = deps.extractValue(attXml, "EstimatedDataSize")?.toLongOrNull() ?: 0,
+                isInline = isInline,
+                contentId = contentId
+            ))
         }
         return attachments
     }
@@ -698,6 +651,7 @@ class EasEmailService internal constructor(
                 markAsReadViaEws(subject, read)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.w("EasEmailService", "markAsReadViaEws failed: ${e.message}")
             }
         }
         
@@ -755,6 +709,15 @@ $changesXml
     }
     
     /**
+     * NTLM-only аутентификация для EWS SOAP запросов.
+     * EasEmailService не использует Basic Auth fallback.
+     */
+    private suspend fun executeEwsNtlmOnly(ewsUrl: String, soapRequest: String, operation: String): String? {
+        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
+        return deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+    }
+
+    /**
      * Помечает письмо как прочитанное/непрочитанное через EWS UpdateItem.
      * Находит письмо по Subject через FindItem, затем обновляет IsRead.
      * Работает на Exchange 2007 SP1+ (надёжнее чем EAS Sync Change для Read).
@@ -794,10 +757,7 @@ $changesXml
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
         
-        var findResponse = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")?.let { auth ->
-            deps.executeNtlmRequest(ewsUrl, findRequest, auth, "FindItem")
-        }
-        if (findResponse == null) return
+        val findResponse = executeEwsNtlmOnly(ewsUrl, findRequest, "FindItem") ?: return
         
         // Извлекаем все ItemId + ChangeKey
         val itemPattern = """<t:ItemId Id="([^"]+)"\s+ChangeKey="([^"]+)"""".toRegex()
@@ -828,8 +788,7 @@ $itemChanges
 </m:UpdateItem>""".trimIndent()
         val updateRequest = deps.buildEwsSoapRequest(updateBody)
         
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, updateRequest, "UpdateItem") ?: return
-        deps.executeNtlmRequest(ewsUrl, updateRequest, ntlmAuth, "UpdateItem")
+        executeEwsNtlmOnly(ewsUrl, updateRequest, "UpdateItem")
     }
     
     /**
@@ -931,25 +890,11 @@ $itemChanges
             
             val soapEnvelope = deps.buildEwsSoapRequest(deleteBody)
             
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapEnvelope, "DeleteItem")
-            if (ntlmAuth == null) {
-                return@withContext EasResult.Error("NTLM аутентификация не удалась")
-            }
+            val responseXml = executeEwsNtlmOnly(ewsUrl, soapEnvelope, "DeleteItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
             
-            val responseXml = deps.executeNtlmRequest(ewsUrl, soapEnvelope, ntlmAuth, "DeleteItem")
-            if (responseXml == null) {
-                return@withContext EasResult.Error("Не удалось выполнить запрос")
-            }
-            
-            // Проверяем ОБА условия
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-            
-            if (hasSuccess && hasNoError) {
+            if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
                 EasResult.Success(Unit)
-            } else if (responseXml.contains("ErrorItemNotFound")) {
-                EasResult.Success(Unit) // Уже удалено
             } else {
                 val errorMessage = deps.extractEwsError(responseXml)
                 EasResult.Error(errorMessage)
@@ -988,8 +933,7 @@ $itemChanges
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
         
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem") ?: return null
-        val responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem") ?: return null
+        val responseXml = executeEwsNtlmOnly(ewsUrl, findRequest, "FindItem") ?: return null
         
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
         return itemIdPattern.find(responseXml)?.groupValues?.get(1)

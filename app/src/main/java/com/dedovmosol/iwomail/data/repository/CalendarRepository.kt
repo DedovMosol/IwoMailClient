@@ -27,89 +27,24 @@ class CalendarRepository(private val context: Context) {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
         private fun getSyncMutex(accountId: Long) = syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
 
-        /**
-         * Защита от "воскрешения" удалённых событий.
-         * Множество serverId событий, удалённых пользователем.
-         * КРИТИЧНО: Персистится через SharedPreferences чтобы пережить рестарт приложения!
-         * Без персистенции при убийстве процесса набор терялся, и при следующей
-         * синхронизации удалённые события "воскресали".
-         * Записи удаляются ТОЛЬКО когда syncCalendar() подтверждает,
-         * что сервер больше не возвращает эти события.
-         */
-        private val deletedServerIds = java.util.LinkedHashSet<String>()
-        
-        private const val PREFS_NAME = "calendar_deleted_ids"
-        private const val KEY_DELETED_IDS = "deleted_server_ids"
-        private const val MAX_DELETED_IDS = 1000
-        @Volatile private var prefsInitialized = false
-        
-        private fun initFromPrefs(context: Context) {
-            if (prefsInitialized) return
-            synchronized(deletedServerIds) {
-                if (prefsInitialized) return
-                try {
-                    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    val saved = prefs.getStringSet(KEY_DELETED_IDS, emptySet())?.toSet() ?: emptySet()
-                    deletedServerIds.addAll(saved)
-                } catch (_: Exception) { }
-                prefsInitialized = true
-            }
-        }
-        
-        private fun saveToPrefs(context: Context) {
-            try {
-                val snapshot = synchronized(deletedServerIds) { deletedServerIds.toSet() }
-                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                prefs.edit().putStringSet(KEY_DELETED_IDS, snapshot).apply()
-            } catch (_: Exception) { }
-        }
-        
-        private fun markAsDeleted(serverId: String, context: Context? = null) {
-            if (serverId.isNotBlank()) {
-                synchronized(deletedServerIds) {
-                    if (deletedServerIds.size >= MAX_DELETED_IDS) {
-                        val excess = deletedServerIds.size - MAX_DELETED_IDS / 2
-                        if (excess > 0) {
-                            val iter = deletedServerIds.iterator()
-                            var removed = 0
-                            while (iter.hasNext() && removed < excess) {
-                                iter.next()
-                                iter.remove()
-                                removed++
-                            }
-                        }
-                    }
-                    deletedServerIds.add(serverId)
-                }
-                context?.let { saveToPrefs(it) }
-            }
-        }
-        
-        private fun isMarkedAsDeleted(serverId: String): Boolean {
-            return synchronized(deletedServerIds) { deletedServerIds.contains(serverId) }
-        }
-        
-        private fun removeFromDeleted(serverId: String, context: Context? = null) {
-            synchronized(deletedServerIds) { deletedServerIds.remove(serverId) }
-            context?.let { saveToPrefs(it) }
-        }
-        
-        /**
-         * Вызывается из syncCalendar() — убирает из защитного множества
-         * те serverId, которых сервер уже НЕ возвращает (реально удалены).
-         * КРИТИЧНО: Убираем ТОЛЬКО те ID, которые:
-         *   1) были помечены как удалённые пользователем (в deletedServerIds)
-         *   2) сервер ПОДТВЕРДИЛ удаление (НЕ вернул в ответе)
-         * Если сервер ЕЩЁ возвращает событие — защиту НЕ снимаем!
-         */
-        private fun confirmServerDeletions(serverReturnedIds: Set<String>, context: Context? = null) {
-            val removed = synchronized(deletedServerIds) {
-                deletedServerIds.removeIf { it !in serverReturnedIds }
-            }
-            if (removed) {
-                context?.let { saveToPrefs(it) }
-            }
-        }
+        // Защита от "воскрешения" удалённых событий (без TTL — до подтверждения сервером).
+        private val deletedTracker = com.dedovmosol.iwomail.util.DeletedIdsTracker(
+            prefsName = "calendar_deleted_ids",
+            prefsKey = "deleted_server_ids",
+            maxSize = 1000,
+            ttlMs = 0L
+        )
+
+        private fun initDeletedTracker(context: Context) = deletedTracker.init(context)
+
+        private fun markAsDeleted(serverId: String, context: Context? = null) =
+            deletedTracker.register(serverId, context)
+
+        private fun isMarkedAsDeleted(serverId: String): Boolean =
+            deletedTracker.isTracked(serverId)
+
+        private fun confirmServerDeletions(serverReturnedIds: Set<String>, context: Context? = null) =
+            deletedTracker.confirmByServerState(serverReturnedIds, context)
     }
     
     private fun normalizeAllDayTimes(startTime: Long, endTime: Long): Pair<Long, Long> {
@@ -711,7 +646,7 @@ class CalendarRepository(private val context: Context) {
         occurrenceStartTime: Long,
         occurrenceSnapshot: CalendarEventEntity? = null
     ): EasResult<Boolean> {
-        initFromPrefs(context)
+        initDeletedTracker(context)
         return withContext(Dispatchers.IO) {
             try {
                 val easClient = when (val r = requireExchangeClient(masterEvent.accountId, RepositoryErrors.CALENDAR_EXCHANGE_ONLY)) {
@@ -875,7 +810,7 @@ class CalendarRepository(private val context: Context) {
      * Удаляет с сервера (best-effort) + из локальной БД + markAsDeleted от воскрешения при sync.
      */
     suspend fun deleteEventPermanently(event: CalendarEventEntity): EasResult<Boolean> {
-        initFromPrefs(context)
+        initDeletedTracker(context)
         return withContext(Dispatchers.IO) {
             try {
                 if (event.id.contains("_occ_")) {
@@ -927,7 +862,7 @@ class CalendarRepository(private val context: Context) {
      * отменяет напоминания, затем очищает локальную БД.
      */
     suspend fun emptyCalendarTrash(accountId: Long): EasResult<Int> {
-        initFromPrefs(context)
+        initDeletedTracker(context)
         return withContext(Dispatchers.IO) {
             try {
                 val deletedEvents = calendarEventDao.getDeletedEventsList(accountId)
@@ -1079,7 +1014,7 @@ class CalendarRepository(private val context: Context) {
     }
 
     private suspend fun syncCalendarInternal(accountId: Long): EasResult<Int> {
-        initFromPrefs(context)
+        initDeletedTracker(context)
         return withContext(Dispatchers.IO) {
             try {
                 val easClient = when (val r = requireExchangeClient(accountId)) {
@@ -1192,7 +1127,7 @@ class CalendarRepository(private val context: Context) {
                         
                         android.util.Log.d("CalendarRepository", 
                             "syncCalendar: filtered=${filteredServerEvents.size}, unique=${uniqueEvents.size}, " +
-                            "deletedServerIds=${deletedServerIds.size}, trashIds=${trashServerIds.size}")
+                            "deletedServerIds=${deletedTracker.size}, trashIds=${trashServerIds.size}")
                         
                         // Защита от race condition: sync может получить устаревшие данные после update
                         val syncTime = System.currentTimeMillis()

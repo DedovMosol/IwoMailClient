@@ -21,7 +21,7 @@ enum class ContactSource {
         childColumns = ["accountId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("accountId"), Index("email")]
+    indices = [Index("accountId"), Index("email"), Index("source"), Index("isFavorite"), Index("groupId")]
 )
 data class ContactEntity(
     @PrimaryKey val id: String,  // accountId_serverId или UUID для локальных

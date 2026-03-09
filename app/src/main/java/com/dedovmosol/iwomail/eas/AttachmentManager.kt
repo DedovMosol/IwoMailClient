@@ -117,41 +117,10 @@ class AttachmentManager(
             fileReference
         }
         val safeRef = XmlUtils.escape(decodedRef)
-        // Пробуем разные варианты XML
         val variants = listOf(
-            // Вариант 1: FileReference в namespace AirSyncBase
-            """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <ItemOperations xmlns="ItemOperations">
-                    <Fetch>
-                        <Store>Mailbox</Store>
-                        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
-                    </Fetch>
-                </ItemOperations>
-            """.trimIndent(),
-            // Вариант 2: FileReference без namespace
-            """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <ItemOperations xmlns="ItemOperations">
-                    <Fetch>
-                        <Store>Mailbox</Store>
-                        <FileReference>$safeRef</FileReference>
-                    </Fetch>
-                </ItemOperations>
-            """.trimIndent(),
-            // Вариант 3: С Range
-            """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <ItemOperations xmlns="ItemOperations">
-                    <Fetch>
-                        <Store>Mailbox</Store>
-                        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
-                        <Options>
-                            <Range>0-999999999</Range>
-                        </Options>
-                    </Fetch>
-                </ItemOperations>
-            """.trimIndent()
+            EasXmlTemplates.itemOperationsFetchAttachment(safeRef),
+            EasXmlTemplates.itemOperationsFetchAttachment(safeRef, withAirSyncBaseNs = false),
+            EasXmlTemplates.itemOperationsFetchAttachment(safeRef, range = "0-999999999")
         )
         
         for ((index, xml) in variants.withIndex()) {

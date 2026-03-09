@@ -101,9 +101,8 @@ class TaskRepository(private val context: Context) {
         reminderTime: Long = 0,
         assignTo: String? = null
     ): EasResult<TaskEntity> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
-                // ЗАЩИТА ОТ ДУБЛИРОВАНИЯ: если идентичная задача уже существует — возвращаем её
                 val existingTasks = taskDao.getTasksByAccountList(accountId)
                 val duplicate = existingTasks.find { existing ->
                     existing.subject == subject &&
@@ -115,18 +114,8 @@ class TaskRepository(private val context: Context) {
                 if (duplicate != null) {
                     android.util.Log.w("TaskRepository", 
                         "createTask: Duplicate detected (subject=$subject), returning existing")
-                    return@withContext EasResult.Success(duplicate)
+                    return@withEasClient EasResult.Success(duplicate)
                 }
-                
-                val account = accountRepo.getAccount(accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.TASKS_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
                 val result = withEasRetry {
                     easClient.createTask(
@@ -199,23 +188,9 @@ class TaskRepository(private val context: Context) {
         oldSubject: String? = null,
         assignTo: String? = null
     ): EasResult<TaskEntity> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
                 val startTime = System.currentTimeMillis()
-                
-                val account = accountRepo.getAccount(task.accountId)
-                if (account == null) {
-                    return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                }
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.TASKS_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(task.accountId)
-                if (easClient == null) {
-                    return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                }
                 
                 val result = withEasRetry {
                     easClient.updateTask(
@@ -313,18 +288,8 @@ class TaskRepository(private val context: Context) {
      * Удаление задачи (перемещение в корзину)
      */
     suspend fun deleteTask(task: TaskEntity): EasResult<Boolean> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
-                val account = accountRepo.getAccount(task.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.TASKS_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(task.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
                 var actualTask: TaskEntity? = task
                 var actualServerId = task.serverId
                 
@@ -374,18 +339,8 @@ class TaskRepository(private val context: Context) {
      * Перемещает задачу из Deleted Items обратно в Tasks на сервере
      */
     suspend fun restoreTask(task: TaskEntity): EasResult<Boolean> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
-                val account = accountRepo.getAccount(task.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.TASKS_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(task.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
                 // КРИТИЧНО: Восстанавливаем на сервере (MoveItem из Deleted Items в Tasks)
                 val result = easClient.restoreTask(task.serverId, task.subject)
                 
@@ -437,18 +392,8 @@ class TaskRepository(private val context: Context) {
      * Окончательное удаление задачи (из корзины)
      */
     suspend fun deleteTaskPermanently(task: TaskEntity): EasResult<Boolean> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
-                val account = accountRepo.getAccount(task.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.TASKS_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(task.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
                 // Окончательно удаляем на сервере (HardDelete)
                 val result = withEasRetry { easClient.deleteTaskPermanently(task.serverId) }
                 
@@ -480,22 +425,12 @@ class TaskRepository(private val context: Context) {
      * Очистка корзины задач (окончательное удаление всех удалённых задач)
      */
     suspend fun emptyTasksTrash(accountId: Long): EasResult<Int> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
                 val deletedTasks = taskDao.getDeletedTasksList(accountId)
                 if (deletedTasks.isEmpty()) {
-                    return@withContext EasResult.Success(0)
+                    return@withEasClient EasResult.Success(0)
                 }
-                
-                val account = accountRepo.getAccount(accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.TASKS_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
 
                 val batchResult = easClient.deleteTasksPermanentlyBatch(deletedTasks.map { it.serverId })
                 val batchOk = batchResult is EasResult.Success && batchResult.data > 0

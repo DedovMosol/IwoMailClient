@@ -352,35 +352,64 @@ class EasAttachmentService internal constructor(
     // ==================== СКАЧИВАНИЕ ВЛОЖЕНИЙ ====================
     
     /**
-     * Скачивание вложения
-     * Пробует несколько методов: ItemOperations, Fetch email, GetAttachment
+     * Скачивание вложения в оперативную память.
+     * Для больших файлов (>50 МБ) рекомендуется downloadAttachmentToFile().
      */
     suspend fun downloadAttachment(
         fileReference: String, 
         collectionId: String? = null, 
         serverId: String? = null
     ): EasResult<ByteArray> {
-        // Метод 1: ItemOperations (стандартный)
         val itemOpsResult = downloadViaItemOperations(fileReference)
-        if (itemOpsResult is EasResult.Success) {
-            return itemOpsResult
-        }
+        if (itemOpsResult is EasResult.Success) return itemOpsResult
         
-        // Метод 2: Fetch всего письма и извлечение вложения
         if (collectionId != null && serverId != null) {
             val fetchResult = downloadViaItemOperationsFetchEmail(collectionId, serverId, fileReference)
-            if (fetchResult is EasResult.Success) {
-                return fetchResult
+            if (fetchResult is EasResult.Success) return fetchResult
+        }
+        
+        val getAttResult = downloadViaGetAttachment(fileReference)
+        if (getAttResult is EasResult.Success) return getAttResult
+        
+        return EasResult.Error("Сервер не поддерживает скачивание вложений через EAS.\n\nВозможные причины:\n• Политика безопасности запрещает скачивание\n• Вложение удалено с сервера\n\nПопробуйте открыть письмо в веб-интерфейсе OWA.")
+    }
+    
+    /**
+     * Скачивание вложения напрямую в файл (streaming, без OOM).
+     * GetAttachment (EAS 2.5/12.0/12.1): бинарные данные стримятся через byteStream().
+     * ItemOperations (EAS 12.0+): base64 декодируется и пишется в файл.
+     */
+    suspend fun downloadAttachmentToFile(
+        fileReference: String,
+        destFile: java.io.File,
+        collectionId: String? = null,
+        serverId: String? = null
+    ): EasResult<java.io.File> {
+        val itemOpsResult = downloadViaItemOperations(fileReference)
+        if (itemOpsResult is EasResult.Success && itemOpsResult.data.isNotEmpty()) {
+            return writeToFile(itemOpsResult.data, destFile)
+        }
+        
+        if (collectionId != null && serverId != null) {
+            val fetchResult = downloadViaItemOperationsFetchEmail(collectionId, serverId, fileReference)
+            if (fetchResult is EasResult.Success && fetchResult.data.isNotEmpty()) {
+                return writeToFile(fetchResult.data, destFile)
             }
         }
         
-        // Метод 3: GetAttachment (устаревший, для Exchange 2007)
-        val getAttResult = downloadViaGetAttachment(fileReference)
-        if (getAttResult is EasResult.Success) {
-            return getAttResult
-        }
+        val streamResult = streamViaGetAttachment(fileReference, destFile)
+        if (streamResult is EasResult.Success) return streamResult
         
         return EasResult.Error("Сервер не поддерживает скачивание вложений через EAS.\n\nВозможные причины:\n• Политика безопасности запрещает скачивание\n• Вложение удалено с сервера\n\nПопробуйте открыть письмо в веб-интерфейсе OWA.")
+    }
+    
+    private fun writeToFile(data: ByteArray, destFile: java.io.File): EasResult<java.io.File> {
+        return try {
+            destFile.outputStream().use { it.write(data) }
+            EasResult.Success(destFile)
+        } catch (e: Exception) {
+            EasResult.Error("Ошибка записи файла: ${e.message}")
+        }
     }
     
     private suspend fun downloadViaItemOperations(fileReference: String): EasResult<ByteArray> {
@@ -407,51 +436,16 @@ class EasAttachmentService internal constructor(
     
     private suspend fun tryItemOperations(fileRef: String): EasResult<ByteArray> {
         val safeRef = XmlUtils.escape(fileRef)
-        // Вариант 1: FileReference в namespace AirSyncBase
-        val xml1 = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
-    </Fetch>
-</ItemOperations>""".trimIndent()
-        
-        var result = doItemOperationsFetch(xml1)
-        if (result is EasResult.Success && result.data.isNotEmpty()) {
-            return result
-        }
-        
-        // Вариант 2: FileReference без namespace
-        val xml2 = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <FileReference>$safeRef</FileReference>
-    </Fetch>
-</ItemOperations>""".trimIndent()
-        
-        result = doItemOperationsFetch(xml2)
-        if (result is EasResult.Success && result.data.isNotEmpty()) {
-            return result
-        }
-        
-        // Вариант 3: С Options для указания Range
-        val xml3 = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <FileReference xmlns="AirSyncBase">$safeRef</FileReference>
-        <Options>
-            <Range>0-999999999</Range>
-        </Options>
-    </Fetch>
-</ItemOperations>""".trimIndent()
-        
-        result = doItemOperationsFetch(xml3)
-        if (result is EasResult.Success && result.data.isNotEmpty()) {
-            return result
-        }
-        
+
+        var result = doItemOperationsFetch(EasXmlTemplates.itemOperationsFetchAttachment(safeRef))
+        if (result is EasResult.Success && result.data.isNotEmpty()) return result
+
+        result = doItemOperationsFetch(EasXmlTemplates.itemOperationsFetchAttachment(safeRef, withAirSyncBaseNs = false))
+        if (result is EasResult.Success && result.data.isNotEmpty()) return result
+
+        result = doItemOperationsFetch(EasXmlTemplates.itemOperationsFetchAttachment(safeRef, range = "0-999999999"))
+        if (result is EasResult.Success && result.data.isNotEmpty()) return result
+
         return result
     }
     
@@ -517,20 +511,7 @@ class EasAttachmentService internal constructor(
         serverId: String,
         fileReference: String
     ): EasResult<ByteArray> {
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">${XmlUtils.escape(collectionId)}</CollectionId>
-        <ServerId xmlns="AirSync">${XmlUtils.escape(serverId)}</ServerId>
-        <Options>
-            <MIMESupport xmlns="AirSync">2</MIMESupport>
-            <BodyPreference xmlns="AirSyncBase">
-                <Type>4</Type>
-            </BodyPreference>
-        </Options>
-    </Fetch>
-</ItemOperations>""".trimIndent()
+        val xml = EasXmlTemplates.itemOperationsFetchEmail(collectionId, serverId)
         
         val result = doItemOperationsFetch(xml)
         
@@ -560,62 +541,111 @@ class EasAttachmentService internal constructor(
         return EasResult.Error("GetAttachment не поддерживается сервером (HTTP 501)")
     }
     
+    private fun buildGetAttachmentRequest(attachmentName: String): Request {
+        val serverUrl = deps.getNormalizedServerUrl()
+        val username = deps.getUsername()
+        val deviceId = deps.getDeviceId()
+        val deviceType = deps.getDeviceType()
+        val encodedUser = java.net.URLEncoder.encode(username, "UTF-8")
+        val url = "$serverUrl/Microsoft-Server-ActiveSync?" +
+            "Cmd=GetAttachment&AttachmentName=$attachmentName&User=$encodedUser&DeviceId=$deviceId&DeviceType=$deviceType"
+        
+        val builder = Request.Builder()
+            .url(url)
+            .get()
+            .header("Authorization", deps.getAuthHeader())
+            .header("MS-ASProtocolVersion", deps.getEasVersion())
+            .header("User-Agent", "Android/12-EAS-2.0")
+        deps.getPolicyKey()?.let { builder.header("X-MS-PolicyKey", it) }
+        return builder.build()
+    }
+    
+    private suspend fun executeGetAttachmentWithProvision(attachmentName: String): Response? {
+        val initialResponse = deps.executeRequest(buildGetAttachmentRequest(attachmentName))
+        if (initialResponse.code == 449) {
+            initialResponse.close()
+            when (val provResult = deps.provision()) {
+                is EasResult.Success -> return deps.executeRequest(buildGetAttachmentRequest(attachmentName))
+                is EasResult.Error -> return null
+            }
+        }
+        return initialResponse
+    }
+    
     private suspend fun tryGetAttachment(attachmentName: String): EasResult<ByteArray> {
         return withContext(Dispatchers.IO) {
             try {
-                val serverUrl = deps.getNormalizedServerUrl()
-                val username = deps.getUsername()
-                val deviceId = deps.getDeviceId()
-                val deviceType = deps.getDeviceType()
+                val response = executeGetAttachmentWithProvision(attachmentName)
+                    ?: return@withContext EasResult.Error("Provision failed")
                 
-                val encodedUser = java.net.URLEncoder.encode(username, "UTF-8")
-                val url = "$serverUrl/Microsoft-Server-ActiveSync?" +
-                    "Cmd=GetAttachment&AttachmentName=$attachmentName&User=$encodedUser&DeviceId=$deviceId&DeviceType=$deviceType"
-                
-                val requestBuilder = Request.Builder()
-                    .url(url)
-                    .get()
-                    .header("Authorization", deps.getAuthHeader())
-                    .header("MS-ASProtocolVersion", deps.getEasVersion())
-                    .header("User-Agent", "Android/12-EAS-2.0")
-                
-                deps.getPolicyKey()?.let { requestBuilder.header("X-MS-PolicyKey", it) }
-                
-                val initialResponse = deps.executeRequest(requestBuilder.build())
-                
-                // Обработка 449 (Provision Required)
-                val finalResponse = if (initialResponse.code == 449) {
-                    initialResponse.close()
-                    when (val provResult = deps.provision()) {
-                        is EasResult.Success -> {
-                            val retryBuilder = Request.Builder()
-                                .url(url)
-                                .get()
-                                .header("Authorization", deps.getAuthHeader())
-                                .header("MS-ASProtocolVersion", deps.getEasVersion())
-                                .header("User-Agent", "Android/12-EAS-2.0")
-                            deps.getPolicyKey()?.let { retryBuilder.header("X-MS-PolicyKey", it) }
-                            deps.executeRequest(retryBuilder.build())
-                        }
-                        is EasResult.Error -> return@withContext EasResult.Error(provResult.message)
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        return@withContext EasResult.Error("HTTP ${resp.code}: ${resp.message}")
                     }
-                } else {
-                    initialResponse
-                }
-                
-                finalResponse.use { response ->
-                    if (!response.isSuccessful) {
-                        return@withContext EasResult.Error("HTTP ${response.code}: ${response.message}")
-                    }
-                    
-                    val data = response.body?.bytes()
+                    val data = resp.body?.bytes()
                     if (data == null || data.isEmpty()) {
                         return@withContext EasResult.Error("Пустой ответ")
                     }
                     EasResult.Success(data)
                 }
-                
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error("Ошибка: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * GetAttachment стриминг прямо в файл (без промежуточного ByteArray).
+     * MS-ASCMD 2.2.1.7: GetAttachment возвращает бинарные данные вложения напрямую.
+     * Поддерживается ТОЛЬКО в EAS 2.5/12.0/12.1.
+     */
+    private suspend fun streamViaGetAttachment(
+        fileReference: String,
+        destFile: java.io.File
+    ): EasResult<java.io.File> {
+        val decodedRef = try {
+            java.net.URLDecoder.decode(fileReference, "UTF-8")
+        } catch (e: Exception) { fileReference }
+        
+        val result = streamGetAttachmentToFile(decodedRef, destFile)
+        if (result is EasResult.Success) return result
+        
+        if (decodedRef != fileReference) {
+            val result2 = streamGetAttachmentToFile(fileReference, destFile)
+            if (result2 is EasResult.Success) return result2
+        }
+        return EasResult.Error("GetAttachment failed")
+    }
+    
+    private suspend fun streamGetAttachmentToFile(
+        attachmentName: String,
+        destFile: java.io.File
+    ): EasResult<java.io.File> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val response = executeGetAttachmentWithProvision(attachmentName)
+                    ?: return@withContext EasResult.Error("Provision failed")
+                
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        return@withContext EasResult.Error("HTTP ${resp.code}: ${resp.message}")
+                    }
+                    val body = resp.body
+                        ?: return@withContext EasResult.Error("Пустой ответ")
+                    
+                    body.byteStream().use { input ->
+                        destFile.outputStream().use { output ->
+                            input.copyTo(output, bufferSize = 8192)
+                        }
+                    }
+                    if (destFile.length() == 0L) {
+                        return@withContext EasResult.Error("Пустой ответ")
+                    }
+                    EasResult.Success(destFile)
+                }
+            } catch (e: Exception) {
+                destFile.delete()
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("Ошибка: ${e.message}")
             }

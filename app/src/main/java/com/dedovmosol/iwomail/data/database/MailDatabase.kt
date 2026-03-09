@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 36,
+    version = 37,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -158,6 +158,16 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_lastModified ON calendar_events(lastModified)")
             }
         }
+        
+        private val MIGRATION_36_37 = object : Migration(36, 37) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_contacts_source ON contacts(source)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_contacts_isFavorite ON contacts(isFavorite)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_contacts_groupId ON contacts(groupId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_notes_isDeleted ON notes(isDeleted)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_accountId_isDeleted_startTime ON calendar_events(accountId, isDeleted, startTime)")
+            }
+        }
 
         private val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
@@ -172,7 +182,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_32_33,
             MIGRATION_33_34,
             MIGRATION_34_35,
-            MIGRATION_35_36
+            MIGRATION_35_36,
+            MIGRATION_36_37
         )
         
         fun getInstance(context: Context): MailDatabase {

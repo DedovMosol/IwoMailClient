@@ -50,6 +50,28 @@ object HtmlRegex {
 }
 
 /**
+ * XSS protection: removes script tags, event handlers, and javascript: URIs.
+ * Idempotent — safe to call multiple times on the same HTML.
+ * Used before injecting email body into WebView.
+ */
+private val SANITIZE_SCRIPT_TAG = Regex("(?si)<script[^>]*>.*?</script>")
+private val SANITIZE_SCRIPT_OPEN_CLOSE = Regex("(?i)</?script[^>]*>")
+private val SANITIZE_EVENT_DOUBLE = Regex("""(?i)\s+on\w+\s*=\s*"[^"]*"""")
+private val SANITIZE_EVENT_SINGLE = Regex("""(?i)\s+on\w+\s*=\s*'[^']*'""")
+private val SANITIZE_EVENT_UNQUOTED = Regex("""(?i)\s+on\w+\s*=\s*[^\s>"']+""")
+private val SANITIZE_JS_URI_DOUBLE = Regex("""(?i)(href|src|action|formaction)\s*=\s*"\s*javascript:[^"]*"""")
+private val SANITIZE_JS_URI_SINGLE = Regex("""(?i)(href|src|action|formaction)\s*=\s*'\s*javascript:[^']*'""")
+
+fun sanitizeEmailHtml(html: String): String = html
+    .replace(SANITIZE_SCRIPT_TAG, "")
+    .replace(SANITIZE_SCRIPT_OPEN_CLOSE, "")
+    .replace(SANITIZE_EVENT_DOUBLE, "")
+    .replace(SANITIZE_EVENT_SINGLE, "")
+    .replace(SANITIZE_EVENT_UNQUOTED, "")
+    .replace(SANITIZE_JS_URI_DOUBLE, """$1="#"""")
+    .replace(SANITIZE_JS_URI_SINGLE, """$1='#'""")
+
+/**
  * Очистка HTML-тегов из текста, если он содержит HTML-разметку.
  * Exchange 2007 SP1 возвращает тело задач/заметок в HTML из Outlook.
  */

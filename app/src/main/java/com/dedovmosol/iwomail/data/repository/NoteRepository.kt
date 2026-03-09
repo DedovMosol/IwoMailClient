@@ -56,20 +56,9 @@ class NoteRepository(private val context: Context) {
     }
     
     suspend fun restoreNote(note: NoteEntity): EasResult<Boolean> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
                 android.util.Log.d("NotesDebug", "=== RESTORE NOTE START: subject='${note.subject.take(30)}', serverId=${note.serverId}")
-                
-                val account = accountRepo.getAccount(note.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(note.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
                 android.util.Log.d("NotesDebug", "Calling easClient.restoreNote...")
                 // Восстанавливаем на сервере (перемещаем из Deleted Items в Notes)
                 val result = withEasRetry { easClient.restoreNote(note.serverId) }
@@ -144,19 +133,8 @@ class NoteRepository(private val context: Context) {
         serverIds: List<String>,
         onProgress: (deleted: Int, total: Int) -> Unit
     ): EasResult<Int> {
-        return withContext(Dispatchers.IO) {
-            if (serverIds.isEmpty()) return@withContext EasResult.Success(0)
-
-            val account = accountRepo.getAccount(accountId)
-                ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-
-            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
-            }
-
-            val easClient = accountRepo.createEasClient(accountId)
-                ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-
+        if (serverIds.isEmpty()) return EasResult.Success(0)
+        return accountRepo.withEasClient(accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             var deletedCount = 0
             var failedCount = 0
             val total = serverIds.size
@@ -201,9 +179,8 @@ class NoteRepository(private val context: Context) {
         subject: String,
         body: String
     ): EasResult<NoteEntity> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
-                // ЗАЩИТА ОТ ДУБЛИРОВАНИЯ: если идентичная заметка уже существует — возвращаем её
                 val existingNotes = noteDao.getNotesByAccountList(accountId)
                 val duplicate = existingNotes.find { existing ->
                     existing.subject == subject &&
@@ -212,18 +189,8 @@ class NoteRepository(private val context: Context) {
                 if (duplicate != null) {
                     android.util.Log.w("NoteRepository", 
                         "createNote: Duplicate detected (subject=$subject), returning existing")
-                    return@withContext EasResult.Success(duplicate)
+                    return@withEasClient EasResult.Success(duplicate)
                 }
-                
-                val account = accountRepo.getAccount(accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
                 
                 val result = withEasRetry { easClient.createNote(subject, body) }
                 
@@ -291,22 +258,8 @@ class NoteRepository(private val context: Context) {
         subject: String,
         body: String
     ): EasResult<NoteEntity> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
-                val account = accountRepo.getAccount(note.accountId)
-                if (account == null) {
-                    return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                }
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(note.accountId)
-                if (easClient == null) {
-                    return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                }
-                
                 val result = withEasRetry { easClient.updateNote(note.serverId, subject, body) }
                 
                 when (result) {
@@ -343,18 +296,8 @@ class NoteRepository(private val context: Context) {
      * Заметка удаляется с сервера, при следующей синхронизации попадёт в Deleted Items
      */
     suspend fun deleteNote(note: NoteEntity): EasResult<Boolean> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
-                val account = accountRepo.getAccount(note.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
-                }
-                
-                val easClient = accountRepo.createEasClient(note.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
                 var updatedNote = note
                 var result = easClient.deleteNote(note.serverId)
                 
@@ -377,7 +320,7 @@ class NoteRepository(private val context: Context) {
                 when (result) {
                     is EasResult.Success -> {
                         if (result.data != true) {
-                            return@withContext EasResult.Error(RepositoryErrors.NOTE_DELETE_ERROR)
+                            return@withEasClient EasResult.Error(RepositoryErrors.NOTE_DELETE_ERROR)
                         }
                         
                         noteDao.markAsDeleted(updatedNote.id)
@@ -430,18 +373,8 @@ class NoteRepository(private val context: Context) {
      * Окончательное удаление заметки из корзины
      */
     suspend fun deleteNotePermanently(note: NoteEntity): EasResult<Boolean> {
-        return withContext(Dispatchers.IO) {
+        return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
-                val account = accountRepo.getAccount(note.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-
-                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-                    return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
-                }
-
-                val easClient = accountRepo.createEasClient(note.accountId)
-                    ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-
                 val result = withEasRetry { easClient.deleteNotePermanently(note.serverId) }
 
                 when (result) {

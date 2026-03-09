@@ -322,6 +322,22 @@ sealed class Screen(val route: String) {
     object UserFolders : Screen("user_folders")
 }
 
+private suspend fun navigateWithRetry(tag: String, action: () -> Unit) {
+    try {
+        action()
+    } catch (e1: Exception) {
+        if (e1 is kotlinx.coroutines.CancellationException) throw e1
+        android.util.Log.w("AppNavigation", "$tag failed, retrying", e1)
+        kotlinx.coroutines.delay(500)
+        try {
+            action()
+        } catch (e2: Exception) {
+            if (e2 is kotlinx.coroutines.CancellationException) throw e2
+            android.util.Log.e("AppNavigation", "$tag retry failed", e2)
+        }
+    }
+}
+
 @Composable
 fun AppNavigation(
     openInboxUnread: Boolean = false, 
@@ -437,7 +453,7 @@ fun AppNavigation(
                 snapshotFlow { navController.currentBackStackEntry }.first { it != null }
             }
             kotlinx.coroutines.delay(100)
-            try {
+            navigateWithRetry("Compose") {
                 navController.navigate(Screen.Compose.createRoute(
                     toEmail = composeToEmail,
                     subject = composeSubject,
@@ -446,23 +462,6 @@ fun AppNavigation(
                     launchSingleTop = true
                 }
                 onComposeHandled()
-            } catch (e1: Exception) {
-                if (e1 is kotlinx.coroutines.CancellationException) throw e1
-                android.util.Log.w("AppNavigation", "Compose navigate failed, retrying", e1)
-                kotlinx.coroutines.delay(500)
-                try {
-                    navController.navigate(Screen.Compose.createRoute(
-                        toEmail = composeToEmail,
-                        subject = composeSubject,
-                        body = composeBody
-                    )) {
-                        launchSingleTop = true
-                    }
-                    onComposeHandled()
-                } catch (e2: Exception) {
-                    if (e2 is kotlinx.coroutines.CancellationException) throw e2
-                    android.util.Log.e("AppNavigation", "Compose navigate retry also failed", e2)
-                }
             }
         }
     }
@@ -545,21 +544,9 @@ fun AppNavigation(
                         snapshotFlow { navController.currentBackStackEntry }.first { it != null }
                     }
                     kotlinx.coroutines.delay(100)
-                    try {
+                    navigateWithRetry("Unread") {
                         navController.navigate(Screen.EmailList.createRoute(inboxFolder.id, "UNREAD")) {
                             popUpTo(Screen.Main.route) { inclusive = false }
-                        }
-                    } catch (e1: Exception) {
-                        if (e1 is kotlinx.coroutines.CancellationException) throw e1
-                        android.util.Log.w("AppNavigation", "Unread navigate failed, retrying", e1)
-                        kotlinx.coroutines.delay(500)
-                        try {
-                            navController.navigate(Screen.EmailList.createRoute(inboxFolder.id, "UNREAD")) {
-                                popUpTo(Screen.Main.route) { inclusive = false }
-                            }
-                        } catch (e2: Exception) {
-                            if (e2 is kotlinx.coroutines.CancellationException) throw e2
-                            android.util.Log.e("AppNavigation", "Unread navigate retry failed", e2)
                         }
                     }
                 }
@@ -622,23 +609,10 @@ fun AppNavigation(
                             database.folderDao().getFolderByType(account.id, 2)
                         }
                         if (inboxFolder != null) {
-                            try {
+                            navigateWithRetry("Shortcut email") {
                                 navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
                                     popUpTo(Screen.Main.route) { inclusive = false }
                                     launchSingleTop = true
-                                }
-                            } catch (e1: Exception) {
-                                if (e1 is kotlinx.coroutines.CancellationException) throw e1
-                                android.util.Log.w("AppNavigation", "Shortcut email navigate failed, retrying", e1)
-                                kotlinx.coroutines.delay(500)
-                                try {
-                                    navController.navigate(Screen.EmailList.createRoute(inboxFolder.id)) {
-                                        popUpTo(Screen.Main.route) { inclusive = false }
-                                        launchSingleTop = true
-                                    }
-                                } catch (e2: Exception) {
-                                    if (e2 is kotlinx.coroutines.CancellationException) throw e2
-                                    android.util.Log.e("AppNavigation", "Shortcut email navigate retry failed", e2)
                                 }
                             }
                         }
@@ -648,17 +622,7 @@ fun AppNavigation(
                     android.util.Log.e("AppNavigation", "Shortcut with inbox navigate failed", e)
                 }
             } else {
-                try {
-                    doNavigate()
-                } catch (e1: Exception) {
-                    if (e1 is kotlinx.coroutines.CancellationException) throw e1
-                    android.util.Log.w("AppNavigation", "Shortcut navigate failed, retrying", e1)
-                    kotlinx.coroutines.delay(500)
-                    try { doNavigate() } catch (e2: Exception) {
-                        if (e2 is kotlinx.coroutines.CancellationException) throw e2
-                        android.util.Log.e("AppNavigation", "Shortcut navigate retry failed", e2)
-                    }
-                }
+                navigateWithRetry("Shortcut") { doNavigate() }
             }
             onShortcutHandled()
         }
@@ -671,21 +635,9 @@ fun AppNavigation(
                 snapshotFlow { navController.currentBackStackEntry }.first { it != null }
             }
             kotlinx.coroutines.delay(100)
-            try {
+            navigateWithRetry("Updates") {
                 navController.navigate(Screen.Updates.route) {
                     launchSingleTop = true
-                }
-            } catch (e1: Exception) {
-                if (e1 is kotlinx.coroutines.CancellationException) throw e1
-                android.util.Log.w("AppNavigation", "Updates navigate failed, retrying", e1)
-                kotlinx.coroutines.delay(500)
-                try {
-                    navController.navigate(Screen.Updates.route) {
-                        launchSingleTop = true
-                    }
-                } catch (e2: Exception) {
-                    if (e2 is kotlinx.coroutines.CancellationException) throw e2
-                    android.util.Log.e("AppNavigation", "Updates navigate retry failed", e2)
                 }
             }
             onUpdatesHandled()

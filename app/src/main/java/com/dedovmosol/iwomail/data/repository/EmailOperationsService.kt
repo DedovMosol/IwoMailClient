@@ -39,23 +39,12 @@ class EmailOperationsService(
             val client = accountRepo.createEasClient(email.accountId) ?: return EasResult.Error("Не удалось создать клиент")
             val folder = folderDao.getFolder(email.folderId) ?: return EasResult.Error("Папка не найдена")
             
-            // ИСПРАВЛЕНО: Если syncKey == "0", сначала инициализируем его через sync
-            var currentSyncKey = folder.syncKey
-            if (currentSyncKey == "0") {
-                val initResult = client.sync(folder.serverId, "0", windowSize = 0)
-                when (initResult) {
-                    is EasResult.Success -> {
-                        currentSyncKey = initResult.data.syncKey
-                        folderDao.updateSyncKey(email.folderId, currentSyncKey)
-                    }
-                    is EasResult.Error -> {
-                        // Если не удалось получить syncKey, помечаем только локально
-                        emailDao.updateReadStatus(emailId, read)
-                        updateFolderCounts(email.folderId)
-                        updateMailWidget(context)
-                        return EasResult.Success(true)
-                    }
-                }
+            val currentSyncKey = ensureValidSyncKey(client, email.folderId, folder.serverId, folder.syncKey)
+            if (currentSyncKey == null) {
+                emailDao.updateReadStatus(emailId, read)
+                updateFolderCounts(email.folderId)
+                updateMailWidget(context)
+                return EasResult.Success(true)
             }
             
             // Оптимистичное обновление — UI реагирует сразу
@@ -169,16 +158,8 @@ class EmailOperationsService(
             
             for ((folderId, folderEmails) in byFolder) {
                 val folder = folderDao.getFolder(folderId) ?: continue
-                var currentSyncKey = folder.syncKey
-                
-                // Инициализация syncKey если нужно
-                if (currentSyncKey == "0") {
-                    val initResult = client.sync(folder.serverId, "0", windowSize = 0)
-                    if (initResult is EasResult.Success) {
-                        currentSyncKey = initResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, currentSyncKey)
-                    } else continue
-                }
+                val currentSyncKey = ensureValidSyncKey(client, folderId, folder.serverId, folder.syncKey)
+                    ?: continue
                 
                 val serverIds = folderEmails.map { it.serverId }
                 val result = client.markAsReadBatch(folder.serverId, serverIds, currentSyncKey, read)
@@ -418,20 +399,8 @@ class EmailOperationsService(
                 return EasResult.Success(true)
             }
             
-            var currentSyncKey = folder.syncKey
-            if (currentSyncKey == "0") {
-                val initResult = client.sync(folder.serverId, "0", windowSize = 0)
-                when (initResult) {
-                    is EasResult.Success -> {
-                        currentSyncKey = initResult.data.syncKey
-                        folderDao.updateSyncKey(email.folderId, currentSyncKey)
-                    }
-                    is EasResult.Error -> {
-                        // SyncKey init failed — локально уже обновили
-                        return EasResult.Success(true)
-                    }
-                }
-            }
+            val currentSyncKey = ensureValidSyncKey(client, email.folderId, folder.serverId, folder.syncKey)
+                ?: return EasResult.Success(true)
             
             val result = client.toggleFlag(folder.serverId, email.serverId, currentSyncKey, newFlagStatus)
             when (result) {
@@ -833,15 +802,7 @@ class EmailOperationsService(
             for ((folderServerId, emails) in groupedByFolder) {
                 val folderId = emails.first().folderId
                 var syncKey = folderDao.getFolder(folderId)?.syncKey ?: "0"
-                
-                // Инициализация syncKey если "0"
-                if (syncKey == "0") {
-                    val initResult = client.sync(folderServerId, "0")
-                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
-                        syncKey = initResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-                    }
-                }
+                ensureValidSyncKey(client, folderId, folderServerId, syncKey)?.let { syncKey = it }
                 
                 // Если syncKey всё ещё "0" — EWS fallback по одному
                 if (syncKey == "0") {
@@ -865,7 +826,7 @@ class EmailOperationsService(
                 
                 if (batchResult is EasResult.Error && 
                     (batchResult.message.contains("INVALID_SYNCKEY") || batchResult.message.contains("DELETE_NOT_APPLIED"))) {
-                    val initResult = client.sync(folderServerId, "0")
+                    val initResult = client.sync(folderServerId, "0", windowSize = 0)
                     if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
                         syncKey = initResult.data.syncKey
                         folderDao.updateSyncKey(folderId, syncKey)
@@ -970,6 +931,27 @@ class EmailOperationsService(
         }
     }
     
+    /**
+     * Инициализирует syncKey через Sync с "0" если текущий ключ невалиден.
+     * MS-ASCMD: SyncKey="0" → сервер возвращает новый ключ без данных (EAS 12.0+).
+     * @return валидный syncKey или null если инициализация не удалась
+     */
+    private suspend fun ensureValidSyncKey(
+        client: com.dedovmosol.iwomail.eas.EasClient,
+        folderId: String,
+        folderServerId: String,
+        currentSyncKey: String
+    ): String? {
+        if (currentSyncKey != "0") return currentSyncKey
+        val initResult = client.sync(folderServerId, "0", windowSize = 0)
+        if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
+            val newKey = initResult.data.syncKey
+            folderDao.updateSyncKey(folderId, newKey)
+            return newKey
+        }
+        return null
+    }
+
     /**
      * Обновляет счётчики папки с транзакцией для консистентности
      */

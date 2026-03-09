@@ -50,173 +50,35 @@ import com.dedovmosol.iwomail.ui.components.RichTextEditor
 import com.dedovmosol.iwomail.ui.components.RichTextToolbar
 import com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.ui.screens.compose.AttachmentInfo
+import com.dedovmosol.iwomail.ui.screens.compose.EmailSuggestion
+import com.dedovmosol.iwomail.ui.screens.compose.ImageQuality
+import com.dedovmosol.iwomail.ui.screens.compose.SuggestionSource
+import com.dedovmosol.iwomail.ui.screens.compose.CID_PATTERN
+import com.dedovmosol.iwomail.ui.screens.compose.DATA_URL_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.HTML_SIGNATURE_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.HTML_TAG_STRIP_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.NORMALIZE_BRACKET_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.NORMALIZE_EMAIL_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.NON_HTML_TAG_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.SAFE_FILENAME_COMPOSE_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.SIGNATURE_DIV_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_BR_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_DIV_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_P_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.WHITESPACE_COLLAPSE_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
+import com.dedovmosol.iwomail.ui.screens.compose.extractEmailFromString
+import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlQuote
+import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlSignature
+import com.dedovmosol.iwomail.ui.screens.compose.looksLikeHtml
+import com.dedovmosol.iwomail.ui.screens.compose.replaceCidWithDataUrl
 import com.dedovmosol.iwomail.util.escapeHtml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-private const val BODY_SAVE_THRESHOLD = 100_000
-
-private fun createLargeStringSaver(cacheDir: java.io.File, tag: String) =
-    androidx.compose.runtime.saveable.Saver<String, String>(
-        save = { value ->
-            if (value.length <= BODY_SAVE_THRESHOLD) value
-            else try {
-                val file = java.io.File(cacheDir, "compose_state_$tag.tmp")
-                file.writeText(value)
-                "\u0000FILE:${file.absolutePath}"
-            } catch (_: Exception) { value.take(BODY_SAVE_THRESHOLD) }
-        },
-        restore = { saved ->
-            if (saved.startsWith("\u0000FILE:")) {
-                try {
-                    val file = java.io.File(saved.removePrefix("\u0000FILE:"))
-                    if (file.exists()) file.readText().also { file.delete() } else ""
-                } catch (_: Exception) { "" }
-            } else saved
-        }
-    )
-
-private val SIGNATURE_REGEX = Regex("\n\n--\n.*", RegexOption.DOT_MATCHES_ALL)
-// HTML версия подписи - ищем от открывающего до закрывающего маркера
-// Жадный квантификатор .* захватит всё до последнего <!--/signature-->
-private val HTML_SIGNATURE_REGEX = Regex("<div class=\"signature\"[^>]*>.*</div><!--/signature-->", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-private val CID_PATTERN = Regex("cid:([^\"'\\s>]+)")
-private val DATA_URL_REGEX = """src\s*=\s*"data:([^;]+);base64,([^"]+)"""".toRegex()
-private val HTML_TAG_STRIP_REGEX = Regex("<[^>]*>")
-private val WHITESPACE_COLLAPSE_REGEX = Regex("\\s+")
-private val TRAILING_EMPTY_DIV_REGEX = Regex("(<div>\\s*(<br>|&nbsp;)?\\s*</div>\\s*)+$", RegexOption.IGNORE_CASE)
-private val TRAILING_EMPTY_P_REGEX = Regex("(<p>\\s*(<br>|&nbsp;)?\\s*</p>\\s*)+$", RegexOption.IGNORE_CASE)
-private val TRAILING_BR_REGEX = Regex("(<br\\s*/?>\\s*)+$", RegexOption.IGNORE_CASE)
-private val NON_HTML_TAG_REGEX = Regex("<(?!/?[a-zA-Z][a-zA-Z0-9]*[\\s>/])(?![!?])[^>]*>")
-
-/**
- * Формирует HTML подпись
- * @param text текст подписи
- * @param isHtml true если подпись уже в HTML формате, false если plain text
- */
-private fun formatHtmlSignature(text: String?, isHtml: Boolean = false): String {
-    if (text.isNullOrBlank()) return ""
-    
-    val content = if (isHtml) {
-        // HTML подпись — используем как есть
-        text
-    } else {
-        // Plain text — экранируем и заменяем переносы строк
-        text.escapeHtml().replace("\n", "<br>")
-    }
-    // Закрывающий комментарий <!--/signature--> используется как маркер конца для regex
-    return "<div class=\"signature\"><br>--<br>$content</div><!--/signature-->"
-}
-
-/**
- * Формирует HTML цитату для Reply/Forward
- */
-private fun formatHtmlQuote(
-    header: String,
-    from: String,
-    date: String,
-    subject: String,
-    toField: String?,
-    originalBody: String
-): String {
-    val toLine = if (toField != null) "<b>To:</b> ${toField.escapeHtml()}<br>" else ""
-    return """
-        <br><br>
-        <div style="border-left: 2px solid #ccc; padding-left: 10px; margin-left: 5px; color: #666;">
-            <b>--- ${header.escapeHtml()} ---</b><br>
-            <b>From:</b> ${from.escapeHtml()}<br>
-            <b>Date:</b> ${date.escapeHtml()}<br>
-            <b>Subject:</b> ${subject.escapeHtml()}<br>
-            $toLine
-            <br>
-            $originalBody
-        </div>
-    """.trimIndent()
-}
-
-// Regex для определения HTML контента (ищем HTML теги)
-private val HTML_TAG_REGEX = Regex("<[a-zA-Z][^>]*>")
-private val BRACKET_EMAIL_REGEX = Regex("<([^>]+@[^>]+)>")
-// Предкомпилированные regex для normalizeRecipients, обработки вложений и извлечения адресов
-private val NORMALIZE_EMAIL_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
-private val NORMALIZE_BRACKET_REGEX = Regex("<([^>]+)>")
-private val SAFE_FILENAME_COMPOSE_REGEX = Regex("[\\\\/:*?\"<>|]")
-private val SIGNATURE_DIV_REGEX = Regex("<div class=\"signature\">.*</div>", RegexOption.DOT_MATCHES_ALL)
-
-/**
- * Проверяет, содержит ли строка HTML теги
- */
-private fun String.looksLikeHtml(): Boolean = HTML_TAG_REGEX.containsMatchIn(this)
-
-private fun extractEmailFromString(raw: String, queryHint: String? = null): String? {
-    if (raw.isBlank()) return null
-    val cleaned = raw.replace("\r", " ").replace("\n", " ").trim()
-    if (cleaned.isBlank()) return null
-    val emails = NORMALIZE_EMAIL_REGEX.findAll(cleaned).map { it.value }.toList()
-    val queryLower = queryHint?.trim()?.lowercase().orEmpty()
-    if (queryLower.isNotEmpty()) {
-        emails.firstOrNull { it.lowercase().contains(queryLower) }?.let { return it }
-    }
-    BRACKET_EMAIL_REGEX.find(cleaned)?.groupValues?.getOrNull(1)?.let { return it }
-    return emails.firstOrNull()
-}
-
-/**
- * Подсказка для автодополнения email
- */
-data class EmailSuggestion(
-    val email: String,
-    val name: String,
-    val source: SuggestionSource,
-    val groupEmails: List<String> = emptyList(), // Для GROUP: все email участников
-    val groupName: String = "",   // Для GROUP: имя группы (для токена [name])
-    val groupColor: Int = 0        // Для GROUP: цвет группы
-)
-
-enum class SuggestionSource {
-    CONTACT,    // Из локальных контактов
-    HISTORY,    // Из истории писем
-    GAL,        // Из корпоративной книги
-    GROUP       // Группа контактов (подставляет все email группы)
-}
-
-/**
- * Качество сжатия изображения для вставки inline
- */
-enum class ImageQuality(val maxSize: Int, val jpegQuality: Int, val labelRu: String, val labelEn: String) {
-    SMALL(800, 70, "Маленькое (~100 КБ)", "Small (~100 KB)"),
-    MEDIUM(1024, 85, "Среднее (~300 КБ)", "Medium (~300 KB)"),
-    LARGE(1600, 90, "Большое (~600 КБ)", "Large (~600 KB)"),
-    ORIGINAL(4096, 95, "Оригинал (макс. качество)", "Original (max quality)")
-}
-
-data class AttachmentInfo(
-    val uri: Uri,
-    val name: String,
-    val size: Long,
-    val mimeType: String
-) {
-    // Для сохранения при повороте экрана
-    fun toSaveableString(): String = "${uri}|||${name}|||${size}|||${mimeType}"
-    
-    companion object {
-        fun fromSaveableString(s: String): AttachmentInfo? {
-            val parts = s.split("|||")
-            if (parts.size != 4) return null
-            return try {
-                AttachmentInfo(
-                    uri = Uri.parse(parts[0]),
-                    name = parts[1],
-                    size = parts[2].toLong(),
-                    mimeType = parts[3]
-                )
-            } catch (_: Exception) { null }
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -331,16 +193,6 @@ fun ComposeScreen(
         return result.distinct().joinToString(", ")
     }
 
-    fun replaceCidWithDataUrl(html: String, inlineImages: Map<String, String>): String {
-        var result = html
-        inlineImages.forEach { (cid, dataUrl) ->
-            result = result
-                .replace("cid:$cid", dataUrl)
-                .replace("cid:${cid.removePrefix("<").removeSuffix(">")}", dataUrl)
-        }
-        return result
-    }
-    
     // Загрузка вложений из Share intent
     var shareAttachmentsLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {

@@ -498,9 +498,9 @@ interface EmailDao {
      */
     @Query("""
         SELECT DISTINCT `from` as email, fromName as name FROM emails 
-        WHERE fromName IS NOT NULL AND fromName != '' AND fromName NOT LIKE '%@%'
+        WHERE accountId = :accountId AND fromName IS NOT NULL AND fromName != '' AND fromName NOT LIKE '%@%'
     """)
-    suspend fun getAllSenderNames(): List<EmailHistoryResult>
+    suspend fun getAllSenderNames(accountId: Long): List<EmailHistoryResult>
     
     /**
      * Подсчитывает ВСЕ полученные письма за указанный период.

@@ -301,74 +301,20 @@ fun EmailListScreen(
         val isRussian = currentLanguage == AppLanguage.RUSSIAN
         val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
 
-        if (isTrashFolder) {
-            val emailIds = selectedIds.toList()
-            if (emailIds.isEmpty()) {
-                selectedIds = emptySet()
-                return
-            }
-            deletionController.startDeletion(
-                emailIds = emailIds,
-                message = deletingSelectedMessage,
-                scope = scope
-            ) { ids, onProgress ->
-                val result = withContext(Dispatchers.IO) {
-                    mailRepo.deleteEmailsPermanentlyWithProgress(ids) { deleted, total ->
-                        onProgress(deleted, total)
-                    }
-                }
-                when (result) {
-                    is EasResult.Success -> {
-                        if (result.data > 0) {
-                            android.widget.Toast.makeText(
-                                context,
-                                NotificationStrings.getDeletedPermanently(isRussian),
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        } else {
-                            android.widget.Toast.makeText(
-                                context,
-                                nothingDeletedMsg,
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    }
-                    is EasResult.Error -> {
-                        val localizedMessage = NotificationStrings.localizeError(result.message, isRussian)
-                        android.widget.Toast.makeText(
-                            context,
-                            localizedMessage,
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-                selectedIds = emptySet()
-            }
-            return
-        }
-        
         scope.launch {
             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
             val result = withContext(Dispatchers.IO) {
-                // Перемещаем в корзину на сервере (не удаляем локально)
                 mailRepo.moveToTrash(selectedIds.toList())
             }
             when (result) {
                 is EasResult.Success -> {
-                    // Показываем сообщение только если что-то было удалено/перемещено
                     if (result.data > 0) {
-                        val message = if (isTrashFolder) {
-                            NotificationStrings.getDeletedPermanently(isRussian)
-                        } else {
-                            NotificationStrings.getMovedToTrash(isRussian)
-                        }
                         android.widget.Toast.makeText(
                             context,
-                            message,
+                            NotificationStrings.getMovedToTrash(isRussian),
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                     } else {
-                        // Ничего не удалено
                         android.widget.Toast.makeText(
                             context,
                             nothingDeletedMsg,

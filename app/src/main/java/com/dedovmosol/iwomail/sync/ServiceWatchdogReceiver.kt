@@ -22,6 +22,7 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "ServiceWatchdog"
         private const val DEBOUNCE_MS = 300_000L // 5 минут между проверками
+        private const val STALE_THRESHOLD_MS = 600_000L // 10 минут — порог устаревания PushService
     }
     
     override fun onReceive(context: Context, intent: Intent) {
@@ -72,7 +73,7 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
                 
                 val lastUpdate = pushPrefs.getLong("last_update", 0L)
                 val timeSinceUpdate = System.currentTimeMillis() - lastUpdate
-                if (lastUpdate > 0 && timeSinceUpdate < 10 * 60 * 1000L) {
+                if (lastUpdate > 0 && timeSinceUpdate < STALE_THRESHOLD_MS) {
                     android.util.Log.i(TAG, "PushService alive (last update ${timeSinceUpdate / 1000}s ago)")
                     return@launch
                 }

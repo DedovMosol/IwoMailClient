@@ -194,40 +194,31 @@ class EasTasksService internal constructor(
         return EasResult.Error("Не удалось обновить задачу после retry")
     }
     
-    /**
-     * Удаление задачи (перемещение в корзину)
-     */
-    suspend fun deleteTask(serverId: String): EasResult<Boolean> {
-        if (!deps.isVersionDetected()) {
-            deps.detectEasVersion()
-        }
-        
+    suspend fun deleteTask(serverId: String): EasResult<Boolean> =
+        deleteTaskImpl(serverId, deletesAsMoves = true, ewsDeleteType = "MoveToDeletedItems")
+
+    suspend fun deleteTaskPermanently(serverId: String): EasResult<Boolean> =
+        deleteTaskImpl(serverId, deletesAsMoves = false, ewsDeleteType = "HardDelete", ewsNotFoundIsSuccess = true)
+
+    private suspend fun deleteTaskImpl(
+        serverId: String,
+        deletesAsMoves: Boolean,
+        ewsDeleteType: String,
+        ewsNotFoundIsSuccess: Boolean = false
+    ): EasResult<Boolean> {
+        if (!deps.isVersionDetected()) deps.detectEasVersion()
+
         if (deps.getEasVersion().startsWith("12.")) {
-            return deleteTaskEws(serverId)
+            return deleteTaskEwsImpl(serverId, ewsDeleteType, ewsNotFoundIsSuccess)
         }
-        
+
         val tasksFolderId = cachedTasksFolderId ?: deps.getTasksFolderId()
             ?: return EasResult.Error("Папка задач не найдена")
-        
+
         for (attempt in 0..1) {
             val syncKey = getSyncKey(tasksFolderId) ?: return EasResult.Error("Не удалось получить SyncKey")
-            
-            val deleteXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
-            <CollectionId>${deps.escapeXml(tasksFolderId)}</CollectionId>
-            <DeletesAsMoves>1</DeletesAsMoves>
-            <Commands>
-                <Delete>
-                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
-                </Delete>
-            </Commands>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-            
+            val deleteXml = EasXmlTemplates.syncDelete(syncKey, tasksFolderId, serverId, deletesAsMoves)
+
             val result = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
                 val status = deps.extractValue(responseXml, "Status")
                 if (status == "3" || status == "12") {
@@ -245,59 +236,6 @@ class EasTasksService internal constructor(
             }
         }
         return EasResult.Error("Не удалось удалить задачу после retry")
-    }
-    
-    /**
-     * Окончательное удаление задачи
-     */
-    suspend fun deleteTaskPermanently(serverId: String): EasResult<Boolean> {
-        if (!deps.isVersionDetected()) {
-            deps.detectEasVersion()
-        }
-        
-        if (deps.getEasVersion().startsWith("12.")) {
-            return deleteTaskEwsPermanently(serverId)
-        }
-        
-        val tasksFolderId = cachedTasksFolderId ?: deps.getTasksFolderId()
-            ?: return EasResult.Error("Папка задач не найдена")
-        
-        for (attempt in 0..1) {
-            val syncKey = getSyncKey(tasksFolderId) ?: return EasResult.Error("Не удалось получить SyncKey")
-            
-            val deleteXml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
-    <Collections>
-        <Collection>
-            <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
-            <CollectionId>${deps.escapeXml(tasksFolderId)}</CollectionId>
-            <DeletesAsMoves>0</DeletesAsMoves>
-            <Commands>
-                <Delete>
-                    <ServerId>${deps.escapeXml(serverId)}</ServerId>
-                </Delete>
-            </Commands>
-        </Collection>
-    </Collections>
-</Sync>""".trimIndent()
-            
-            val result = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
-                val status = deps.extractValue(responseXml, "Status")
-                if (status == "3" || status == "12") {
-                    syncKeyCache.remove(tasksFolderId)
-                    throw InvalidSyncKeyException(status)
-                }
-                status == "1"
-            }
-            when (result) {
-                is EasResult.Success -> return result
-                is EasResult.Error -> {
-                    if (attempt == 0 && result.message.contains("InvalidSyncKey")) continue
-                    return result
-                }
-            }
-        }
-        return EasResult.Error("Не удалось окончательно удалить задачу после retry")
     }
     
     /**
@@ -675,6 +613,15 @@ class EasTasksService internal constructor(
     }
     
     // ==================== Private EWS methods ====================
+
+    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? {
+        var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, operation)
+        if (responseXml == null) {
+            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
+            responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+        }
+        return responseXml
+    }
     
     private suspend fun syncTasksEws(): EasResult<List<EasTask>> = withContext(Dispatchers.IO) {
         try {
@@ -763,14 +710,8 @@ class EasTasksService internal constructor(
                 yield()
                 val findRequest = buildRequest(offset, pageSize)
                 
-                var responseXml = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
-                if (responseXml == null) {
-                    val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                        ?: break
-                    responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-                        ?: break
-                }
-                
+                val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem") ?: break
+
                 val totalItemsMatch = Companion.REGEX_TOTAL_ITEMS_IN_VIEW.find(responseXml)
                 val totalItems = totalItemsMatch?.groupValues?.get(1)?.toIntOrNull() ?: -1
                 val indexedPagingOffsetMatch = Companion.REGEX_INDEXED_PAGING_OFFSET.find(responseXml)
@@ -856,12 +797,8 @@ class EasTasksService internal constructor(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem") ?: continue
-                responseXml = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem") ?: continue
-            }
-            
+            val responseXml = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem") ?: continue
+
             if (responseXml.isBlank()) continue
             
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
@@ -910,16 +847,9 @@ class EasTasksService internal constructor(
             val ewsUrl = deps.getEwsUrl()
             val soapRequest = buildEwsCreateTaskRequest(subject, body, startDate, dueDate, importance)
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "CreateItem")
-            
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
-                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
-            }
-            
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS CreateItem")
+
             if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
                 android.util.Log.e("EasTasksService", "createTaskEws: Schema error! Response (first 500 chars): ${responseXml.take(500)}")
                 return@withContext EasResult.Error("Ошибка схемы EWS")
@@ -927,13 +857,9 @@ class EasTasksService internal constructor(
             
             val itemId = EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
             
-            // КРИТИЧНО: Проверяем ОБА условия
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
             val result = if (itemId != null) {
                 EasResult.Success(itemId)
-            } else if (hasSuccess && hasNoError) {
+            } else if (EwsClient.isEwsSuccess(responseXml)) {
                 EasResult.Success("pending_sync_${System.currentTimeMillis()}")
             } else {
                 EasResult.Error("Не удалось создать задачу через EWS")
@@ -951,70 +877,31 @@ class EasTasksService internal constructor(
         }
     }
     
-    private suspend fun deleteTaskEws(serverId: String): EasResult<Boolean> = withContext(Dispatchers.IO) {
+    private suspend fun deleteTaskEwsImpl(
+        serverId: String,
+        deleteType: String,
+        notFoundIsSuccess: Boolean
+    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
             val ewsUrl = deps.getEwsUrl()
             val ewsItemId = resolveEwsTaskItemId(ewsUrl, serverId)
-                ?: return@withContext EasResult.Error("Не удалось найти задачу на сервере")
-            val escapedItemId = deps.escapeXml(ewsItemId)
-            
-            val soapRequest = buildEwsDeleteRequest(escapedItemId, "MoveToDeletedItems")
-            
-            // КРИТИЧНО: Basic Auth first, NTLM fallback
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
+            if (ewsItemId == null) {
+                return@withContext if (notFoundIsSuccess) EasResult.Success(true)
+                    else EasResult.Error("Не удалось найти задачу на сервере")
             }
-            
-            // КРИТИЧНО: Для delete проверяем Success+NoError ИЛИ ErrorItemNotFound (уже удалено)
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-            val hasNotFound = responseXml.contains("ErrorItemNotFound")
-            val success = (hasSuccess && hasNoError) || hasNotFound
-            
-            EasResult.Success(success)
+            val escapedItemId = deps.escapeXml(ewsItemId)
+            val soapRequest = buildEwsDeleteRequest(escapedItemId, deleteType)
+
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
+
+            EasResult.Success(EwsClient.isEwsSuccessOrNotFound(responseXml))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка EWS: ${e.message}")
         }
     }
     
-    private suspend fun deleteTaskEwsPermanently(serverId: String): EasResult<Boolean> = withContext(Dispatchers.IO) {
-        try {
-            val ewsUrl = deps.getEwsUrl()
-            val ewsItemId = resolveEwsTaskItemId(ewsUrl, serverId)
-                ?: return@withContext EasResult.Success(true)
-            val escapedItemId = deps.escapeXml(ewsItemId)
-            
-            val soapRequest = buildEwsDeleteRequest(escapedItemId, "HardDelete")
-            
-            // КРИТИЧНО: Basic Auth first, NTLM fallback
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
-            }
-            
-            // КРИТИЧНО: Для delete проверяем Success+NoError ИЛИ ErrorItemNotFound (уже удалено)
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-            val hasNotFound = responseXml.contains("ErrorItemNotFound")
-            val success = (hasSuccess && hasNoError) || hasNotFound
-            
-            EasResult.Success(success)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка EWS: ${e.message}")
-        }
-    }
-
     /**
      * Batch EWS DeleteItem для задач — один запрос с несколькими ItemId.
      * AffectedTaskOccurrences="AllOccurrences" обязателен для задач.
@@ -1053,22 +940,13 @@ $itemIdsXml
     </m:DeleteItem>""".trimIndent()
             val soapRequest = EasXmlTemplates.ewsSoapRequest(soapBody)
 
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "DeleteItem")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "DeleteItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "DeleteItem")
-                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS batch DeleteItem")
 
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "deleteTasksBatchEws: ${ewsItemIds.size} items, deleteType=$deleteType, response len=${responseXml.length}")
 
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("NoError")
-            val hasNotFound = responseXml.contains("ErrorItemNotFound")
-
-            if ((hasSuccess && hasNoError) || hasNotFound) {
+            if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
                 EasResult.Success(ewsItemIds.size)
             } else {
                 val errorCode = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>"
@@ -1140,19 +1018,8 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "MoveItem")
-            
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "MoveItem")
-                if (ntlmAuth == null) {
-                    return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                }
-                
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "MoveItem")
-                if (responseXml == null) {
-                    return@withContext EasResult.Error("Не удалось выполнить запрос")
-                }
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "MoveItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS MoveItem")
             
             val success = responseXml.contains("ResponseClass=\"Success\"") &&
                          (responseXml.contains("NoError") || responseXml.contains("<ResponseCode>NoError</ResponseCode>"))
@@ -1213,14 +1080,9 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var getItemResponse = deps.tryBasicAuthEws(ewsUrl, getItemRequest, "GetItem")
-            if (getItemResponse == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                getItemResponse = deps.executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem")
-                    ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
-            }
-            
+            val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
+                ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
+
             // Извлекаем ChangeKey из ответа
             val changeKeyPattern = """<t:ItemId Id="[^"]+" ChangeKey="([^"]+)"""".toRegex()
             val changeKeyMatch = changeKeyPattern.find(getItemResponse)
@@ -1289,23 +1151,10 @@ $itemIdsXml
             
             val soapRequest = buildEwsUpdateTaskRequest(escapedItemId, escapedChangeKey, updates)
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, "UpdateItem")
-            
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, "UpdateItem")
-                    ?: return@withContext EasResult.Error("NTLM аутентификация не удалась")
-                
-                responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "UpdateItem")
-                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос")
-            }
-            
-            // КРИТИЧНО: Проверяем ОБА условия
-            val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
-            val hasNoError = responseXml.contains("<ResponseCode>NoError</ResponseCode>") ||
-                            responseXml.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-            val success = hasSuccess && hasNoError
-            
-            if (success) {
+            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "UpdateItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS UpdateItem")
+
+            if (EwsClient.isEwsSuccess(responseXml)) {
                 EasResult.Success(true)
             } else {
                 val errorMsg = Regex("MessageText>([^<]+)</").find(responseXml)?.groupValues?.get(1)
@@ -1354,14 +1203,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        // КРИТИЧНО: Basic Auth first, NTLM fallback
-        var responseXml = deps.tryBasicAuthEws(ewsUrl, findRequest, "FindItem")
-        if (responseXml == null) {
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, findRequest, "FindItem")
-                ?: return null
-            responseXml = deps.executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
-                ?: return null
-        }
+        val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem") ?: return null
 
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
         return itemIdPattern.find(responseXml)?.groupValues?.get(1)
@@ -1467,14 +1309,8 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, request, "FindFolder")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "FindFolder")
-                    ?: return emptyList()
-                responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "FindFolder")
-                    ?: return emptyList()
-            }
-            
+            val responseXml = executeEwsWithAuth(ewsUrl, request, "FindFolder") ?: return emptyList()
+
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverTaskSubfolderIds: response len=${responseXml.length}")
             // Логируем больше ответа для диагностики: первые 2000 символов
@@ -1530,11 +1366,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, request, "GetFolder")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "GetFolder") ?: return Pair(-1, -1)
-                responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "GetFolder") ?: return Pair(-1, -1)
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, request, "GetFolder") ?: return Pair(-1, -1)
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "getTasksFolderInfo: response: ${responseXml.take(800)}")
 
@@ -1582,11 +1414,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            var responseXml = deps.tryBasicAuthEws(ewsUrl, request, "FindFolder")
-            if (responseXml == null) {
-                val ntlmAuth = deps.performNtlmHandshake(ewsUrl, request, "FindFolder") ?: return emptyList()
-                responseXml = deps.executeNtlmRequest(ewsUrl, request, ntlmAuth, "FindFolder") ?: return emptyList()
-            }
+            val responseXml = executeEwsWithAuth(ewsUrl, request, "FindFolder") ?: return emptyList()
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverDirectTaskSubfolders: response len=${responseXml.length}, first 600: ${responseXml.take(600)}")
 

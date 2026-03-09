@@ -6,14 +6,9 @@ import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
-import com.dedovmosol.iwomail.util.HtmlRegex
+import com.dedovmosol.iwomail.util.stripHtml
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.withLock
-
-// Предкомпилированные regex для производительности
-private val CN_REGEX = Regex("CN=([^/><]+)", RegexOption.IGNORE_CASE)
-private val NAME_BEFORE_BRACKET_REGEX = Regex("^\"?([^\"<]+)\"?\\s*<")
-private val WHITESPACE_REGEX = Regex("\\s+")
 
 /**
  * Репозиторий для работы с почтой
@@ -56,11 +51,11 @@ class MailRepository(private val context: Context) {
         return emailNameCache.get(cleanEmail)
     }
     
-    suspend fun getNameFromContacts(email: String): String? {
+    suspend fun getNameFromContacts(accountId: Long, email: String): String? {
         if (!cacheInitialized) return null
         val db = database
         return try {
-            db.contactDao().getNameByEmail(email)
+            db.contactDao().getNameByEmail(accountId, email)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             null
@@ -91,12 +86,14 @@ class MailRepository(private val context: Context) {
                     }
                 }
                 
-                val senderPairs = database.emailDao().getAllSenderNames()
-                for ((rawEmail, name) in senderPairs) {
-                    if (rawEmail.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
-                        val key = extractEmail(rawEmail)
-                        if (emailNameCache.get(key) == null) {
-                            emailNameCache.put(key, name)
+                for (account in accounts) {
+                    val senderPairs = database.emailDao().getAllSenderNames(account.id)
+                    for ((rawEmail, name) in senderPairs) {
+                        if (rawEmail.isNotBlank() && name.isNotBlank() && !name.contains("@")) {
+                            val key = extractEmail(rawEmail)
+                            if (emailNameCache.get(key) == null) {
+                                emailNameCache.put(key, name)
+                            }
                         }
                     }
                 }
@@ -850,28 +847,6 @@ if (result is EasResult.Success) {
         folderDao.updateCounts(folderId, unreadCount, totalCount)
     }
     
-    // === Утилитные методы ===
-    
-    private fun extractName(emailField: String): String {
-        if (emailField.isBlank()) return ""
-        
-        val cnMatch = CN_REGEX.find(emailField)
-        if (cnMatch != null) {
-            return cnMatch.groupValues[1].trim()
-        }
-        
-        val nameMatch = NAME_BEFORE_BRACKET_REGEX.find(emailField)
-        if (nameMatch != null) {
-            return nameMatch.groupValues[1].trim()
-        }
-        
-        if (emailField.contains("@") && !emailField.contains("<")) {
-            return ""
-        }
-        
-        return emailField.trim()
-    }
-    
     // === Репарация XML-экранированных данных ===
     
     /**
@@ -951,22 +926,5 @@ if (result is EasResult.Success) {
             android.util.Log.e("MailRepository", "XML entity repair failed", e)
         }
     }
-    
-    
-    private fun stripHtml(html: String): String {
-        return html
-            .replace(HtmlRegex.STYLE, "")
-            .replace(HtmlRegex.SCRIPT, "")
-            .replace(HtmlRegex.COMMENT, "")
-            .replace(HtmlRegex.BR, " ")
-            .replace(HtmlRegex.TAG, "")
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace(HtmlRegex.HTML_ENTITY) { HtmlRegex.decodeNumericEntity(it) }
-            .replace(WHITESPACE_REGEX, " ")
-            .trim()
-    }
+
 }

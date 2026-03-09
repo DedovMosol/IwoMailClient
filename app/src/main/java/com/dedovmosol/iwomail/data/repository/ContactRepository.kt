@@ -520,121 +520,61 @@ class ContactRepository(context: Context) {
     
     // === Импорт/Экспорт ===
     
-    /**
-     * Экспорт контактов в vCard формат
-     */
-    suspend fun exportToVCard(contacts: List<ContactEntity>): String {
-        return buildString {
-            contacts.forEach { contact ->
-                append("BEGIN:VCARD\r\n")
-                append("VERSION:3.0\r\n")
-                append("FN:${escapeVCard(contact.displayName)}\r\n")
-                if (contact.lastName.isNotBlank() || contact.firstName.isNotBlank()) {
-                    append("N:${escapeVCard(contact.lastName)};${escapeVCard(contact.firstName)};;;\r\n")
-                }
-                if (contact.email.isNotBlank()) {
-                    append("EMAIL:${contact.email}\r\n")
-                }
-                if (contact.email2.isNotBlank()) {
-                    append("EMAIL:${contact.email2}\r\n")
-                }
-                if (contact.phone.isNotBlank()) {
-                    append("TEL;TYPE=HOME:${contact.phone}\r\n")
-                }
-                if (contact.mobilePhone.isNotBlank()) {
-                    append("TEL;TYPE=CELL:${contact.mobilePhone}\r\n")
-                }
-                if (contact.workPhone.isNotBlank()) {
-                    append("TEL;TYPE=WORK:${contact.workPhone}\r\n")
-                }
-                if (contact.company.isNotBlank()) {
-                    append("ORG:${escapeVCard(contact.company)}\r\n")
-                }
-                if (contact.jobTitle.isNotBlank()) {
-                    append("TITLE:${escapeVCard(contact.jobTitle)}\r\n")
-                }
-                if (contact.notes.isNotBlank()) {
-                    append("NOTE:${escapeVCard(contact.notes)}\r\n")
-                }
-                append("END:VCARD\r\n")
-            }
+    suspend fun exportToVCard(contacts: List<ContactEntity>): String = buildString {
+        contacts.forEach { c ->
+            appendVCardEntry(
+                c.displayName, c.firstName, c.lastName,
+                listOf(c.email, c.email2),
+                listOf("HOME" to c.phone, "CELL" to c.mobilePhone, "WORK" to c.workPhone),
+                c.company, c.jobTitle, c.notes
+            )
         }
     }
-    
-    /**
-     * Экспорт GAL контактов в vCard формат
-     */
-    fun exportGalToVCard(contacts: List<GalContact>): String {
-        return buildString {
-            contacts.forEach { contact ->
-                append("BEGIN:VCARD\r\n")
-                append("VERSION:3.0\r\n")
-                append("FN:${escapeVCard(contact.displayName)}\r\n")
-                if (contact.lastName.isNotBlank() || contact.firstName.isNotBlank()) {
-                    append("N:${escapeVCard(contact.lastName)};${escapeVCard(contact.firstName)};;;\r\n")
-                }
-                if (contact.email.isNotBlank()) {
-                    append("EMAIL:${contact.email}\r\n")
-                }
-                if (contact.phone.isNotBlank()) {
-                    append("TEL;TYPE=WORK:${contact.phone}\r\n")
-                }
-                if (contact.mobilePhone.isNotBlank()) {
-                    append("TEL;TYPE=CELL:${contact.mobilePhone}\r\n")
-                }
-                if (contact.company.isNotBlank()) {
-                    append("ORG:${escapeVCard(contact.company)}\r\n")
-                }
-                if (contact.jobTitle.isNotBlank()) {
-                    append("TITLE:${escapeVCard(contact.jobTitle)}\r\n")
-                }
-                append("END:VCARD\r\n")
-            }
+
+    fun exportGalToVCard(contacts: List<GalContact>): String = buildString {
+        contacts.forEach { c ->
+            appendVCardEntry(
+                c.displayName, c.firstName, c.lastName,
+                listOf(c.email),
+                listOf("WORK" to c.phone, "CELL" to c.mobilePhone),
+                c.company, c.jobTitle
+            )
         }
     }
-    
-    /**
-     * Экспорт контактов в CSV формат
-     */
-    suspend fun exportToCSV(contacts: List<ContactEntity>): String {
-        return buildString {
-            // Заголовок
-            append("DisplayName,FirstName,LastName,Email,Email2,Phone,MobilePhone,WorkPhone,Company,Department,JobTitle,Notes\r\n")
-            // Данные
-            contacts.forEach { contact ->
-                append("${escapeCSV(contact.displayName)},")
-                append("${escapeCSV(contact.firstName)},")
-                append("${escapeCSV(contact.lastName)},")
-                append("${escapeCSV(contact.email)},")
-                append("${escapeCSV(contact.email2)},")
-                append("${escapeCSV(contact.phone)},")
-                append("${escapeCSV(contact.mobilePhone)},")
-                append("${escapeCSV(contact.workPhone)},")
-                append("${escapeCSV(contact.company)},")
-                append("${escapeCSV(contact.department)},")
-                append("${escapeCSV(contact.jobTitle)},")
-                append("${escapeCSV(contact.notes)}\r\n")
-            }
+
+    suspend fun exportToCSV(contacts: List<ContactEntity>): String = buildCsvExport(
+        "DisplayName,FirstName,LastName,Email,Email2,Phone,MobilePhone,WorkPhone,Company,Department,JobTitle,Notes",
+        contacts.map { listOf(it.displayName, it.firstName, it.lastName, it.email, it.email2, it.phone, it.mobilePhone, it.workPhone, it.company, it.department, it.jobTitle, it.notes) }
+    )
+
+    fun exportGalToCSV(contacts: List<GalContact>): String = buildCsvExport(
+        "DisplayName,FirstName,LastName,Email,Phone,MobilePhone,Company,Department,JobTitle",
+        contacts.map { listOf(it.displayName, it.firstName, it.lastName, it.email, it.phone, it.mobilePhone, it.company, it.department, it.jobTitle) }
+    )
+
+    private fun StringBuilder.appendVCardEntry(
+        displayName: String, firstName: String, lastName: String,
+        emails: List<String>, phones: List<Pair<String, String>>,
+        company: String, jobTitle: String, notes: String = ""
+    ) {
+        append("BEGIN:VCARD\r\n")
+        append("VERSION:3.0\r\n")
+        append("FN:${escapeVCard(displayName)}\r\n")
+        if (lastName.isNotBlank() || firstName.isNotBlank()) {
+            append("N:${escapeVCard(lastName)};${escapeVCard(firstName)};;;\r\n")
         }
+        emails.forEach { email -> if (email.isNotBlank()) append("EMAIL:$email\r\n") }
+        phones.forEach { (type, number) -> if (number.isNotBlank()) append("TEL;TYPE=$type:$number\r\n") }
+        if (company.isNotBlank()) append("ORG:${escapeVCard(company)}\r\n")
+        if (jobTitle.isNotBlank()) append("TITLE:${escapeVCard(jobTitle)}\r\n")
+        if (notes.isNotBlank()) append("NOTE:${escapeVCard(notes)}\r\n")
+        append("END:VCARD\r\n")
     }
-    
-    /**
-     * Экспорт GAL контактов в CSV формат
-     */
-    fun exportGalToCSV(contacts: List<GalContact>): String {
-        return buildString {
-            append("DisplayName,FirstName,LastName,Email,Phone,MobilePhone,Company,Department,JobTitle\r\n")
-            contacts.forEach { contact ->
-                append("${escapeCSV(contact.displayName)},")
-                append("${escapeCSV(contact.firstName)},")
-                append("${escapeCSV(contact.lastName)},")
-                append("${escapeCSV(contact.email)},")
-                append("${escapeCSV(contact.phone)},")
-                append("${escapeCSV(contact.mobilePhone)},")
-                append("${escapeCSV(contact.company)},")
-                append("${escapeCSV(contact.department)},")
-                append("${escapeCSV(contact.jobTitle)}\r\n")
-            }
+
+    private fun buildCsvExport(header: String, rows: List<List<String>>): String = buildString {
+        append(header).append("\r\n")
+        rows.forEach { fields ->
+            append(fields.joinToString(",") { escapeCSV(it) }).append("\r\n")
         }
     }
     
