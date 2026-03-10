@@ -39,6 +39,7 @@ object RepositoryErrors {
     const val EVENT_NOT_FOUND = "Событие не найдено"
     const val CALENDAR_SYNC_ERROR = "Ошибка синхронизации календаря"
     const val MEETING_RESPONSE_ERROR = "Ошибка ответа на приглашение"
+    const val MEETING_RESPONSE_REQUIRES_REQUEST_MESSAGE = "Для ответа нужен ID исходного письма-приглашения, а не ID события календаря"
     const val MEETING_INVITE_ERROR = "Ошибка отправки приглашений"
     const val ATTENDEE_UPDATE_ERROR = "Ошибка обновления статуса"
     

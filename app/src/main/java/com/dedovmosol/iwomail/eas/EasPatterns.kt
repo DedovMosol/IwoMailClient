@@ -30,6 +30,7 @@ object EasPatterns {
     val MDN_DISPOSITION = "Disposition-Notification-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
     val MDN_RETURN_RECEIPT = "Return-Receipt-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
     val MDN_CONFIRM_READING = "X-Confirm-Reading-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
+    val MIME_MESSAGE_ID = """(?im)^Message-ID:\s*(<[^>\r\n]+>|[^\r\n]+)$""".toRegex()
     
     // === MIME patterns ===
     val BOUNDARY = "boundary=\"?([^\"\\r\\n]+)\"?".toRegex(RegexOption.IGNORE_CASE)

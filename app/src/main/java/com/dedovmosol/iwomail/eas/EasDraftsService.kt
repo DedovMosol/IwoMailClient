@@ -67,6 +67,13 @@ class EasDraftsService internal constructor(
         private val ROOT_ITEM_CHANGE_KEY_REGEX = """RootItemChangeKey="([^"]+)"""".toRegex()
         private val CHANGE_KEY_REGEX = """ChangeKey="([^"]+)"""".toRegex()
         private val BRACKET_EMAIL_REGEX = """<([^>]+)>""".toRegex()
+        private val BODY_PATTERN = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val MIME_CONTENT_PATTERN = "<(?:t:)?MimeContent[^>]*>(.*?)</(?:t:)?MimeContent>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val ITEM_ID_T_PATTERN = """<t:ItemId Id="([^"]+)"""".toRegex()
+        private val ITEM_ID_NS_PATTERN = """<t:ItemId\s+Id="([^"]+)"""".toRegex()
+        private val ITEM_ID_ALT_PATTERN = """ItemId\s+Id="([^"]+)"""".toRegex()
+        private val ITEM_ID_M_PATTERN = """<m:ItemId Id="([^"]+)"""".toRegex()
+        private val ITEM_ID_BARE_PATTERN = """<ItemId Id="([^"]+)"""".toRegex()
         private val EMAIL_ADDR_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     }
     
@@ -255,8 +262,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
             
-            // Извлекаем Body c учётом атрибутов (<t:Body BodyType="HTML">...</t:Body>)
-            val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val rawBody = BODY_PATTERN
                 .find(responseXml)
                 ?.groupValues
                 ?.get(1)
@@ -365,9 +371,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             // <t:MimeContent>(.*?)</t:MimeContent> — он НЕ обрабатывает атрибуты.
             // EWS ВСЕГДА возвращает <t:MimeContent CharacterSet="UTF-8">base64</t:MimeContent>.
             // Без [^>]* regex не совпадёт → extractEws вернёт null → inline-картинки потеряны.
-            // Используем кастомный regex, который учитывает атрибуты.
-            val mimePattern = "<(?:t:)?MimeContent[^>]*>(.*?)</(?:t:)?MimeContent>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val mimeBase64 = mimePattern.find(responseXml)?.groupValues?.get(1)?.trim() ?: ""
+            val mimeBase64 = MIME_CONTENT_PATTERN.find(responseXml)?.groupValues?.get(1)?.trim() ?: ""
             if (mimeBase64.isBlank()) {
                 return@withContext EasResult.Success("")
             }
@@ -483,7 +487,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             // 4. Извлекаем ItemId
             var itemId = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "Id")
                 ?: EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
-                ?: """<t:ItemId Id="([^"]+)"""".toRegex().find(responseXml)?.groupValues?.get(1)
+                ?: ITEM_ID_T_PATTERN.find(responseXml)?.groupValues?.get(1)
             
             // 5. Если ItemId не найден, но ответ без ошибки — черновик мог быть создан.
             // Ищем его через FindItem в папке Drafts по теме (Exchange 2007 SP1+).
@@ -681,7 +685,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         // Извлекаем первый (самый свежий) ItemId
         return XmlValueExtractor.extractAttribute(findResponse, "ItemId", "Id")
             ?: EasPatterns.EWS_ITEM_ID.find(findResponse)?.groupValues?.get(1)
-            ?: """<t:ItemId Id="([^"]+)"""".toRegex().find(findResponse)?.groupValues?.get(1)
+            ?: ITEM_ID_T_PATTERN.find(findResponse)?.groupValues?.get(1)
     }
     
     /**
@@ -727,14 +731,10 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
             ?: return EasResult.Error("EWS FindItem failed")
 
-        // Извлекаем ВСЕ ItemId из ответа
-        val itemIdPattern = """<t:ItemId\s+Id="([^"]+)"""".toRegex()
-        val allIds = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
+        val allIds = ITEM_ID_NS_PATTERN.findAll(findResponse).map { it.groupValues[1] }.toList()
         
-        // Fallback: попробуем другой формат (без namespace prefix)
         if (allIds.isEmpty()) {
-            val altPattern = """ItemId\s+Id="([^"]+)"""".toRegex()
-            val altIds = altPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
+            val altIds = ITEM_ID_ALT_PATTERN.findAll(findResponse).map { it.groupValues[1] }.toList()
             return EasResult.Success(altIds)
         }
         
@@ -764,11 +764,7 @@ private suspend fun createDraftEws(
                 ?: EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
                 ?: run {
                     // Дополнительные попытки извлечь ItemId
-                    val patterns = listOf(
-                        """<t:ItemId Id="([^"]+)"""".toRegex(),
-                        """<m:ItemId Id="([^"]+)"""".toRegex(),
-                        """<ItemId Id="([^"]+)"""".toRegex()
-                    )
+                    val patterns = listOf(ITEM_ID_T_PATTERN, ITEM_ID_M_PATTERN, ITEM_ID_BARE_PATTERN)
                     patterns.firstNotNullOfOrNull { it.find(responseXml)?.groupValues?.get(1) }
                 }
 

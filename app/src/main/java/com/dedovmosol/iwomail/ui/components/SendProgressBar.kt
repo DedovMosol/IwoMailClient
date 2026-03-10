@@ -13,7 +13,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.data.database.AccountEntity
-import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.network.NetworkMonitor
@@ -105,8 +104,6 @@ class SendController {
         val stepMs = 50L
         val steps = (countdownMs / stepMs).toInt()
         
-        val accountRepo = AccountRepository(context)
-        
         sendJob = sendScope.launch {
             try {
                 // Фаза 1: Обратный отсчёт
@@ -124,7 +121,7 @@ class SendController {
                     progress = 0f
                 )
                 
-                val accountRepo = AccountRepository(context)
+                val accountRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context)
                 val client = accountRepo.createEasClient(email.account.id)
                 if (client == null) {
                     withContext(Dispatchers.Main) {

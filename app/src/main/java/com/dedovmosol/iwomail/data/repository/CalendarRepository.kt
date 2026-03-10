@@ -952,10 +952,9 @@ class CalendarRepository(private val context: Context) {
     }
     
     /**
-     * Ответ на приглашение на встречу
-     * @param event Событие календаря
-     * @param response Тип ответа: "Accept", "Tentative", "Decline"
-     * @param sendResponse Отправить ответ организатору
+     * Ответ на приглашение на встречу.
+     * MS-ASCMD §2.2.1.11: для EAS 12.1 нужен RequestId (ServerId письма-приглашения)
+     * и CollectionId (ServerId папки Inbox). Ищет связку в CalendarEventEntity или в EmailDao.
      */
     suspend fun respondToMeeting(
         event: CalendarEventEntity,
@@ -968,22 +967,49 @@ class CalendarRepository(private val context: Context) {
                     is EasResult.Success -> r.data
                     is EasResult.Error -> return@withContext r
                 }
-                
-                val result = withRetry {
-                    easClient.respondToMeetingRequest(event.serverId, response, sendResponse, subject = event.subject)
+
+                var requestId = event.meetingRequestId
+                var folderServerId = event.meetingRequestFolderId
+
+                if (requestId.isBlank()) {
+                    val linked = linkMeetingRequestIds(event)
+                    if (linked != null) {
+                        requestId = linked.first
+                        folderServerId = linked.second
+                    }
                 }
-                
+
+                if (requestId.isBlank()) {
+                    android.util.Log.w("CalendarRepository",
+                        "respondToMeeting: no meeting request email found for subject='${event.subject}'")
+                    return@withContext EasResult.Error(RepositoryErrors.MEETING_RESPONSE_REQUIRES_REQUEST_MESSAGE)
+                }
+
+                android.util.Log.d("CalendarRepository",
+                    "respondToMeeting: requestId=$requestId, collectionId=$folderServerId")
+
+                val result = withRetry {
+                    easClient.respondToMeetingRequest(
+                        serverId = requestId,
+                        response = response,
+                        sendResponse = sendResponse,
+                        subject = event.subject,
+                        collectionId = folderServerId
+                    )
+                }
+
                 when (result) {
                     is EasResult.Success -> {
-                        // Обновляем статус ответа локально
                         val newResponseStatus = when (response.lowercase()) {
                             "accept" -> MeetingResponseStatus.ACCEPTED.value
                             "tentative" -> MeetingResponseStatus.TENTATIVE.value
                             "decline" -> MeetingResponseStatus.DECLINED.value
                             else -> MeetingResponseStatus.ACCEPTED.value
                         }
-                        val updatedEvent = event.copy(responseStatus = newResponseStatus)
-                        calendarEventDao.update(updatedEvent)
+                        calendarEventDao.update(event.copy(
+                            responseStatus = newResponseStatus,
+                            appointmentReplyTime = System.currentTimeMillis()
+                        ))
                         EasResult.Success(true)
                     }
                     is EasResult.Error -> result
@@ -993,6 +1019,31 @@ class CalendarRepository(private val context: Context) {
                 EasResult.Error(e.message ?: RepositoryErrors.MEETING_RESPONSE_ERROR)
             }
         }
+    }
+
+    /**
+     * Ищет письмо-приглашение по subject и связывает его с событием.
+     * @return Pair(emailServerId, folderServerId) или null если не найдено
+     */
+    private suspend fun linkMeetingRequestIds(event: CalendarEventEntity): Pair<String, String>? {
+        if (event.subject.isBlank()) return null
+
+        val emailDao = database.emailDao()
+        val meetingEmail = emailDao.findMeetingRequestBySubject(event.accountId, event.subject)
+            ?: return null
+
+        val folderDao = database.folderDao()
+        val folder = folderDao.getFolder(meetingEmail.folderId)
+        val folderServerId = folder?.serverId ?: ""
+
+        val requestId = meetingEmail.serverId
+        if (requestId.isBlank()) return null
+
+        calendarEventDao.updateMeetingRequestIds(event.id, requestId, folderServerId)
+        android.util.Log.d("CalendarRepository",
+            "linkMeetingRequestIds: linked event '${event.subject}' → requestId=$requestId, folderId=$folderServerId")
+
+        return Pair(requestId, folderServerId)
     }
 
     
@@ -1029,8 +1080,9 @@ class CalendarRepository(private val context: Context) {
                         val syncResult = result.data
                         val serverEvents = syncResult.events
                         val explicitlyDeletedIds = syncResult.deletedServerIds
+                        val isAuthoritativeSnapshot = syncResult.isAuthoritativeSnapshot
                         android.util.Log.d("CalendarRepository", 
-                            "syncCalendar: server returned ${serverEvents.size} events, ${explicitlyDeletedIds.size} explicit deletes")
+                            "syncCalendar: server returned ${serverEvents.size} events, ${explicitlyDeletedIds.size} explicit deletes, authoritative=$isAuthoritativeSnapshot")
                         
                         // Все DB-записи в одной транзакции для атомарности
                         val syncedCount = database.withTransaction {
@@ -1052,7 +1104,7 @@ class CalendarRepository(private val context: Context) {
                         
                         val existingEventsMap = existingEvents.associateBy { it.serverId }
                         
-                        if (serverEvents.isNotEmpty() || existingEvents.isEmpty()) {
+                        if (isAuthoritativeSnapshot && (serverEvents.isNotEmpty() || existingEvents.isEmpty())) {
                             val serverDeletedIds = existingServerIds - serverReturnedIds
                             
                             val now = System.currentTimeMillis()
@@ -1085,6 +1137,11 @@ class CalendarRepository(private val context: Context) {
                                 CalendarReminderReceiver.cancelReminder(context, eventId)
                                 calendarEventDao.delete(eventId)
                             }
+                        } else if (!isAuthoritativeSnapshot) {
+                            android.util.Log.w(
+                                "CalendarRepository",
+                                "syncCalendar: Non-authoritative snapshot received — skipping diff-based deletions to prevent data loss"
+                            )
                         } else {
                             android.util.Log.w("CalendarRepository", 
                                 "syncCalendar: Server returned 0 events but ${existingEvents.size} exist locally — skipping deletion to prevent data loss")
@@ -1093,7 +1150,7 @@ class CalendarRepository(private val context: Context) {
                         // КРИТИЧНО: Очищаем защитное множество — убираем serverId,
                         // которые сервер УЖЕ НЕ возвращает (реально удалены на сервере).
                         // Только если сервер вернул непустой ответ (валидный sync)
-                        if (serverEvents.isNotEmpty()) {
+                        if (isAuthoritativeSnapshot && serverEvents.isNotEmpty()) {
                             confirmServerDeletions(serverReturnedIds, context)
                         }
                         
@@ -1249,7 +1306,9 @@ class CalendarRepository(private val context: Context) {
                                 disallowNewTimeProposal = event.disallowNewTimeProposal,
                                 onlineMeetingLink = event.onlineMeetingLink,
                                 hasAttachments = finalHasAttachments,
-                                attachments = finalAttachments
+                                attachments = finalAttachments,
+                                meetingRequestId = existingEvent?.meetingRequestId ?: "",
+                                meetingRequestFolderId = existingEvent?.meetingRequestFolderId ?: ""
                             )
                         }
                         
@@ -1313,6 +1372,25 @@ class CalendarRepository(private val context: Context) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                         }
                         
+                        // MS-ASCMD §2.2.1.11: связываем meeting events с письмами-приглашениями
+                        // для корректного accept/decline через EAS MeetingResponse
+                        try {
+                            val emailDao = database.emailDao()
+                            val meetingEvents = calendarEventDao.getEventsByAccountList(accountId)
+                                .filter { it.isMeeting && it.meetingRequestId.isBlank() && !it.isDeleted }
+                            for (ev in meetingEvents) {
+                                if (ev.subject.isBlank()) continue
+                                val email = emailDao.findMeetingRequestBySubject(accountId, ev.subject) ?: continue
+                                val folder = database.folderDao().getFolder(email.folderId)
+                                val fServerId = folder?.serverId ?: ""
+                                calendarEventDao.updateMeetingRequestIds(ev.id, email.serverId, fServerId)
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            android.util.Log.w("CalendarRepository",
+                                "syncCalendar: linkMeetingRequestIds failed: ${e.message}")
+                        }
+
                         // Exchange 2007 SP1: EAS Sync может не возвращать обновлённые exceptions
                         // для повторяющихся событий при модификации отдельных вхождений на ПК.
                         // Дополняем через EWS FindItem + CalendarView.

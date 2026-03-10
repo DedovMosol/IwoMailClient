@@ -69,9 +69,11 @@ class EasEmailService internal constructor(
         private val MDN_DISPOSITION_REGEX get() = EasPatterns.MDN_DISPOSITION
         private val MDN_RETURN_RECEIPT_REGEX get() = EasPatterns.MDN_RETURN_RECEIPT
         private val MDN_CONFIRM_READING_REGEX get() = EasPatterns.MDN_CONFIRM_READING
+        private val MIME_MESSAGE_ID_REGEX get() = EasPatterns.MIME_MESSAGE_ID
         private val EMAIL_BRACKET_REGEX get() = EasPatterns.EMAIL_BRACKET
         private val BOUNDARY_REGEX get() = EasPatterns.BOUNDARY
         private val AIRSYNC_DATA_REGEX = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val HEADER_FOLDING_REGEX = "\r?\n[ \t]+".toRegex()
         
         private val CONTENT_ID_PATTERN = "Content-ID:\\s*<([^>]+)>".toRegex(RegexOption.IGNORE_CASE)
         private val CONTENT_TYPE_IMAGE_PATTERN = "Content-Type:\\s*(image/[^;\\r\\n]+)".toRegex(RegexOption.IGNORE_CASE)
@@ -274,12 +276,15 @@ class EasEmailService internal constructor(
             }
             
             var mdnRequestedBy: String? = null
+            var originalMessageId: String? = null
             var bodyContent = ""
             
             if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty()) {
-                val mimeData = mimeResult.data
-                mdnRequestedBy = parseMdnHeader(mimeData)
-                bodyContent = extractBodyFromMime(mimeData)
+                val decodedMimeData = decodeMimeData(mimeResult.data)
+                val mimeHeaders = extractTopLevelMimeHeaders(decodedMimeData)
+                mdnRequestedBy = parseMdnHeader(mimeHeaders)
+                originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
+                bodyContent = extractBodyFromMime(decodedMimeData)
             }
             
             // HTML fallback (Type=2)
@@ -316,7 +321,13 @@ class EasEmailService internal constructor(
                 }
             }
             
-            EasResult.Success(EmailBodyResult(bodyContent, mdnRequestedBy))
+            EasResult.Success(
+                EmailBodyResult(
+                    body = bodyContent,
+                    mdnRequestedBy = mdnRequestedBy,
+                    originalMessageId = originalMessageId
+                )
+            )
         } ?: EasResult.Error("Timeout loading email body")
     }
     
@@ -443,7 +454,7 @@ class EasEmailService internal constructor(
     /**
      * Парсит заголовок Disposition-Notification-To из MIME данных
      */
-    private fun parseMdnHeader(mimeData: String): String? {
+    private fun parseMdnHeader(mimeHeaders: String): String? {
         val patterns = listOf(
             MDN_DISPOSITION_REGEX,
             MDN_RETURN_RECEIPT_REGEX,
@@ -451,7 +462,7 @@ class EasEmailService internal constructor(
         )
         
         for (pattern in patterns) {
-            val match = pattern.find(mimeData)
+            val match = pattern.find(mimeHeaders)
             if (match != null) {
                 val email = match.groupValues[1].trim()
                 val emailMatch = EMAIL_BRACKET_REGEX.find(email)
@@ -460,6 +471,29 @@ class EasEmailService internal constructor(
         }
         
         return null
+    }
+
+    private fun parseOriginalMessageIdHeader(mimeHeaders: String): String? {
+        val rawMessageId = MIME_MESSAGE_ID_REGEX.find(mimeHeaders)
+            ?.groupValues
+            ?.get(1)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+
+        return if (rawMessageId.startsWith("<") && rawMessageId.endsWith(">")) {
+            rawMessageId
+        } else {
+            "<$rawMessageId>"
+        }
+    }
+
+    private fun extractTopLevelMimeHeaders(mimeData: String): String {
+        val headerEnd = mimeData.indexOf("\r\n\r\n").takeIf { it >= 0 }
+            ?: mimeData.indexOf("\n\n").takeIf { it >= 0 }
+            ?: mimeData.length
+        return mimeData.substring(0, headerEnd)
+            .replace(HEADER_FOLDING_REGEX, " ")
     }
     
     /**
@@ -1299,6 +1333,9 @@ $deleteCommands
         val flagSection = XmlUtils.extractTagValue(xml, "Flag")
         val isFlagged = flagSection?.let { deps.extractValue(it, "FlagStatus") == "2" } ?: false
 
+        // MS-ASEMAIL 2.2.2.49: MessageClass — IPM.Note, IPM.Schedule.Meeting.Request, etc.
+        val messageClass = deps.extractValue(xml, "MessageClass") ?: ""
+
         return EasEmail(
             serverId = serverId,
             from = XmlUtils.unescape(deps.extractValue(xml, "From") ?: ""),
@@ -1311,7 +1348,8 @@ $deleteCommands
             body = body,
             bodyType = bodyType,
             attachments = attachments,
-            flagged = isFlagged
+            flagged = isFlagged,
+            messageClass = messageClass
         )
     }
     
@@ -1341,21 +1379,11 @@ $deleteCommands
     }
     
     private fun extractBodyFromMime(mimeData: String): String {
-        val decoded = try {
-            if (looksLikeBase64(mimeData)) {
-                String(android.util.Base64.decode(mimeData, android.util.Base64.DEFAULT), Charsets.UTF_8)
-            } else {
-                mimeData
-            }
-        } catch (e: Exception) {
-            mimeData
-        }
-        
         // RFC 2045 §6.1: Content-Transfer-Encoding applies per MIME part independently
         val htmlPartPattern = "(Content-Type:\\s*text/html[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
         )
-        val htmlMatch = htmlPartPattern.find(decoded)
+        val htmlMatch = htmlPartPattern.find(mimeData)
         if (htmlMatch != null) {
             return decodeMimePartContent(htmlMatch.groupValues[1], htmlMatch.groupValues[2].trim())
         }
@@ -1363,12 +1391,22 @@ $deleteCommands
         val textPartPattern = "(Content-Type:\\s*text/plain[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
         )
-        val textMatch = textPartPattern.find(decoded)
+        val textMatch = textPartPattern.find(mimeData)
         if (textMatch != null) {
             return decodeMimePartContent(textMatch.groupValues[1], textMatch.groupValues[2].trim())
         }
         
-        return decoded
+        return mimeData
+    }
+
+    private fun decodeMimeData(mimeData: String): String = try {
+        if (looksLikeBase64(mimeData)) {
+            String(Base64.decode(mimeData, Base64.DEFAULT), Charsets.UTF_8)
+        } else {
+            mimeData
+        }
+    } catch (_: Exception) {
+        mimeData
     }
     
     private fun decodeMimePartContent(headers: String, body: String): String {

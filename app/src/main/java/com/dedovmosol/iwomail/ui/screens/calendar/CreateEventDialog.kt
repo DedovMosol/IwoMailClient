@@ -33,9 +33,9 @@ import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import java.text.SimpleDateFormat
 import java.util.*
 
-private val PARSE_DATE_TIME_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()) }
-private val PARSE_DATE_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
-private val PARSE_TIME_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+private fun dateTimeFormat() = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+private fun dateFormat() = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+private fun timeFormat() = SimpleDateFormat("HH:mm", Locale.getDefault())
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,11 +64,11 @@ internal fun CreateEventDialog(
     val context = LocalContext.current
     val isEditing = event != null
     
-    // РџРѕР»СѓС‡Р°РµРј СЃС‚СЂРѕРєРё Р·Р°СЂР°РЅРµРµ РґР»СЏ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ РІ onClick
+    // Получаем строки заранее для использования в onClick
     val invalidDateTimeText = Strings.invalidDateTime
     val endBeforeStartText = Strings.endBeforeStart
     
-    // РЎРѕСЃС‚РѕСЏРЅРёСЏ РїРѕР»РµР№
+    // Состояния полей
     var subject by rememberSaveable { mutableStateOf(event?.subject ?: "") }
     var location by rememberSaveable { mutableStateOf(event?.location ?: "") }
     var body by rememberSaveable { mutableStateOf(event?.body ?: "") }
@@ -76,7 +76,7 @@ internal fun CreateEventDialog(
     var reminder by rememberSaveable { mutableStateOf(event?.reminder ?: 15) }
     var busyStatus by rememberSaveable { mutableStateOf(event?.busyStatus ?: 2) }
     var attendees by rememberSaveable { mutableStateOf("") }
-    // РўРёРї РїРѕРІС‚РѕСЂРµРЅРёСЏ: -1=РќРµС‚, 0=Daily, 1=Weekly, 2=Monthly, 5=Yearly
+    // Тип повторения: -1=Нет, 0=Daily, 1=Weekly, 2=Monthly, 5=Yearly
     var recurrenceType by rememberSaveable {
         mutableStateOf(
             if (event?.isRecurring == true && event.recurrenceRule.isNotBlank()) {
@@ -84,18 +84,18 @@ internal fun CreateEventDialog(
             } else -1
         )
     }
-    // Р”РёР°Р»РѕРі РІС‹Р±РѕСЂР° РєРѕРЅС‚Р°РєС‚РѕРІ
+    // Диалог выбора контактов
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
     
-    // Р’Р»РѕР¶РµРЅРёСЏ
+    // Вложения
     var pickedAttachments by remember { mutableStateOf(listOf<DraftAttachmentData>()) }
     var removedExistingAttachmentRefs by remember { mutableStateOf(setOf<String>()) }
-    val isRussianPicker = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+    val isRussianCallback = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        val maxSingleFile = 7L * 1024 * 1024 // 7 MB вЂ” Р»РёРјРёС‚ СЃРµСЂРІРµСЂР°
-        val maxTotal = 10L * 1024 * 1024 // 10 MB СЃСѓРјРјР°СЂРЅРѕ
+        val maxSingleFile = 7L * 1024 * 1024 // 7 MB — лимит сервера
+        val maxTotal = 10L * 1024 * 1024 // 10 MB суммарно
         var currentTotal = pickedAttachments.sumOf { it.data.size.toLong() }
         uris.forEach { uri ->
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -107,15 +107,13 @@ internal fun CreateEventDialog(
                     if (size > maxSingleFile) {
                         val sizeMB = size / 1024 / 1024
                         Toast.makeText(context,
-                            if (isRussianPicker) "Р¤Р°Р№Р» '$name' СЃР»РёС€РєРѕРј Р±РѕР»СЊС€РѕР№ (${sizeMB} РњР‘, РјР°РєСЃ 7 РњР‘)"
-                            else "File '$name' too large (${sizeMB} MB, max 7 MB)",
+                            Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback),
                             Toast.LENGTH_LONG).show()
                         return@use
                     }
                     if (currentTotal + size > maxTotal) {
                         Toast.makeText(context,
-                            if (isRussianPicker) "РџСЂРµРІС‹С€РµРЅ РѕР±С‰РёР№ Р»РёРјРёС‚ РІР»РѕР¶РµРЅРёР№ (10 РњР‘)"
-                            else "Total attachment limit exceeded (10 MB)",
+                            Strings.attachmentLimitExceeded(isRussianCallback),
                             Toast.LENGTH_LONG).show()
                         return@use
                     }
@@ -140,8 +138,7 @@ internal fun CreateEventDialog(
                     if (bytes == null && streamExceededSingleLimit) {
                         val sizeMB = maxSingleFile / 1024 / 1024
                         Toast.makeText(context,
-                            if (isRussianPicker) "Р¤Р°Р№Р» '$name' СЃР»РёС€РєРѕРј Р±РѕР»СЊС€РѕР№ (${sizeMB} РњР‘, РјР°РєСЃ 7 РњР‘)"
-                            else "File '$name' too large (${sizeMB} MB, max 7 MB)",
+                            Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback),
                             Toast.LENGTH_LONG).show()
                         return@use
                     }
@@ -149,15 +146,13 @@ internal fun CreateEventDialog(
                         if (bytes.size.toLong() > maxSingleFile) {
                             val sizeMB = bytes.size / 1024 / 1024
                             Toast.makeText(context,
-                                if (isRussianPicker) "Р¤Р°Р№Р» '$name' СЃР»РёС€РєРѕРј Р±РѕР»СЊС€РѕР№ (${sizeMB} РњР‘, РјР°РєСЃ 7 РњР‘)"
-                                else "File '$name' too large (${sizeMB} MB, max 7 MB)",
+                                Strings.fileTooLargeMessage(name, sizeMB.toLong(), isRussianCallback),
                                 Toast.LENGTH_LONG).show()
                             return@use
                         }
                         if (currentTotal + bytes.size > maxTotal) {
                             Toast.makeText(context,
-                                if (isRussianPicker) "РџСЂРµРІС‹С€РµРЅ РѕР±С‰РёР№ Р»РёРјРёС‚ РІР»РѕР¶РµРЅРёР№ (10 РњР‘)"
-                                else "Total attachment limit exceeded (10 MB)",
+                                Strings.attachmentLimitExceeded(isRussianCallback),
                                 Toast.LENGTH_LONG).show()
                             return@use
                         }
@@ -173,7 +168,7 @@ internal fun CreateEventDialog(
         }
     }
     
-    // РўРµРєСЃС‚РѕРІС‹Рµ РїРѕР»СЏ РґР»СЏ РґР°С‚ Рё РІСЂРµРјРµРЅРё
+    // Текстовые поля для дат и времени
     var startDateText by rememberSaveable { mutableStateOf("") }
     var startTimeText by rememberSaveable { mutableStateOf("") }
     var endDateText by rememberSaveable { mutableStateOf("") }
@@ -182,47 +177,47 @@ internal fun CreateEventDialog(
     var showReminderMenu by rememberSaveable { mutableStateOf(false) }
     var showStatusMenu by rememberSaveable { mutableStateOf(false) }
     
-    // РЎРѕСЃС‚РѕСЏРЅРёСЏ РґР»СЏ DatePicker / TimePicker РґРёР°Р»РѕРіРѕРІ
+    // Состояния для DatePicker / TimePicker диалогов
     var showStartDatePicker by rememberSaveable { mutableStateOf(false) }
     var showStartTimePicker by rememberSaveable { mutableStateOf(false) }
     var showEndDatePicker by rememberSaveable { mutableStateOf(false) }
     var showEndTimePicker by rememberSaveable { mutableStateOf(false) }
     
-    // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ С‚РµРєСЃС‚РѕРІС‹С… РїРѕР»РµР№ РёР· СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёС… РґР°С‚
+    // Инициализация текстовых полей из существующих дат
     LaunchedEffect(event, initialDate) {
-        // РљР РРўРР§РќРћ: РќР• СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј UTC, С‚.Рє. РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ СЂР°Р±РѕС‚Р°РµС‚ РІ LOCAL timezone
-        // Р‘Р” С…СЂР°РЅРёС‚ UTC, РЅРѕ РѕС‚РѕР±СЂР°Р¶Р°РµРј РІ LOCAL
+        // КРИТИЧНО: НЕ устанавливаем UTC, т.к. пользователь работает в LOCAL timezone
+        // БД хранит UTC, но отображаем в LOCAL
         
         if (event != null) {
-            startDateText = PARSE_DATE_FORMAT.get().format(Date(event.startTime))
-            startTimeText = PARSE_TIME_FORMAT.get().format(Date(event.startTime))
-            endDateText = PARSE_DATE_FORMAT.get().format(Date(event.endTime))
-            endTimeText = PARSE_TIME_FORMAT.get().format(Date(event.endTime))
+            startDateText = dateFormat().format(Date(event.startTime))
+            startTimeText = timeFormat().format(Date(event.startTime))
+            endDateText = dateFormat().format(Date(event.endTime))
+            endTimeText = timeFormat().format(Date(event.endTime))
         } else {
-            // РСЃРїРѕР»СЊР·СѓРµРј С‚РµРєСѓС‰РµРµ РІСЂРµРјСЏ, РѕРєСЂСѓРіР»С‘РЅРЅРѕРµ РґРѕ СЃР»РµРґСѓСЋС‰РµРіРѕ С‡Р°СЃР°
+            // Используем текущее время, округлённое до следующего часа
             val calendar = Calendar.getInstance()
             calendar.set(Calendar.MINUTE, 0)
             calendar.set(Calendar.SECOND, 0)
             calendar.set(Calendar.MILLISECOND, 0)
             calendar.add(Calendar.HOUR_OF_DAY, 1)
             
-            startDateText = PARSE_DATE_FORMAT.get().format(calendar.time)
-            startTimeText = PARSE_TIME_FORMAT.get().format(calendar.time)
+            startDateText = dateFormat().format(calendar.time)
+            startTimeText = timeFormat().format(calendar.time)
             
             calendar.add(Calendar.HOUR_OF_DAY, 1)
-            endDateText = PARSE_DATE_FORMAT.get().format(calendar.time)
-            endTimeText = PARSE_TIME_FORMAT.get().format(calendar.time)
+            endDateText = dateFormat().format(calendar.time)
+            endTimeText = timeFormat().format(calendar.time)
         }
     }
     
-    // Р’Р°Р»РёРґР°С†РёСЏ
+    // Валидация
     val isValid = subject.isNotBlank()
     
     val lazyListState = rememberLazyListState()
     
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = { if (!isCreating) onDismiss() },
-        scrollable = false, // РћС‚РєР»СЋС‡Р°РµРј Р°РІС‚РѕСЃРєСЂРѕР»Р» РґРёР°Р»РѕРіР°
+        scrollable = false, // Отключаем автоскролл диалога
         properties = DialogProperties(usePlatformDefaultWidth = false),
         modifier = Modifier
             .fillMaxWidth(0.95f)
@@ -238,7 +233,7 @@ internal fun CreateEventDialog(
             }
         },
         text = {
-            // РљРѕРЅС‚РµРЅС‚ СЃ РїСЂРѕРєСЂСѓС‚РєРѕР№ + РІРёРґРёРјС‹Р№ СЃРєСЂРѕР»Р»Р±Р°СЂ
+            // Контент с прокруткой + видимый скроллбар
             Box(modifier = Modifier.heightIn(min = 200.dp)) {
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
@@ -247,7 +242,7 @@ internal fun CreateEventDialog(
                     contentPadding = PaddingValues(end = 8.dp, bottom = 16.dp)
                 ) {
                 item {
-                    // РќР°Р·РІР°РЅРёРµ
+                    // Название
                     OutlinedTextField(
                         value = subject,
                         onValueChange = { subject = it },
@@ -260,7 +255,7 @@ internal fun CreateEventDialog(
                 
                 item {
                     
-                    // Р’РµСЃСЊ РґРµРЅСЊ
+                    // Весь день
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -276,7 +271,7 @@ internal fun CreateEventDialog(
                 
                 item {
                     
-                    // Р”Р°С‚Р° РЅР°С‡Р°Р»Р°
+                    // Дата начала
                     Text(
                         text = Strings.startDate,
                         style = MaterialTheme.typography.labelMedium
@@ -343,20 +338,14 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // Р”Р°С‚Р° РѕРєРѕРЅС‡Р°РЅРёСЏ (РїСЂРё РїРѕРІС‚РѕСЂРµРЅРёРё вЂ” СѓС‚РѕС‡РЅСЏРµРј, С‡С‚Рѕ СЌС‚Рѕ РєРѕРЅРµС† РєР°Р¶РґРѕРіРѕ СЌРєР·РµРјРїР»СЏСЂР°)
-                    val isRussianLang = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
-                    val endLabel = if (recurrenceType != -1) {
-                        if (isRussianLang) "РћРєРѕРЅС‡Р°РЅРёРµ РєР°Р¶РґРѕРіРѕ СЃРѕР±С‹С‚РёСЏ" else "End of each event"
-                    } else {
-                        Strings.endDate
-                    }
+                    val endLabel = if (recurrenceType != -1) Strings.endOfEachEvent else Strings.endDate
                     Text(
                         text = endLabel,
                         style = MaterialTheme.typography.labelMedium
                     )
                     if (recurrenceType != -1) {
                         Text(
-                            text = if (isRussianLang) "РџСЂРѕРґРѕР»Р¶РёС‚РµР»СЊРЅРѕСЃС‚СЊ РєР°Р¶РґРѕРіРѕ РїРѕРІС‚РѕСЂРµРЅРёСЏ" else "Sets the duration of each occurrence",
+                            text = Strings.durationOfEachOccurrence,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -423,7 +412,7 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // РњРµСЃС‚Рѕ
+                    // Место
                     OutlinedTextField(
                         value = location,
                         onValueChange = { location = it },
@@ -434,7 +423,7 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // РџСЂРёРіР»Р°СЃРёС‚СЊ СѓС‡Р°СЃС‚РЅРёРєРѕРІ
+                    // Пригласить участников
                     OutlinedTextField(
                         value = attendees,
                         onValueChange = { attendees = it },
@@ -452,7 +441,7 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // РќР°РїРѕРјРёРЅР°РЅРёРµ
+                    // Напоминание
                     Box {
                         OutlinedTextField(
                             value = when (reminder) {
@@ -463,7 +452,7 @@ internal fun CreateEventDialog(
                                 60 -> Strings.hour1
                                 120 -> Strings.hours2
                                 1440 -> Strings.day1
-                                else -> "$reminder РјРёРЅ"
+                                else -> "$reminder мин"
                             },
                             onValueChange = {},
                             label = { Text(Strings.reminder) },
@@ -505,7 +494,7 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // РЎС‚Р°С‚СѓСЃ Р·Р°РЅСЏС‚РѕСЃС‚Рё
+                    // Статус занятости
                     Box {
                         OutlinedTextField(
                             value = when (busyStatus) {
@@ -552,21 +541,19 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // РџРѕРІС‚РѕСЂРµРЅРёРµ вЂ” СЂР°РґРёРѕРєРЅРѕРїРєРё
-                    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            text = if (isRussian) "РџРѕРІС‚РѕСЂРµРЅРёРµ" else "Repeat",
+                            text = Strings.repeatLabel,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         listOf(
-                            -1 to (if (isRussian) "РќРµ РїРѕРІС‚РѕСЂСЏС‚СЊ" else "No repeat"),
-                            0 to (if (isRussian) "РљР°Р¶РґС‹Р№ РґРµРЅСЊ" else "Daily"),
-                            1 to (if (isRussian) "РљР°Р¶РґСѓСЋ РЅРµРґРµР»СЋ" else "Weekly"),
-                            2 to (if (isRussian) "РљР°Р¶РґС‹Р№ РјРµСЃСЏС†" else "Monthly"),
-                            5 to (if (isRussian) "РљР°Р¶РґС‹Р№ РіРѕРґ" else "Yearly")
+                            -1 to Strings.noRepeat,
+                            0 to Strings.everyDay,
+                            1 to Strings.everyWeek,
+                            2 to Strings.everyMonth,
+                            5 to Strings.everyYear
                         ).forEach { (value, label) ->
                             Row(
                                 modifier = Modifier
@@ -590,7 +577,7 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // РћРїРёСЃР°РЅРёРµ
+                    // Описание
                     OutlinedTextField(
                         value = body,
                         onValueChange = { body = it },
@@ -603,10 +590,8 @@ internal fun CreateEventDialog(
                 }
                 
                 item {
-                    // Р’Р»РѕР¶РµРЅРёСЏ
-                    val isRussianAtt = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        // РЎСѓС‰РµСЃС‚РІСѓСЋС‰РёРµ РІР»РѕР¶РµРЅРёСЏ СЃ СЃРµСЂРІРµСЂР° (РїСЂРё СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёРё)
+                        // Существующие вложения с сервера (при редактировании)
                         if (isEditing && event != null && event.hasAttachments && event.attachments.isNotBlank()) {
                             val existingAttachments = remember(event.attachments) {
                                 try {
@@ -635,7 +620,7 @@ internal fun CreateEventDialog(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (isRussianAtt) "РўРµРєСѓС‰РёРµ РІР»РѕР¶РµРЅРёСЏ (${visibleAttachments.size})" else "Current attachments (${visibleAttachments.size})",
+                                        text = Strings.currentAttachmentsCount(visibleAttachments.size),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -677,7 +662,7 @@ internal fun CreateEventDialog(
                                         ) {
                                             Icon(
                                                 imageVector = AppIcons.Close,
-                                                contentDescription = if (isRussianAtt) "РћС‚РєСЂРµРїРёС‚СЊ" else "Detach",
+                                                contentDescription = Strings.detach,
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         }
@@ -699,7 +684,7 @@ internal fun CreateEventDialog(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isRussianAtt) "РџСЂРёРєСЂРµРїРёС‚СЊ С„Р°Р№Р»" else "Attach file")
+                            Text(Strings.attachFile)
                         }
                         
                         if (pickedAttachments.isNotEmpty()) {
@@ -738,7 +723,7 @@ internal fun CreateEventDialog(
                                     ) {
                                         Icon(
                                             imageVector = AppIcons.Close,
-                                            contentDescription = if (isRussianAtt) "РЈРґР°Р»РёС‚СЊ" else "Remove",
+                                            contentDescription = Strings.removeAttachment,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
@@ -756,7 +741,7 @@ internal fun CreateEventDialog(
             com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = {
                     if (isValid) {
-                        // РџР°СЂСЃРёРЅРі РґР°С‚ Рё РІСЂРµРјРµРЅРё
+                        // Парсинг дат и времени
                         val startTime = if (allDayEvent) {
                             parseDateTime(startDateText, "00:00")
                         } else {
@@ -796,7 +781,7 @@ internal fun CreateEventDialog(
         }
     )
     
-    // Р”РёР°Р»РѕРі РІС‹Р±РѕСЂР° РєРѕРЅС‚Р°РєС‚РѕРІ
+    // Диалог выбора контактов
     if (showContactPicker) {
         val database = remember { com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context) }
         com.dedovmosol.iwomail.ui.components.ContactPickerDialog(
@@ -817,7 +802,7 @@ internal fun CreateEventDialog(
         )
     }
     
-    // DatePicker Рё TimePicker РґРёР°Р»РѕРіРё
+    // DatePicker и TimePicker диалоги
     val pickerDateFormat = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
     
     if (showStartDatePicker) {
@@ -910,16 +895,16 @@ internal fun CreateEventDialog(
 }
 
 /**
- * РџР°СЂСЃРёС‚ РґР°С‚Сѓ Рё РІСЂРµРјСЏ РёР· С‚РµРєСЃС‚РѕРІС‹С… РїРѕР»РµР№
- * @param dateText РґР°С‚Р° РІ С„РѕСЂРјР°С‚Рµ "РґРґ.РјРј.РіРіРіРі"
- * @param timeText РІСЂРµРјСЏ РІ С„РѕСЂРјР°С‚Рµ "С‡С‡:РјРј"
- * @return timestamp РІ РјРёР»Р»РёСЃРµРєСѓРЅРґР°С… РёР»Рё 0 РїСЂРё РѕС€РёР±РєРµ
+ * Парсит дату и время из текстовых полей
+ * @param dateText дата в формате "дд.мм.гггг"
+ * @param timeText время в формате "чч:мм"
+ * @return timestamp в миллисекундах или 0 при ошибке
  */
 private fun parseDateTime(dateText: String, timeText: String): Long {
     return try {
-        // РќР• СѓСЃС‚Р°РЅР°РІР»РёРІР°РµРј UTC - SimpleDateFormat.parse() Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІРѕР·РІСЂР°С‰Р°РµС‚ UTC timestamp
+        // НЕ устанавливаем UTC - SimpleDateFormat.parse() автоматически возвращает UTC timestamp
         val dateTimeString = "$dateText $timeText"
-        PARSE_DATE_TIME_FORMAT.get().parse(dateTimeString)?.time ?: 0L
+        dateTimeFormat().parse(dateTimeString)?.time ?: 0L
     } catch (e: Exception) {
         0L
     }

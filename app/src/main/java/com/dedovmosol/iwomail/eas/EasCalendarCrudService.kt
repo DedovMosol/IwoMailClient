@@ -458,20 +458,15 @@ class EasCalendarCrudService(
                 if (findResult is EasResult.Error) return@withContext findResult
                 val findResponse = (findResult as EasResult.Success).data
 
-                val itemPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                val idPattern = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\"".toRegex()
-                val subjectPat = "<(?:t:)?Subject>(.*?)</(?:t:)?Subject>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                val startPat = "<(?:t:)?Start>(.*?)</(?:t:)?Start>".toRegex(RegexOption.DOT_MATCHES_ALL)
-
                 var bestItemId: String? = null
                 var bestChangeKey: String? = null
                 var bestTimeDiff = Long.MAX_VALUE
 
-                for (itemMatch in itemPattern.findAll(findResponse)) {
+                for (itemMatch in EWS_CALENDAR_ITEM.findAll(findResponse)) {
                     val itemXml = itemMatch.groupValues[1]
-                    val idMatch = idPattern.find(itemXml) ?: continue
-                    val itemSubject = subjectPat.find(itemXml)?.groupValues?.get(1) ?: ""
-                    val itemStartStr = startPat.find(itemXml)?.groupValues?.get(1)
+                    val idMatch = EWS_ITEM_ID_WITH_CHANGE_KEY.find(itemXml) ?: continue
+                    val itemSubject = EWS_SUBJECT.find(itemXml)?.groupValues?.get(1) ?: ""
+                    val itemStartStr = EWS_START.find(itemXml)?.groupValues?.get(1)
                     val itemStartMs = CalendarDateUtils.parseEwsDateTime(itemStartStr) ?: continue
 
                     val timeDiff = kotlin.math.abs(itemStartMs - searchStartTime)
@@ -858,20 +853,15 @@ class EasCalendarCrudService(
                 if (findResult is EasResult.Error) return@withContext findResult
                 val findResponse = (findResult as EasResult.Success).data
 
-                val itemPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                val idPattern = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"".toRegex()
-                val subjectPat = "<(?:t:)?Subject>(.*?)</(?:t:)?Subject>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                val startPat = "<(?:t:)?Start>(.*?)</(?:t:)?Start>".toRegex(RegexOption.DOT_MATCHES_ALL)
-
                 var bestItemId: String? = null
                 var bestTimeDiff = Long.MAX_VALUE
                 val fallbackCandidates = mutableListOf<Pair<String, Long>>()
 
-                for (itemMatch in itemPattern.findAll(findResponse)) {
+                for (itemMatch in EWS_CALENDAR_ITEM.findAll(findResponse)) {
                     val itemXml = itemMatch.groupValues[1]
-                    val id = idPattern.find(itemXml)?.groupValues?.get(1) ?: continue
-                    val subj = subjectPat.find(itemXml)?.groupValues?.get(1) ?: ""
-                    val startMs = CalendarDateUtils.parseEwsDateTime(startPat.find(itemXml)?.groupValues?.get(1)) ?: continue
+                    val id = EWS_ITEM_ID_ONLY.find(itemXml)?.groupValues?.get(1) ?: continue
+                    val subj = EWS_SUBJECT.find(itemXml)?.groupValues?.get(1) ?: ""
+                    val startMs = CalendarDateUtils.parseEwsDateTime(EWS_START.find(itemXml)?.groupValues?.get(1)) ?: continue
                     val diff = kotlin.math.abs(startMs - occurrenceStartTime)
                     if (diff > oneDayMs) continue
                     if (subj.equals(searchSubject, ignoreCase = true) && diff < bestTimeDiff) {
@@ -1793,8 +1783,8 @@ $itemIdsXml
         if (deleteResult is EasResult.Error) return EasResult.Error((deleteResult).message)
         val response = (deleteResult as EasResult.Success).data
 
-        val successCount = "ResponseClass=\"Success\"".toRegex().findAll(response).count()
-        val itemNotFoundCount = "ErrorItemNotFound".toRegex().findAll(response).count()
+        val successCount = EWS_RESPONSE_SUCCESS.findAll(response).count()
+        val itemNotFoundCount = EWS_ERROR_ITEM_NOT_FOUND.findAll(response).count()
         val totalOk = successCount + itemNotFoundCount
 
         android.util.Log.d("EasCalendarCrudService",
@@ -1892,17 +1882,10 @@ $itemIdsXml
                 if (responseResult is EasResult.Error) return@withContext responseResult
                 val response = (responseResult as EasResult.Success).data
                 
-                // Извлекаем все ItemId+ChangeKey+Subject, фильтруем по Subject в коде
-                // Namespace-tolerant: match both <t:CalendarItem> and <CalendarItem>
-                val itemPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                val idPattern = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\"".toRegex()
-                val subjectPattern = "<(?:t:)?Subject>(.*?)</(?:t:)?Subject>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                val startPattern = "<(?:t:)?Start>(.*?)</(?:t:)?Start>".toRegex(RegexOption.DOT_MATCHES_ALL)
-                
-                for (itemMatch in itemPattern.findAll(response)) {
+                for (itemMatch in EWS_CALENDAR_ITEM.findAll(response)) {
                     val itemXml = itemMatch.groupValues[1]
-                    val subjectMatch = subjectPattern.find(itemXml)?.groupValues?.get(1) ?: ""
-                    val startMatch = startPattern.find(itemXml)?.groupValues?.get(1)
+                    val subjectMatch = EWS_SUBJECT.find(itemXml)?.groupValues?.get(1) ?: ""
+                    val startMatch = EWS_START.find(itemXml)?.groupValues?.get(1)
                     val startMatches = if (startTime > 0L) {
                         val itemStartMs = CalendarDateUtils.parseEwsDateTime(startMatch)
                         itemStartMs == null || kotlin.math.abs(itemStartMs - startTime) <= 5L * 60 * 1000
@@ -1910,7 +1893,7 @@ $itemIdsXml
                         true
                     }
                     if (subjectMatch.equals(subject, ignoreCase = true) && startMatches) {
-                        val idMatch = idPattern.find(itemXml)
+                        val idMatch = EWS_ITEM_ID_WITH_CHANGE_KEY.find(itemXml)
                         if (idMatch != null) {
                             return@withContext EasResult.Success("${idMatch.groupValues[1]}|${idMatch.groupValues[2]}")
                         }
@@ -1978,12 +1961,7 @@ $itemIdsXml
                 if (responseResult is EasResult.Error) return@withContext responseResult
                 val response = (responseResult as EasResult.Success).data
 
-                val itemPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
-                    .toRegex(RegexOption.DOT_MATCHES_ALL)
-                val idPattern = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\""
-                    .toRegex()
-
-                for (itemMatch in itemPattern.findAll(response)) {
+                for (itemMatch in EWS_CALENDAR_ITEM.findAll(response)) {
                     val itemXml = itemMatch.groupValues[1]
                     val calItemType = XmlValueExtractor.extractEws(itemXml, "CalendarItemType") ?: ""
                     val itemSubject = XmlValueExtractor.extractEws(itemXml, "Subject") ?: ""
@@ -1991,7 +1969,7 @@ $itemIdsXml
                     if (calItemType == "RecurringMaster" &&
                         itemSubject.equals(subject, ignoreCase = true)
                     ) {
-                        val idMatch = idPattern.find(itemXml)
+                        val idMatch = EWS_ITEM_ID_WITH_CHANGE_KEY.find(itemXml)
                         if (idMatch != null) {
                             return@withContext EasResult.Success(
                                 "${idMatch.groupValues[1]}|${idMatch.groupValues[2]}"
@@ -2006,5 +1984,22 @@ $itemIdsXml
                 EasResult.Error("Failed to find RecurringMaster ItemId: ${e.message}")
             }
         }
+    }
+
+    companion object {
+        private val EWS_CALENDAR_ITEM = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
+            .toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_ITEM_ID_WITH_CHANGE_KEY = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\""
+            .toRegex()
+        private val EWS_ITEM_ID_ONLY = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\""
+            .toRegex()
+        private val EWS_SUBJECT = "<(?:t:)?Subject>(.*?)</(?:t:)?Subject>"
+            .toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_START = "<(?:t:)?Start>(.*?)</(?:t:)?Start>"
+            .toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val EWS_RESPONSE_SUCCESS = "ResponseClass=\"Success\""
+            .toRegex()
+        private val EWS_ERROR_ITEM_NOT_FOUND = "ErrorItemNotFound"
+            .toRegex()
     }
 }

@@ -47,7 +47,8 @@ class EasCalendarService internal constructor(
 
     data class CalendarSyncResult(
         val events: List<EasCalendarEvent>,
-        val deletedServerIds: Set<String> = emptySet()
+        val deletedServerIds: Set<String> = emptySet(),
+        val isAuthoritativeSnapshot: Boolean = true
     )
 
     data class DeleteRequest(

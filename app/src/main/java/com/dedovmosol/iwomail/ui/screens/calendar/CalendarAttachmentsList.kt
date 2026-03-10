@@ -61,14 +61,14 @@ internal fun CalendarAttachmentsList(
     
     if (attachments.isEmpty()) return
     
-    // Save As: СЃРёСЃС‚РµРјРЅС‹Р№ С„Р°Р№Р»-РїРёРєРµСЂ
+    // Save As: системный файл-пикер
     var pendingSaveAsAtt by remember { mutableStateOf<CalendarAttachmentInfo?>(null) }
     var pendingPreviewFile by remember { mutableStateOf<java.io.File?>(null) }
     var downloadingRef by remember { mutableStateOf<String?>(null) }
     val previewLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
-        // РЈРґР°Р»СЏРµРј РІСЂРµРјРµРЅРЅС‹Р№ С„Р°Р№Р» РїРѕСЃР»Рµ РІРѕР·РІСЂР°С‚Р° РёР· РїСЂРѕСЃРјРѕС‚СЂС‰РёРєР°
+        // Удаляем временный файл после возврата из просмотрщика
         pendingPreviewFile?.delete()
         pendingPreviewFile = null
     }
@@ -86,7 +86,7 @@ internal fun CalendarAttachmentsList(
                         withContext(Dispatchers.IO) {
                             context.contentResolver.openOutputStream(uri)?.use { out -> out.write(result.data) }
                         }
-                        Toast.makeText(context, if (isRussian) "Р¤Р°Р№Р» СЃРѕС…СЂР°РЅС‘РЅ" else "File saved", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, if (isRussian) "Файл сохранён" else "File saved", Toast.LENGTH_SHORT).show()
                     }
                     is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                 }
@@ -109,7 +109,7 @@ internal fun CalendarAttachmentsList(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isRussian) "Р’Р»РѕР¶РµРЅРёСЏ (${attachments.size})" else "Attachments (${attachments.size})",
+                text = if (isRussian) "Вложения (${attachments.size})" else "Attachments (${attachments.size})",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -152,7 +152,7 @@ internal fun CalendarAttachmentsList(
                                     }
                                     previewLauncher.launch(intent)
 
-                                    // Fallback: РµСЃР»Рё РІРЅРµС€РЅРµРµ РїСЂРёР»РѕР¶РµРЅРёРµ РЅРµ РІРµСЂРЅС‘С‚ result, С‡РёСЃС‚РёРј РїРѕР·Р¶Рµ
+                                    // Fallback: если внешнее приложение не вернёт result, чистим позже
                                     scope.launch {
                                         kotlinx.coroutines.delay(60 * 60 * 1000L)
                                         if (pendingPreviewFile?.absolutePath == tempFile.absolutePath) {
@@ -166,7 +166,7 @@ internal fun CalendarAttachmentsList(
                                     pendingPreviewFile = null
                                     Toast.makeText(
                                         context,
-                                        if (isRussian) "РќРµС‚ РїСЂРёР»РѕР¶РµРЅРёСЏ РґР»СЏ РїСЂРѕСЃРјРѕС‚СЂР° С„Р°Р№Р»Р°" else "No app to preview this file",
+                                        if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -175,7 +175,7 @@ internal fun CalendarAttachmentsList(
                         }
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        Toast.makeText(context, e.message ?: (if (isRussian) "РћС€РёР±РєР° РїСЂРѕСЃРјРѕС‚СЂР°" else "Preview error"), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, e.message ?: (if (isRussian) "Ошибка просмотра" else "Preview error"), Toast.LENGTH_LONG).show()
                     } finally {
                         downloadingRef = null
                     }
@@ -248,7 +248,7 @@ internal fun CalendarAttachmentsList(
                     onDismissRequest = { showSaveMenu = false }
                 ) {
                     DropdownMenuItem(
-                        text = { Text(if (isRussian) "РџСЂРѕСЃРјРѕС‚СЂ" else "Preview") },
+                        text = { Text(if (isRussian) "Просмотр" else "Preview") },
                         onClick = {
                             showSaveMenu = false
                             openPreview()
@@ -278,7 +278,7 @@ internal fun CalendarAttachmentsList(
                                                 )
                                                 uri?.let { context.contentResolver.openOutputStream(it)?.use { out -> out.write(result.data) } }
                                             }
-                                            Toast.makeText(context, if (isRussian) "РЎРѕС…СЂР°РЅРµРЅРѕ РІ Downloads/IwoMail/Calendar/" else "Saved to Downloads/IwoMail/Calendar/", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, if (isRussian) "Сохранено в Downloads/IwoMail/Calendar/" else "Saved to Downloads/IwoMail/Calendar/", Toast.LENGTH_SHORT).show()
                                         }
                                         is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                                     }

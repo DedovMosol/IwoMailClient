@@ -93,7 +93,7 @@ internal fun MonthView(
         )
     } else {
         Column {
-            // Р—Р°РіРѕР»РѕРІРѕРє РјРµСЃСЏС†Р° (РєР»РёРєР°Р±РµР»СЊРЅС‹Р№)
+            // Заголовок месяца (кликабельный)
             MonthHeader(
                 month = currentMonth,
                 year = currentYear,
@@ -110,7 +110,7 @@ internal fun MonthView(
                 onTitleClick = { showYearView = true }
             )
             
-            // РЎРµС‚РєР° РєР°Р»РµРЅРґР°СЂСЏ
+            // Сетка календаря
             CalendarGrid(
                 month = currentMonth,
                 year = currentYear,
@@ -119,7 +119,7 @@ internal fun MonthView(
                 onDateSelected = onDateSelected
             )
             
-            // РЎРѕР±С‹С‚РёСЏ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РґРЅСЏ
+            // События выбранного дня
             if (dayEvents.isNotEmpty()) {
                 Text(
                     text = remember(selectedDate) { SimpleDateFormat("d MMMM", Locale.getDefault()).format(selectedDate) },
@@ -245,7 +245,7 @@ private fun CalendarGrid(
     val calendar = Calendar.getInstance()
     calendar.set(year, month, 1)
     
-    // РџРµСЂРІС‹Р№ РґРµРЅСЊ РјРµСЃСЏС†Р° (0 = Р’РѕСЃРєСЂРµСЃРµРЅСЊРµ, РЅСѓР¶РЅРѕ СЃРґРІРёРЅСѓС‚СЊ РґР»СЏ РџРЅ-Р’СЃ)
+    // Первый день месяца (0 = Воскресенье, нужно сдвинуть для Пн-Вс)
     val firstDayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
     val firstDayOffset = if (firstDayOfWeek == Calendar.SUNDAY) 6 else firstDayOfWeek - 2
     val daysInMonth = calendar.getActualMaximum(Calendar.DAY_OF_MONTH)
@@ -253,7 +253,7 @@ private fun CalendarGrid(
     val dayNames = Strings.dayNamesShort
     
     Column {
-        // Р—Р°РіРѕР»РѕРІРєРё РґРЅРµР№ РЅРµРґРµР»Рё
+        // Заголовки дней недели
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -300,7 +300,7 @@ private fun CalendarGrid(
             Triple(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
         }
         
-        // РЎРµС‚РєР° РґРЅРµР№
+        // Сетка дней
         LazyVerticalGrid(
             columns = GridCells.Fixed(7),
             modifier = Modifier
@@ -408,7 +408,7 @@ private fun YearView(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // Р—Р°РіРѕР»РѕРІРѕРє СЃ РіРѕРґРѕРј
+        // Заголовок с годом
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -432,7 +432,18 @@ private fun YearView(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // РЎРµС‚РєР° РјРµСЃСЏС†РµРІ 4x3
+        val eventsByMonth = remember(events, year) {
+            val cal = Calendar.getInstance()
+            val buckets = Array(12) { mutableListOf<CalendarEventEntity>() }
+            for (event in events) {
+                cal.timeInMillis = event.startTime
+                if (cal.get(Calendar.YEAR) == year) {
+                    buckets[cal.get(Calendar.MONTH)].add(event)
+                }
+            }
+            Array<List<CalendarEventEntity>>(12) { buckets[it] }
+        }
+        
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
             modifier = Modifier.fillMaxSize(),
@@ -444,7 +455,7 @@ private fun YearView(
                     month = monthIndex,
                     year = year,
                     monthName = monthNames[monthIndex],
-                    events = events,
+                    monthEvents = eventsByMonth[monthIndex],
                     selectedDate = selectedDate,
                     onClick = { onMonthSelected(monthIndex, year) }
                 )
@@ -459,7 +470,7 @@ private fun MiniMonthCard(
     month: Int,
     year: Int,
     monthName: String,
-    events: List<CalendarEventEntity>,
+    monthEvents: List<CalendarEventEntity>,
     selectedDate: Date,
     onClick: () -> Unit
 ) {
@@ -469,13 +480,11 @@ private fun MiniMonthCard(
     val firstDayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
     val firstDayOffset = if (firstDayOfWeek == Calendar.SUNDAY) 6 else firstDayOfWeek - 2
     
-    // Р”РЅРё СЃ СЃРѕР±С‹С‚РёСЏРјРё РІ СЌС‚РѕРј РјРµСЃСЏС†Рµ
-    val daysWithEvents = remember(events, month, year) {
+    val daysWithEvents = remember(monthEvents) {
         val cal = Calendar.getInstance()
-        events.mapNotNullTo(mutableSetOf()) { event ->
+        monthEvents.mapNotNullTo(mutableSetOf()) { event ->
             cal.timeInMillis = event.startTime
-            if (cal.get(Calendar.YEAR) == year && cal.get(Calendar.MONTH) == month)
-                cal.get(Calendar.DAY_OF_MONTH) else null
+            cal.get(Calendar.DAY_OF_MONTH)
         }
     }
     
@@ -492,7 +501,7 @@ private fun MiniMonthCard(
         )
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
-            // РќР°Р·РІР°РЅРёРµ РјРµСЃСЏС†Р°
+            // Название месяца
             Text(
                 text = monthName.uppercase(),
                 style = MaterialTheme.typography.labelMedium,
@@ -502,7 +511,7 @@ private fun MiniMonthCard(
             
             Spacer(modifier = Modifier.height(4.dp))
             
-            // Р”РЅРё РЅРµРґРµР»Рё
+            // Дни недели
             Row(modifier = Modifier.fillMaxWidth()) {
                 Strings.dayNamesMin.forEach { day ->
                     Text(
@@ -516,7 +525,7 @@ private fun MiniMonthCard(
                 }
             }
             
-            // Р”РЅРё РјРµСЃСЏС†Р°
+            // Дни месяца
             var dayCounter = 1
             for (week in 0..5) {
                 if (dayCounter > daysInMonth) break

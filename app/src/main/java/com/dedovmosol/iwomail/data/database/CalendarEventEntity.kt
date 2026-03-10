@@ -69,5 +69,7 @@ data class CalendarEventEntity(
     val onlineMeetingLink: String = "", // Ссылка на онлайн-встречу (Lync/Teams)
     val hasAttachments: Boolean = false, // Есть ли вложения
     val attachments: String = "", // JSON метаданных вложений [{name, fileReference, size, isInline, contentId}]
-    val isDeleted: Boolean = false  // Событие в корзине
+    val isDeleted: Boolean = false,  // Событие в корзине
+    val meetingRequestId: String = "",       // EAS ServerId исходного письма-приглашения (MS-ASCMD MeetingResponse RequestId)
+    val meetingRequestFolderId: String = ""  // EAS CollectionId папки с письмом-приглашением (обычно Inbox)
 )

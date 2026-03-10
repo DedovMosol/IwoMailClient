@@ -36,6 +36,7 @@ class EasContactsService internal constructor(
     }
 
     @Volatile var lastSyncWasIncrementalNoChanges: Boolean = false
+    @Volatile var lastSyncWasAuthoritative: Boolean = true
 
     /**
      * Синхронизация контактов из папки Contacts на сервере Exchange
@@ -43,6 +44,7 @@ class EasContactsService internal constructor(
      */
     suspend fun syncContacts(): EasResult<List<GalContact>> {
         lastSyncWasIncrementalNoChanges = false
+        lastSyncWasAuthoritative = true
 
         val foldersResult = folderSync("0")
         val contactsFolderId = when (foldersResult) {
@@ -122,6 +124,7 @@ class EasContactsService internal constructor(
         }
         
         if (syncKey == "0") {
+            lastSyncWasAuthoritative = false
             return EasResult.Success(emptyList())
         }
         
@@ -157,10 +160,17 @@ class EasContactsService internal constructor(
                     if (batchResult.message.contains("InvalidSyncKey")) {
                         syncKeyCache.remove(contactsFolderId)
                     }
-                    if (allContacts.isNotEmpty()) break
+                    if (allContacts.isNotEmpty()) {
+                        lastSyncWasAuthoritative = false
+                        break
+                    }
                     return EasResult.Error(batchResult.message)
                 }
             }
+        }
+
+        if (moreAvailable) {
+            lastSyncWasAuthoritative = false
         }
 
         if (syncKey != "0") {
@@ -173,10 +183,11 @@ class EasContactsService internal constructor(
     /**
      * Поиск в глобальной адресной книге (GAL)
      * @param query Строка поиска (имя или email). Пустая строка или "*" вернёт все контакты
-     * @param maxResults Максимальное количество результатов (по умолчанию 2000)
+     * @param maxResults Желаемое количество результатов; один GAL Search запрос в EAS возвращает не более 100
      */
     suspend fun searchGAL(query: String, maxResults: Int = 2000): EasResult<List<GalContact>> {
         val searchQuery = if (query.isBlank() || query == "*") "*" else XmlUtils.escape(query)
+        val cappedResults = maxResults.coerceIn(1, 100)
         
         val xml = """<?xml version="1.0" encoding="UTF-8"?>
 <Search xmlns="Search" xmlns:gal="Gal">
@@ -184,7 +195,7 @@ class EasContactsService internal constructor(
         <Name>GAL</Name>
         <Query>$searchQuery</Query>
         <Options>
-            <Range>0-${maxResults - 1}</Range>
+            <Range>0-${cappedResults - 1}</Range>
         </Options>
     </Store>
 </Search>""".trimIndent()

@@ -949,8 +949,7 @@ $itemIdsXml
             if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
                 EasResult.Success(ewsItemIds.size)
             } else {
-                val errorCode = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>"
-                    .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)?.groupValues?.get(1)?.trim()
+                val errorCode = REGEX_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)?.trim()
                 EasResult.Error("EWS batch DeleteItem tasks: $errorCode")
             }
         } catch (e: Exception) {
@@ -1083,9 +1082,7 @@ $itemIdsXml
             val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
 
-            // Извлекаем ChangeKey из ответа
-            val changeKeyPattern = """<t:ItemId Id="[^"]+" ChangeKey="([^"]+)"""".toRegex()
-            val changeKeyMatch = changeKeyPattern.find(getItemResponse)
+            val changeKeyMatch = REGEX_ITEM_CHANGE_KEY.find(getItemResponse)
             val changeKey = changeKeyMatch?.groupValues?.get(1) ?: ""
             
             val escapedItemId = deps.escapeXml(ewsItemId)
@@ -1205,8 +1202,7 @@ $itemIdsXml
 
         val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem") ?: return null
 
-        val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-        return itemIdPattern.find(responseXml)?.groupValues?.get(1)
+        return REGEX_ITEM_ID_T.find(responseXml)?.groupValues?.get(1)
     }
 
     private suspend fun resolveEwsTaskItemId(ewsUrl: String, serverId: String, subject: String? = null): String? {
@@ -1370,11 +1366,9 @@ $itemIdsXml
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "getTasksFolderInfo: response: ${responseXml.take(800)}")
 
-            val totalCount = "<(?:t:)?TotalCount>(\\d+)</(?:t:)?TotalCount>"
-                .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)
+            val totalCount = REGEX_TOTAL_COUNT.find(responseXml)
                 ?.groupValues?.get(1)?.toIntOrNull() ?: -1
-            val childFolderCount = "<(?:t:)?ChildFolderCount>(\\d+)</(?:t:)?ChildFolderCount>"
-                .toRegex(RegexOption.DOT_MATCHES_ALL).find(responseXml)
+            val childFolderCount = REGEX_CHILD_FOLDER_COUNT.find(responseXml)
                 ?.groupValues?.get(1)?.toIntOrNull() ?: -1
             return Pair(totalCount, childFolderCount)
         } catch (e: Exception) {
@@ -1879,6 +1873,10 @@ $itemIdsXml
         private val REGEX_FOLDER_CLASS = "<(?:t:)?FolderClass>(.*?)</(?:t:)?FolderClass>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val REGEX_DISPLAY_NAME = "<(?:t:)?DisplayName>(.*?)</(?:t:)?DisplayName>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val REGEX_TOTAL_COUNT = "<(?:t:)?TotalCount>(\\d+)</(?:t:)?TotalCount>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val REGEX_CHILD_FOLDER_COUNT = "<(?:t:)?ChildFolderCount>(\\d+)</(?:t:)?ChildFolderCount>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val REGEX_RESPONSE_CODE = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        private val REGEX_ITEM_CHANGE_KEY = """<t:ItemId Id="[^"]+" ChangeKey="([^"]+)"""".toRegex()
+        private val REGEX_ITEM_ID_T = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
 
         // removeDuplicateLines
         private val REGEX_BR = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)

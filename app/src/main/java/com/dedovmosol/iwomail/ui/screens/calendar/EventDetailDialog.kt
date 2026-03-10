@@ -1,9 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens.calendar
 
-import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -13,11 +11,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
 import com.dedovmosol.iwomail.data.repository.CalendarRepository
 import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
@@ -26,8 +26,6 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -58,8 +56,8 @@ internal fun EventDetailDialog(
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     var expanded by rememberSaveable { mutableStateOf(false) }
     
-    // cleanBody вЂ” plain text РґР»СЏ collapsed preview (РІСЃРµ HTML-С‚РµРіРё СѓР±СЂР°РЅС‹)
-    // richBody  вЂ” HTML СЃ <img>/<a> РґР»СЏ expanded RichTextWithImages
+    // cleanBody — plain text для collapsed preview (все HTML-теги убраны)
+    // richBody  — HTML с <img>/<a> для expanded RichTextWithImages
     val (cleanBody, richBody) = remember(event.body) {
         fun dedup(text: String): String {
             var t = text
@@ -93,21 +91,21 @@ internal fun EventDetailDialog(
         clean to rich
     }
     
-    // РР·РІР»РµРєР°РµРј email РёР· СЃС‚СЂРѕРєРё РѕСЂРіР°РЅРёР·Р°С‚РѕСЂР°
+    // Извлекаем email из строки организатора
     val organizerEmail = remember(event.organizer) {
         EMAIL_REGEX.find(event.organizer)?.value ?: ""
     }
     
-    // РџСЂРѕРІРµСЂСЏРµРј С‡С‚Рѕ СЏ РЅРµ РѕСЂРіР°РЅРёР·Р°С‚РѕСЂ (С‚РѕРіРґР° РїРѕРєР°Р·С‹РІР°РµРј РєРЅРѕРїРєРё РѕС‚РІРµС‚Р°)
+    // Проверяем что я не организатор (тогда показываем кнопки ответа)
     val isOrganizer = remember(organizerEmail, currentUserEmail) {
         organizerEmail.isNotBlank() && currentUserEmail.isNotBlank() &&
         organizerEmail.equals(currentUserEmail, ignoreCase = true)
     }
     
-    // РџСЂРѕРІРµСЂСЏРµРј РµСЃС‚СЊ Р»Рё С‡С‚Рѕ РїРѕРєР°Р·С‹РІР°С‚СЊ РІ СЂР°СЃС€РёСЂРµРЅРЅРѕРј РІРёРґРµ
+    // Проверяем есть ли что показывать в расширенном виде
     val hasMoreContent = richBody.isNotBlank() || event.organizer.isNotBlank() || event.organizerName.isNotBlank() || attendees.isNotEmpty() || event.hasAttachments || event.onlineMeetingLink.isNotBlank()
     
-    // Р”РёР°Р»РѕРі РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ СѓРґР°Р»РµРЅРёСЏ
+    // Диалог подтверждения удаления
     if (showDeleteConfirm) {
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
@@ -141,9 +139,9 @@ internal fun EventDetailDialog(
             )
         },
         text = {
-            // РќРµ РґРѕР±Р°РІР»СЏРµРј verticalScroll - ScaledAlertDialog СѓР¶Рµ РёРјРµРµС‚ СЃРєСЂРѕР»Р»
+            // Не добавляем verticalScroll - ScaledAlertDialog уже имеет скролл
             Column {
-                // Р”Р°С‚Р°/РІСЂРµРјСЏ
+                // Дата/время
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(bottom = 8.dp)
@@ -165,7 +163,7 @@ internal fun EventDetailDialog(
                     )
                 }
                 
-                // РџСЂР°РІРёР»Рѕ РїРѕРІС‚РѕСЂРµРЅРёСЏ
+                // Правило повторения
                 if (event.isRecurring && event.recurrenceRule.isNotBlank()) {
                     val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
                     val ruleDescription = RecurrenceHelper.describeRule(event.recurrenceRule, isRussian)
@@ -190,7 +188,7 @@ internal fun EventDetailDialog(
                     }
                 }
                 
-                // РњРµСЃС‚Рѕ
+                // Место
                 if (event.location.isNotBlank()) {
                     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
                     val isUrl = event.location.startsWith("http://") || event.location.startsWith("https://")
@@ -217,7 +215,7 @@ internal fun EventDetailDialog(
                     }
                 }
                 
-                // РљСЂР°С‚РєРѕРµ РѕРїРёСЃР°РЅРёРµ (СЃРІС‘СЂРЅСѓС‚С‹Р№ РІРёРґ)
+                // Краткое описание (свёрнутый вид)
                 if (!expanded && cleanBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -229,7 +227,7 @@ internal fun EventDetailDialog(
                     )
                 }
                 
-                // РљРЅРѕРїРєР° "РџРѕРєР°Р·Р°С‚СЊ РµС‰С‘"
+                // Кнопка "Показать ещё"
                 if (!expanded && hasMoreContent) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -244,9 +242,9 @@ internal fun EventDetailDialog(
                     }
                 }
                 
-                // Р Р°СЃС€РёСЂРµРЅРЅС‹Р№ РІРёРґ
+                // Расширенный вид
                 if (expanded) {
-                    // РљРЅРѕРїРєР° "РЎРІРµСЂРЅСѓС‚СЊ" РІРІРµСЂС…Сѓ РґР»СЏ СѓРґРѕР±СЃС‚РІР°
+                    // Кнопка "Свернуть" вверху для удобства
                     TextButton(
                         onClick = { expanded = false },
                         modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -260,7 +258,7 @@ internal fun EventDetailDialog(
                         Text(Strings.showLess)
                     }
                     
-                    // РћСЂРіР°РЅРёР·Р°С‚РѕСЂ
+                    // Организатор
                     if (event.organizer.isNotBlank() || event.organizerName.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
@@ -297,7 +295,7 @@ internal fun EventDetailDialog(
                         }
                     }
                     
-                    // РЎСЃС‹Р»РєР° РЅР° РѕРЅР»Р°Р№РЅ-РІСЃС‚СЂРµС‡Сѓ
+                    // Ссылка на онлайн-встречу
                     if (event.onlineMeetingLink.isNotBlank()) {
                         val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
                         Spacer(modifier = Modifier.height(4.dp))
@@ -315,14 +313,14 @@ internal fun EventDetailDialog(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "РћРЅР»Р°Р№РЅ-РІСЃС‚СЂРµС‡Р°" else "Online meeting",
+                                text = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Онлайн-встреча" else "Online meeting",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
                     }
                     
-                    // Р’Р»РѕР¶РµРЅРёСЏ
+                    // Вложения
                     if (event.hasAttachments) {
                         Spacer(modifier = Modifier.height(8.dp))
                         if (event.attachments.isNotBlank()) {
@@ -342,7 +340,7 @@ internal fun EventDetailDialog(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN)
-                                        "Р•СЃС‚СЊ РІР»РѕР¶РµРЅРёСЏ (СЃРёРЅС…СЂРѕРЅРёР·РёСЂСѓР№С‚Рµ РґР»СЏ Р·Р°РіСЂСѓР·РєРё)"
+                                        "Есть вложения (синхронизируйте для загрузки)"
                                     else
                                         "Has attachments (sync to load details)",
                                     style = MaterialTheme.typography.bodySmall,
@@ -352,7 +350,7 @@ internal fun EventDetailDialog(
                         }
                     }
                     
-                    // РЈС‡Р°СЃС‚РЅРёРєРё
+                    // Участники
                     if (attendees.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
@@ -374,7 +372,7 @@ internal fun EventDetailDialog(
                                 )
                                 attendees.forEach { attendee ->
                                     val nameOrEmail = if (attendee.name.isNotBlank()) attendee.name else attendee.email
-                                    // РЎС‚Р°С‚СѓСЃ СѓС‡Р°СЃС‚РЅРёРєР°: 0=Unknown, 2=Tentative, 3=Accepted, 4=Declined, 5=Not responded
+                                    // Статус участника: 0=Unknown, 2=Tentative, 3=Accepted, 4=Declined, 5=Not responded
                                     val statusText = when (attendee.status) {
                                         2 -> " (${Strings.statusTentative})"
                                         3 -> " (${Strings.statusAccepted})"
@@ -396,7 +394,7 @@ internal fun EventDetailDialog(
                         }
                     }
                     
-                    // РџРѕР»РЅРѕРµ РѕРїРёСЃР°РЅРёРµ СЃ РёР·РѕР±СЂР°Р¶РµРЅРёСЏРјРё Рё СЃСЃС‹Р»РєР°РјРё
+                    // Полное описание с изображениями и ссылками
                     if (richBody.isNotBlank()) {
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider()
@@ -413,7 +411,7 @@ internal fun EventDetailDialog(
             }
         },
         confirmButton = {
-            // РЎРїСЂР°РІР°: РЈРґР°Р»РёС‚СЊ (С‚РѕР»СЊРєРѕ РёРєРѕРЅРєР° СЃ РѕР±РІРѕРґРєРѕР№)
+            // Справа: Удалить (только иконка с обводкой)
             OutlinedButton(
                 onClick = { showDeleteConfirm = true },
                 colors = ButtonDefaults.outlinedButtonColors(
@@ -430,7 +428,7 @@ internal fun EventDetailDialog(
             }
         },
         dismissButton = {
-            // РЎР»РµРІР°: Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ (С‚РѕР»СЊРєРѕ РёРєРѕРЅРєР° СЃ РѕР±РІРѕРґРєРѕР№, С†РІРµС‚ РёР· С‚РµРјС‹)
+            // Слева: Редактировать (только иконка с обводкой, цвет из темы)
             OutlinedButton(
                 onClick = onEditClick,
                 colors = ButtonDefaults.outlinedButtonColors(
@@ -540,62 +538,20 @@ private fun ClickableHtmlText(
 
 @Composable
 private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
-    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var isLoading by remember(url) { mutableStateOf(true) }
-    var error by remember(url) { mutableStateOf(false) }
-    
-    // РћСЃРІРѕР±РѕР¶РґР°РµРј Bitmap РїСЂРё РІС‹С…РѕРґРµ РёР· РєРѕРјРїРѕР·РёС†РёРё
-    DisposableEffect(url) {
-        onDispose {
-            bitmap?.recycle()
-            bitmap = null
-        }
-    }
-    
-    LaunchedEffect(url) {
-        isLoading = true
-        error = false
-        try {
-            bitmap = withContext(Dispatchers.IO) {
-                var conn: java.net.HttpURLConnection? = null
-                try {
-                    conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 10000
-                    conn.readTimeout = 10000
-                    conn.connect()
-                    val bytes = conn.inputStream.use { it.readBytes() }
-                    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-                    val maxDim = 2048
-                    var sampleSize = 1
-                    while (opts.outWidth / sampleSize > maxDim || opts.outHeight / sampleSize > maxDim) {
-                        sampleSize *= 2
-                    }
-                    val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
-                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
-                } finally {
-                    conn?.disconnect()
-                }
+    SubcomposeAsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(url)
+            .crossfade(true)
+            .build(),
+        contentDescription = null,
+        modifier = modifier,
+        contentScale = ContentScale.FillWidth,
+        loading = {
+            Box(Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
             }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            error = true
         }
-        isLoading = false
-    }
-    
-    val safeBitmap = bitmap
-    when {
-        isLoading -> Box(modifier.height(100.dp), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-        }
-        !error && safeBitmap != null -> androidx.compose.foundation.Image(
-            bitmap = safeBitmap.asImageBitmap(),
-            contentDescription = null,
-            modifier = modifier,
-            contentScale = androidx.compose.ui.layout.ContentScale.FillWidth
-        )
-    }
+    )
 }
 
 
@@ -621,7 +577,7 @@ internal fun DeletedEventDetailDialog(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = event.subject.ifBlank { if (isRussian) "Р‘РµР· РЅР°Р·РІР°РЅРёСЏ" else "No title" },
+                    text = event.subject.ifBlank { if (isRussian) "Без названия" else "No title" },
                     textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
                 )
             }
@@ -629,20 +585,20 @@ internal fun DeletedEventDetailDialog(
         text = {
             Column {
                 Text(
-                    text = if (isRussian) "РЎРѕР±С‹С‚РёРµ РІ РєРѕСЂР·РёРЅРµ" else "Event in trash",
+                    text = if (isRussian) "Событие в корзине" else "Event in trash",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error
                 )
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // Р’СЂРµРјСЏ РЅР°С‡Р°Р»Р° вЂ” РѕРєРѕРЅС‡Р°РЅРёСЏ
+                // Время начала — окончания
                 Text(
-                    text = "${dateTimeFormat.format(Date(event.startTime))} вЂ” ${dateTimeFormat.format(Date(event.endTime))}",
+                    text = "${dateTimeFormat.format(Date(event.startTime))} — ${dateTimeFormat.format(Date(event.endTime))}",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 
-                // РњРµСЃС‚Рѕ
+                // Место
                 if (event.location.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -652,7 +608,7 @@ internal fun DeletedEventDetailDialog(
                     )
                 }
                 
-                // РћРїРёСЃР°РЅРёРµ
+                // Описание
                 if (event.body.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     HorizontalDivider()
@@ -668,7 +624,7 @@ internal fun DeletedEventDetailDialog(
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                // РљРЅРѕРїРєРё: Р’РѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ / РЈРґР°Р»РёС‚СЊ РЅР°РІСЃРµРіРґР°
+                // Кнопки: Восстановить / Удалить навсегда
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -682,7 +638,7 @@ internal fun DeletedEventDetailDialog(
                     ) {
                         Icon(
                             AppIcons.Restore,
-                            contentDescription = if (isRussian) "Р’РѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ" else "Restore",
+                            contentDescription = if (isRussian) "Восстановить" else "Restore",
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -696,7 +652,7 @@ internal fun DeletedEventDetailDialog(
                     ) {
                         Icon(
                             AppIcons.DeleteForever,
-                            contentDescription = if (isRussian) "РЈРґР°Р»РёС‚СЊ РЅР°РІСЃРµРіРґР°" else "Delete permanently",
+                            contentDescription = if (isRussian) "Удалить навсегда" else "Delete permanently",
                             modifier = Modifier.size(20.dp),
                             tint = com.dedovmosol.iwomail.ui.theme.AppColors.delete
                         )

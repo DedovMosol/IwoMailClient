@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 37,
+    version = 39,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -169,6 +169,20 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN meetingRequestId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE calendar_events ADD COLUMN meetingRequestFolderId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE emails ADD COLUMN messageClass TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        private val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE emails ADD COLUMN internetMessageId TEXT DEFAULT NULL")
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -183,7 +197,9 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_33_34,
             MIGRATION_34_35,
             MIGRATION_35_36,
-            MIGRATION_36_37
+            MIGRATION_36_37,
+            MIGRATION_37_38,
+            MIGRATION_38_39
         )
         
         fun getInstance(context: Context): MailDatabase {
@@ -378,7 +394,9 @@ data class EmailEntity(
     val hasAttachments: Boolean = false,
     val originalFolderId: String? = null, // Исходная папка до перемещения в корзину
     val mdnRequestedBy: String? = null, // Email для отправки отчёта о прочтении (MDN)
-    val mdnSent: Boolean = false // Отчёт о прочтении уже отправлен
+    val mdnSent: Boolean = false, // Отчёт о прочтении уже отправлен
+    val messageClass: String = "", // MS-ASEMAIL MessageClass (e.g. IPM.Schedule.Meeting.Request)
+    val internetMessageId: String? = null // RFC 5322 Message-ID для корреляции MDN
 )
 
 data class EmailDedupInfo(

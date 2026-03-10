@@ -888,7 +888,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             read = email.read,
             flagged = email.flagged,
             importance = email.importance,
-            hasAttachments = email.attachments.isNotEmpty()
+            hasAttachments = email.attachments.isNotEmpty(),
+            messageClass = email.messageClass
         )
     }
     

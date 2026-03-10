@@ -55,7 +55,13 @@ class EasCalendarSyncService(
                 android.util.Log.w("EasCalendarSyncService", "supplementAttachmentsViaEws failed: ${e.message}")
                 easResult.data.events
             }
-            return EasResult.Success(EasCalendarService.CalendarSyncResult(withAttFix, easResult.data.deletedServerIds))
+            return EasResult.Success(
+                EasCalendarService.CalendarSyncResult(
+                    events = withAttFix,
+                    deletedServerIds = easResult.data.deletedServerIds,
+                    isAuthoritativeSnapshot = easResult.data.isAuthoritativeSnapshot
+                )
+            )
         }
         return easResult
     }
@@ -81,7 +87,12 @@ class EasCalendarSyncService(
         }
 
         if (syncKey == "0") {
-            return EasResult.Success(EasCalendarService.CalendarSyncResult(emptyList()))
+            return EasResult.Success(
+                EasCalendarService.CalendarSyncResult(
+                    events = emptyList(),
+                    isAuthoritativeSnapshot = false
+                )
+            )
         }
 
         return syncCalendarEasLoop(calendarFolderId, syncKey)
@@ -111,6 +122,7 @@ class EasCalendarSyncService(
         val maxConsecutiveErrors = 3
         val syncStartTime = System.currentTimeMillis()
         val maxSyncDurationMs = 300_000L
+        var isAuthoritativeSnapshot = true
         var previousSyncKey = syncKey
         var sameKeyCount = 0
         var emptyDataCount = 0
@@ -120,6 +132,7 @@ class EasCalendarSyncService(
 
             if (System.currentTimeMillis() - syncStartTime > maxSyncDurationMs) {
                 android.util.Log.w("EasCalendarSyncService", "Calendar sync timeout after $iterations iterations")
+                isAuthoritativeSnapshot = false
                 break
             }
 
@@ -186,6 +199,7 @@ class EasCalendarSyncService(
                         }
                         12 -> {
                             android.util.Log.w("EasCalendarSyncService", "Calendar Sync Status=12: Folder hierarchy changed")
+                            isAuthoritativeSnapshot = false
                             moreAvailable = false
                             continue
                         }
@@ -193,7 +207,15 @@ class EasCalendarSyncService(
                             android.util.Log.w("EasCalendarSyncService", "Calendar Sync Status=$status")
                             consecutiveErrors++
                             if (consecutiveErrors >= maxConsecutiveErrors) {
-                                return if (allEvents.isNotEmpty()) EasResult.Success(EasCalendarService.CalendarSyncResult(allEvents, allDeletedIds))
+                                return if (allEvents.isNotEmpty()) {
+                                    EasResult.Success(
+                                        EasCalendarService.CalendarSyncResult(
+                                            events = allEvents,
+                                            deletedServerIds = allDeletedIds,
+                                            isAuthoritativeSnapshot = false
+                                        )
+                                    )
+                                }
                                 else EasResult.Error("Calendar Sync failed: Status=$status")
                             }
                             kotlinx.coroutines.delay(500L * consecutiveErrors)
@@ -221,6 +243,7 @@ class EasCalendarSyncService(
                         sameKeyCount++
                         if (sameKeyCount >= 5) {
                             android.util.Log.w("EasCalendarSyncService", "SyncKey not changing for 5 iterations, breaking")
+                            isAuthoritativeSnapshot = false
                             moreAvailable = false
                         }
                     } else {
@@ -233,6 +256,7 @@ class EasCalendarSyncService(
                         emptyDataCount++
                         if (emptyDataCount >= 5) {
                             android.util.Log.w("EasCalendarSyncService", "No commands for $emptyDataCount iterations, breaking")
+                            isAuthoritativeSnapshot = false
                             moreAvailable = false
                         }
                     } else {
@@ -244,7 +268,13 @@ class EasCalendarSyncService(
                     android.util.Log.w("EasCalendarSyncService", "Calendar sync batch error #$consecutiveErrors: ${result.message}")
                     if (consecutiveErrors >= maxConsecutiveErrors) {
                         return if (allEvents.isNotEmpty()) {
-                            EasResult.Success(EasCalendarService.CalendarSyncResult(allEvents, allDeletedIds))
+                            EasResult.Success(
+                                EasCalendarService.CalendarSyncResult(
+                                    events = allEvents,
+                                    deletedServerIds = allDeletedIds,
+                                    isAuthoritativeSnapshot = false
+                                )
+                            )
                         } else {
                             result
                         }
@@ -254,7 +284,17 @@ class EasCalendarSyncService(
             }
         }
 
-        return EasResult.Success(EasCalendarService.CalendarSyncResult(allEvents, allDeletedIds))
+        if (moreAvailable) {
+            isAuthoritativeSnapshot = false
+        }
+
+        return EasResult.Success(
+            EasCalendarService.CalendarSyncResult(
+                events = allEvents,
+                deletedServerIds = allDeletedIds,
+                isAuthoritativeSnapshot = isAuthoritativeSnapshot
+            )
+        )
     }
 
     suspend fun getCalendarFolderId(): String? {

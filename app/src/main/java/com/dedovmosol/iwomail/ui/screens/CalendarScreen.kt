@@ -47,8 +47,8 @@ enum class CalendarDateFilter {
 }
 
 /**
- * Р Р°Р·РІРѕСЂР°С‡РёРІР°РµС‚ РїРѕРІС‚РѕСЂСЏСЋС‰РёРµСЃСЏ СЃРѕР±С‹С‚РёСЏ РІ РІРёСЂС‚СѓР°Р»СЊРЅС‹Рµ СЌРєР·РµРјРїР»СЏСЂС‹ (occurrences)
- * РґР»СЏ Р·Р°РґР°РЅРЅРѕРіРѕ РґРёР°РїР°Р·РѕРЅР° РґР°С‚. РќРµ-РїРѕРІС‚РѕСЂСЏСЋС‰РёРµСЃСЏ СЃРѕР±С‹С‚РёСЏ С„РёР»СЊС‚СЂСѓСЋС‚СЃСЏ РїРѕ РґРёР°РїР°Р·РѕРЅСѓ.
+ * Разворачивает повторяющиеся события в виртуальные экземпляры (occurrences)
+ * для заданного диапазона дат. Не-повторяющиеся события фильтруются по диапазону.
  */
 internal fun expandRecurringForRange(
     events: List<CalendarEventEntity>,
@@ -59,7 +59,7 @@ internal fun expandRecurringForRange(
     
     for (event in events) {
         if (event.isRecurring && event.recurrenceRule.isNotBlank()) {
-            // Р“РµРЅРµСЂРёСЂСѓРµРј СЌРєР·РµРјРїР»СЏСЂС‹ СЃРµСЂРёРё РІ РґРёР°РїР°Р·РѕРЅРµ
+            // Генерируем экземпляры серии в диапазоне
             val occurrences = RecurrenceHelper.generateOccurrences(event, rangeStart, rangeEnd)
             if (occurrences.isNotEmpty()) {
                 for (occ in occurrences) {
@@ -75,14 +75,14 @@ internal fun expandRecurringForRange(
                     ))
                 }
             } else {
-                // Fallback: РµСЃР»Рё РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ вЂ” РїРѕРєР°Р·С‹РІР°РµРј РѕСЂРёРіРёРЅР°Р» (РµСЃР»Рё РІ РґРёР°РїР°Р·РѕРЅРµ)
+                // Fallback: если не удалось сгенерировать — показываем оригинал (если в диапазоне)
                 if ((event.startTime in rangeStart until rangeEnd) ||
                     (event.startTime < rangeEnd && event.endTime > rangeStart)) {
                     result.add(event)
                 }
             }
         } else {
-            // РќРµ-РїРѕРІС‚РѕСЂСЏСЋС‰РµРµСЃСЏ: СЃС‚Р°РЅРґР°СЂС‚РЅР°СЏ РїСЂРѕРІРµСЂРєР° РїРѕРїР°РґР°РЅРёСЏ РІ РґРёР°РїР°Р·РѕРЅ
+            // Не-повторяющееся: стандартная проверка попадания в диапазон
             if ((event.startTime in rangeStart until rangeEnd) ||
                 (event.startTime < rangeEnd && event.endTime > rangeStart)) {
                 result.add(event)
@@ -117,7 +117,7 @@ fun CalendarScreen(
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
     
-    // РћС‚РґРµР»СЊРЅС‹Р№ scope РґР»СЏ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё, С‡С‚РѕР±С‹ РЅРµ РѕС‚РјРµРЅСЏР»Р°СЃСЊ РїСЂРё РЅР°РІРёРіР°С†РёРё
+    // Отдельный scope для синхронизации, чтобы не отменялась при навигации
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
     
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
@@ -126,9 +126,9 @@ fun CalendarScreen(
     val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsState(initial = emptyList())
     val deletedEvents by remember(accountId) { calendarRepo.getDeletedEvents(accountId) }.collectAsState(initial = emptyList())
     
-    // ID Р°РєРєР°СѓРЅС‚Р°, РґР»СЏ РєРѕС‚РѕСЂРѕРіРѕ СѓР¶Рµ Р±С‹Р» Р·Р°РїСѓС‰РµРЅ Р°РІС‚РѕСЃРёРЅРє.
-    // rememberSaveable: СЃРѕС…СЂР°РЅСЏРµС‚СЃСЏ РїСЂРё РїРѕРІРѕСЂРѕС‚Рµ в†’ РЅРµ Р·Р°РїСѓСЃРєР°РµС‚ РїРѕРІС‚РѕСЂРЅС‹Р№ СЃРёРЅРє РґР»СЏ С‚РѕРіРѕ Р¶Рµ Р°РєРєР°СѓРЅС‚Р°.
-    // РџСЂРё СЃРјРµРЅРµ accountId Р·РЅР°С‡РµРЅРёРµ РЅРµ СЃРѕРІРїР°РґС‘С‚ в†’ СЃРёРЅРє Р·Р°РїСѓСЃС‚РёС‚СЃСЏ РґР»СЏ РЅРѕРІРѕРіРѕ Р°РєРєР°СѓРЅС‚Р°.
+    // ID аккаунта, для которого уже был запущен автосинк.
+    // rememberSaveable: сохраняется при повороте → не запускает повторный синк для того же аккаунта.
+    // При смене accountId значение не совпадёт → синк запустится для нового аккаунта.
     var syncedForAccountId by rememberSaveable { mutableStateOf(0L) }
 
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
@@ -136,7 +136,7 @@ fun CalendarScreen(
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedSearchQuery by rememberDebouncedState(searchQuery)
     
-    // РЎРѕС…СЂР°РЅРµРЅРёРµ С„РѕРєСѓСЃР° РїРѕРёСЃРєР° РїСЂРё РїРѕРІРѕСЂРѕС‚Рµ СЌРєСЂР°РЅР°
+    // Сохранение фокуса поиска при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
     var isSearchFocused by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(isSearchFocused) {
@@ -147,9 +147,9 @@ fun CalendarScreen(
     }
     var isSyncing by remember { mutableStateOf(false) }
     
-    // РђРІС‚РѕРјР°С‚РёС‡РµСЃРєР°СЏ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РїСЂРё РїРµСЂРІРѕРј РѕС‚РєСЂС‹С‚РёРё СЌРєСЂР°РЅР° РёР»Рё СЃРјРµРЅРµ Р°РєРєР°СѓРЅС‚Р°.
-    // syncedForAccountId != accountId в†’ СЃРёРЅРє РЅРµ Р·Р°РїСѓСЃРєР°Р»СЃСЏ РґР»СЏ СЌС‚РѕРіРѕ Р°РєРєР°СѓРЅС‚Р° в†’ Р·Р°РїСѓСЃРєР°РµРј.
-    // РџСЂРё РїРѕРІРѕСЂРѕС‚Рµ СЌРєСЂР°РЅР° accountId РЅРµ РјРµРЅСЏРµС‚СЃСЏ в†’ syncedForAccountId СЃРѕРІРїР°РґР°РµС‚ в†’ СЃРёРЅРє РЅРµ РїРѕРІС‚РѕСЂСЏРµС‚СЃСЏ.
+    // Автоматическая синхронизация при первом открытии экрана или смене аккаунта.
+    // syncedForAccountId != accountId → синк не запускался для этого аккаунта → запускаем.
+    // При повороте экрана accountId не меняется → syncedForAccountId совпадает → синк не повторяется.
     LaunchedEffect(accountId) {
         if (accountId > 0 && syncedForAccountId != accountId && !isSyncing) {
             syncedForAccountId = accountId
@@ -176,20 +176,20 @@ fun CalendarScreen(
     }
     var isCreating by remember { mutableStateOf(false) }
 
-    // Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ РѕРґРЅРѕРіРѕ РІС…РѕР¶РґРµРЅРёСЏ РїРѕРІС‚РѕСЂСЏСЋС‰РµРіРѕСЃСЏ СЃРѕР±С‹С‚РёСЏ
+    // Редактирование одного вхождения повторяющегося события
     var editingOccurrenceStartTime by rememberSaveable { mutableStateOf<Long?>(null) }
     var cachedOccurrenceEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var showEditChoiceDialog by rememberSaveable { mutableStateOf(false) }
     var pendingEditOccurrenceId by rememberSaveable { mutableStateOf<String?>(null) }
     
-    // РњРЅРѕР¶РµСЃС‚РІРµРЅРЅС‹Р№ РІС‹Р±РѕСЂ
+    // Множественный выбор
     val haptic = LocalHapticFeedback.current
     var selectedEventIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedEventIds.isNotEmpty()
     
-    // РћРїСЂРµРґРµР»СЏРµРј, РµСЃС‚СЊ Р»Рё СЃСЂРµРґРё РІС‹РґРµР»РµРЅРЅС‹С… СѓРґР°Р»С‘РЅРЅС‹Рµ СЃРѕР±С‹С‚РёСЏ (РґР»СЏ РєРѕСЂСЂРµРєС‚РЅРѕРіРѕ TopBar/РґРёР°Р»РѕРіР°)
+    // Определяем, есть ли среди выделенных удалённые события (для корректного TopBar/диалога)
     val deletedEventIdSet = remember(deletedEvents) { deletedEvents.map { it.id }.toSet() }
     val resolvedSelectedIds = remember(selectedEventIds, deletedEventIdSet) {
         selectedEventIds.map { id ->
@@ -205,7 +205,7 @@ fun CalendarScreen(
     val hasDeletedSelected = selectedDeletedResolvedIds.isNotEmpty()
     val hasActiveSelected = selectedActiveResolvedIds.isNotEmpty()
     
-    // Р”РёР°Р»РѕРі РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ СѓРґР°Р»РµРЅРёСЏ
+    // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
@@ -216,26 +216,26 @@ fun CalendarScreen(
         )
     ) { mutableStateOf(setOf<String>()) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
-    // Р”РёР°Р»РѕРі РІС‹Р±РѕСЂР°: СѓРґР°Р»РёС‚СЊ РІС…РѕР¶РґРµРЅРёРµ РёР»Рё СЃРµСЂРёСЋ
+    // Диалог выбора: удалить вхождение или серию
     var showOccurrenceDeleteChoice by rememberSaveable { mutableStateOf(false) }
     var pendingOccurrenceIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     
-    // РЎРѕСЃС‚РѕСЏРЅРёРµ СЃРїРёСЃРєР° РґР»СЏ Р°РІС‚РѕСЃРєСЂРѕР»Р»Р°
+    // Состояние списка для автоскролла
     val listState = rememberLazyListState()
     
-    // Р¤РёР»СЊС‚СЂ РїРѕ РґР°С‚Рµ (Р°РЅР°Р»РѕРіРёС‡РЅРѕ Р·Р°РґР°С‡Р°Рј)
+    // Фильтр по дате (аналогично задачам)
     var dateFilter by rememberSaveable { mutableStateOf(initialDateFilter) }
     
-    // РћР±СЂР°Р±РѕС‚РєР° РєРЅРѕРїРєРё Back РІ СЂРµР¶РёРјРµ РІС‹Р±РѕСЂР°
+    // Обработка кнопки Back в режиме выбора
     androidx.activity.compose.BackHandler(enabled = isSelectionMode) {
         selectedEventIds = emptySet()
     }
     
-    // Р¤РёР»СЊС‚СЂР°С†РёСЏ РїРѕ РїРѕРёСЃРєСѓ Рё РїРѕ РґР°С‚Рµ (СЃ СЂР°Р·РІРѕСЂР°С‡РёРІР°РЅРёРµРј РїРѕРІС‚РѕСЂСЏСЋС‰РёС…СЃСЏ СЃРѕР±С‹С‚РёР№)
+    // Фильтрация по поиску и по дате (с разворачиванием повторяющихся событий)
     val filteredEvents = remember(events, deletedEvents, debouncedSearchQuery, dateFilter) {
-        // РЎРЅР°С‡Р°Р»Р° С„РёР»СЊС‚СЂСѓРµРј РїРѕ РґР°С‚Рµ
+        // Сначала фильтруем по дате
         val dateFiltered = when (dateFilter) {
             CalendarDateFilter.DELETED -> deletedEvents
             CalendarDateFilter.ALL -> {
@@ -289,7 +289,7 @@ fun CalendarScreen(
                 expandRecurringForRange(events, todayStart, monthEnd)
             }
         }
-        // Р—Р°С‚РµРј С„РёР»СЊС‚СЂСѓРµРј РїРѕ РїРѕРёСЃРєСѓ
+        // Затем фильтруем по поиску
         if (debouncedSearchQuery.isBlank()) {
             dateFiltered
         } else {
@@ -336,8 +336,8 @@ fun CalendarScreen(
         }
     }
     
-    // Р’РёСЂС‚СѓР°Р»СЊРЅС‹Рµ occurrence (_occ_) РёС‰СѓС‚СЃСЏ РІ filteredEvents (СЃРѕРґРµСЂР¶РёС‚ СЂР°Р·РІС‘СЂРЅСѓС‚С‹Рµ РїРѕРІС‚РѕСЂРµРЅРёСЏ),
-    // С‡С‚РѕР±С‹ РїРѕРєР°Р·Р°С‚СЊ РєРѕСЂСЂРµРєС‚РЅРѕРµ РІСЂРµРјСЏ occurrence, Р° РЅРµ Р±Р°Р·РѕРІРѕРіРѕ СЃРѕР±С‹С‚РёСЏ.
+    // Виртуальные occurrence (_occ_) ищутся в filteredEvents (содержит развёрнутые повторения),
+    // чтобы показать корректное время occurrence, а не базового события.
     val selectedEvent = remember(selectedEventId, filteredEvents, events, deletedEvents) {
         selectedEventId?.let { id ->
             filteredEvents.find { it.id == id }
@@ -384,23 +384,23 @@ fun CalendarScreen(
         }
     }
 
-    // Р”РёР°Р»РѕРі РїСЂРѕСЃРјРѕС‚СЂР° СЃРѕР±С‹С‚РёСЏ
+    // Диалог просмотра события
     selectedEvent?.let { event ->
         val eventDeletedText = Strings.eventDeleted
         val deletingOneEventText = Strings.deletingEvents(1)
         val restoringOneEventText = Strings.restoringEvents(1)
         val undoText = Strings.undo
         val eventsRestoredText = Strings.eventsRestored
-        val eventRestoredText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "РЎРѕР±С‹С‚РёРµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ" else "Event restored"
-        val eventDeletedPermanentlyText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "РЎРѕР±С‹С‚РёРµ СѓРґР°Р»РµРЅРѕ РЅР°РІСЃРµРіРґР°" else "Event permanently deleted"
+        val eventRestoredText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие восстановлено" else "Event restored"
+        val eventDeletedPermanentlyText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие удалено навсегда" else "Event permanently deleted"
         
         if (event.isDeleted) {
-            // Р”РёР°Р»РѕРі РґР»СЏ СѓРґР°Р»С‘РЅРЅРѕРіРѕ СЃРѕР±С‹С‚РёСЏ вЂ” РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ РёР»Рё СѓРґР°Р»РёС‚СЊ РЅР°РІСЃРµРіРґР°
+            // Диалог для удалённого события — восстановить или удалить навсегда
             DeletedEventDetailDialog(
                 event = event,
                 onDismiss = { selectedEventId = null },
                 onRestoreClick = {
-                    selectedEventId = null  // Р—Р°РєСЂС‹РІР°РµРј РґРёР°Р»РѕРі РЎР РђР—РЈ
+                    selectedEventId = null  // Закрываем диалог СРАЗУ
                     
                     deletionController.startDeletion(
                         emailIds = listOf(event.id),
@@ -448,7 +448,7 @@ fun CalendarScreen(
                 }
             )
         } else {
-            // Р”Р»СЏ РІРёСЂС‚СѓР°Р»СЊРЅС‹С… occurrence вЂ” РЅР°С…РѕРґРёРј РѕСЂРёРіРёРЅР°Р»СЊРЅРѕРµ СЃРѕР±С‹С‚РёРµ РІ Р‘Р”
+            // Для виртуальных occurrence — находим оригинальное событие в БД
             val originalEvent = if (event.id.contains("_occ_")) {
                 val originalId = event.id.substringBefore("_occ_")
                 events.find { it.id == originalId } ?: event
@@ -456,7 +456,7 @@ fun CalendarScreen(
                 event
             }
             
-            // РћР±С‹С‡РЅС‹Р№ РґРёР°Р»РѕРі РґР»СЏ Р°РєС‚РёРІРЅРѕРіРѕ СЃРѕР±С‹С‚РёСЏ (РїРѕРєР°Р·С‹РІР°РµРј РґР°РЅРЅС‹Рµ occurrence, РЅРѕ РѕРїРµСЂР°С†РёРё вЂ” РЅР°Рґ РѕСЂРёРіРёРЅР°Р»РѕРј)
+            // Обычный диалог для активного события (показываем данные occurrence, но операции — над оригиналом)
             EventDetailDialog(
                 event = event,
                 calendarRepo = calendarRepo,
@@ -507,7 +507,7 @@ fun CalendarScreen(
         }
     }
     
-    // Р”РёР°Р»РѕРі РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ СѓРґР°Р»РµРЅРёСЏ СЃРѕР±С‹С‚РёР№
+    // Диалог подтверждения удаления событий
     if (showDeleteConfirmDialog) {
         val eventsDeletedText = Strings.eventDeleted
         val eventsDeletedPermanentlyText = Strings.eventsDeletedPermanently
@@ -543,8 +543,8 @@ fun CalendarScreen(
                         showDeleteConfirmDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                         
-                        // РС‰РµРј РІС‹Р±СЂР°РЅРЅС‹Рµ СЃРѕР±С‹С‚РёСЏ РІ РѕР±РѕРёС… СЃРїРёСЃРєР°С…
-                        // Р”Р»СЏ РІРёСЂС‚СѓР°Р»СЊРЅС‹С… occurrence ID (СЃРѕРґРµСЂР¶Р°С‚ _occ_) Р±РµСЂС‘Рј РѕСЂРёРіРёРЅР°Р»СЊРЅС‹Р№ ID СЃРµСЂРёРё
+                        // Ищем выбранные события в обоих списках
+                        // Для виртуальных occurrence ID (содержат _occ_) берём оригинальный ID серии
                         val eventsToDelete = (events + deletedEvents).filter { it.id in deleteConfirmTargetIds }
                         val eventIds = eventsToDelete.map { it.id }
                         selectedEventIds = selectedEventIds.filterNot { id ->
@@ -554,7 +554,7 @@ fun CalendarScreen(
                         
                         if (eventIds.isNotEmpty()) {
                             if (deleteConfirmIsPermanent) {
-                                // РћРєРѕРЅС‡Р°С‚РµР»СЊРЅРѕРµ СѓРґР°Р»РµРЅРёРµ РёР· РєРѕСЂР·РёРЅС‹ вЂ” СЃ РїСЂРѕРіСЂРµСЃСЃР±Р°СЂРѕРј
+                                // Окончательное удаление из корзины — с прогрессбаром
                                 deletionController.startDeletion(
                                     emailIds = eventIds,
                                     message = deletingEventsMessage,
@@ -576,9 +576,9 @@ fun CalendarScreen(
                                     }
                                 }
                             } else {
-                                // Soft-delete (РІ РєРѕСЂР·РёРЅСѓ) С‡РµСЂРµР· РµРґРёРЅС‹Р№ EasClient (deleteEvents).
-                                // Р Р°РЅСЊС€Рµ РґР»СЏ РєР°Р¶РґРѕРіРѕ СЃРѕР±С‹С‚РёСЏ СЃРѕР·РґР°РІР°Р»СЃСЏ РѕС‚РґРµР»СЊРЅС‹Р№ EasClient в†’
-                                // РґСѓР±Р»РёСЂРѕРІР°РЅРёРµ NTLM-С…СЌРЅРґС€РµР№РєРѕРІ Рё РєРѕРЅС„Р»РёРєС‚ SyncKey (EAS).
+                                // Soft-delete (в корзину) через единый EasClient (deleteEvents).
+                                // Раньше для каждого события создавался отдельный EasClient →
+                                // дублирование NTLM-хэндшейков и конфликт SyncKey (EAS).
                                 scope.launch {
                                     val result = withContext(Dispatchers.IO) {
                                         calendarRepo.deleteEvents(eventsToDelete)
@@ -609,7 +609,7 @@ fun CalendarScreen(
         )
     }
     
-    // Р”РёР°Р»РѕРі РІС‹Р±РѕСЂР°: СѓРґР°Р»РёС‚СЊ РєРѕРЅРєСЂРµС‚РЅРѕРµ РІС…РѕР¶РґРµРЅРёРµ РёР»Рё РІСЃСЋ СЃРµСЂРёСЋ
+    // Диалог выбора: удалить конкретное вхождение или всю серию
     if (showOccurrenceDeleteChoice) {
         val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -619,10 +619,10 @@ fun CalendarScreen(
                 deleteConfirmTargetIds = emptySet()
             },
             icon = { Icon(AppIcons.DeleteForever, null) },
-            title = { Text(if (isRussian) "РЈРґР°Р»РµРЅРёРµ РїРѕРІС‚РѕСЂСЏСЋС‰РµРіРѕСЃСЏ\nСЃРѕР±С‹С‚РёСЏ" else "Delete Recurring\nEvent", textAlign = TextAlign.Center) },
+            title = { Text(if (isRussian) "Удаление повторяющегося\nсобытия" else "Delete Recurring\nEvent", textAlign = TextAlign.Center) },
             text = {
                 Text(
-                    if (isRussian) "РЈРґР°Р»РёС‚СЊ С‚РѕР»СЊРєРѕ РІС‹Р±СЂР°РЅРЅС‹Рµ РІС…РѕР¶РґРµРЅРёСЏ\nРёР»Рё РІСЃСЋ СЃРµСЂРёСЋ С†РµР»РёРєРѕРј?"
+                    if (isRussian) "Удалить только выбранные вхождения\nили всю серию целиком?"
                     else "Delete only selected occurrences\nor the entire series?",
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
@@ -667,14 +667,14 @@ fun CalendarScreen(
                             }
                             withContext(Dispatchers.Main) {
                                 if (successCount > 0 || nonOccurrenceResolvedIds.isNotEmpty()) {
-                                    Toast.makeText(context, if (isRussian) "РЈРґР°Р»РµРЅРѕ" else "Deleted", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, if (isRussian) "Удалено" else "Deleted", Toast.LENGTH_SHORT).show()
                                 } else if (errorMsg != null) {
                                     Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
                     },
-                    text = if (isRussian) "РўРѕР»СЊРєРѕ\nРІС…РѕР¶РґРµРЅРёСЏ" else "Only\noccurrences"
+                    text = if (isRussian) "Только\nвхождения" else "Only\noccurrences"
                 )
             },
             confirmButton = {
@@ -686,24 +686,24 @@ fun CalendarScreen(
                         deleteConfirmIsPermanent = false
                         showDeleteConfirmDialog = true
                     },
-                    text = if (isRussian) "Р’СЃСЋ\nСЃРµСЂРёСЋ" else "Entire\nseries"
+                    text = if (isRussian) "Всю\nсерию" else "Entire\nseries"
                 )
             }
         )
     }
 
-    // Р”РёР°Р»РѕРі РѕС‡РёСЃС‚РєРё РєРѕСЂР·РёРЅС‹ РєР°Р»РµРЅРґР°СЂСЏ
+    // Диалог очистки корзины календаря
     if (showEmptyTrashDialog) {
         val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
-        val trashEmptiedText = if (isRussian) "РљРѕСЂР·РёРЅР° РѕС‡РёС‰РµРЅР°" else "Trash emptied"
+        val trashEmptiedText = if (isRussian) "Корзина очищена" else "Trash emptied"
         
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showEmptyTrashDialog = false },
             icon = { Icon(AppIcons.DeleteForever, null) },
-            title = { Text(if (isRussian) "РћС‡РёСЃС‚РёС‚СЊ РєРѕСЂР·РёРЅСѓ?" else "Empty trash?") },
+            title = { Text(if (isRussian) "Очистить корзину?" else "Empty trash?") },
             text = { 
                 Text(
-                    if (isRussian) "РЈРґР°Р»РёС‚СЊ РЅР°РІСЃРµРіРґР° ${deletedEvents.size} СЃРѕР±С‹С‚РёР№ РёР· РєРѕСЂР·РёРЅС‹?"
+                    if (isRussian) "Удалить навсегда ${deletedEvents.size} событий из корзины?"
                     else "Permanently delete ${deletedEvents.size} events from trash?"
                 ) 
             },
@@ -738,7 +738,7 @@ fun CalendarScreen(
         )
     }
     
-    // Р”РёР°Р»РѕРі РІС‹Р±РѕСЂР°: В«РР·РјРµРЅРёС‚СЊ СЌС‚Рѕ РІС…РѕР¶РґРµРЅРёРµВ» РёР»Рё В«РР·РјРµРЅРёС‚СЊ РІСЃСЋ СЃРµСЂРёСЋВ»
+    // Диалог выбора: «Изменить это вхождение» или «Изменить всю серию»
     if (showEditChoiceDialog) {
         val occId = pendingEditOccurrenceId
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -787,7 +787,7 @@ fun CalendarScreen(
         )
     }
 
-    // Р”РёР°Р»РѕРі СЃРѕР·РґР°РЅРёСЏ/СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёСЏ СЃРѕР±С‹С‚РёСЏ
+    // Диалог создания/редактирования события
     if (showCreateDialog) {
         val eventUpdatedText = Strings.eventUpdated
         val eventCreatedText = Strings.eventCreated
@@ -795,7 +795,7 @@ fun CalendarScreen(
         val eventDeletedText = Strings.error
         val eventAttachmentsMayNotUploadText = Strings.eventAttachmentsMayNotUpload
         val recurringConversionHintText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) {
-            "РЎРѕР±С‹С‚РёРµ СЃС‚Р°Р»Рѕ РїРѕРІС‚РѕСЂСЏСЋС‰РёРјСЃСЏ. РСЃРїРѕР»СЊР·СѓР№С‚Рµ С„РёР»СЊС‚СЂ \"${Strings.allDates}\", С‡С‚РѕР±С‹ СѓРІРёРґРµС‚СЊ РІСЃРµ РІС…РѕР¶РґРµРЅРёСЏ."
+            "Событие стало повторяющимся. Используйте фильтр \"${Strings.allDates}\", чтобы увидеть все вхождения."
         } else {
             "Event is now recurring. Use the \"${Strings.allDates}\" filter to view all occurrences."
         }
@@ -831,12 +831,12 @@ fun CalendarScreen(
                 cachedOccurrenceEvent = null
             },
             onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, attachments, removedAttachmentIds ->
-                // Р—Р°С‰РёС‚Р° РѕС‚ double-tap: РµСЃР»Рё СѓР¶Рµ СЃРѕР·РґР°С‘Рј вЂ” РёРіРЅРѕСЂРёСЂСѓРµРј
+                // Защита от double-tap: если уже создаём — игнорируем
                 if (isCreating) return@CreateEventDialog
                 isCreating = true
                 scope.launch {
                     try {
-                        // РџР°СЂСЃРёРј СЃРїРёСЃРѕРє СѓС‡Р°СЃС‚РЅРёРєРѕРІ
+                        // Парсим список участников
                         val attendeeList = attendees.split(",", ";")
                             .map { it.trim() }
                             .filter { it.contains("@") }
@@ -902,18 +902,18 @@ fun CalendarScreen(
                         
                         when (result) {
                             is EasResult.Success -> {
-                                // РќР• РІС‹Р·С‹РІР°РµРј syncCalendar() Р·РґРµСЃСЊ:
-                                // createEvent() Рё updateEvent() СѓР¶Рµ СЃРёРЅС…СЂРѕРЅРёР·РёСЂСѓСЋС‚ РІРЅСѓС‚СЂРё СЃРµР±СЏ.
-                                // РџРѕРІС‚РѕСЂРЅС‹Р№ sync РѕРїР°СЃРµРЅ: Exchange РјРѕР¶РµС‚ РЅРµ СѓСЃРїРµС‚СЊ РїСЂРѕРёРЅРґРµРєСЃРёСЂРѕРІР°С‚СЊ
-                                // РЅРѕРІРѕРµ СЃРѕР±С‹С‚РёРµ в†’ sync РЅРµ СѓРІРёРґРёС‚ РµРіРѕ в†’ СѓРґР°Р»РёС‚ Р»РѕРєР°Р»СЊРЅРѕ.
+                                // НЕ вызываем syncCalendar() здесь:
+                                // createEvent() и updateEvent() уже синхронизируют внутри себя.
+                                // Повторный sync опасен: Exchange может не успеть проиндексировать
+                                // новое событие → sync не увидит его → удалит локально.
                                 val messageBase = if (attendeeList.isNotEmpty()) {
                                     "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
                                 } else {
                                     if (isEditing) eventUpdatedText else eventCreatedText
                                 }
 
-                                // РРЅРґРёРєР°С‚РѕСЂ С‡Р°СЃС‚РёС‡РЅРѕРіРѕ СѓСЃРїРµС…Р°: СЃРѕР±С‹С‚РёРµ РѕС‚РїСЂР°РІР»РµРЅРѕ, РЅРѕ РІР»РѕР¶РµРЅРёСЏ РјРѕРіР»Рё РЅРµ Р·Р°РіСЂСѓР·РёС‚СЊСЃСЏ.
-                                // РСЃРїРѕР»СЊР·СѓРµРј РјСЏРіРєСѓСЋ СЌРІСЂРёСЃС‚РёРєСѓ РїРѕ РёР·РјРµРЅРµРЅРёСЋ Р»РѕРєР°Р»СЊРЅРѕРіРѕ attachments JSON.
+                                // Индикатор частичного успеха: событие отправлено, но вложения могли не загрузиться.
+                                // Используем мягкую эвристику по изменению локального attachments JSON.
                                 val attachmentWarning = if (attachments.isEmpty()) {
                                     false
                                 } else if (eventToEdit != null) {
@@ -940,7 +940,7 @@ fun CalendarScreen(
                                 editingEventId = null
                                 editingOccurrenceStartTime = null
                                 cachedOccurrenceEvent = null
-                                // РђРІС‚РѕСЃРєСЂРѕР»Р» РІРІРµСЂС… РїРѕСЃР»Рµ СЃРѕР·РґР°РЅРёСЏ (СЃ Р·Р°РґРµСЂР¶РєРѕР№ РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ СЃРїРёСЃРєР°)
+                                // Автоскролл вверх после создания (с задержкой для обновления списка)
                                 if (!isEditing) {
                                     kotlinx.coroutines.delay(100)
                                     listState.animateScrollToItem(0)
@@ -1098,10 +1098,10 @@ fun CalendarScreen(
                         }
                     },
                     actions = {
-                        // РџРµСЂРµРєР»СЋС‡РµРЅРёРµ СЂРµР¶РёРјР° РїСЂРѕСЃРјРѕС‚СЂР°
+                        // Переключение режима просмотра
                         IconButton(
                             onClick = {
-                                selectedEventIds = emptySet() // РЎР±СЂР°СЃС‹РІР°РµРј РІС‹Р±РѕСЂ РїСЂРё СЃРјРµРЅРµ СЂРµР¶РёРјР°
+                                selectedEventIds = emptySet() // Сбрасываем выбор при смене режима
                                 viewMode = if (viewMode == CalendarViewMode.AGENDA) {
                                     CalendarViewMode.MONTH
                                 } else {
@@ -1116,7 +1116,7 @@ fun CalendarScreen(
                             )
                         }
                         
-                        // РљРЅРѕРїРєР° СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё
+                        // Кнопка синхронизации
                         val calendarSyncedText = Strings.calendarSynced
                         IconButton(
                             onClick = {
@@ -1227,7 +1227,7 @@ fun CalendarScreen(
                     )
                 }
                 CalendarViewMode.MONTH -> {
-                    // Р¤РёР»СЊС‚СЂС‹ РїРѕ РґР°С‚Рµ РґР»СЏ MonthView
+                    // Фильтры по дате для MonthView
                     CalendarFilterChips(
                         currentFilter = dateFilter,
                         onFilterChange = { selectedEventIds = emptySet(); dateFilter = it },

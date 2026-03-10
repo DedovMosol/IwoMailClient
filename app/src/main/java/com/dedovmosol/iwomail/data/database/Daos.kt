@@ -267,6 +267,9 @@ interface EmailDao {
     
     @Query("UPDATE emails SET mdnRequestedBy = :mdnRequestedBy WHERE id = :id")
     suspend fun updateMdnRequestedBy(id: String, mdnRequestedBy: String)
+
+    @Query("UPDATE emails SET internetMessageId = :internetMessageId WHERE id = :id")
+    suspend fun updateInternetMessageId(id: String, internetMessageId: String)
     
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAllIgnore(emails: List<EmailEntity>)
@@ -579,6 +582,16 @@ interface EmailDao {
            OR `to` LIKE '%&lt;%' OR cc LIKE '%&lt;%' OR preview LIKE '%&lt;%' OR fromName LIKE '%&lt;%'
     """)
     suspend fun repairEncodedBodies(): Int
+
+    @Query("""
+        SELECT * FROM emails 
+        WHERE accountId = :accountId 
+        AND messageClass LIKE 'IPM.Schedule.Meeting.Request%'
+        AND subject = :subject
+        ORDER BY dateReceived DESC
+        LIMIT 1
+    """)
+    suspend fun findMeetingRequestBySubject(accountId: Long, subject: String): EmailEntity?
 }
 
 /**

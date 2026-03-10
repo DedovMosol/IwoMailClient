@@ -146,11 +146,18 @@ class ContactRepository(context: Context) {
                             .map { it.easServerId.ifEmpty { it.email } }
                             .filter { it.isNotEmpty() }
                             .toSet()
-                        val deletedServerIds = existingServerIds - serverServerIds
-                        
-                        for (sid in deletedServerIds) {
-                            val contactId = "${accountId}_exchange_${stableHash(sid)}"
-                            contactDao.deleteById(contactId)
+
+                        if (easClient.contactsSyncWasAuthoritative) {
+                            val deletedServerIds = existingServerIds - serverServerIds
+                            for (sid in deletedServerIds) {
+                                val contactId = "${accountId}_exchange_${stableHash(sid)}"
+                                contactDao.deleteById(contactId)
+                            }
+                        } else {
+                            android.util.Log.w(
+                                "ContactRepository",
+                                "syncExchangeContacts: non-authoritative sync result, skipping diff-based deletions"
+                            )
                         }
                         
                         val contactEntities = serverContacts.map { galContact ->
@@ -208,6 +215,7 @@ class ContactRepository(context: Context) {
                 
                 val allContacts = mutableListOf<GalContact>()
                 val seenEmails = mutableSetOf<String>()
+                var needsPrefixExpansion = false
                 
                 // Сначала пробуем "*" (работает на новых серверах)
                 when (val result = easClient.searchGAL("*", 2000)) {
@@ -215,13 +223,19 @@ class ContactRepository(context: Context) {
                         if (result.data.isNotEmpty()) {
                             allContacts.addAll(result.data)
                             result.data.forEach { seenEmails.add(it.email.lowercase()) }
+                            if (result.data.size >= 100) {
+                                needsPrefixExpansion = true
+                            }
+                        } else {
+                            needsPrefixExpansion = true
                         }
                     }
-                    is EasResult.Error -> { /* попробуем по буквам */ }
+                    is EasResult.Error -> { needsPrefixExpansion = true }
                 }
                 
-                // Если "*" не дал результатов — загружаем по буквам
-                if (allContacts.isEmpty()) {
+                // Если "*" не сработал или упёрся в серверный лимит GAL Search,
+                // добираем контакты префиксным поиском.
+                if (needsPrefixExpansion) {
                     val latinLetters = ('a'..'z').toList()
                     val cyrillicLetters = ('а'..'я').toList()
                     for (alphabet in listOf(latinLetters, cyrillicLetters)) {
@@ -253,20 +267,9 @@ class ContactRepository(context: Context) {
                     return@withContext EasResult.Success(0)
                 }
                 
-                // Получаем существующие GAL контакты (только с _gal_ prefix, не _exchange_)
-                val existingContacts = contactDao.getExchangeContactsList(accountId)
-                    .filter { it.id.startsWith("${accountId}_gal_") }
-                val existingEmails = existingContacts.map { it.email.lowercase() }.toSet()
-                
-                // Определяем какие контакты удалены на сервере
-                val serverEmails = allContacts.map { it.email.lowercase() }.toSet()
-                val deletedEmails = existingEmails - serverEmails
-                
-                // Удаляем только те, которых нет на сервере
-                for (email in deletedEmails) {
-                    val contactId = "${accountId}_gal_${stableHash(email)}"
-                    contactDao.deleteById(contactId)
-                }
+                // GAL Search не является полным authoritative snapshot для Exchange 2007 SP1 / EAS 12.1:
+                // результаты могут быть усечены по Range, запросу "*" или префиксному поиску.
+                // Поэтому синхронизация GAL делает только upsert, без удаления "отсутствующих" записей.
                 
                 // Удаляем себя из БД если уже был сохранён ранее
                 if (ownEmail.isNotBlank()) {

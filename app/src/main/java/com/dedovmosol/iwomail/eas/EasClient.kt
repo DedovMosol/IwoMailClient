@@ -1245,6 +1245,9 @@ $foldersXml
 
     val contactsIncrementalNoChanges: Boolean
         get() = contactsService.lastSyncWasIncrementalNoChanges
+
+    val contactsSyncWasAuthoritative: Boolean
+        get() = contactsService.lastSyncWasAuthoritative
     
     /**
      * Создание заметки на сервере Exchange
@@ -1434,81 +1437,82 @@ $foldersXml
     ): EasResult<Boolean> = calendarService.deleteCalendarAttachments(attachmentIds)
     
     /**
-     * Ответ на приглашение на встречу через EAS MeetingResponse
-     * @param serverId ID события календаря (формат: accountId_easServerId)
+     * Ответ на приглашение на встречу.
+     * MS-ASCMD §2.2.1.11: EAS 12.1 MeetingResponse использует RequestId (ServerId письма)
+     * и CollectionId (ServerId папки Inbox). Для EAS 12.1 Calendar folder НЕ допускается.
+     *
+     * @param serverId EAS ServerId письма-приглашения (для EAS MeetingResponse) или EWS ItemId
      * @param response Тип ответа: "Accept", "Tentative", "Decline"
-     * @param sendResponse Отправить ответ организатору (не используется в EAS 12.1)
+     * @param sendResponse Отправить ответ организатору
+     * @param subject Тема события (для EWS fallback поиска)
+     * @param collectionId EAS ServerId папки с письмом-приглашением (обычно Inbox)
      */
     suspend fun respondToMeetingRequest(
         serverId: String,
         response: String,
         sendResponse: Boolean = true,
-        subject: String = ""
+        subject: String = "",
+        collectionId: String = ""
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
-            val easServerId = if (serverId.contains("_")) {
-                serverId.substringAfter("_")
-            } else {
-                serverId
+            val userResponse = when (response.lowercase()) {
+                "accept" -> 1
+                "tentative" -> 2
+                "decline" -> 3
+                else -> 1
             }
-            try {
-                // MS-ASCMD §2.2.1.11: EAS 12.1 запрещает Calendar folder для MeetingResponse.
-                // CollectionId должен указывать на папку с meeting request (Inbox, type=2).
-                val foldersResult = folderSync("0")
-                val inboxFolderId = when (foldersResult) {
-                    is EasResult.Success -> {
-                        foldersResult.data.folders.find { it.type == 2 }?.serverId
-                    }
-                    is EasResult.Error -> return@withContext EasResult.Error(foldersResult.message)
-                }
-                
-                if (inboxFolderId == null) {
-                    return@withContext EasResult.Error("Папка Inbox не найдена")
-                }
-                
-                val userResponse = when (response.lowercase()) {
-                    "accept" -> 1
-                    "tentative" -> 2
-                    "decline" -> 3
-                    else -> 1
-                }
-                
-                val meetingResponseXml = """<?xml version="1.0" encoding="UTF-8"?>
+
+            if (collectionId.isNotBlank() && serverId.isNotBlank()) {
+                val easResult = respondToMeetingRequestEas(serverId, collectionId, userResponse)
+                if (easResult is EasResult.Success) return@withContext easResult
+                android.util.Log.w("EasClient",
+                    "respondToMeetingRequest: EAS MeetingResponse failed (${(easResult as EasResult.Error).message}), trying EWS")
+            }
+
+            val ewsId = if (serverId.contains("_")) serverId.substringAfter("_") else serverId
+            if (ewsId.length > 50 && !ewsId.contains(":")) {
+                return@withContext respondToMeetingRequestEws(ewsId, response, sendResponse, subject)
+            }
+
+            EasResult.Error("Meeting response requires the original meeting request message ID")
+        }
+    }
+
+    /**
+     * EAS MeetingResponse — MS-ASCMD §2.2.1.11 (EAS 12.1).
+     * RequestId = ServerId письма-приглашения, CollectionId = ServerId папки (Inbox).
+     */
+    private suspend fun respondToMeetingRequestEas(
+        requestId: String,
+        collectionId: String,
+        userResponse: Int
+    ): EasResult<Boolean> {
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
 <MeetingResponse xmlns="MeetingResponse">
     <Request>
         <UserResponse>$userResponse</UserResponse>
-        <CollectionId>${escapeXml(inboxFolderId)}</CollectionId>
-        <RequestId>${escapeXml(easServerId)}</RequestId>
+        <CollectionId>${escapeXml(collectionId)}</CollectionId>
+        <RequestId>${escapeXml(requestId)}</RequestId>
     </Request>
 </MeetingResponse>""".trimIndent()
-                
-                val result = executeEasCommand("MeetingResponse", meetingResponseXml) { responseXml ->
-                    val status = extractValue(responseXml, "Status")
-                    when (status) {
-                        "1" -> true
-                        "2" -> throw Exception("Неверный запрос на собрание")
-                        "3" -> throw Exception("Ошибка сервера при обработке запроса")
-                        "4" -> throw Exception("Неверный ID запроса на собрание")
-                        else -> {
-                            if (responseXml.contains("CalendarId")) {
-                                true
-                            } else {
-                                throw Exception("Неизвестная ошибка: Status=$status")
-                            }
-                        }
+
+        return try {
+            executeEasCommand("MeetingResponse", xml) { responseXml ->
+                val status = extractValue(responseXml, "Status")
+                when (status) {
+                    "1" -> true
+                    "2" -> throw Exception("Invalid meeting request (Status=2)")
+                    "3" -> throw Exception("Server mailbox error (Status=3)")
+                    "4" -> throw Exception("Server error (Status=4)")
+                    else -> {
+                        if (responseXml.contains("CalendarId")) true
+                        else throw Exception("MeetingResponse Status=$status")
                     }
                 }
-                
-                when (result) {
-                    is EasResult.Success -> EasResult.Success(true)
-                    is EasResult.Error -> {
-                        respondToMeetingRequestEws(easServerId, response, sendResponse, subject)
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                respondToMeetingRequestEws(easServerId, response, sendResponse, subject)
             }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            EasResult.Error(e.message ?: "MeetingResponse failed")
         }
     }
     
@@ -1548,8 +1552,8 @@ $foldersXml
                     }
                 }
             }
-            // Если не удалось получить ChangeKey, возвращаем без него
-            return Pair(easServerId, "")
+            // Для meeting response нужен реальный item identity с актуальным ChangeKey.
+            return null
         }
         
         if (subject.isBlank()) {
@@ -1606,12 +1610,15 @@ $foldersXml
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
+                if (serverId.length <= 50 || serverId.contains(":")) {
+                    return@withContext EasResult.Error("EWS fallback requires the original meeting request EWS ItemId")
+                }
                 val ewsUrl = this@EasClient.ewsUrl
                 
                 val itemInfo = findEwsCalendarItemIdWithChangeKey(ewsUrl, serverId, subject)
                 
                 if (itemInfo == null) {
-                    return@withContext EasResult.Error("Не удалось найти событие на сервере")
+                    return@withContext EasResult.Error("Не удалось найти исходное письмо-приглашение на сервере")
                 }
                 
                 val (ewsItemId, changeKey) = itemInfo
@@ -2483,7 +2490,8 @@ data class EasEmail(
     val body: String,
     val bodyType: Int = 1, // 1=text, 2=html
     val attachments: List<EasAttachment> = emptyList(),
-    val flagged: Boolean = false // Флаг избранного (FlagStatus=2 на сервере)
+    val flagged: Boolean = false, // Флаг избранного (FlagStatus=2 на сервере)
+    val messageClass: String = "" // MS-ASEMAIL MessageClass (IPM.Note, IPM.Schedule.Meeting.Request, etc.)
 )
 
 data class EasAttachment(
@@ -2619,6 +2627,7 @@ data class EasTask(
  */
 data class EmailBodyResult(
     val body: String,
-    val mdnRequestedBy: String? = null // Email для отправки MDN
+    val mdnRequestedBy: String? = null, // Email для отправки MDN
+    val originalMessageId: String? = null // RFC 5322 Message-ID исходного письма
 )
 

@@ -889,7 +889,68 @@ object Strings {
     val statusAccepted: String @Composable get() = if (isRussian()) "принял" else "accepted"
     val statusDeclined: String @Composable get() = if (isRussian()) "отклонил" else "declined"
     val statusNotResponded: String @Composable get() = if (isRussian()) "не ответил" else "not responded"
-    
+
+    // Календарь — повторение
+    val repeatLabel: String @Composable get() = if (isRussian()) "Повторение" else "Repeat"
+    val noRepeat: String @Composable get() = if (isRussian()) "Не повторять" else "No repeat"
+    val everyDay: String @Composable get() = if (isRussian()) "Каждый день" else "Daily"
+    val everyWeek: String @Composable get() = if (isRussian()) "Каждую неделю" else "Weekly"
+    val everyMonth: String @Composable get() = if (isRussian()) "Каждый месяц" else "Monthly"
+    val everyYear: String @Composable get() = if (isRussian()) "Каждый год" else "Yearly"
+    val endOfEachEvent: String @Composable get() = if (isRussian()) "Окончание каждого события" else "End of each event"
+    val durationOfEachOccurrence: String @Composable get() = if (isRussian()) "Продолжительность каждого повторения" else "Sets the duration of each occurrence"
+
+    // Календарь — удаление повторяющихся
+    val deleteRecurringTitle: String @Composable get() = if (isRussian()) "Удаление повторяющегося\nсобытия" else "Delete Recurring\nEvent"
+    val deleteRecurringText: String @Composable get() = if (isRussian()) "Удалить только выбранные вхождения\nили всю серию целиком?" else "Delete only selected occurrences\nor the entire series?"
+    val onlyOccurrences: String @Composable get() = if (isRussian()) "Только\nвхождения" else "Only\noccurrences"
+    val entireSeriesButton: String @Composable get() = if (isRussian()) "Всю\nсерию" else "Entire\nseries"
+    val actionDeleted: String @Composable get() = if (isRussian()) "Удалено" else "Deleted"
+
+    // Календарь — корзина
+    val calendarTrash: String @Composable get() = if (isRussian()) "Корзина" else "Trash"
+    val emptyTrashAction: String @Composable get() = if (isRussian()) "Очистить" else "Empty"
+    val emptyCalendarTrashTitle: String @Composable get() = if (isRussian()) "Очистить корзину?" else "Empty trash?"
+    @Composable
+    fun emptyCalendarTrashConfirm(count: Int): String = if (isRussian())
+        "Удалить навсегда $count событий из корзины?"
+        else "Permanently delete $count events from trash?"
+    val eventInTrash: String @Composable get() = if (isRussian()) "Событие в корзине" else "Event in trash"
+    val noTitleEvent: String @Composable get() = if (isRussian()) "Без названия" else "No title"
+    @Composable
+    fun eventBecameRecurring(allDatesLabel: String): String = if (isRussian())
+        "Событие стало повторяющимся. Используйте фильтр \"$allDatesLabel\", чтобы увидеть все вхождения."
+        else "Event is now recurring. Use the \"$allDatesLabel\" filter to view all occurrences."
+
+    // Вложения — календарь
+    val attachFile: String @Composable get() = if (isRussian()) "Прикрепить файл" else "Attach file"
+    val detach: String @Composable get() = if (isRussian()) "Открепить" else "Detach"
+    val removeAttachment: String @Composable get() = if (isRussian()) "Удалить" else "Remove"
+    @Composable
+    fun currentAttachmentsCount(count: Int): String = if (isRussian())
+        "Текущие вложения ($count)" else "Current attachments ($count)"
+    val fileSaved: String @Composable get() = if (isRussian()) "Файл сохранён" else "File saved"
+    @Composable
+    fun attachmentsCountLabel(count: Int): String = if (isRussian())
+        "Вложения ($count)" else "Attachments ($count)"
+    val noPreviewApp: String @Composable get() = if (isRussian()) "Нет приложения для просмотра файла" else "No app to preview this file"
+    val previewError: String @Composable get() = if (isRussian()) "Ошибка просмотра" else "Preview error"
+    val preview: String @Composable get() = if (isRussian()) "Просмотр" else "Preview"
+    val savedToCalendarFolder: String @Composable get() = if (isRussian()) "Сохранено в Downloads/IwoMail/Calendar/" else "Saved to Downloads/IwoMail/Calendar/"
+    val attachmentLimitExceeded: String @Composable get() = if (isRussian()) "Превышен общий лимит вложений (10 МБ)" else "Total attachment limit exceeded (10 MB)"
+    @Composable
+    fun fileTooLargeMessage(name: String, sizeMB: Long): String = if (isRussian())
+        "Файл '$name' слишком большой ($sizeMB МБ, макс 7 МБ)"
+        else "File '$name' too large ($sizeMB MB, max 7 MB)"
+    fun fileTooLargeMessage(name: String, sizeMB: Long, isRussian: Boolean): String =
+        if (isRussian) "Файл '$name' слишком большой ($sizeMB МБ, макс 7 МБ)"
+        else "File '$name' too large ($sizeMB MB, max 7 MB)"
+    fun attachmentLimitExceeded(isRussian: Boolean): String =
+        if (isRussian) "Превышен общий лимит вложений (10 МБ)"
+        else "Total attachment limit exceeded (10 MB)"
+    val restoreEventAction: String @Composable get() = if (isRussian()) "Восстановить" else "Restore"
+    val deletePermanentlyAction: String @Composable get() = if (isRussian()) "Удалить навсегда" else "Delete permanently"
+
     // Создание/редактирование заметок
     val newNote: String @Composable get() = if (isRussian()) "Новая заметка" else "New note"
     val editNote: String @Composable get() = if (isRussian()) "Редактировать заметку" else "Edit note"
@@ -1344,6 +1405,16 @@ object NotificationStrings {
             errorCode.contains("ConnectException") || errorCode.contains("Failed to connect") -> if (isRussian) "Не удалось подключиться к серверу. Проверьте сеть." else "Failed to connect to server. Check network."
             errorCode.contains("SSL") || errorCode.contains("Certificate") -> if (isRussian) "Ошибка сертификата SSL. Попробуйте включить 'Принимать все сертификаты' или добавить сертификат сервера." else "SSL certificate error. Try enabling 'Accept all certificates' or add server certificate."
             errorCode.contains("No address associated") -> if (isRussian) "Неверный адрес сервера" else "Invalid server address"
+            errorCode.contains("Для ответа нужен ID исходного письма-приглашения") ->
+                if (isRussian) errorCode else "Meeting response requires the original invitation message ID, not the calendar event ID"
+            errorCode.contains("Meeting response requires the original meeting request message ID") ->
+                if (isRussian) "Письмо-приглашение не найдено. Синхронизируйте почту и попробуйте снова." else "Meeting request email not found. Sync your mail and try again."
+            errorCode.contains("Meeting response requires the original meeting request EWS ItemId") ->
+                if (isRussian) "Для ответа нужен исходный EWS ItemId письма-приглашения" else errorCode
+            errorCode.contains("EWS fallback requires the original meeting request EWS ItemId") ->
+                if (isRussian) "Для EWS-ответа нужен исходный EWS ItemId письма-приглашения" else errorCode
+            errorCode.contains("Не удалось найти исходное письмо-приглашение на сервере") ->
+                if (isRussian) errorCode else "Could not find the original invitation message on the server"
             errorCode == "Unknown error" -> if (isRussian) "Неизвестная ошибка" else "Unknown error"
             errorCode.contains("Inbox folder not found") -> if (isRussian) "Папка «Входящие» не найдена" else "Inbox folder not found"
             else -> errorCode

@@ -99,4 +99,10 @@ interface CalendarEventDao {
     
     @Query("UPDATE calendar_events SET attendees = :attendeesJson WHERE id = :id")
     suspend fun updateAttendees(id: String, attendeesJson: String)
+
+    @Query("UPDATE calendar_events SET meetingRequestId = :requestId, meetingRequestFolderId = :folderId WHERE id = :id")
+    suspend fun updateMeetingRequestIds(id: String, requestId: String, folderId: String)
+
+    @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isMeeting = 1 AND subject = :subject AND isDeleted = 0 LIMIT 1")
+    suspend fun findMeetingBySubject(accountId: Long, subject: String): CalendarEventEntity?
 }

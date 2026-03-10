@@ -93,19 +93,19 @@ internal fun CalendarFilterChips(
             selected = currentFilter == CalendarDateFilter.DELETED,
             onClick = { onFilterChange(CalendarDateFilter.DELETED) },
             label = { 
-                val label = if (isRussian) "РљРѕСЂР·РёРЅР°" else "Trash"
+                val label = if (isRussian) "Корзина" else "Trash"
                 Text(if (deletedCount > 0) "$label ($deletedCount)" else label) 
             },
             leadingIcon = if (currentFilter == CalendarDateFilter.DELETED) {
                 { Icon(AppIcons.Delete, null, Modifier.size(16.dp)) }
             } else null
         )
-        // РљРЅРѕРїРєР° РѕС‡РёСЃС‚РєРё РєРѕСЂР·РёРЅС‹ (РІРёРґРЅР° С‚РѕР»СЊРєРѕ РІ СЂРµР¶РёРјРµ РєРѕСЂР·РёРЅС‹)
+        // Кнопка очистки корзины (видна только в режиме корзины)
         if (currentFilter == CalendarDateFilter.DELETED && deletedCount > 0) {
             FilterChip(
                 selected = false,
                 onClick = onEmptyTrash,
-                label = { Text(if (isRussian) "РћС‡РёСЃС‚РёС‚СЊ" else "Empty") },
+                label = { Text(if (isRussian) "Очистить" else "Empty") },
                 leadingIcon = { Icon(AppIcons.DeleteForever, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error) }
             )
         }
@@ -134,7 +134,7 @@ internal fun AgendaView(
     val isSelectionMode = selectedEventIds.isNotEmpty()
     val haptic = LocalHapticFeedback.current
     Column {
-        // РџРѕР»Рµ РїРѕРёСЃРєР° (РЅР° РІСЃСЋ С€РёСЂРёРЅСѓ)
+        // Поле поиска (на всю ширину)
         OutlinedTextField(
             value = searchQuery,
             onValueChange = onSearchQueryChange,
@@ -156,7 +156,7 @@ internal fun AgendaView(
             shape = RoundedCornerShape(12.dp)
         )
         
-        // Р¤РёР»СЊС‚СЂС‹ РїРѕ РґР°С‚Рµ (РїРѕРґ РїРѕР»РµРј РїРѕРёСЃРєР°)
+        // Фильтры по дате (под полем поиска)
         CalendarFilterChips(
             currentFilter = dateFilter,
             onFilterChange = onDateFilterChange,
@@ -164,7 +164,7 @@ internal fun AgendaView(
             onEmptyTrash = onEmptyTrash
         )
         
-        // РЎС‡С‘С‚С‡РёРє
+        // Счётчик
         Text(
             text = "${Strings.total}: ${events.size}",
             style = MaterialTheme.typography.bodySmall,
@@ -540,7 +540,7 @@ internal fun EventCard(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // Р§РµРєР±РѕРєСЃ РІС‹Р±РѕСЂР° РІ СЂРµР¶РёРјРµ РјРЅРѕР¶РµСЃС‚РІРµРЅРЅРѕРіРѕ РІС‹Р±РѕСЂР°
+            // Чекбокс выбора в режиме множественного выбора
             if (isSelectionMode) {
                 Checkbox(
                     checked = isSelected,
@@ -549,7 +549,7 @@ internal fun EventCard(
                 Spacer(modifier = Modifier.width(8.dp))
             }
             
-            // Р¦РІРµС‚РЅР°СЏ РїРѕР»РѕСЃРєР° СЃС‚Р°С‚СѓСЃР°
+            // Цветная полоска статуса
             Box(
                 modifier = Modifier
                     .width(4.dp)
@@ -601,7 +601,7 @@ internal fun EventCard(
                 
                 Text(
                     text = when {
-                        event.allDayEvent && showDate -> "${shortDateFormat.format(Date(event.startTime))} вЂ” ${Strings.allDay}"
+                        event.allDayEvent && showDate -> "${shortDateFormat.format(Date(event.startTime))} — ${Strings.allDay}"
                         event.allDayEvent -> Strings.allDay
                         showDate -> "${shortDateFormat.format(Date(event.startTime))}  ${timeFormat.format(Date(event.startTime))} - ${timeFormat.format(Date(event.endTime))}"
                         else -> "${timeFormat.format(Date(event.startTime))} - ${timeFormat.format(Date(event.endTime))}"

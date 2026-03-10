@@ -67,22 +67,13 @@ class EmailOperationsService(
                 is EasResult.Error -> {
                     android.util.Log.w("EmailOps", "markAsRead failed (syncKey=$currentSyncKey): ${result.message}")
                     
-                    // SyncKey мог устареть из-за параллельной синхронизации.
-                    // Стратегия: пробуем обновить syncKey через sync, а если и он
-                    // устарел — сбрасываем на "0" и получаем начальный ключ.
-                    var freshSyncKey: String? = null
-                    
-                    // Попытка 1: обновить текущий syncKey
-                    val refreshResult = client.sync(folder.serverId, currentSyncKey, windowSize = 0)
-                    if (refreshResult is EasResult.Success) {
-                        freshSyncKey = refreshResult.data.syncKey
+                    // Повторяем только если параллельный sync уже успел сохранить
+                    // новый syncKey в БД. Самостоятельно делать GetChanges-sync здесь
+                    // нельзя: это может продвинуть SyncKey мимо необработанных дельт.
+                    val freshSyncKey = if (isLikelyStaleSyncKeyError(result.message)) {
+                        getRetrySyncKeyFromDatabase(email.folderId, currentSyncKey)
                     } else {
-                        // Попытка 2: сбросить syncKey через "0" (полная реинициализация)
-                        android.util.Log.w("EmailOps", "markAsRead: syncKey refresh failed, resetting from 0")
-                        val resetResult = client.sync(folder.serverId, "0", windowSize = 0)
-                        if (resetResult is EasResult.Success) {
-                            freshSyncKey = resetResult.data.syncKey
-                        }
+                        null
                     }
                     
                     if (freshSyncKey != null) {
@@ -170,14 +161,10 @@ class EmailOperationsService(
                     }
                     is EasResult.Error -> {
                         android.util.Log.w("EmailOps", "markAsReadBatch failed for folder $folderId: ${result.message}")
-                        // Retry с обновлённым syncKey
-                        var freshSyncKey: String? = null
-                        val refreshResult = client.sync(folder.serverId, currentSyncKey, windowSize = 0)
-                        if (refreshResult is EasResult.Success) {
-                            freshSyncKey = refreshResult.data.syncKey
+                        val freshSyncKey = if (isLikelyStaleSyncKeyError(result.message)) {
+                            getRetrySyncKeyFromDatabase(folderId, currentSyncKey)
                         } else {
-                            val resetResult = client.sync(folder.serverId, "0", windowSize = 0)
-                            if (resetResult is EasResult.Success) freshSyncKey = resetResult.data.syncKey
+                            null
                         }
                         if (freshSyncKey != null) {
                             folderDao.updateSyncKey(folderId, freshSyncKey)
@@ -277,6 +264,10 @@ class EmailOperationsService(
                     if (!result.data.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
                         emailDao.updateMdnRequestedBy(emailId, result.data.mdnRequestedBy)
                     }
+
+                    result.data.originalMessageId
+                        ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
+                        ?.let { emailDao.updateInternetMessageId(emailId, it) }
                     
                     android.util.Log.d("BDY", "loadEmailBody: SUCCESS, bodyLength=${bodyContent.length}")
                     EasResult.Success(bodyContent)
@@ -364,6 +355,12 @@ class EmailOperationsService(
                                 val result = client.fetchEmailBodyWithMdn(folderServerId, emailServerId)
                                 result.onSuccessResult { response ->
                                     emailDao.updateBody(emailId, response.body)
+                                    if (!response.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
+                                        emailDao.updateMdnRequestedBy(emailId, response.mdnRequestedBy)
+                                    }
+                                    response.originalMessageId
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { emailDao.updateInternetMessageId(emailId, it) }
                                 }
                             } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         }
@@ -900,7 +897,7 @@ class EmailOperationsService(
         val client = accountRepo.createEasClient(email.accountId)
             ?: return EasResult.Error("Не удалось создать клиент")
         
-        return client.sendMdn(mdnTo, email.subject)
+        return client.sendMdn(mdnTo, email.subject, email.internetMessageId)
             .onSuccessResult {
                 emailDao.updateMdnSent(emailId, true)
             }
@@ -950,6 +947,19 @@ class EmailOperationsService(
             return newKey
         }
         return null
+    }
+
+    private suspend fun getRetrySyncKeyFromDatabase(
+        folderId: String,
+        failedSyncKey: String
+    ): String? {
+        val latestSyncKey = folderDao.getFolder(folderId)?.syncKey ?: return null
+        return latestSyncKey.takeIf { it.isNotBlank() && it != "0" && it != failedSyncKey }
+    }
+
+    private fun isLikelyStaleSyncKeyError(message: String): Boolean {
+        return message.contains("INVALID_SYNCKEY", ignoreCase = true) ||
+            message.contains("Status=3", ignoreCase = true)
     }
 
     /**
