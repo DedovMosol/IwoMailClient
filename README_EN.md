@@ -157,7 +157,7 @@ This project is open for improvements! Here's how you can help:
 
 ```
 UI Layer
-  Jetpack Compose — 21 screens, 8 components
+  Jetpack Compose — 22 screens, 8 components
   Navigation, Theme, Localization
     ↓
 Repository Layer
@@ -171,7 +171,7 @@ Protocol Layer
     ↓
 Database Layer                    Network Layer
   Room — 11 DAOs, 10 Entities      HttpClientProvider, NetworkMonitor
-  MailDatabase (v34)                NtlmAuthenticator
+  MailDatabase (v39)                NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker

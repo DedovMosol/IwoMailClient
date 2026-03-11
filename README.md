@@ -157,7 +157,7 @@
 
 ```
 UI Layer
-  Jetpack Compose — 21 экран, 8 компонентов
+  Jetpack Compose — 22 экрана, 8 компонентов
   Navigation, Theme, Localization
     ↓
 Repository Layer
@@ -171,7 +171,7 @@ Protocol Layer
     ↓
 Database Layer                    Network Layer
   Room — 11 DAO, 10 Entity         HttpClientProvider, NetworkMonitor
-  MailDatabase (v34)                NtlmAuthenticator
+  MailDatabase (v39)                NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker

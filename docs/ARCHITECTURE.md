@@ -86,7 +86,7 @@ com.dedovmosol.iwomail/
 │
 ├── data/                              # Data Layer
 │   ├── database/                      # Room Database
-│   │   ├── MailDatabase.kt            # Database (migrations up to v37)
+│   │   ├── MailDatabase.kt            # Database (migrations up to v39)
 │   │   ├── Daos.kt                    # EmailDao, FolderDao, AccountDao
 │   │   ├── CalendarEventDao.kt        # Calendar event DAO
 │   │   ├── CalendarEventEntity.kt     # Entity (11+ fields from MS-ASCAL)
@@ -109,7 +109,7 @@ com.dedovmosol.iwomail/
 │       ├── TaskRepository.kt          # Tasks: sync, CRUD, reminders
 │       ├── SettingsRepository.kt      # Settings (DataStore)
 │       ├── EmailSyncService.kt        # Email sync (incremental/full)
-│       ├── EmailOperationsService.kt  # Operations: move, delete, flag, markRead
+│       ├── EmailOperationsService.kt  # Operations: move, delete, flag, markRead, MDN
 │       ├── FolderSyncService.kt       # Folder sync
 │       ├── RepositoryProvider.kt      # Manual DI (singleton)
 │       ├── RepositoryExtensions.kt    # Extension functions
@@ -123,7 +123,7 @@ com.dedovmosol.iwomail/
 │   ├── EasVersionDetector.kt         # OPTIONS / version negotiation
 │   ├── EasFolderSyncService.kt       # FolderSync + CRUD + folder ID cache
 │   ├── EwsClient.kt                   # Exchange Web Services (NTLM/Basic)
-│   ├── EasEmailService.kt            # Mail: sync, send, fetch body
+│   ├── EasEmailService.kt            # Mail: sync, send, fetch body, MDN parsing
 │   ├── EasCalendarService.kt         # Calendar: sync, CRUD orchestration (EAS + EWS)
 │   ├── CalendarDateUtils.kt          # Calendar date/time/timezone utilities
 │   ├── CalendarXmlParser.kt          # Calendar XML parsing (EAS + EWS events, attendees, attachments)
@@ -136,11 +136,11 @@ com.dedovmosol.iwomail/
 │   ├── EasNotesService.kt            # Notes: sync, CRUD (EAS + EWS)
 │   ├── EasTasksService.kt            # Tasks: sync, CRUD (EAS + EWS)
 │   ├── EasDraftsService.kt           # Drafts: create, update, delete (EWS)
-│   ├── EasAttachmentService.kt       # Attachment download
+│   ├── EasAttachmentService.kt       # Attachment download, MDN send
 │   ├── EasProvisioning.kt            # Provisioning (security policies)
 │   ├── EasXmlTemplates.kt            # XML templates for EAS/EWS requests
 │   ├── EasXmlParser.kt               # XML response parser
-│   ├── EasPatterns.kt                # Regex patterns for parsing
+│   ├── EasPatterns.kt                # Regex patterns for parsing (incl. MIME/MDN)
 │   ├── EasCodePages.kt               # WBXML code pages (EAS)
 │   ├── EasResultExtensions.kt        # Extensions for EasResult<T>
 │   ├── WbxmlParser.kt                # WBXML parser (binary XML)
@@ -235,7 +235,7 @@ com.dedovmosol.iwomail/
 ┌────────────────────────▼────────────────────────────────┐
 │  Database Layer              │  Network Layer            │
 │  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
-│  MailDatabase (v37)          │  NetworkMonitor           │
+│  MailDatabase (v39)          │  NetworkMonitor           │
 │                              │  NtlmAuthenticator        │
 └──────────────────────────────┴──────────────────────────┘
                          │
@@ -441,7 +441,7 @@ com.dedovmosol.iwomail/
 │
 ├── data/                              # Data Layer
 │   ├── database/                      # Room Database
-│   │   ├── MailDatabase.kt            # База данных (миграции до v37)
+│   │   ├── MailDatabase.kt            # База данных (миграции до v39)
 │   │   ├── Daos.kt                    # EmailDao, FolderDao, AccountDao
 │   │   ├── CalendarEventDao.kt        # DAO для событий календаря
 │   │   ├── CalendarEventEntity.kt     # Entity (11+ полей из MS-ASCAL)
@@ -464,7 +464,7 @@ com.dedovmosol.iwomail/
 │       ├── TaskRepository.kt          # Задачи: sync, CRUD, напоминания
 │       ├── SettingsRepository.kt      # Настройки (DataStore)
 │       ├── EmailSyncService.kt        # Синхронизация писем (incremental/full)
-│       ├── EmailOperationsService.kt  # Операции: move, delete, flag, markRead
+│       ├── EmailOperationsService.kt  # Операции: move, delete, flag, markRead, MDN
 │       ├── FolderSyncService.kt       # Синхронизация папок
 │       ├── RepositoryProvider.kt      # Manual DI (singleton)
 │       ├── RepositoryExtensions.kt    # Extension-функции
@@ -478,7 +478,7 @@ com.dedovmosol.iwomail/
 │   ├── EasVersionDetector.kt         # OPTIONS / определение версии
 │   ├── EasFolderSyncService.kt       # FolderSync + CRUD + кэш ID папок
 │   ├── EwsClient.kt                   # Exchange Web Services (NTLM/Basic)
-│   ├── EasEmailService.kt            # Почта: sync, send, fetch body
+│   ├── EasEmailService.kt            # Почта: sync, send, fetch body, парсинг MDN
 │   ├── EasCalendarService.kt         # Календарь: sync, CRUD оркестрация (EAS + EWS)
 │   ├── CalendarDateUtils.kt          # Утилиты дат/времени/таймзон для календаря
 │   ├── CalendarXmlParser.kt          # Парсинг XML для календаря (EAS + EWS events, attendees, attachments)
@@ -491,11 +491,11 @@ com.dedovmosol.iwomail/
 │   ├── EasNotesService.kt            # Заметки: sync, CRUD (EAS + EWS)
 │   ├── EasTasksService.kt            # Задачи: sync, CRUD (EAS + EWS)
 │   ├── EasDraftsService.kt           # Черновики: create, update, delete (EWS)
-│   ├── EasAttachmentService.kt       # Скачивание вложений
+│   ├── EasAttachmentService.kt       # Скачивание вложений, отправка MDN
 │   ├── EasProvisioning.kt            # Provisioning (политики безопасности)
 │   ├── EasXmlTemplates.kt            # XML-шаблоны EAS/EWS запросов
 │   ├── EasXmlParser.kt               # Парсинг XML-ответов
-│   ├── EasPatterns.kt                # Regex-паттерны для парсинга
+│   ├── EasPatterns.kt                # Regex-паттерны для парсинга (вкл. MIME/MDN)
 │   ├── EasCodePages.kt               # WBXML code pages (EAS)
 │   ├── EasResultExtensions.kt        # Extensions для EasResult<T>
 │   ├── WbxmlParser.kt                # Парсер WBXML (бинарный XML)
@@ -590,7 +590,7 @@ com.dedovmosol.iwomail/
 ┌────────────────────────▼────────────────────────────────┐
 │  Database Layer              │  Network Layer            │
 │  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
-│  MailDatabase (v37)          │  NetworkMonitor           │
+│  MailDatabase (v39)          │  NetworkMonitor           │
 │                              │  NtlmAuthenticator        │
 └──────────────────────────────┴──────────────────────────┘
                          │
