@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.dedovmosol.iwomail.data.model.classifyError
+import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.data.repository.MailRepository
@@ -56,23 +58,28 @@ object InitialSyncController {
         settingsRepo: SettingsRepository
     ) { @Suppress("NAME_SHADOWING") val context = context.applicationContext
         if (accountId in syncedAccounts) return
-        if (accountId in syncingAccounts) return
-        if (syncJobs[accountId]?.isActive == true) return
+        // ConcurrentHashMap.KeySetView.add() атомарно: false если уже был — предотвращает TOCTOU гонку
+        if (!syncingAccounts.add(accountId)) return
+        if (syncJobs[accountId]?.isActive == true) {
+            syncingAccounts.remove(accountId)
+            return
+        }
 
         val attempts = syncAttempts.getOrDefault(accountId, 0)
         if (attempts >= MAX_SYNC_ATTEMPTS) {
+            syncingAccounts.remove(accountId)
             syncedAccounts.add(accountId)
             updateState()
             return
         }
 
         if (!isNetworkAvailable(context)) {
+            syncingAccounts.remove(accountId)
             noNetwork = true
             return
         }
         noNetwork = false
 
-        syncingAccounts.add(accountId)
         syncAttempts[accountId] = attempts + 1
         updateState()
 
@@ -120,7 +127,11 @@ object InitialSyncController {
             } catch (e: CancellationException) {
                 updateState()
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                val kind = classifyError(null, e)
+                AccountServerHealthRepository.reportSyncOutcome(
+                    accountId, success = false, errorKind = kind, errorMessage = e.message
+                )
                 syncedAccounts.add(accountId)
                 updateState()
             } finally {
@@ -378,6 +389,10 @@ object InitialSyncController {
                     val result = withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
 
                     if (result is EasResult.Error) {
+                        val kind = classifyError(result.message, null)
+                        AccountServerHealthRepository.reportSyncOutcome(
+                            accountId, success = false, errorKind = kind, errorMessage = result.message
+                        )
                         return@withTimeoutOrNull
                     }
 
@@ -426,7 +441,11 @@ object InitialSyncController {
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                val kind = classifyError(null, e)
+                AccountServerHealthRepository.reportSyncOutcome(
+                    accountId, success = false, errorKind = kind, errorMessage = e.message
+                )
             } finally {
                 syncingAccounts.remove(accountId)
                 syncJobs.remove(accountId)

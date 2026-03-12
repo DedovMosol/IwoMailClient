@@ -97,7 +97,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 **Storage:**
 - Room Database — local DB
-- DataStore — settings
+- DataStore — settings and per-account sync/notification checkpoints
 
 **Network & Protocols:**
 - OkHttp 4.12.0 — HTTP client
@@ -127,6 +127,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 - [Changelog](docs/CHANGELOG_EN.md)
 - [Project Architecture](docs/ARCHITECTURE.md)
+- [XmlPullParser migration plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 - [Privacy Policy](docs/PRIVACY_POLICY.md)
 
 ## 🤝 Contributing
@@ -177,6 +178,7 @@ Background Services
   PushService, SyncWorker, OutboxWorker
   BootReceiver, SyncAlarmReceiver, PushRestartWorker
   ServiceWatchdogReceiver, ScheduledEmailWorker
+  NotificationHelper, MailNotificationActionReceiver
   CalendarReminderReceiver, TaskReminderReceiver
   MarkEmailReadWorker, MarkTaskCompleteWorker
 ```

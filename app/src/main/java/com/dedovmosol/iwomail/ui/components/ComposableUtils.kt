@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -21,9 +22,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -287,6 +290,9 @@ fun rememberDragSelectModifier(
     var dragStartIndex by remember { mutableStateOf(-1) }
     var dragCurrentIndex by remember { mutableStateOf(-1) }
     var initialSelection by remember { mutableStateOf(setOf<String>()) }
+    var lastPointerY by remember { mutableStateOf(Float.NaN) }
+    var autoScrollDelta by remember { mutableStateOf(0f) }
+    var autoScrollJob by remember { mutableStateOf<Job?>(null) }
     
     // rememberUpdatedState — closure всегда видит актуальные значения
     val currentSelectedIds by rememberUpdatedState(selectedIds)
@@ -294,6 +300,51 @@ fun rememberDragSelectModifier(
     
     val indexMap = remember(itemKeys) {
         itemKeys.withIndex().associate { (index, key) -> key to index }
+    }
+
+    fun updateDraggedSelection(pointerY: Float, withHaptic: Boolean) {
+        if (dragStartIndex < 0 || pointerY.isNaN()) return
+        val index = findItemIndexAtY(listState, indexMap, pointerY)
+        if (index >= 0 && index != dragCurrentIndex) {
+            dragCurrentIndex = index
+            if (withHaptic) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+            val start = minOf(dragStartIndex, dragCurrentIndex)
+            val end = minOf(maxOf(dragStartIndex, dragCurrentIndex), itemKeys.size - 1)
+            val rangeIds = itemKeys.subList(start, end + 1).toSet()
+            currentOnChange(initialSelection + rangeIds)
+        }
+    }
+
+    fun stopAutoScroll() {
+        autoScrollDelta = 0f
+        autoScrollJob?.cancel()
+        autoScrollJob = null
+    }
+
+    fun ensureAutoScroll() {
+        if (autoScrollJob?.isActive == true) return
+        autoScrollJob = scope.launch {
+            try {
+                while (isActive) {
+                    val delta = autoScrollDelta
+                    val pointerY = lastPointerY
+                    if (delta == 0f || pointerY.isNaN() || dragStartIndex < 0) break
+                    listState.scrollBy(delta)
+                    updateDraggedSelection(pointerY, withHaptic = false)
+                    withFrameNanos { }
+                }
+            } finally {
+                autoScrollJob = null
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            autoScrollJob?.cancel()
+        }
     }
     
     return Modifier.pointerInput(itemKeys) {
@@ -305,44 +356,72 @@ fun rememberDragSelectModifier(
                     dragStartIndex = index
                     dragCurrentIndex = index
                     initialSelection = currentSelectedIds
+                    lastPointerY = offset.y
                     currentOnChange(initialSelection + itemKeys[index])
                 }
             },
             onDrag = { change, _ ->
                 if (dragStartIndex >= 0) {
                     change.consume()
-                    val index = findItemIndexAtY(listState, indexMap, change.position.y)
-                    if (index >= 0 && index != dragCurrentIndex) {
-                        dragCurrentIndex = index
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        val start = minOf(dragStartIndex, dragCurrentIndex)
-                        val end = minOf(maxOf(dragStartIndex, dragCurrentIndex), itemKeys.size - 1)
-                        val rangeIds = itemKeys.subList(start, end + 1).toSet()
-                        currentOnChange(initialSelection + rangeIds)
-                    }
-                    
-                    // Авто-скролл при приближении к краям
+                    lastPointerY = change.position.y
+                    updateDraggedSelection(change.position.y, withHaptic = true)
+
+                    // Авто-скролл при приближении к краям с плавной скоростью
                     val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat()
-                    val scrollZone = viewportHeight * 0.12f
-                    val scrollSpeed = 15f
+                    autoScrollDelta = calculateDragAutoScrollDelta(
+                        pointerY = change.position.y,
+                        viewportHeight = viewportHeight
+                    )
                     when {
-                        change.position.y < scrollZone ->
-                            scope.launch { listState.scrollBy(-scrollSpeed) }
-                        change.position.y > viewportHeight - scrollZone ->
-                            scope.launch { listState.scrollBy(scrollSpeed) }
+                        autoScrollDelta == 0f -> stopAutoScroll()
+                        else -> ensureAutoScroll()
                     }
                 }
             },
             onDragEnd = {
                 dragStartIndex = -1
                 dragCurrentIndex = -1
+                lastPointerY = Float.NaN
+                stopAutoScroll()
             },
             onDragCancel = {
                 dragStartIndex = -1
                 dragCurrentIndex = -1
+                lastPointerY = Float.NaN
+                stopAutoScroll()
             }
         )
     }
+}
+
+private fun calculateDragAutoScrollDelta(
+    pointerY: Float,
+    viewportHeight: Float
+): Float {
+    if (viewportHeight <= 0f) return 0f
+
+    val scrollZone = viewportHeight * 0.16f
+    val minSpeed = 6f
+    val maxSpeed = 28f
+
+    return when {
+        pointerY < scrollZone -> {
+            val progress = (pointerY / scrollZone).coerceIn(0f, 1f)
+            -lerp(maxSpeed, minSpeed, progress)
+        }
+
+        pointerY > viewportHeight - scrollZone -> {
+            val progress = ((pointerY - (viewportHeight - scrollZone)) / scrollZone)
+                .coerceIn(0f, 1f)
+            lerp(minSpeed, maxSpeed, progress)
+        }
+
+        else -> 0f
+    }
+}
+
+private fun lerp(start: Float, stop: Float, fraction: Float): Float {
+    return start + (stop - start) * fraction
 }
 
 private fun findItemIndexAtY(

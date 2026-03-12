@@ -36,12 +36,17 @@ fun SyncCleanupScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
+    val settingsRepo = remember { com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context) }
     val isRu = isRussian()
-    
+
     var account by remember { mutableStateOf<AccountEntity?>(null) }
-    
+    var downloadsDays by remember { mutableStateOf(0) }
+    var rollbackDays by remember { mutableStateOf(0) }
+
     LaunchedEffect(accountId) {
         account = accountRepo.getAccount(accountId)
+        downloadsDays = settingsRepo.getAutoCleanupDownloadsDays()
+        rollbackDays = settingsRepo.getAutoCleanupRollbackDays()
     }
     
     val currentAccount = account ?: return
@@ -156,6 +161,8 @@ fun SyncCleanupScreen(
             trashDays = currentAccount.autoCleanupTrashDays,
             draftsDays = currentAccount.autoCleanupDraftsDays,
             spamDays = currentAccount.autoCleanupSpamDays,
+            downloadsDays = downloadsDays,
+            rollbackDays = rollbackDays,
             onTrashDaysChange = { days ->
                 scope.launch {
                     accountRepo.updateAutoCleanupTrashDays(accountId, days)
@@ -172,6 +179,18 @@ fun SyncCleanupScreen(
                 scope.launch {
                     accountRepo.updateAutoCleanupSpamDays(accountId, days)
                     account = accountRepo.getAccount(accountId)
+                }
+            },
+            onDownloadsDaysChange = { days ->
+                scope.launch {
+                    settingsRepo.setAutoCleanupDownloadsDays(days)
+                    downloadsDays = days
+                }
+            },
+            onRollbackDaysChange = { days ->
+                scope.launch {
+                    settingsRepo.setAutoCleanupRollbackDays(days)
+                    rollbackDays = days
                 }
             },
             onDismiss = { showAutoCleanupDialog = false }

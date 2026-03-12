@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 
+import com.dedovmosol.iwomail.ui.components.DragSelectionIndicator
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material.pullrefresh.pullRefresh
@@ -1471,22 +1472,32 @@ private fun EmailListItem(
             
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(if (isSelected) MaterialTheme.colorScheme.primary else avatarColor)
+                    .size(44.dp)
                     .combinedClickable(
                         onClick = onClick,
                         onLongClick = longClickHandler
-                    ),
-                contentAlignment = Alignment.Center
+                    )
             ) {
-                if (isSelected) {
-                    Icon(AppIcons.Check, null, tint = Color.White, modifier = Modifier.size(24.dp))
-                } else {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(avatarColor)
+                        .align(Alignment.Center),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
                         text = avatarInitial,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
+                    )
+                }
+                if (isSelectionMode) {
+                    DragSelectionIndicator(
+                        selected = isSelected,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(22.dp)
                     )
                 }
             }

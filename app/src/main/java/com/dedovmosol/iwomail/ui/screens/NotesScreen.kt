@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import com.dedovmosol.iwomail.ui.components.DragSelectionIndicator
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
@@ -855,11 +856,11 @@ private fun NoteCard(
             verticalAlignment = Alignment.Top
         ) {
             if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() }
+                DragSelectionIndicator(
+                    selected = isSelected,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(12.dp))
             }
             Column(
                 modifier = Modifier.weight(1f)

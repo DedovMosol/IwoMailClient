@@ -8,10 +8,17 @@ import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
 import com.dedovmosol.iwomail.eas.mapResult
 import com.dedovmosol.iwomail.eas.flatMapResult
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Сервис для синхронизации и операций с папками
  * Single Responsibility: операции с папками (sync, create, delete, rename)
+ *
+ * MS-ASCMD: FolderSync SyncKey строго последовательный — параллельные
+ * FolderSync/FolderCreate/FolderDelete с одним SyncKey → Status 9.
+ * Per-account Mutex сериализует все операции, изменяющие folderSyncKey.
  */
 class FolderSyncService(
     private val context: Context,
@@ -21,6 +28,11 @@ class FolderSyncService(
     private val accountRepo: AccountRepository,
     private val database: MailDatabase
 ) {
+    companion object {
+        private val folderSyncLocks = ConcurrentHashMap<Long, Mutex>()
+        private fun getFolderMutex(accountId: Long): Mutex =
+            folderSyncLocks.computeIfAbsent(accountId) { Mutex() }
+    }
     /**
      * Безопасное обновление папки без удаления связанных писем
      * Использует INSERT IGNORE + UPDATE вместо REPLACE
@@ -40,9 +52,13 @@ class FolderSyncService(
     }
     
     /**
-     * Синхронизация папок для аккаунта
+     * Синхронизация папок для аккаунта (с per-account lock).
+     * Безопасно вызывать из любого контекста — конкурентные вызовы сериализуются.
      */
-    suspend fun syncFolders(accountId: Long): EasResult<Unit> {
+    suspend fun syncFolders(accountId: Long): EasResult<Unit> =
+        getFolderMutex(accountId).withLock { syncFoldersUnlocked(accountId) }
+
+    private suspend fun syncFoldersUnlocked(accountId: Long): EasResult<Unit> {
         val account = accountRepo.getAccount(accountId) 
             ?: return EasResult.Error("Аккаунт не найден")
         
@@ -54,113 +70,111 @@ class FolderSyncService(
     }
     
     /**
-     * Создание новой папки
+     * Создание новой папки (сериализовано per-account — защита SyncKey)
      */
-    suspend fun createFolder(accountId: Long, folderName: String): EasResult<Unit> {
-        val account = accountRepo.getAccount(accountId) 
-            ?: return EasResult.Error("Аккаунт не найден")
-        
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-            return EasResult.Error("Создание папок поддерживается только для Exchange")
-        }
-        
-        // Синхронизируем папки ПЕРЕД созданием для получения актуального syncKey
-        syncFolders(accountId)
-        
-        // Получаем обновлённый аккаунт с актуальным syncKey
-        val freshAccount = accountRepo.getAccount(accountId) 
-            ?: return EasResult.Error("Аккаунт не найден")
-        
-        val client = accountRepo.getEasClientOrError<Unit>(accountId) { return it }
-        
-        val syncKey = freshAccount.folderSyncKey ?: "0"
-        
-        val result = client.createFolder(folderName, "0", 12, syncKey)
-        return result
-            .onSuccessResult { response ->
-                accountDao.updateFolderSyncKey(accountId, response.newSyncKey)
-                val newFolder = FolderEntity(
-                    id = "${accountId}_${response.serverId}",
-                    accountId = accountId,
-                    serverId = response.serverId,
-                    displayName = folderName,
-                    parentId = "0",
-                    type = FolderType.USER_CREATED
-                )
-                upsertFolder(newFolder)
+    suspend fun createFolder(accountId: Long, folderName: String): EasResult<Unit> =
+        getFolderMutex(accountId).withLock {
+            val account = accountRepo.getAccount(accountId)
+                ?: return EasResult.Error("Аккаунт не найден")
+
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                return EasResult.Error("Создание папок поддерживается только для Exchange")
             }
-            .mapResult { Unit }
-    }
-    
-    /**
-     * Удаление папки с сервера
-     */
-    suspend fun deleteFolder(accountId: Long, folderId: String): EasResult<Unit> {
-        val account = accountRepo.getAccount(accountId) 
-            ?: return EasResult.Error("Аккаунт не найден")
-        
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-            return EasResult.Error("Удаление папок поддерживается только для Exchange")
-        }
-        
-        val folder = folderDao.getFolder(folderId)
-            ?: return EasResult.Error("Папка не найдена")
-        
-        if (FolderType.isSystemFolder(folder.type)) {
-            return EasResult.Error("Нельзя удалить системную папку")
-        }
-        
-        val client = accountRepo.getEasClientOrError<Unit>(accountId) { return it }
-        
-        val syncKey = account.folderSyncKey
-        
-        val result = client.deleteFolder(folder.serverId, syncKey ?: "0")
-        return result
-            .onSuccessResult { newSyncKey ->
-                database.withTransaction {
-                    accountDao.updateFolderSyncKey(accountId, newSyncKey)
-                    emailDao.deleteByFolder(folderId)
-                    folderDao.delete(folderId)
+
+            syncFoldersUnlocked(accountId)
+
+            val freshAccount = accountRepo.getAccount(accountId)
+                ?: return EasResult.Error("Аккаунт не найден")
+
+            val client = accountRepo.getEasClientOrError<Unit>(accountId) { return it }
+
+            val syncKey = freshAccount.folderSyncKey ?: "0"
+
+            client.createFolder(folderName, "0", 12, syncKey)
+                .onSuccessResult { response ->
+                    accountDao.updateFolderSyncKey(accountId, response.newSyncKey)
+                    val newFolder = FolderEntity(
+                        id = "${accountId}_${response.serverId}",
+                        accountId = accountId,
+                        serverId = response.serverId,
+                        displayName = folderName,
+                        parentId = "0",
+                        type = FolderType.USER_CREATED
+                    )
+                    upsertFolder(newFolder)
                 }
-            }
-            .flatMapResult { syncFolders(accountId) }
-    }
+                .mapResult { Unit }
+        }
     
     /**
-     * Переименование папки на сервере
+     * Удаление папки с сервера (сериализовано per-account — защита SyncKey)
      */
-    suspend fun renameFolder(accountId: Long, folderId: String, newName: String): EasResult<Unit> {
-        val account = accountRepo.getAccount(accountId) 
-            ?: return EasResult.Error("Аккаунт не найден")
-        
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-            return EasResult.Error("Переименование папок поддерживается только для Exchange")
-        }
-        
-        val folder = folderDao.getFolder(folderId)
-            ?: return EasResult.Error("Папка не найдена")
-        
-        if (FolderType.isSystemFolder(folder.type)) {
-            return EasResult.Error("Нельзя переименовать системную папку")
-        }
-        
-        val client = accountRepo.getEasClientOrError<Unit>(accountId) { return it }
-        
-        val syncKey = account.folderSyncKey
-        
-        val result = client.renameFolder(folder.serverId, newName, syncKey ?: "0")
-        return result
-            .onSuccessResult { newSyncKey ->
-                accountDao.updateFolderSyncKey(accountId, newSyncKey)
-                folderDao.updateDisplayName(folderId, newName)
+    suspend fun deleteFolder(accountId: Long, folderId: String): EasResult<Unit> =
+        getFolderMutex(accountId).withLock {
+            val account = accountRepo.getAccount(accountId)
+                ?: return EasResult.Error("Аккаунт не найден")
+
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                return EasResult.Error("Удаление папок поддерживается только для Exchange")
             }
-            .flatMapResult { syncFolders(accountId) }
-    }
+
+            val folder = folderDao.getFolder(folderId)
+                ?: return EasResult.Error("Папка не найдена")
+
+            if (FolderType.isSystemFolder(folder.type)) {
+                return EasResult.Error("Нельзя удалить системную папку")
+            }
+
+            val client = accountRepo.getEasClientOrError<Unit>(accountId) { return it }
+
+            val syncKey = account.folderSyncKey
+
+            client.deleteFolder(folder.serverId, syncKey ?: "0")
+                .onSuccessResult { newSyncKey ->
+                    database.withTransaction {
+                        accountDao.updateFolderSyncKey(accountId, newSyncKey)
+                        emailDao.deleteByFolder(folderId)
+                        folderDao.delete(folderId)
+                    }
+                }
+                .flatMapResult { syncFoldersUnlocked(accountId) }
+        }
     
     /**
-     * Синхронизация папок через EAS
+     * Переименование папки на сервере (сериализовано per-account — защита SyncKey)
      */
-    suspend fun syncFoldersEas(accountId: Long, account: AccountEntity, retryCount: Int = 0): EasResult<Unit> {
+    suspend fun renameFolder(accountId: Long, folderId: String, newName: String): EasResult<Unit> =
+        getFolderMutex(accountId).withLock {
+            val account = accountRepo.getAccount(accountId)
+                ?: return EasResult.Error("Аккаунт не найден")
+
+            if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                return EasResult.Error("Переименование папок поддерживается только для Exchange")
+            }
+
+            val folder = folderDao.getFolder(folderId)
+                ?: return EasResult.Error("Папка не найдена")
+
+            if (FolderType.isSystemFolder(folder.type)) {
+                return EasResult.Error("Нельзя переименовать системную папку")
+            }
+
+            val client = accountRepo.getEasClientOrError<Unit>(accountId) { return it }
+
+            val syncKey = account.folderSyncKey
+
+            client.renameFolder(folder.serverId, newName, syncKey ?: "0")
+                .onSuccessResult { newSyncKey ->
+                    accountDao.updateFolderSyncKey(accountId, newSyncKey)
+                    folderDao.updateDisplayName(folderId, newName)
+                }
+                .flatMapResult { syncFoldersUnlocked(accountId) }
+        }
+    
+    /**
+     * Синхронизация папок через EAS (вызывается из locked-контекста)
+     */
+    private suspend fun syncFoldersEas(accountId: Long, account: AccountEntity, retryCount: Int = 0): EasResult<Unit> {
         if (retryCount > 1) {
             return EasResult.Error("Ошибка синхронизации папок: слишком много попыток")
         }
@@ -261,13 +275,14 @@ class FolderSyncService(
     }
     
     /**
-     * Синхронизация папок через EWS (fallback на EAS)
+     * Синхронизация папок через EWS (fallback на EAS, с per-account lock)
      */
-    suspend fun syncFoldersEws(accountId: Long): EasResult<Unit> {
-        val account = accountRepo.getAccount(accountId) 
-            ?: return EasResult.Error("Аккаунт не найден")
-        return syncFoldersEas(accountId, account)
-    }
+    suspend fun syncFoldersEws(accountId: Long): EasResult<Unit> =
+        getFolderMutex(accountId).withLock {
+            val account = accountRepo.getAccount(accountId)
+                ?: return EasResult.Error("Аккаунт не найден")
+            syncFoldersEas(accountId, account)
+        }
     
     /**
      * Синхронизация папок через IMAP

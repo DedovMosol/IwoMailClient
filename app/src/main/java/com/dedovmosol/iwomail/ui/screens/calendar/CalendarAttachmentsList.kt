@@ -39,6 +39,7 @@ internal fun CalendarAttachmentsList(
     calendarRepo: CalendarRepository
 ) {
     val context = LocalContext.current
+    val accountRepo = remember { com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context) }
     val scope = rememberCoroutineScope()
     val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
     
@@ -265,20 +266,34 @@ internal fun CalendarAttachmentsList(
                                     when (val result = calendarRepo.downloadCalendarAttachment(accountId, att.fileReference)) {
                                         is EasResult.Success -> {
                                             val safeFileName = att.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                                            val calendarPath = withContext(Dispatchers.IO) {
+                                                accountRepo.getResolvedCalendarRelativePath(accountId)
+                                            } ?: run {
+                                                Toast.makeText(
+                                                    context,
+                                                    com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(
+                                                        com.dedovmosol.iwomail.data.repository.RepositoryErrors.ACCOUNT_NOT_FOUND,
+                                                        isRussian
+                                                    ),
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                                return@launch
+                                            }
                                             withContext(Dispatchers.IO) {
                                                 val contentValues = android.content.ContentValues().apply {
                                                     put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
                                                     put(android.provider.MediaStore.Downloads.MIME_TYPE,
                                                         android.webkit.MimeTypeMap.getSingleton()
                                                             .getMimeTypeFromExtension(java.io.File(safeFileName).extension) ?: "application/octet-stream")
-                                                    put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/IwoMail/Calendar")
+                                                    put(android.provider.MediaStore.Downloads.RELATIVE_PATH, calendarPath)
                                                 }
                                                 val uri = context.contentResolver.insert(
                                                     android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
                                                 )
                                                 uri?.let { context.contentResolver.openOutputStream(it)?.use { out -> out.write(result.data) } }
                                             }
-                                            Toast.makeText(context, if (isRussian) "Сохранено в Downloads/IwoMail/Calendar/" else "Saved to Downloads/IwoMail/Calendar/", Toast.LENGTH_SHORT).show()
+                                            val calPath = "Downloads/${calendarPath.removePrefix("Download/")}"
+                                            Toast.makeText(context, if (isRussian) "Сохранено в $calPath/" else "Saved to $calPath/", Toast.LENGTH_SHORT).show()
                                         }
                                         is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                                     }

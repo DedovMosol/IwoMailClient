@@ -360,7 +360,8 @@ fun AccountSettingsScreen(
                             showCertificateDialog = false
                             try { certFile.delete() } catch (_: Exception) {}
                             scope.launch {
-                                // КРИТИЧНО: При удалении сертификата отключаем Certificate Pinning
+                                // КРИТИЧНО: При удалении сертификата полностью отключаем Certificate Pinning
+                                accountRepo.updatePinnedCertHash(accountId, null)
                                 accountRepo.updateCertificatePinningEnabled(accountId, false)
                                 accountRepo.updateCertificatePath(accountId, null)
                                 account = accountRepo.getAccount(accountId)
@@ -724,6 +725,17 @@ fun AccountSettingsScreen(
             }
             
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
+            item {
+                ConnectionStatusBlock(
+                    accountId = accountId,
+                    serverUrl = currentAccount.serverUrl,
+                    alternateServerUrl = currentAccount.alternateServerUrl,
+                    port = currentAccount.incomingPort
+                )
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
             
             // Изменить учётные данные
             item {
@@ -967,8 +979,9 @@ fun CertificatePinningCard(
     val scope = rememberCoroutineScope()
     var isLoading by remember { mutableStateOf(false) }
     
-    // Проверяем наличие изменения сертификата
-    val certificateChange = remember(account.id) {
+    // Проверяем наличие изменения сертификата (ключ pinnedCertificateHash гарантирует
+    // перевычисление после принятия/отключения/обновления пина)
+    val certificateChange = remember(account.id, account.pinnedCertificateHash) {
         com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.getChange(account.id)
     }
     
@@ -1017,6 +1030,7 @@ fun CertificatePinningCard(
                     accountId = account.id,
                     accountRepo = accountRepo,
                     isRu = isRu,
+                    hasDualUrl = account.alternateServerUrl != null,
                     onAccountUpdated = onAccountUpdated
                 )
             } else if (account.pinnedCertificateHash != null) {
@@ -1087,6 +1101,7 @@ private fun CertificateChangeWarning(
     accountId: Long,
     accountRepo: AccountRepository,
     isRu: Boolean,
+    hasDualUrl: Boolean = false,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -1137,6 +1152,18 @@ private fun CertificateChangeWarning(
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Bold
     )
+
+    if (hasDualUrl) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = if (isRu)
+                "ℹ️ У вас настроен Dual-URL. Если внутренний и внешний серверы используют разные сертификаты (не SAN), при переключении между сетями пин может не совпадать. Используйте SAN-сертификат или отключите pinning."
+            else
+                "ℹ️ You have Dual-URL configured. If internal and external servers use different certificates (not SAN), the pin may mismatch when switching networks. Use a SAN certificate or disable pinning.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF2196F3)
+        )
+    }
     
     Spacer(Modifier.height(12.dp))
     
@@ -1236,13 +1263,15 @@ private fun CertificatePinnedInfo(
         fontFamily = FontFamily.Monospace
     )
     
-    // Предупреждение о множественных ошибках
-    if (account.certificatePinningFailCount > 0) {
+    val pinChange = remember(account.id, account.pinnedCertificateHash) {
+        com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.getChange(account.id)
+    }
+    if (pinChange != null) {
         Spacer(Modifier.height(4.dp))
         Text(
-            "⚠️ ${if (isRu) "Ошибок проверки" else "Verification errors"}: ${account.certificatePinningFailCount}",
+            "⚠️ ${if (isRu) "Обнаружено изменение сертификата" else "Certificate change detected"}",
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFFF9800), // Orange
+            color = Color(0xFFFF9800),
             fontWeight = FontWeight.Bold
         )
     }
@@ -1306,16 +1335,15 @@ private fun CertificatePinnedInfo(
         }
     }
     
-    // Предупреждение при множественных ошибках
-    if (account.certificatePinningFailCount >= 3) {
+    if (pinChange != null) {
         Spacer(Modifier.height(8.dp))
         Text(
             text = if (isRu)
-                "⚠️ Множественные ошибки проверки. Возможно, сертификат изменился. Рекомендуется обновить или отключить защиту."
+                "⚠️ Сертификат сервера изменился. Рекомендуется обновить или отключить защиту."
             else
-                "⚠️ Multiple verification errors. Certificate may have changed. Consider updating or disabling protection.",
+                "⚠️ Server certificate has changed. Consider updating or disabling protection.",
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFFF9800) // Orange
+            color = Color(0xFFFF9800)
         )
     }
 }
@@ -1551,4 +1579,99 @@ private val ACCOUNT_DATE_FORMAT = java.lang.ThreadLocal.withInitial {
 
 private fun formatDate(timestamp: Long): String {
     return ACCOUNT_DATE_FORMAT.get()?.format(java.util.Date(timestamp)) ?: ""
+}
+
+@Composable
+private fun ConnectionStatusBlock(
+    accountId: Long,
+    serverUrl: String,
+    alternateServerUrl: String?,
+    port: Int
+) {
+    val health by com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
+        .healthFlow(accountId).collectAsState()
+
+    val isRu = isRussian()
+    val statusText: String
+    val statusColor: Color
+
+    when (health.problemType) {
+        com.dedovmosol.iwomail.data.model.ServerProblemType.None -> {
+            statusText = Strings.connectedOk
+            statusColor = Color(0xFF4CAF50)
+        }
+        com.dedovmosol.iwomail.data.model.ServerProblemType.PrimaryDownUsingFallback -> {
+            statusText = Strings.usingFallbackServer
+            statusColor = Color(0xFFFFA000)
+        }
+        com.dedovmosol.iwomail.data.model.ServerProblemType.AuthError -> {
+            statusText = Strings.authErrorServer
+            statusColor = MaterialTheme.colorScheme.error
+        }
+        com.dedovmosol.iwomail.data.model.ServerProblemType.CertError -> {
+            statusText = Strings.certErrorServer
+            statusColor = MaterialTheme.colorScheme.error
+        }
+        else -> {
+            statusText = Strings.serverUnavailable
+            statusColor = MaterialTheme.colorScheme.error
+        }
+    }
+
+    val activeEndpoint = if (health.isUsingFallback && !alternateServerUrl.isNullOrBlank()) {
+        "$alternateServerUrl:$port"
+    } else {
+        "$serverUrl:$port"
+    }
+
+    val backupLabel = if (health.isUsingFallback) {
+        if (isRu) " (резервный)" else " (backup)"
+    } else ""
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = Strings.connectionStatus,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(statusColor)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = statusColor
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "${Strings.activeEndpoint}: $activeEndpoint$backupLabel",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Text(
+            text = "${Strings.lastSync} ${Strings.timeAgo(health.lastSuccessAt)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        if (health.lastErrorMessage != null) {
+            Text(
+                text = "${Strings.lastError}: ${health.lastErrorMessage}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+    }
 }

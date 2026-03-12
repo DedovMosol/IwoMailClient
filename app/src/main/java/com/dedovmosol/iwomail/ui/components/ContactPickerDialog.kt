@@ -9,9 +9,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 
+import com.dedovmosol.iwomail.ui.components.DragSelectionIndicator
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +35,11 @@ import com.dedovmosol.iwomail.ui.utils.getAvatarColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+private val StringSetSaver = listSaver<Set<String>, String>(
+    save = { it.toList() },
+    restore = { it.toSet() }
+)
+
 /**
  * Диалог выбора контактов для полей Кому/Копия/Скрытая
  */
@@ -46,7 +54,7 @@ fun ContactPickerDialog(
     onGroupsSelected: (List<Triple<String, List<String>, Int>>) -> Unit = {} // Список (groupName, emails, color)
 ) {
     // Вкладки: 0=Личные, 1=Exchange, 2=GAL, 3=Группы
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     
     // Контакты
     var localContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
@@ -60,12 +68,12 @@ fun ContactPickerDialog(
     var groupEmailsMap by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
     
     // Поиск
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
     
     // Выбранные контакты (email)
-    var selectedEmails by remember { mutableStateOf(setOf<String>()) }
+    var selectedEmails by rememberSaveable(stateSaver = StringSetSaver) { mutableStateOf(emptySet()) }
     // Выбранные группы (id)
-    var selectedGroupIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedGroupIds by rememberSaveable(stateSaver = StringSetSaver) { mutableStateOf(emptySet()) }
     
     // Загрузка контактов и групп
     LaunchedEffect(accountId, ownEmail) {
@@ -387,30 +395,34 @@ private fun ContactPickerItem(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Чекбокс
-        Checkbox(
-            checked = isSelected,
-            onCheckedChange = { onToggle() }
-        )
-        
-        Spacer(modifier = Modifier.width(8.dp))
-        
         // Аватар
         val avatarColor = remember(contact.displayName) {
             getAvatarColor(contact.displayName)
         }
         Box(
             modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(avatarColor),
+                .size(44.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.bodyLarge
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(avatarColor),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+            DragSelectionIndicator(
+                selected = isSelected,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(22.dp)
             )
         }
         
@@ -478,25 +490,30 @@ private fun GroupPickerItem(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Checkbox(
-            checked = isSelected,
-            onCheckedChange = { onToggle() }
-        )
-        
-        Spacer(modifier = Modifier.width(8.dp))
-        
         Box(
             modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(Color(group.color)),
+                .size(44.dp),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                AppIcons.People,
-                null,
-                tint = Color.White,
-                modifier = Modifier.size(22.dp)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color(group.color)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    AppIcons.People,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            DragSelectionIndicator(
+                selected = isSelected,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(22.dp)
             )
         }
         

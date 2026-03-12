@@ -97,7 +97,7 @@
 
 **Хранилище:**
 - Room Database — локальная БД
-- DataStore — настройки
+- DataStore — настройки и чекпоинты синхронизации/уведомлений по аккаунтам
 
 **Сеть и протоколы:**
 - OkHttp 4.12.0 — HTTP клиент
@@ -127,6 +127,7 @@
 
 - [История изменений](docs/CHANGELOG_RU.md)
 - [Архитектура проекта](docs/ARCHITECTURE.md)
+- [План миграции на XmlPullParser](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 - [Политика конфиденциальности](docs/PRIVACY_POLICY.md)
 
 ## 🤝 Вклад в проект
@@ -177,6 +178,7 @@ Background Services
   PushService, SyncWorker, OutboxWorker
   BootReceiver, SyncAlarmReceiver, PushRestartWorker
   ServiceWatchdogReceiver, ScheduledEmailWorker
+  NotificationHelper, MailNotificationActionReceiver
   CalendarReminderReceiver, TaskReminderReceiver
   MarkEmailReadWorker, MarkTaskCompleteWorker
 ```

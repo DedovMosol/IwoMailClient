@@ -6,6 +6,7 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.GalContact
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import androidx.room.withTransaction
 import java.security.MessageDigest
@@ -38,6 +39,12 @@ private fun stableHash(input: String): String {
  * Репозиторий для работы с контактами
  */
 class ContactRepository(context: Context) {
+    
+    companion object {
+        private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
+        private fun getSyncMutex(accountId: Long) =
+            syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
+    }
     
     private val database = MailDatabase.getInstance(context)
     private val contactDao = database.contactDao()
@@ -121,7 +128,7 @@ class ContactRepository(context: Context) {
      * Загружает контакты из папки Contacts на сервере
      */
     suspend fun syncExchangeContacts(accountId: Long): EasResult<Int> {
-        return withContext(Dispatchers.IO) {
+        return getSyncMutex(accountId).withLock { withContext(Dispatchers.IO) {
             try {
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
@@ -196,7 +203,7 @@ class ContactRepository(context: Context) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.CONTACT_SYNC_ERROR)
             }
-        }
+        } }
     }
     
     /**
@@ -204,7 +211,7 @@ class ContactRepository(context: Context) {
      * Загружает все контакты из глобальной адресной книги и сохраняет как EXCHANGE контакты
      */
     suspend fun syncGalContactsToDb(accountId: Long): EasResult<Int> {
-        return withContext(Dispatchers.IO) {
+        return getSyncMutex(accountId).withLock { withContext(Dispatchers.IO) {
             try {
                 // Получаем email текущего аккаунта для фильтрации "себя"
                 val account = accountRepo.getAccount(accountId)
@@ -322,7 +329,7 @@ class ContactRepository(context: Context) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error(e.message ?: RepositoryErrors.GAL_SYNC_ERROR)
             }
-        }
+        } }
     }
     
     // === Проверка дубликатов ===

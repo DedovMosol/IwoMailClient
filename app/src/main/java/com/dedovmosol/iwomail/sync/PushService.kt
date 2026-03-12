@@ -21,6 +21,8 @@ import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
+import com.dedovmosol.iwomail.data.model.ErrorKind
+import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.NotificationStrings
@@ -66,8 +68,6 @@ class PushService : Service() {
     
     // Per-account debounce: предотвращает блокировку sync аккаунта B из-за аккаунта A
     private val lastAccountSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
-    // Per-account notification checkpoint: предотвращает пропуск писем аккаунта B
-    private val lastAccountNotifCheckTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
         
     // NetworkCallback для отслеживания состояния сети
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -215,7 +215,6 @@ class PushService : Service() {
         accountPingJobs.remove(accountId)?.cancel()
         maxPingFoldersPerAccount.remove(accountId)
         lastAccountSyncTimes.remove(accountId)
-        lastAccountNotifCheckTimes.remove(accountId)
     }
     
     override fun onCreate() {
@@ -570,11 +569,13 @@ class PushService : Service() {
                         break
                     }
                     
-                    // Обновляем кэш аккаунта по TTL (настройки могли измениться в UI)
+                    // Обновляем кэш аккаунта по TTL или при инвалидации (pinning toggle, settings change)
                     val now = System.currentTimeMillis()
-                    if (cachedAccount == null || now - lastAccountRefreshTime > accountCacheTtl) {
+                    val configChanged = accountRepo.getLastClientInvalidation(accountId) > lastAccountRefreshTime
+                    if (cachedAccount == null || now - lastAccountRefreshTime > accountCacheTtl || configChanged) {
                         cachedAccount = database.accountDao().getAccount(accountId)
                         lastAccountRefreshTime = now
+                        easClientCache.remove(accountId)
                     }
                     val currentAccount = cachedAccount
                     if (currentAccount == null) {
@@ -626,11 +627,14 @@ class PushService : Service() {
                         delay(5_000 - elapsed)
                     }
                     
+                    val hasAlt = !currentAccount.alternateServerUrl.isNullOrBlank()
                     when (result) {
                         STATUS_EXPIRED -> {
                             consecutiveErrors = 0
                             consecutiveSuccesses++
-                            // Адаптивное увеличение heartbeat при стабильной работе
+                            AccountServerHealthRepository.reportSyncOutcome(
+                                accountId, success = true, hasAlternateUrl = hasAlt
+                            )
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
                                 saveHeartbeat(accountId, heartbeat)
@@ -639,12 +643,13 @@ class PushService : Service() {
                         }
                         STATUS_CHANGES_FOUND -> {
                             syncAccount(currentAccount)
-                            // После sync принудительно обновляем кэш аккаунта
                             cachedAccount = database.accountDao().getAccount(accountId)
                             lastAccountRefreshTime = System.currentTimeMillis()
                             consecutiveErrors = 0
                             consecutiveSuccesses++
-                            // Тоже увеличиваем — это успешный Ping
+                            AccountServerHealthRepository.reportSyncOutcome(
+                                accountId, success = true, hasAlternateUrl = hasAlt
+                            )
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
                                 saveHeartbeat(accountId, heartbeat)
@@ -652,37 +657,54 @@ class PushService : Service() {
                             }
                         }
                         STATUS_HEARTBEAT_OUT_OF_BOUNDS -> {
-                            // Сервер сказал что heartbeat слишком большой — уменьшаем
                             heartbeat = maxOf(heartbeat / 2, MIN_HEARTBEAT)
                             saveHeartbeat(accountId, heartbeat)
+                            consecutiveErrors = 0
                             consecutiveSuccesses = 0
+                            AccountServerHealthRepository.reportSyncOutcome(
+                                accountId, success = true, hasAlternateUrl = hasAlt
+                            )
                         }
                         STATUS_TOO_MANY_FOLDERS -> {
-                            // MS-ASCMD: Сервер отклонил Ping — слишком много папок.
-                            // Снижаем лимит для этого аккаунта (min 5).
                             val currentMax = maxPingFoldersPerAccount[accountId] ?: 25
                             val reducedMax = maxOf(5, currentMax - 5)
                             maxPingFoldersPerAccount[accountId] = reducedMax
                             android.util.Log.w("PushService", "Ping Status=6: too many folders for account $accountId, reducing to $reducedMax")
+                            consecutiveErrors = 0
                             consecutiveSuccesses = 0
+                            AccountServerHealthRepository.reportSyncOutcome(
+                                accountId, success = true, hasAlternateUrl = hasAlt
+                            )
                         }
                         STATUS_FOLDER_REFRESH_NEEDED -> {
                             syncFolders(currentAccount)
+                            consecutiveErrors = 0
                             consecutiveSuccesses = 0
+                            AccountServerHealthRepository.reportSyncOutcome(
+                                accountId, success = true, hasAlternateUrl = hasAlt
+                            )
                         }
                         else -> {
                             consecutiveErrors++
                             consecutiveSuccesses = 0
+                            AccountServerHealthRepository.reportSyncOutcome(
+                                accountId, success = false, errorKind = ErrorKind.Network,
+                                errorMessage = "Ping status=$result",
+                                hasAlternateUrl = hasAlt
+                            )
                             if (heartbeat > MIN_HEARTBEAT) {
                                 heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
                                 saveHeartbeat(accountId, heartbeat)
                             }
                             if (consecutiveErrors >= 3) {
+                                if (tryPushFallback(accountId)) {
+                                    consecutiveErrors = 0
+                                    continue
+                                }
                                 pingNotSupported = true
                                 savePingNotSupported(accountId)
                                 consecutiveErrors = 0
                             } else {
-                                // Backoff: 10с → 30с (быстрое восстановление при transient-ошибках)
                                 val backoffMs = if (consecutiveErrors == 1) 10_000L else 30_000L
                                 delay(backoffMs)
                             }
@@ -694,11 +716,22 @@ class PushService : Service() {
                     android.util.Log.e("PushService", "ERROR in ping loop for account $accountId", e)
                     consecutiveErrors++
                     consecutiveSuccesses = 0
+                    val hasAltForCatch = cachedAccount?.alternateServerUrl?.isNotBlank() == true
+                    AccountServerHealthRepository.reportSyncOutcome(
+                        accountId, success = false,
+                        errorKind = com.dedovmosol.iwomail.data.model.classifyError(null, e),
+                        errorMessage = e.message,
+                        hasAlternateUrl = hasAltForCatch
+                    )
                     if (heartbeat > MIN_HEARTBEAT) {
                         heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
                         saveHeartbeat(accountId, heartbeat)
                     }
                     if (consecutiveErrors >= 3) {
+                        if (tryPushFallback(accountId)) {
+                            consecutiveErrors = 0
+                            continue
+                        }
                         pingNotSupported = true
                         savePingNotSupported(accountId)
                         consecutiveErrors = 0
@@ -712,7 +745,25 @@ class PushService : Service() {
         accountPingJobs[accountId] = job
         job.start()
     }
-    
+
+    /**
+     * Перед отказом от Ping, пробуем подключить резервный сервер.
+     * Если alternate URL доступен → подменяем EasClient в кэше PushService и продолжаем Ping-loop.
+     * @return true если fallback удался и ping-loop можно продолжить
+     */
+    private suspend fun tryPushFallback(accountId: Long): Boolean {
+        val fallbackClient = try {
+            accountRepo.tryFallbackToAlternate(accountId)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            null
+        } ?: return false
+        easClientCache.remove(accountId)
+        easClientCache[accountId] = fallbackClient
+        android.util.Log.i(TAG, "Ping: switched to alternate server for account $accountId")
+        return true
+    }
+
     private suspend fun doPing(account: AccountEntity, heartbeat: Int): Int {
         // MS-ASCMD Ping Status=6: сервер может ограничить количество папок.
         // Начинаем с 25, при Status=6 снижаем до serverMaxFolders.
@@ -801,10 +852,7 @@ class PushService : Service() {
             return
         }
         
-        // Per-account notification checkpoint: не пропускаем письма аккаунта B
-        // из-за обновления checkpoint аккаунтом A
-        var lastNotificationCheck = lastAccountNotifCheckTimes[account.id]
-            ?: settingsRepo.getLastNotificationCheckTimeSync()
+        var lastNotificationCheck = settingsRepo.getLastNotificationCheckTime(account.id)
         // При первом запуске не показываем уведомления для старых писем
         if (lastNotificationCheck == 0L) {
             lastNotificationCheck = System.currentTimeMillis() - 60_000
@@ -842,50 +890,74 @@ class PushService : Service() {
                 || folder.id in unsyncedUserFolderIds
             syncFolderWithRetry(
                 mailRepo, account.id, folder.id,
-                allowFullResync = allowFull, tag = "PushService"
+                allowFullResync = allowFull, tag = "PushService",
+                accountRepo = accountRepo
             )
         }
         
         lastAccountSyncTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
-        val preloadCandidates = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
-        for (entity in preloadCandidates) {
-            if (entity.body.isEmpty()) {
-                try {
-                    mailRepo.loadEmailBody(entity.id)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.w(TAG, "Failed to preload body for ${entity.id}", e)
-                }
-            }
-        }
-
         NotificationHelper.notificationMutex.withLock {
-            val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
-            
+            lastNotificationCheck = settingsRepo.getLastNotificationCheckTime(account.id)
+            if (lastNotificationCheck == 0L) {
+                lastNotificationCheck = System.currentTimeMillis() - 60_000
+            }
+
+            // Checkpoint фиксируем ДО query: письмо, пришедшее после этой точки,
+            // не потеряется и попадёт в следующий цикл.
+            val notificationCheckpointTime = System.currentTimeMillis()
+            val notificationCandidates =
+                database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
             val shownNotifications = NotificationHelper.getShownNotifications(this)
-            val filteredEmails = newEmailEntities.filter { email ->
+            val filteredEmails = notificationCandidates.filter { email ->
                 val notifKey = "${account.id}_${email.id}"
                 !shownNotifications.contains(notifKey)
             }
-            
-            val newEmails = filteredEmails.map { email ->
-                NotificationHelper.NewEmailInfo(email.id, email.fromName, email.from, email.subject, email.dateReceived)
-            }
-            
-            if (newEmails.isNotEmpty()) {
+
+            if (filteredEmails.isNotEmpty()) {
+                val totalCount = filteredEmails.size
+                val displayEmails = filteredEmails
+                    .take(NotificationHelper.MAX_DISPLAY_EMAILS)
+                    .map { email ->
+                        NotificationHelper.NewEmailInfo(
+                            email.id,
+                            email.fromName,
+                            email.from,
+                            email.subject,
+                            email.dateReceived
+                        )
+                    }
+                val markReadEmailIds =
+                    if (totalCount <= NotificationHelper.MAX_MARK_READ_ACTION_EMAILS) {
+                        filteredEmails.map { it.id }
+                    } else {
+                        emptyList()
+                    }
                 val notificationsEnabled = settingsRepo.notificationsEnabled.first()
                 if (notificationsEnabled) {
                     getSharedPreferences("push_service", Context.MODE_PRIVATE)
                         .edit().putLong("last_notification_time", System.currentTimeMillis()).apply()
-                    NotificationHelper.showNewMailNotification(this, newEmails, account.id, account.email, settingsRepo)
-                    NotificationHelper.markNotificationsAsShown(this, newEmails.map { "${account.id}_${it.id}" })
+                    NotificationHelper.showNewMailNotification(
+                        context = this,
+                        displayEmails = displayEmails,
+                        totalCount = totalCount,
+                        markReadEmailIds = markReadEmailIds,
+                        accountId = account.id,
+                        accountEmail = account.email,
+                        settingsRepo = settingsRepo
+                    )
+                    NotificationHelper.markNotificationsAsShown(
+                        this,
+                        filteredEmails
+                            .take(NotificationHelper.MAX_SHOWN_ENTRIES)
+                            .map { "${account.id}_${it.id}" }
+                    )
                 }
             }
-            
-            lastAccountNotifCheckTimes[account.id] = System.currentTimeMillis()
-            settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
+
+            settingsRepo.setLastNotificationCheckTime(account.id, notificationCheckpointTime)
+            settingsRepo.setLastNotificationCheckTime(notificationCheckpointTime)
         }
     }
     

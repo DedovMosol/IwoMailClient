@@ -19,6 +19,7 @@ import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +52,16 @@ import com.dedovmosol.iwomail.ui.screens.contacts.cleanContactEmail
 import com.dedovmosol.iwomail.ui.screens.contacts.GROUP_COLORS
 import com.dedovmosol.iwomail.ui.screens.contacts.shareFile
 import kotlinx.coroutines.launch
+
+private val StringSetStateSaver = androidx.compose.runtime.saveable.Saver<Set<String>, ArrayList<String>>(
+    save = { ArrayList(it) },
+    restore = { it.toSet() }
+)
+
+private val ContactPairIdListSaver = listSaver<List<Pair<String, String>>, String>(
+    save = { pairs -> pairs.flatMap { listOf(it.first, it.second) } },
+    restore = { saved -> saved.chunked(2).mapNotNull { if (it.size == 2) it[0] to it[1] else null } }
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,10 +156,7 @@ fun ContactsScreen(
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
     // Используем ArrayList<String> saver: Set<String> не всегда надёжно сохраняется в Bundle
     var selectedContactIds by rememberSaveable(
-        stateSaver = androidx.compose.runtime.saveable.Saver(
-            save = { ArrayList(it) },
-            restore = { it.toSet() }
-        )
+        stateSaver = StringSetStateSaver
     ) { mutableStateOf(setOf<String>()) }
     // Флаг для пропуска первого срабатывания LaunchedEffect(selectedTab) при повороте экрана.
     // remember (не rememberSaveable) — пересоздаётся при rotation, что нам и нужно.
@@ -218,11 +226,15 @@ fun ContactsScreen(
     var showContactDetailsId by rememberSaveable { mutableStateOf<String?>(null) }
     var showMoreMenu by rememberSaveable { mutableStateOf(false) }
     var showExportDialog by rememberSaveable { mutableStateOf(false) }
-    var bulkDuplicateTotalCount by remember { mutableStateOf(0) }
-    var bulkNewCount by remember { mutableStateOf(0) }
-    var showBulkDuplicateChoiceDialog by remember { mutableStateOf(false) }
-    var pendingBulkContacts by remember { mutableStateOf<List<ContactEntity>>(emptyList()) }
-    var pendingBulkDuplicatePairs by remember { mutableStateOf<List<Pair<ContactEntity, ContactEntity>>>(emptyList()) }
+    var bulkDuplicateTotalCount by rememberSaveable { mutableIntStateOf(0) }
+    var bulkNewCount by rememberSaveable { mutableIntStateOf(0) }
+    var showBulkDuplicateChoiceDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingBulkContactIds by rememberSaveable(stateSaver = StringSetStateSaver) {
+        mutableStateOf(emptySet())
+    }
+    var pendingBulkDuplicatePairIds by rememberSaveable(stateSaver = ContactPairIdListSaver) {
+        mutableStateOf(emptyList())
+    }
     var addToContactsConfirmId by rememberSaveable { mutableStateOf<String?>(null) }
     val addToContactsConfirmContact = addToContactsConfirmId?.let { id ->
         exchangeFolderContacts.find { it.id == id } ?: galContacts.find { it.id == id }
@@ -243,6 +255,36 @@ fun ContactsScreen(
         localContacts.find { it.id == id }
             ?: exchangeFolderContacts.find { it.id == id }
             ?: galContacts.find { it.id == id }
+    }
+
+    val allContactsById = remember(localContacts, exchangeFolderContacts, galContacts) {
+        (localContacts + exchangeFolderContacts + galContacts).associateBy { it.id }
+    }
+    val localContactsById = remember(localContacts) {
+        localContacts.associateBy { it.id }
+    }
+    val pendingBulkContacts = remember(pendingBulkContactIds, allContactsById) {
+        pendingBulkContactIds.mapNotNull { allContactsById[it] }
+    }
+    val pendingBulkDuplicatePairs = remember(
+        pendingBulkDuplicatePairIds,
+        allContactsById,
+        localContactsById
+    ) {
+        pendingBulkDuplicatePairIds.mapNotNull { (candidateId, existingId) ->
+            val candidate = allContactsById[candidateId]
+            val existing = localContactsById[existingId]
+            if (candidate != null && existing != null) candidate to existing else null
+        }
+    }
+    val isBulkDuplicateDataReady = remember(
+        pendingBulkContacts,
+        pendingBulkDuplicatePairs,
+        bulkNewCount,
+        bulkDuplicateTotalCount
+    ) {
+        pendingBulkContacts.size == bulkNewCount &&
+            pendingBulkDuplicatePairs.size == bulkDuplicateTotalCount
     }
     
     // Импорт
@@ -389,8 +431,10 @@ fun ContactsScreen(
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = {
                 showBulkDuplicateChoiceDialog = false
-                pendingBulkContacts = emptyList()
-                pendingBulkDuplicatePairs = emptyList()
+                pendingBulkContactIds = emptySet()
+                pendingBulkDuplicatePairIds = emptyList()
+                bulkDuplicateTotalCount = 0
+                bulkNewCount = 0
             },
             icon = { Icon(AppIcons.Warning, null, tint = MaterialTheme.colorScheme.error) },
             title = {
@@ -418,6 +462,10 @@ fun ContactsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
+                    }
+                    if (!isBulkDuplicateDataReady) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -453,11 +501,14 @@ fun ContactsScreen(
                             }
                             val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
                             Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
-                            pendingBulkContacts = emptyList()
-                            pendingBulkDuplicatePairs = emptyList()
+                            pendingBulkContactIds = emptySet()
+                            pendingBulkDuplicatePairIds = emptyList()
+                            bulkDuplicateTotalCount = 0
+                            bulkNewCount = 0
                         }
                     },
-                    text = if (isRussian) "Заменить все" else "Replace all"
+                    text = if (isRussian) "Заменить все" else "Replace all",
+                    enabled = isBulkDuplicateDataReady
                 )
             },
             dismissButton = {
@@ -474,11 +525,14 @@ fun ContactsScreen(
                             }
                             val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
                             Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
-                            pendingBulkContacts = emptyList()
-                            pendingBulkDuplicatePairs = emptyList()
+                            pendingBulkContactIds = emptySet()
+                            pendingBulkDuplicatePairIds = emptyList()
+                            bulkDuplicateTotalCount = 0
+                            bulkNewCount = 0
                         }
                     },
-                    text = if (isRussian) "Пропустить" else "Skip"
+                    text = if (isRussian) "Пропустить" else "Skip",
+                    enabled = isBulkDuplicateDataReady
                 )
             }
         )
@@ -1195,8 +1249,8 @@ fun ContactsScreen(
                                             val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
                                             Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
                                         } else {
-                                            pendingBulkContacts = newOnes
-                                            pendingBulkDuplicatePairs = duplicates
+                                            pendingBulkContactIds = newOnes.map { it.id }.toSet()
+                                            pendingBulkDuplicatePairIds = duplicates.map { it.first.id to it.second.id }
                                             bulkDuplicateTotalCount = duplicates.size
                                             bulkNewCount = newOnes.size
                                             showBulkDuplicateChoiceDialog = true

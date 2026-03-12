@@ -71,6 +71,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private val cachedNotesSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     private val cachedCalendarSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     private val cachedTasksSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    private val cachedAccountNotificationCheckTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     private val cachedAutoCleanupTrashTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     private val cachedAutoCleanupDraftsTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
     private val cachedAutoCleanupSpamTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
@@ -210,9 +211,16 @@ class SettingsRepository private constructor(private val context: Context) {
         val SCROLLBAR_SUNDAY = stringPreferencesKey("scrollbar_sunday")
         
         val DEFAULT_DRAFT_MODE = stringPreferencesKey("default_draft_mode")
-        
+
+        val AUTO_CLEANUP_DOWNLOADS_DAYS = intPreferencesKey("auto_cleanup_downloads_days")
+        val AUTO_CLEANUP_ROLLBACK_DAYS = intPreferencesKey("auto_cleanup_rollback_days")
+        val LAST_AUTO_CLEANUP_DOWNLOADS = longPreferencesKey("last_auto_cleanup_downloads")
+        val LAST_AUTO_CLEANUP_ROLLBACK = longPreferencesKey("last_auto_cleanup_rollback")
+
         // Динамические ключи для аккаунтов
         fun initialSyncCompleted(accountId: Long) = booleanPreferencesKey("initial_sync_completed_$accountId")
+        fun accountNotificationCheckTime(accountId: Long) =
+            longPreferencesKey("last_notification_check_time_$accountId")
     }
     
     // Размеры шрифта
@@ -377,6 +385,30 @@ class SettingsRepository private constructor(private val context: Context) {
     
     fun getLastNotificationCheckTimeSync(): Long {
         return cachedLastNotificationCheckTime.get() ?: 0L
+    }
+
+    suspend fun setLastNotificationCheckTime(accountId: Long, timeMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.accountNotificationCheckTime(accountId)] = timeMillis
+        }
+        cachedAccountNotificationCheckTimes[accountId] = timeMillis
+    }
+
+    suspend fun getLastNotificationCheckTime(accountId: Long): Long {
+        val value = context.dataStore.data.first()[Keys.accountNotificationCheckTime(accountId)] ?: 0L
+        cachedAccountNotificationCheckTimes[accountId] = value
+        return value
+    }
+
+    fun getLastNotificationCheckTimeSync(accountId: Long): Long {
+        return cachedAccountNotificationCheckTimes.computeIfAbsent(accountId) { 0L }
+    }
+
+    suspend fun resetLastNotificationCheckTime(accountId: Long) {
+        context.dataStore.edit { prefs ->
+            prefs.remove(Keys.accountNotificationCheckTime(accountId))
+        }
+        cachedAccountNotificationCheckTimes.remove(accountId)
     }
     
     // Миграция удалённых тем (red, orange, pink) → purple
@@ -598,6 +630,44 @@ class SettingsRepository private constructor(private val context: Context) {
         return value
     }
     
+    // --- Очистка файлов приложения (глобальные, не per-account) ---
+
+    val autoCleanupDownloadsDays: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] ?: 0
+    }
+
+    suspend fun getAutoCleanupDownloadsDays(): Int =
+        context.dataStore.data.first()[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] ?: 0
+
+    suspend fun setAutoCleanupDownloadsDays(days: Int) {
+        context.dataStore.edit { prefs -> prefs[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] = days }
+    }
+
+    val autoCleanupRollbackDays: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] ?: 0
+    }
+
+    suspend fun getAutoCleanupRollbackDays(): Int =
+        context.dataStore.data.first()[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] ?: 0
+
+    suspend fun setAutoCleanupRollbackDays(days: Int) {
+        context.dataStore.edit { prefs -> prefs[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] = days }
+    }
+
+    suspend fun getLastAutoCleanupDownloadsTime(): Long =
+        context.dataStore.data.first()[Keys.LAST_AUTO_CLEANUP_DOWNLOADS] ?: 0L
+
+    suspend fun setLastAutoCleanupDownloadsTime(timeMillis: Long) {
+        context.dataStore.edit { prefs -> prefs[Keys.LAST_AUTO_CLEANUP_DOWNLOADS] = timeMillis }
+    }
+
+    suspend fun getLastAutoCleanupRollbackTime(): Long =
+        context.dataStore.data.first()[Keys.LAST_AUTO_CLEANUP_ROLLBACK] ?: 0L
+
+    suspend fun setLastAutoCleanupRollbackTime(timeMillis: Long) {
+        context.dataStore.edit { prefs -> prefs[Keys.LAST_AUTO_CLEANUP_ROLLBACK] = timeMillis }
+    }
+
     // Время последней синхронизации контактов (для каждого аккаунта отдельно)
     private fun getContactsSyncKey(accountId: Long) = longPreferencesKey("last_contacts_sync_$accountId")
     

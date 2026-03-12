@@ -7,9 +7,11 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
 import com.dedovmosol.iwomail.eas.mapResult
+import com.dedovmosol.iwomail.util.stripHtml
 import com.dedovmosol.iwomail.widget.updateMailWidget
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import java.util.Locale
 
 /**
  * Сервис для операций с письмами (move, delete, markAsRead, MDN)
@@ -26,6 +28,7 @@ class EmailOperationsService(
 ) {
     
     private val moveItemsStatusRegex = Regex("status=(\\d+)")
+    private val previewWhitespaceRegex = Regex("\\s+")
     
     /**
      * Пометить письмо как прочитанное/непрочитанное
@@ -201,9 +204,20 @@ class EmailOperationsService(
      */
     suspend fun loadEmailBody(emailId: String, forceReload: Boolean = false): EasResult<String> {
         val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
-        
-        if (email.body.isNotEmpty() && !forceReload) {
+        val folder = folderDao.getFolder(email.folderId)
+        val suspiciousCachedBody = !forceReload &&
+            email.body.isNotEmpty() &&
+            folder?.type != FolderType.DRAFTS &&
+            !cachedBodyMatchesPreview(email.preview, email.body)
+
+        if (email.body.isNotEmpty() && !forceReload && !suspiciousCachedBody) {
             return EasResult.Success(email.body)
+        }
+        if (suspiciousCachedBody) {
+            android.util.Log.w(
+                "BDY",
+                "loadEmailBody: cached body looks stale for emailId=$emailId, forcing exact reload"
+            )
         }
         
         val account = accountRepo.getAccount(email.accountId) 
@@ -218,6 +232,7 @@ class EmailOperationsService(
             return when (val result = client.fetchEmailBodyWithMdn(folderServerId, email.serverId)) {
                 is EasResult.Success -> {
                     var bodyContent = result.data.body
+                    var resolvedMessageId = result.data.originalMessageId
                     
                     // КРИТИЧНО: Для Exchange 2007 SP1 ItemOperations может вернуть пустое тело
                     // В этом случае используем EWS как fallback
@@ -225,20 +240,29 @@ class EmailOperationsService(
                         android.util.Log.d("BDY", "loadEmailBody: Empty body from ItemOperations, trying EWS fallback...")
                         
                         // Получаем тип папки для EWS DistinguishedFolderId
-                        val folder = folderDao.getFolder(email.folderId)
                         val folderTypeStr = when (folder?.type) {
                             FolderType.INBOX -> "inbox"
                             FolderType.SENT_ITEMS -> "sentitems"
                             FolderType.DRAFTS -> "drafts"
                             FolderType.DELETED_ITEMS -> "deleteditems"
                             FolderType.OUTBOX -> "outbox"
-                            else -> "inbox"
+                            else -> null
                         }
-                        
-                        val ewsResult = client.fetchEmailBodyViaEws(email.subject, folderTypeStr, email.dateReceived)
-                        if (ewsResult is EasResult.Success && ewsResult.data.isNotEmpty()) {
-                            android.util.Log.d("BDY", "loadEmailBody: EWS fallback SUCCESS, bodyLength=${ewsResult.data.length}")
-                            bodyContent = ewsResult.data
+
+                        if (folderTypeStr != null) {
+                            val ewsResult = client.fetchEmailBodyViaEws(
+                                subject = email.subject,
+                                folderType = folderTypeStr,
+                                dateReceived = email.dateReceived,
+                                internetMessageId = email.internetMessageId
+                            )
+                            if (ewsResult is EasResult.Success && ewsResult.data.body.isNotEmpty()) {
+                                android.util.Log.d("BDY", "loadEmailBody: EWS fallback SUCCESS, bodyLength=${ewsResult.data.body.length}")
+                                bodyContent = ewsResult.data.body
+                                if (resolvedMessageId.isNullOrBlank()) {
+                                    resolvedMessageId = ewsResult.data.originalMessageId
+                                }
+                            }
                         }
                     }
                     
@@ -247,6 +271,11 @@ class EmailOperationsService(
                     // race condition с другими EAS командами, или ограничений ItemOperations.
                     if (bodyContent.isNotEmpty() || email.body.isEmpty()) {
                         emailDao.updateBody(emailId, bodyContent)
+                    } else if (suspiciousCachedBody) {
+                        // Заведомо подозрительное тело хуже пустого: не показываем чужой кэш.
+                        emailDao.updateBody(emailId, "")
+                        android.util.Log.w("BDY", "loadEmailBody: exact reload failed, dropping suspicious cached body")
+                        bodyContent = ""
                     } else {
                         android.util.Log.w("BDY", "loadEmailBody: Server returned empty body, keeping existing (${email.body.length} chars)")
                         bodyContent = email.body
@@ -265,7 +294,7 @@ class EmailOperationsService(
                         emailDao.updateMdnRequestedBy(emailId, result.data.mdnRequestedBy)
                     }
 
-                    result.data.originalMessageId
+                    resolvedMessageId
                         ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
                         ?.let { emailDao.updateInternetMessageId(emailId, it) }
                     
@@ -295,6 +324,24 @@ class EmailOperationsService(
         
         return EasResult.Error("Загрузка тела не поддерживается для этого типа аккаунта")
     }
+
+    private fun cachedBodyMatchesPreview(preview: String, body: String): Boolean {
+        val normalizedPreview = normalizePreviewText(preview)
+        if (normalizedPreview.isBlank()) return true
+
+        val normalizedBody = normalizePreviewText(stripHtml(body))
+        if (normalizedBody.isBlank()) return false
+
+        if (normalizedBody.startsWith(normalizedPreview)) return true
+
+        val searchWindow = normalizedBody.take((normalizedPreview.length + 64).coerceAtLeast(160))
+        return searchWindow.contains(normalizedPreview)
+    }
+
+    private fun normalizePreviewText(text: String): String = text
+        .replace(previewWhitespaceRegex, " ")
+        .trim()
+        .lowercase(Locale.ROOT)
     
     /**
      * Синхронизирует вложения конкретного письма с сервером через ItemOperations.

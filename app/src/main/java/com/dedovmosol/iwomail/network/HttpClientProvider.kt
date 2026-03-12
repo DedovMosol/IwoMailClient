@@ -88,20 +88,22 @@ object HttpClientProvider {
         clientCertificatePath: String? = null,
         clientCertificatePassword: String? = null,
         pinnedCertInfo: CertificateInfo? = null,
-        accountId: Long? = null
+        accountId: Long? = null,
+        serverUrl: String = ""
     ): OkHttpClient {
         // Если есть сертификаты — используем специальный клиент
         if (certificatePath != null || clientCertificatePath != null) {
             return getCertificateClient(
                 acceptAllCerts,
-                certificatePath, 
-                clientCertificatePath, 
+                certificatePath,
+                clientCertificatePath,
                 clientCertificatePassword,
-                connectTimeout, 
-                readTimeout, 
+                connectTimeout,
+                readTimeout,
                 writeTimeout,
                 pinnedCertInfo,
-                accountId
+                accountId,
+                serverUrl
             )
         }
         
@@ -145,7 +147,8 @@ object HttpClientProvider {
         readTimeout: Long,
         writeTimeout: Long,
         pinnedCertInfo: CertificateInfo?,
-        accountId: Long?
+        accountId: Long?,
+        serverUrl: String
     ): OkHttpClient {
         // Создаем ключ кэша (включаем хэш пароля для корректного кэширования)
         val cacheKey = buildString {
@@ -185,7 +188,8 @@ object HttpClientProvider {
                     readTimeout,
                     writeTimeout,
                     pinnedCertInfo,
-                    accountId
+                    accountId,
+                    serverUrl
                 )
             }
         }
@@ -341,7 +345,8 @@ object HttpClientProvider {
         readTimeout: Long,
         writeTimeout: Long,
         pinnedCertInfo: CertificateInfo?,
-        accountId: Long?
+        accountId: Long?,
+        serverUrl: String = ""
     ): OkHttpClient {
         // ВАЖНО: newBuilder() наследует connection pool и thread pool от базового клиента.
         // При вытеснении из LRU-кэша пулы не утекают — они общие.
@@ -368,7 +373,7 @@ object HttpClientProvider {
             // КРИТИЧНО: Оборачиваем TrustManager для Certificate Pinning
             // Pinning проверяется ПОСЛЕ стандартной валидации (hostname, CA, срок)
             val trustManager = if (pinnedCertInfo != null && accountId != null && baseTrustManager != null) {
-                createPinningTrustManager(pinnedCertInfo, accountId, baseTrustManager)
+                createPinningTrustManager(pinnedCertInfo, accountId, baseTrustManager, serverUrl)
             } else {
                 baseTrustManager
             }
@@ -477,14 +482,16 @@ object HttpClientProvider {
     }
     
     /**
-     * Создает TrustManager с Certificate Pinning (Public Key Pinning)
-     * КРИТИЧНО: Проверяет публичный ключ ПОСЛЕ стандартной валидации
-     * Это позволяет работать с разными доменами (внутренний/внешний Exchange)
+     * Создает TrustManager с Public Key Pinning (SPKI — SubjectPublicKeyInfo)
+     * Проверяет SHA-256 публичного ключа ПОСЛЕ стандартной валидации.
+     * SPKI-пин переживает обновление сертификата, если ключевая пара не менялась.
+     * Backward-compat: принимает и legacy-пины (SHA-256 всего сертификата).
      */
     private fun createPinningTrustManager(
         pinnedCertInfo: CertificateInfo,
         accountId: Long,
-        baseTrustManager: X509TrustManager
+        baseTrustManager: X509TrustManager,
+        serverUrl: String = ""
     ): X509TrustManager {
         return object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
@@ -492,25 +499,23 @@ object HttpClientProvider {
             }
             
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                // 1. СНАЧАЛА стандартная проверка (hostname, CA, срок действия)
                 baseTrustManager.checkServerTrusted(chain, authType)
                 
-                // 2. ЗАТЕМ проверяем публичный ключ (независимо от hostname!)
                 if (chain.isNotEmpty()) {
                     val serverCert = chain[0]
-                    val currentHash = calculateCertHash(serverCert)
+                    val spkiHash = calculateCertHash(serverCert)
+                    val legacyHash = calculateLegacyCertHash(serverCert)
                     
-                    if (currentHash != pinnedCertInfo.hash) {
-                        // Публичный ключ изменился - уведомляем пользователя
+                    if (spkiHash != pinnedCertInfo.hash && legacyHash != pinnedCertInfo.hash) {
                         val currentInfo = extractCertificateInfo(serverCert)
                         CertificateChangeDetector.onCertificateChanged(
                             accountId = accountId,
                             oldCert = pinnedCertInfo,
                             newCert = currentInfo,
-                            hostname = "" // hostname не важен для public key pinning
+                            hostname = serverUrl
                         )
                         
-                        throw java.security.cert.CertificateException("Certificate pin mismatch: expected ${pinnedCertInfo.hash.take(16)}..., got ${currentHash.take(16)}...")
+                        throw java.security.cert.CertificateException("Certificate pin mismatch: expected ${pinnedCertInfo.hash.take(16)}..., got ${spkiHash.take(16)}...")
                     }
                 }
             }
@@ -641,9 +646,19 @@ object HttpClientProvider {
     // ========== Certificate Pinning Utilities ==========
     
     /**
-     * Вычисляет SHA-256 хэш сертификата для Certificate Pinning
+     * SHA-256 хэш SubjectPublicKeyInfo (SPKI) — стандартный Public Key Pinning.
+     * Переживает обновление сертификата если ключевая пара не менялась.
      */
     fun calculateCertHash(cert: X509Certificate): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(cert.publicKey.encoded)
+        return hash.joinToString("") { "%02x".format(it) }
+    }
+    
+    /**
+     * SHA-256 хэш всего DER-сертификата (legacy формат для backward-compat).
+     */
+    private fun calculateLegacyCertHash(cert: X509Certificate): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(cert.encoded)
         return hash.joinToString("") { "%02x".format(it) }

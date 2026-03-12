@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,12 +31,52 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
 private fun dateTimeFormat() = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
 private fun dateFormat() = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
 private fun timeFormat() = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+private data class PendingCalendarAttachment(
+    val filePath: String,
+    val name: String,
+    val mimeType: String,
+    val sizeBytes: Long
+)
+
+private val PendingCalendarAttachmentsSaver = listSaver<List<PendingCalendarAttachment>, String>(
+    save = { attachments ->
+        attachments.flatMap { attachment ->
+            listOf(
+                attachment.filePath,
+                attachment.name,
+                attachment.mimeType,
+                attachment.sizeBytes.toString()
+            )
+        }
+    },
+    restore = { saved ->
+        saved.chunked(4).mapNotNull { chunk ->
+            val sizeBytes = chunk.getOrNull(3)?.toLongOrNull() ?: return@mapNotNull null
+            val filePath = chunk.getOrNull(0) ?: return@mapNotNull null
+            val name = chunk.getOrNull(1) ?: return@mapNotNull null
+            val mimeType = chunk.getOrNull(2) ?: return@mapNotNull null
+            PendingCalendarAttachment(
+                filePath = filePath,
+                name = name,
+                mimeType = mimeType,
+                sizeBytes = sizeBytes
+            )
+        }
+    }
+)
+
+private val StringSetSaver = listSaver<Set<String>, String>(
+    save = { it.toList() },
+    restore = { it.toSet() }
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,15 +129,71 @@ internal fun CreateEventDialog(
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
     
     // Вложения
-    var pickedAttachments by remember { mutableStateOf(listOf<DraftAttachmentData>()) }
-    var removedExistingAttachmentRefs by remember { mutableStateOf(setOf<String>()) }
+    var pendingAttachments by rememberSaveable(stateSaver = PendingCalendarAttachmentsSaver) {
+        mutableStateOf(emptyList())
+    }
+    var removedExistingAttachmentRefs by rememberSaveable(stateSaver = StringSetSaver) {
+        mutableStateOf(emptySet())
+    }
     val isRussianCallback = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
+
+    fun deletePendingAttachmentFile(filePath: String) {
+        try {
+            File(filePath).delete()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun clearPendingAttachments() {
+        pendingAttachments.forEach { attachment ->
+            deletePendingAttachmentFile(attachment.filePath)
+        }
+        pendingAttachments = emptyList()
+    }
+
+    fun dismissDialog() {
+        clearPendingAttachments()
+        onDismiss()
+    }
+
+    fun buildDraftAttachments(): List<DraftAttachmentData>? {
+        val result = mutableListOf<DraftAttachmentData>()
+        for (attachment in pendingAttachments) {
+            val file = File(attachment.filePath)
+            val bytes = try {
+                if (!file.exists()) null else file.readBytes()
+            } catch (_: Exception) {
+                null
+            }
+
+            if (bytes == null) {
+                Toast.makeText(
+                    context,
+                    if (isRussianCallback) {
+                        "Не удалось восстановить вложение ${attachment.name}"
+                    } else {
+                        "Failed to restore attachment ${attachment.name}"
+                    },
+                    Toast.LENGTH_LONG
+                ).show()
+                return null
+            }
+
+            result += DraftAttachmentData(
+                name = attachment.name,
+                mimeType = attachment.mimeType,
+                data = bytes
+            )
+        }
+        return result
+    }
+
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         val maxSingleFile = 7L * 1024 * 1024 // 7 MB — лимит сервера
         val maxTotal = 10L * 1024 * 1024 // 10 MB суммарно
-        var currentTotal = pickedAttachments.sumOf { it.data.size.toLong() }
+        var currentTotal = pendingAttachments.sumOf { it.sizeBytes }
         uris.forEach { uri ->
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
@@ -119,8 +216,11 @@ internal fun CreateEventDialog(
                     }
                     val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
                     var streamExceededSingleLimit = false
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
-                        val out = java.io.ByteArrayOutputStream()
+                    var streamExceededTotalLimit = false
+                    val attachmentsDir = File(context.cacheDir, "calendar_event_attachments").apply { mkdirs() }
+                    val tempFile = File(attachmentsDir, "event_${UUID.randomUUID().toString().replace("-", "")}")
+                    val copiedSize = context.contentResolver.openInputStream(uri)?.use { input ->
+                        tempFile.outputStream().use { output ->
                         val buffer = ByteArray(8 * 1024)
                         var totalRead = 0L
                         while (true) {
@@ -131,38 +231,46 @@ internal fun CreateEventDialog(
                                 streamExceededSingleLimit = true
                                 return@use null
                             }
-                            out.write(buffer, 0, read)
+                            if (currentTotal + totalRead > maxTotal) {
+                                streamExceededTotalLimit = true
+                                return@use null
+                            }
+                            output.write(buffer, 0, read)
                         }
-                        out.toByteArray()
+                        totalRead
+                        }
                     }
-                    if (bytes == null && streamExceededSingleLimit) {
+                    if (copiedSize == null && streamExceededSingleLimit) {
+                        deletePendingAttachmentFile(tempFile.absolutePath)
                         val sizeMB = maxSingleFile / 1024 / 1024
                         Toast.makeText(context,
                             Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback),
                             Toast.LENGTH_LONG).show()
                         return@use
                     }
-                    if (bytes != null) {
-                        if (bytes.size.toLong() > maxSingleFile) {
-                            val sizeMB = bytes.size / 1024 / 1024
-                            Toast.makeText(context,
-                                Strings.fileTooLargeMessage(name, sizeMB.toLong(), isRussianCallback),
-                                Toast.LENGTH_LONG).show()
-                            return@use
-                        }
-                        if (currentTotal + bytes.size > maxTotal) {
-                            Toast.makeText(context,
-                                Strings.attachmentLimitExceeded(isRussianCallback),
-                                Toast.LENGTH_LONG).show()
-                            return@use
-                        }
-                        currentTotal += bytes.size.toLong()
-                        pickedAttachments = pickedAttachments + DraftAttachmentData(
-                            name = name,
-                            mimeType = mimeType,
-                            data = bytes
-                        )
+                    if (copiedSize == null && streamExceededTotalLimit) {
+                        deletePendingAttachmentFile(tempFile.absolutePath)
+                        Toast.makeText(context,
+                            Strings.attachmentLimitExceeded(isRussianCallback),
+                            Toast.LENGTH_LONG).show()
+                        return@use
                     }
+                    if (copiedSize == null) {
+                        deletePendingAttachmentFile(tempFile.absolutePath)
+                        Toast.makeText(
+                            context,
+                            if (isRussianCallback) "Не удалось прочитать вложение" else "Failed to read attachment",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@use
+                    }
+                    currentTotal += copiedSize
+                    pendingAttachments = pendingAttachments + PendingCalendarAttachment(
+                        filePath = tempFile.absolutePath,
+                        name = name,
+                        mimeType = mimeType,
+                        sizeBytes = copiedSize
+                    )
                 }
             }
         }
@@ -216,7 +324,7 @@ internal fun CreateEventDialog(
     val lazyListState = rememberLazyListState()
     
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-        onDismissRequest = { if (!isCreating) onDismiss() },
+        onDismissRequest = { if (!isCreating) dismissDialog() },
         scrollable = false, // Отключаем автоскролл диалога
         properties = DialogProperties(usePlatformDefaultWidth = false),
         modifier = Modifier
@@ -687,9 +795,9 @@ internal fun CreateEventDialog(
                             Text(Strings.attachFile)
                         }
                         
-                        if (pickedAttachments.isNotEmpty()) {
+                        if (pendingAttachments.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            pickedAttachments.forEachIndexed { index, att ->
+                            pendingAttachments.forEachIndexed { index, att ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -711,13 +819,14 @@ internal fun CreateEventDialog(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = Strings.formatFileSize(att.data.size.toLong()),
+                                        text = Strings.formatFileSize(att.sizeBytes),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     IconButton(
                                         onClick = {
-                                            pickedAttachments = pickedAttachments.toMutableList().also { it.removeAt(index) }
+                                            deletePendingAttachmentFile(att.filePath)
+                                            pendingAttachments = pendingAttachments.toMutableList().also { it.removeAt(index) }
                                         },
                                         modifier = Modifier.size(24.dp)
                                     ) {
@@ -763,8 +872,23 @@ internal fun CreateEventDialog(
                             Toast.makeText(context, endBeforeStartText, Toast.LENGTH_SHORT).show()
                             return@ThemeOutlinedButton
                         }
-                        
-                        onSave(subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, pickedAttachments, removedExistingAttachmentRefs.toList())
+
+                        val draftAttachments = buildDraftAttachments() ?: return@ThemeOutlinedButton
+                        clearPendingAttachments()
+                        onSave(
+                            subject,
+                            startTime,
+                            endTime,
+                            location,
+                            body,
+                            allDayEvent,
+                            reminder,
+                            busyStatus,
+                            attendees,
+                            recurrenceType,
+                            draftAttachments,
+                            removedExistingAttachmentRefs.toList()
+                        )
                     }
                 },
                 text = Strings.save,
@@ -774,7 +898,7 @@ internal fun CreateEventDialog(
         },
         dismissButton = {
             com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                onClick = onDismiss,
+                onClick = ::dismissDialog,
                 text = Strings.cancel,
                 enabled = !isCreating
             )

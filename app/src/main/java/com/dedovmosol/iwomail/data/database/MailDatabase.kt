@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 39,
+    version = 40,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -183,6 +183,12 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE accounts ADD COLUMN alternateServerUrl TEXT DEFAULT NULL")
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -199,7 +205,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_35_36,
             MIGRATION_36_37,
             MIGRATION_37_38,
-            MIGRATION_38_39
+            MIGRATION_38_39,
+            MIGRATION_39_40
         )
         
         fun getInstance(context: Context): MailDatabase {
@@ -272,6 +279,7 @@ data class AccountEntity(
     val email: String,
     val displayName: String,
     val serverUrl: String,
+    val alternateServerUrl: String? = null,
     val username: String,
     val domain: String = "",
     val acceptAllCerts: Boolean = false,

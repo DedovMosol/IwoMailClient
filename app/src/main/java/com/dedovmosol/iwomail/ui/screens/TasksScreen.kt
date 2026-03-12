@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
+import com.dedovmosol.iwomail.ui.components.DragSelectionIndicator
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
@@ -984,12 +985,9 @@ private fun DeletedTaskCard(
         ) {
             // Слева: иконка выделения (как в письмах — без чекбокса)
             if (isSelectionMode) {
-                Icon(
-                    imageVector = if (isSelected) AppIcons.CheckCircle else AppIcons.RadioButtonUnchecked,
-                    contentDescription = null,
-                    tint = if (isSelected) MaterialTheme.colorScheme.primary 
-                           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.size(24.dp)
+                DragSelectionIndicator(
+                    selected = isSelected,
+                    modifier = Modifier.size(28.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
             }
@@ -1168,12 +1166,9 @@ private fun TaskCard(
         ) {
             // Слева: иконка выделения (как в письмах — без чекбокса)
             if (isSelectionMode) {
-                Icon(
-                    imageVector = if (isSelected) AppIcons.CheckCircle else AppIcons.RadioButtonUnchecked,
-                    contentDescription = null,
-                    tint = if (isSelected) MaterialTheme.colorScheme.primary 
-                           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.size(24.dp)
+                DragSelectionIndicator(
+                    selected = isSelected,
+                    modifier = Modifier.size(28.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
             }

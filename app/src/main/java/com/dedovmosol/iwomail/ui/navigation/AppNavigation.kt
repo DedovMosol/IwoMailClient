@@ -180,22 +180,27 @@ sealed class Screen(val route: String) {
             certificatePath: String? = null,
             clientCertificatePath: String? = null,
             clientCertificatePassword: String? = null,
-            isFirstAccount: Boolean = false
+            isFirstAccount: Boolean = false,
+            alternateServerUrl: String? = null
         ): String {
-            // Секреты передаём через in-memory carrier, НЕ через route
             VerificationSecrets.password = password?.toCharArray()
             VerificationSecrets.clientCertificatePassword = clientCertificatePassword?.toCharArray()
-            
+
             val certPathEncoded = certificatePath ?: ""
             val clientCertPathEncoded = clientCertificatePath ?: ""
-            // URL-encode каждый параметр, чтобы символы | в полях не ломали split
+            val altUrlEncoded = alternateServerUrl ?: ""
             val enc = { s: String -> URLEncoder.encode(s, "UTF-8") }
+            // 0=email, 1=displayName, 2=serverUrl, 3=username,
+            // 4=domain, 5=acceptAllCerts, 6=color, 7=incomingPort,
+            // 8=outgoingServer, 9=outgoingPort, 10=useSSL, 11=syncMode,
+            // 12=certPath, 13=isFirstAccount, 14=clientCertPath, 15=alternateServerUrl
             val data = listOf(
                 enc(email), enc(displayName), enc(serverUrl), enc(username),
                 enc(domain), enc(acceptAllCerts.toString()), enc(color.toString()),
                 enc(incomingPort.toString()), enc(outgoingServer), enc(outgoingPort.toString()),
                 enc(useSSL.toString()), enc(syncMode), enc(certPathEncoded),
-                enc(isFirstAccount.toString()), enc(clientCertPathEncoded)
+                enc(isFirstAccount.toString()), enc(clientCertPathEncoded),
+                enc(altUrlEncoded)
             ).joinToString("|")
             val encoded = android.util.Base64.encodeToString(
                 data.toByteArray(Charsets.UTF_8),
@@ -795,17 +800,15 @@ fun AppNavigation(
                         navController.popBackStack()
                     }
                 },
-                onNavigateToVerification = { email, displayName, serverUrl, username, password, domain, acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode, certificatePath, clientCertificatePath, clientCertificatePassword ->
-                    // Секреты только in-memory через VerificationSecrets.
-                    // SavedStateHandle НЕ используем — он сериализуется на диск.
-                    // Проверяем, первый ли это аккаунт (нет previousBackStackEntry = пришли с Onboarding)
+                onNavigateToVerification = { email, displayName, serverUrl, username, password, domain, acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode, certificatePath, clientCertificatePath, clientCertificatePassword, alternateServerUrl ->
                     val isFirstAccount = navController.previousBackStackEntry == null
                     navController.navigate(
                         Screen.Verification.createRoute(
                             email, displayName, serverUrl, username, password, domain,
                             acceptAllCerts, color, incomingPort, outgoingServer, outgoingPort, useSSL, syncMode, certificatePath,
                             clientCertificatePath, clientCertificatePassword,
-                            isFirstAccount = isFirstAccount
+                            isFirstAccount = isFirstAccount,
+                            alternateServerUrl = alternateServerUrl
                         )
                     )
                 },
@@ -866,11 +869,12 @@ fun AppNavigation(
             // 0=email, 1=displayName, 2=serverUrl, 3=username,
             // 4=domain, 5=acceptAllCerts, 6=color, 7=incomingPort,
             // 8=outgoingServer, 9=outgoingPort, 10=useSSL, 11=syncMode,
-            // 12=certPath, 13=isFirstAccount, 14=clientCertPath
+            // 12=certPath, 13=isFirstAccount, 14=clientCertPath, 15=alternateServerUrl
             if (parts.size >= 12) {
                 val certificatePath = if (parts.size >= 13 && parts[12].isNotBlank()) parts[12] else null
                 val isFirstAccount = if (parts.size >= 14) parts[13].toBoolean() else false
                 val clientCertificatePath = if (parts.size >= 15 && parts[14].isNotBlank()) parts[14] else null
+                val alternateServerUrl = if (parts.size >= 16 && parts[15].isNotBlank()) parts[15] else null
                 VerificationScreen(
                     email = parts[0],
                     displayName = parts[1],
@@ -888,6 +892,7 @@ fun AppNavigation(
                     certificatePath = certificatePath,
                     clientCertificatePath = clientCertificatePath,
                     clientCertificatePassword = VerificationSecrets.getClientCertPasswordString(),
+                    alternateServerUrl = alternateServerUrl,
                     onSuccess = {
                         VerificationSecrets.clear()
                         setupBackStackEntry?.savedStateHandle?.remove<String>(VERIFICATION_PASSWORD_KEY)

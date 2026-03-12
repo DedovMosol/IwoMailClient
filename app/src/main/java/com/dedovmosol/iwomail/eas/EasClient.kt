@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import android.util.Base64
+import com.dedovmosol.iwomail.util.MimeHtmlProcessor
 
 /**
  * Exchange ActiveSync клиент
@@ -19,6 +20,7 @@ import android.util.Base64
  */
 class EasClient(
     serverUrl: String,
+    private val alternateServerUrl: String? = null,
     private val username: String,
     private val password: String,
     private val domain: String = "",
@@ -43,7 +45,8 @@ class EasClient(
             clientCertificatePath = if (clientCertificatePassword.isNullOrBlank()) null else clientCertificatePath,
             clientCertificatePassword = clientCertificatePassword,
             pinnedCertInfo = pinnedCertInfo,
-            accountId = accountId
+            accountId = accountId,
+            serverUrl = normalizedServerUrl
         )
     }
     
@@ -338,7 +341,6 @@ class EasClient(
         private val MDN_DISPOSITION_REGEX get() = EasPatterns.MDN_DISPOSITION
         private val MDN_RETURN_RECEIPT_REGEX get() = EasPatterns.MDN_RETURN_RECEIPT
         private val MDN_CONFIRM_READING_REGEX get() = EasPatterns.MDN_CONFIRM_READING
-        private val BOUNDARY_REGEX get() = EasPatterns.BOUNDARY
         private val MOVE_RESPONSE_REGEX get() = EasPatterns.MOVE_RESPONSE
         private val ITEM_OPS_GLOBAL_STATUS_REGEX get() = EasPatterns.ITEM_OPS_GLOBAL_STATUS
         private val ITEM_OPS_FETCH_STATUS_REGEX get() = EasPatterns.ITEM_OPS_FETCH_STATUS
@@ -346,10 +348,40 @@ class EasClient(
         private val ITEM_OPS_PROPS_DATA_REGEX get() = EasPatterns.ITEM_OPS_PROPS_DATA
         private val FOLDER_REGEX get() = EasPatterns.FOLDER
         
+        private const val FALLBACK_PROBE_TIMEOUT_MS = 3000
+
         /**
-         * Нормализует URL сервера - добавляет схему и порт
-         * Принцип KISS: упрощенная логика с сохранением fallback поведения
+         * Dual-URL fallback: пробует alternate URL только когда primary недоступен.
+         * Вызывается ТОЛЬКО при ошибке соединения с primary, НЕ при каждой синхронизации.
+         * TCP-проба безопасна: не отправляет credentials (только SYN/ACK).
          */
+        suspend fun probeAlternateUrl(alternateUrl: String, port: Int): Boolean {
+            val host = extractHost(alternateUrl)
+            if (host.isBlank()) return false
+            return withContext(Dispatchers.IO) {
+                try {
+                    java.net.Socket().use { socket ->
+                        socket.connect(java.net.InetSocketAddress(host, port), FALLBACK_PROBE_TIMEOUT_MS)
+                    }
+                    android.util.Log.d("EasClient", "Dual-URL: alternate reachable ($host:$port)")
+                    true
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.d("EasClient", "Dual-URL: alternate also unreachable ($host:$port)")
+                    false
+                }
+            }
+        }
+
+        private fun extractHost(url: String): String {
+            return url.trim()
+                .removePrefix("https://")
+                .removePrefix("http://")
+                .substringBefore("/")
+                .substringBefore(":")
+                .trim()
+        }
+
         fun normalizeUrl(url: String, port: Int = 443, useHttps: Boolean = true): String {
             // Убираем пробелы и существующую схему
             val hostOnly = url.trim()
@@ -676,13 +708,25 @@ class EasClient(
     
     /**
      * Загрузка тела письма через EWS (fallback для Exchange 2007 SP1)
-     * Ищет письмо по Subject + дате используя EWS FindItem, затем получает тело через GetItem
+     *
+     * ВАЖНО: fallback не должен подставлять тело другого письма.
+     * Поэтому поиск идёт только по безопасным и достаточно узким критериям:
+     * - по message:InternetMessageId, если он уже известен
+     * - иначе по Subject + узкому DateTimeReceived окну
+     * - если найдено более одного кандидата, fallback отменяется
+     *
      * @param subject Тема письма для поиска
      * @param folderType Тип папки EWS (inbox, sentitems, deleteditems, drafts)
-     * @param dateReceived Дата получения письма (ms) для фильтрации — предотвращает подмену тела при одинаковых subject
-     * @return Тело письма в HTML формате или пустая строка
+     * @param dateReceived Дата получения письма (ms) для фильтрации
+     * @param internetMessageId RFC 5322 Message-ID, если уже известен локально
+     * @return HTML тело и InternetMessageId либо пустой результат, если безопасное совпадение не найдено
      */
-    suspend fun fetchEmailBodyViaEws(subject: String, folderType: String, dateReceived: Long = 0L): EasResult<String> {
+    suspend fun fetchEmailBodyViaEws(
+        subject: String,
+        folderType: String,
+        dateReceived: Long = 0L,
+        internetMessageId: String? = null
+    ): EasResult<EmailBodyResult> {
         return withContext(Dispatchers.IO) {
             try {
                 // Определяем EWS DistinguishedFolderId на основе типа папки
@@ -692,20 +736,22 @@ class EasClient(
                     "drafts", "3" -> "drafts"
                     "deleted", "deleteditems", "4" -> "deleteditems"
                     "outbox", "6" -> "outbox"
-                    else -> "inbox" // По умолчанию ищем во входящих
+                    else -> null
+                }
+                if (distinguishedFolderId == null) {
+                    android.util.Log.w("EasClient", "fetchEmailBodyViaEws: unsupported folderType='$folderType', skipping fallback")
+                    return@withContext EasResult.Success(EmailBodyResult(""))
                 }
                 
                 // Экранируем subject для XML
                 val escapedSubject = escapeXml(subject)
-                
-                // Формируем restriction: Subject + дата (±2 мин) для точного поиска
-                // Без даты при одинаковых subject возвращалось тело ДРУГОГО письма
-                val restriction = if (dateReceived > 0L) {
+
+                fun buildDateRestriction(windowMs: Long): String {
                     val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
                     sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                    val dateFrom = sdf.format(java.util.Date(dateReceived - 120_000L))
-                    val dateTo = sdf.format(java.util.Date(dateReceived + 120_000L))
-                    """<t:And>
+                    val dateFrom = sdf.format(java.util.Date(dateReceived - windowMs))
+                    val dateTo = sdf.format(java.util.Date(dateReceived + windowMs))
+                    return """<t:And>
                     <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
                         <t:FieldURI FieldURI="item:Subject"/>
                         <t:Constant Value="$escapedSubject"/>
@@ -719,15 +765,38 @@ class EasClient(
                         <t:FieldURIOrConstant><t:Constant Value="$dateTo"/></t:FieldURIOrConstant>
                     </t:IsLessThanOrEqualTo>
                 </t:And>"""
-                } else {
-                    """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
+                }
+
+                val subjectOnlyRestriction = """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
                     <t:FieldURI FieldURI="item:Subject"/>
                     <t:Constant Value="$escapedSubject"/>
                 </t:Contains>"""
+
+                val restrictions = buildList {
+                    if (!internetMessageId.isNullOrBlank()) {
+                        add(
+                            """<t:IsEqualTo>
+                    <t:FieldURI FieldURI="message:InternetMessageId"/>
+                    <t:FieldURIOrConstant>
+                        <t:Constant Value="${escapeXml(internetMessageId)}"/>
+                    </t:FieldURIOrConstant>
+                </t:IsEqualTo>"""
+                        )
+                    }
+                    if (dateReceived > 0L) {
+                        // Сначала узкое окно, затем более широкое. Оба варианта допускаются
+                        // только если найден РОВНО один кандидат.
+                        add(buildDateRestriction(15_000L))
+                        add(buildDateRestriction(120_000L))
+                    } else if (internetMessageId.isNullOrBlank()) {
+                        add(subjectOnlyRestriction)
+                    }
                 }
-                
-                // Шаг 1: FindItem для поиска письма по Subject + дате
-                val findRequest = """<?xml version="1.0" encoding="utf-8"?>
+
+                val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
+
+                suspend fun findCandidateIds(restriction: String): EasResult<List<String>> {
+                    val findRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
                xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
@@ -739,28 +808,52 @@ class EasClient(
             <m:ItemShape>
                 <t:BaseShape>IdOnly</t:BaseShape>
             </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="1" Offset="0" BasePoint="Beginning"/>
+            <m:IndexedPageItemView MaxEntriesReturned="2" Offset="0" BasePoint="Beginning"/>
             <m:Restriction>
                 $restriction
             </m:Restriction>
+            <m:SortOrder>
+                <t:FieldOrder Order="Descending">
+                    <t:FieldURI FieldURI="item:DateTimeReceived"/>
+                </t:FieldOrder>
+            </m:SortOrder>
             <m:ParentFolderIds>
                 <t:DistinguishedFolderId Id="$distinguishedFolderId"/>
             </m:ParentFolderIds>
         </m:FindItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-                
-                val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
-                    ?: return@withContext EasResult.Error("FindItem request failed")
-                
-                // Извлекаем ItemId из ответа
-                val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-                val ewsItemId = itemIdPattern.find(findResponse)?.groupValues?.get(1)
-                
-                if (ewsItemId == null) {
-                    // Не нашли письмо по Subject - это нормально для некоторых случаев
-                    return@withContext EasResult.Success("")
+                    val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+                        ?: return EasResult.Error("FindItem request failed")
+                    val ids = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
+                    return EasResult.Success(ids)
                 }
+
+                var candidateIds = emptyList<String>()
+                for (restriction in restrictions) {
+                    when (val findResult = findCandidateIds(restriction)) {
+                        is EasResult.Error -> return@withContext findResult
+                        is EasResult.Success -> {
+                            when (findResult.data.size) {
+                                1 -> {
+                                    candidateIds = findResult.data
+                                    break
+                                }
+                                0 -> Unit
+                                else -> {
+                                    android.util.Log.w(
+                                        "EasClient",
+                                        "fetchEmailBodyViaEws: ambiguous EWS match for subject='$subject', folder='$distinguishedFolderId', candidates=${findResult.data.size}"
+                                    )
+                                    return@withContext EasResult.Success(EmailBodyResult(""))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val ewsItemId = candidateIds.singleOrNull()
+                    ?: return@withContext EasResult.Success(EmailBodyResult(""))
                 
                 // Шаг 2: GetItem для получения тела
                 val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -776,6 +869,9 @@ class EasClient(
                 <t:BaseShape>Default</t:BaseShape>
                 <t:IncludeMimeContent>false</t:IncludeMimeContent>
                 <t:BodyType>HTML</t:BodyType>
+                <t:AdditionalProperties>
+                    <t:FieldURI FieldURI="message:InternetMessageId"/>
+                </t:AdditionalProperties>
             </m:ItemShape>
             <m:ItemIds>
                 <t:ItemId Id="${escapeXml(ewsItemId)}"/>
@@ -803,10 +899,22 @@ class EasClient(
                     // Это ОСНОВНАЯ причина бага на Exchange 2007, где ItemOperations
                     // возвращает пустое тело и используется этот EWS fallback.
                     body = unescapeXml(body)
-                    return@withContext EasResult.Success(body)
+                    val ewsMessageId = "<t:InternetMessageId>([\\s\\S]*?)</t:InternetMessageId>".toRegex()
+                        .find(getItemResponse)
+                        ?.groupValues
+                        ?.get(1)
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let(::unescapeXml)
+                    return@withContext EasResult.Success(
+                        EmailBodyResult(
+                            body = body,
+                            originalMessageId = ewsMessageId
+                        )
+                    )
                 }
                 
-                EasResult.Success("")
+                EasResult.Success(EmailBodyResult(""))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 EasResult.Error("EWS error: ${e.message}")
@@ -1750,109 +1858,7 @@ $foldersXml
      * Используется для Type=4 (MIME) в parseEmail
      */
     private fun extractBodyFromMime(mimeData: String): String {
-        // Если это multipart - ищем text/html или text/plain часть
-        if (mimeData.contains("Content-Type:", ignoreCase = true)) {
-            // Ищем boundary
-            val boundaryMatch = BOUNDARY_REGEX.find(mimeData)
-            
-            if (boundaryMatch != null) {
-                val boundary = boundaryMatch.groupValues[1]
-                val parts = mimeData.split("--$boundary")
-                
-                // Ищем HTML часть
-                for (part in parts) {
-                    if (part.contains("Content-Type: text/html", ignoreCase = true) ||
-                        part.contains("Content-Type:text/html", ignoreCase = true)) {
-                        // Извлекаем контент после пустой строки
-                        val contentStart = part.indexOf("\r\n\r\n")
-                        if (contentStart != -1) {
-                            var content = part.substring(contentStart + 4).trim()
-                            // Убираем закрывающий boundary если есть
-                            if (content.endsWith("--")) {
-                                content = content.dropLast(2).trim()
-                            }
-                            // Декодируем если base64
-                            if (part.contains("Content-Transfer-Encoding: base64", ignoreCase = true)) {
-                                try {
-                                    content = String(Base64.decode(content.replace("\r\n", ""), Base64.DEFAULT), Charsets.UTF_8)
-                                } catch (_: Exception) {}
-                            }
-                            // Декодируем quoted-printable
-                            if (part.contains("Content-Transfer-Encoding: quoted-printable", ignoreCase = true)) {
-                                content = decodeQuotedPrintable(content)
-                            }
-                            if (content.isNotBlank()) return content
-                        }
-                    }
-                }
-                
-                // Fallback на text/plain
-                for (part in parts) {
-                    if (part.contains("Content-Type: text/plain", ignoreCase = true) ||
-                        part.contains("Content-Type:text/plain", ignoreCase = true)) {
-                        val contentStart = part.indexOf("\r\n\r\n")
-                        if (contentStart != -1) {
-                            var content = part.substring(contentStart + 4).trim()
-                            if (content.endsWith("--")) {
-                                content = content.dropLast(2).trim()
-                            }
-                            if (part.contains("Content-Transfer-Encoding: base64", ignoreCase = true)) {
-                                try {
-                                    content = String(Base64.decode(content.replace("\r\n", ""), Base64.DEFAULT), Charsets.UTF_8)
-                                } catch (_: Exception) {}
-                            }
-                            if (part.contains("Content-Transfer-Encoding: quoted-printable", ignoreCase = true)) {
-                                content = decodeQuotedPrintable(content)
-                            }
-                            if (content.isNotBlank()) return content
-                        }
-                    }
-                }
-            }
-            
-            // Не multipart - просто извлекаем тело после заголовков
-            val bodyStart = mimeData.indexOf("\r\n\r\n")
-            if (bodyStart != -1) {
-                return mimeData.substring(bodyStart + 4).trim()
-            }
-        }
-        
-        // Возвращаем как есть если не удалось распарсить
-        return mimeData
-    }
-    
-    /**
-     * Декодирует quoted-printable кодировку
-     */
-    private fun decodeQuotedPrintable(input: String): String {
-        val text = input.replace("=\r\n", "").replace("=\n", "") // Soft line breaks
-        val bytes = mutableListOf<Byte>()
-        var i = 0
-        
-        while (i < text.length) {
-            when {
-                text[i] == '=' && i + 2 < text.length -> {
-                    try {
-                        val hex = text.substring(i + 1, i + 3)
-                        bytes.add(hex.toInt(16).toByte())
-                        i += 3
-                    } catch (_: Exception) {
-                        bytes.add(text[i].code.toByte())
-                        i++
-                    }
-                }
-                else -> {
-                    bytes.addAll(text[i].toString().toByteArray(Charsets.UTF_8).toList())
-                    i++
-                }
-            }
-        }
-        
-        return try {
-            String(bytes.toByteArray(), Charsets.UTF_8)
-        } catch (_: Exception) {
-            input
-        }
+        return MimeHtmlProcessor.extractHtmlFromMime(mimeData)
     }
     
     /**

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -43,6 +44,23 @@ sealed class AccessVerificationResult {
     data class Error(val message: String) : AccessVerificationResult()
 }
 
+private const val ACCESS_CHECK_NONE = ""
+private const val ACCESS_CHECK_HAS_ACCESS = "has_access"
+private const val ACCESS_CHECK_NO_ACCESS = "no_access"
+private const val ACCESS_CHECK_ERROR = "error"
+
+private fun restoreAccessVerificationResult(
+    status: String,
+    errorMessage: String
+): AccessVerificationResult? {
+    return when (status) {
+        ACCESS_CHECK_HAS_ACCESS -> AccessVerificationResult.HasAccess
+        ACCESS_CHECK_NO_ACCESS -> AccessVerificationResult.NoAccess
+        ACCESS_CHECK_ERROR -> AccessVerificationResult.Error(errorMessage)
+        else -> null
+    }
+}
+
 /**
  * Экран верификации email при добавлении Exchange аккаунта
  * Проверяет что введённый email соответствует реальному email на сервере
@@ -66,6 +84,7 @@ fun VerificationScreen(
     certificatePath: String? = null,
     clientCertificatePath: String? = null,
     clientCertificatePassword: String? = null,
+    alternateServerUrl: String? = null,
     onSuccess: () -> Unit,
     onError: (String, String?) -> Unit // error, savedData
 ) {
@@ -81,35 +100,63 @@ fun VerificationScreen(
     val testEmailSubjectText = Strings.testEmailSubject
     val testEmailBodyText = Strings.testEmailBody
     val emailMismatchTitle = Strings.emailMismatch
+    val tryingBackupServerText = Strings.tryingBackupServer
     val isRussianLang = com.dedovmosol.iwomail.ui.isRussian()
     
     // Функция для создания savedData (пароль не сохраняем)
     fun createSavedData(): String {
         val certPath = certificatePath ?: ""
         val clientCertPath = clientCertificatePath ?: ""
-        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$clientCertPath|$domain|$username"
+        val altUrl = alternateServerUrl ?: ""
+        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$clientCertPath|$domain|$username|$altUrl"
     }
     
-    // Функция для создания savedData при несовпадении email
-    // Пароль НЕ сохраняем, чтобы не передавать секреты через navigation route
     fun createSavedDataForEmailMismatch(): String {
         val certPath = certificatePath ?: ""
         val clientCertPath = clientCertificatePath ?: ""
-        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$domain|$username|$clientCertPath"
+        val altUrl = alternateServerUrl ?: ""
+        return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$domain|$username|$clientCertPath|$altUrl"
     }
     
-    var statusText by remember { mutableStateOf(verifyingAccountText) }
-    var showMismatchDialog by remember { mutableStateOf(false) }
-    var mismatchEnteredEmail by remember { mutableStateOf("") }
-    var mismatchActualEmail by remember { mutableStateOf("") }
+    var statusText by rememberSaveable { mutableStateOf(verifyingAccountText) }
+    var showMismatchDialog by rememberSaveable { mutableStateOf(false) }
+    var mismatchEnteredEmail by rememberSaveable { mutableStateOf("") }
+    var mismatchActualEmail by rememberSaveable { mutableStateOf("") }
+    var initialVerificationFinished by rememberSaveable { mutableStateOf(false) }
     var isCheckingAccess by remember { mutableStateOf(false) }
-    var accessCheckResult by remember { mutableStateOf<AccessVerificationResult?>(null) }
+    var accessCheckStatus by rememberSaveable { mutableStateOf(ACCESS_CHECK_NONE) }
+    var accessCheckErrorMessage by rememberSaveable { mutableStateOf("") }
+    val accessCheckResult = remember(accessCheckStatus, accessCheckErrorMessage) {
+        restoreAccessVerificationResult(accessCheckStatus, accessCheckErrorMessage)
+    }
+
+    fun updateAccessCheckResult(result: AccessVerificationResult?) {
+        when (result) {
+            null -> {
+                accessCheckStatus = ACCESS_CHECK_NONE
+                accessCheckErrorMessage = ""
+            }
+            is AccessVerificationResult.HasAccess -> {
+                accessCheckStatus = ACCESS_CHECK_HAS_ACCESS
+                accessCheckErrorMessage = ""
+            }
+            is AccessVerificationResult.NoAccess -> {
+                accessCheckStatus = ACCESS_CHECK_NO_ACCESS
+                accessCheckErrorMessage = ""
+            }
+            is AccessVerificationResult.Error -> {
+                accessCheckStatus = ACCESS_CHECK_ERROR
+                accessCheckErrorMessage = result.message
+            }
+        }
+    }
     
     // Анимация вращения - создаём всегда, применяем только если animationsEnabled
     val rotation = rememberRotation(animationsEnabled, durationMs = 1000)
 
     // Запускаем верификацию
-    LaunchedEffect(Unit) {
+    LaunchedEffect(showMismatchDialog, initialVerificationFinished) {
+        if (showMismatchDialog || initialVerificationFinished) return@LaunchedEffect
         val result = verifyEmail(
             email = email,
             serverUrl = serverUrl,
@@ -122,17 +169,19 @@ fun VerificationScreen(
             certificatePath = certificatePath,
             clientCertificatePath = clientCertificatePath,
             clientCertificatePassword = clientCertificatePassword,
+            alternateServerUrl = alternateServerUrl,
             verifyingAccountText = verifyingAccountText,
             verifyingEmailText = verifyingEmailText,
             sendingTestEmailText = sendingTestEmailText,
             testEmailSubjectText = testEmailSubjectText,
             testEmailBodyText = testEmailBodyText,
+            tryingBackupServerText = tryingBackupServerText,
             onStatusChange = { statusText = it }
         )
+        initialVerificationFinished = true
         
         when (result) {
             is VerificationResult.Success -> {
-                // Email подтверждён — сохраняем аккаунт
                 val addResult = accountRepo.addAccount(
                     email = email,
                     displayName = displayName,
@@ -150,7 +199,8 @@ fun VerificationScreen(
                     syncMode = syncMode,
                     certificatePath = certificatePath,
                     clientCertificatePath = clientCertificatePath,
-                    clientCertificatePassword = clientCertificatePassword
+                    clientCertificatePassword = clientCertificatePassword,
+                    alternateServerUrl = alternateServerUrl
                 )
                 
                 when (addResult) {
@@ -388,7 +438,6 @@ fun VerificationScreen(
                                 onClick = {
                                     scope.launch {
                                         showMismatchDialog = false
-                                        // Сохраняем аккаунт с actualEmail
                                         val addResult = accountRepo.addAccount(
                                             email = mismatchActualEmail,
                                             displayName = displayName,
@@ -406,7 +455,8 @@ fun VerificationScreen(
                                             syncMode = syncMode,
                                             certificatePath = certificatePath,
                                             clientCertificatePath = clientCertificatePath,
-                                            clientCertificatePassword = clientCertificatePassword
+                                            clientCertificatePassword = clientCertificatePassword,
+                                            alternateServerUrl = alternateServerUrl
                                         )
                                         
                                         when (addResult) {
@@ -444,7 +494,7 @@ fun VerificationScreen(
                                 onClick = {
                                     scope.launch {
                                         isCheckingAccess = true
-                                        accessCheckResult = null
+                                        updateAccessCheckResult(null)
                                         
                                         // Создаём временный клиент для проверки
                                         val tempClient = try {
@@ -463,7 +513,7 @@ fun VerificationScreen(
                                             )
                                         } catch (e: Exception) {
                                             isCheckingAccess = false
-                                            accessCheckResult = AccessVerificationResult.Error(e.message ?: "Unknown error")
+                                            updateAccessCheckResult(AccessVerificationResult.Error(e.message ?: "Unknown error"))
                                             return@launch
                                         }
                                         
@@ -483,7 +533,7 @@ fun VerificationScreen(
                                                 testEmailSubject = testEmailSubjectText
                                             )
                                             
-                                            accessCheckResult = result
+                                            updateAccessCheckResult(result)
                                             
                                             // Если доступ подтверждён (письмо найдено в Inbox) - сохраняем с введённым email
                                             if (result is AccessVerificationResult.HasAccess) {
@@ -507,7 +557,8 @@ fun VerificationScreen(
                                                     syncMode = syncMode,
                                                     certificatePath = certificatePath,
                                                     clientCertificatePath = clientCertificatePath,
-                                                    clientCertificatePassword = clientCertificatePassword
+                                                    clientCertificatePassword = clientCertificatePassword,
+                                                    alternateServerUrl = alternateServerUrl
                                                 )
                                                 
                                                 when (addResult) {
@@ -532,7 +583,7 @@ fun VerificationScreen(
                                                 }
                                             }
                                         } else {
-                                            accessCheckResult = AccessVerificationResult.Error((foldersResult as EasResult.Error).message)
+                                            updateAccessCheckResult(AccessVerificationResult.Error((foldersResult as EasResult.Error).message))
                                         }
                                         
                                         isCheckingAccess = false
@@ -553,6 +604,7 @@ fun VerificationScreen(
                             com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                                 onClick = {
                                     showMismatchDialog = false
+                                    updateAccessCheckResult(null)
                                     onError("CLEAR_EMAIL", createSavedDataForEmailMismatch())
                                 },
                                 text = if (isRussianLang) "Отменить" else "Cancel",
@@ -657,14 +709,16 @@ private suspend fun verifyEmail(
     certificatePath: String? = null,
     clientCertificatePath: String? = null,
     clientCertificatePassword: String? = null,
+    alternateServerUrl: String? = null,
     verifyingAccountText: String,
     verifyingEmailText: String,
     sendingTestEmailText: String,
     testEmailSubjectText: String,
     testEmailBodyText: String,
+    tryingBackupServerText: String = "",
     onStatusChange: (String) -> Unit
 ): VerificationResult {
-    val client = try {
+    var client = try {
         EasClient(
             serverUrl = serverUrl,
             username = username,
@@ -688,7 +742,36 @@ private suspend fun verifyEmail(
     // Шаг 1: Получаем список папок
     onStatusChange(verifyingAccountText)
     
-    val foldersResult = client.folderSync()
+    var foldersResult = client.folderSync()
+
+    if (foldersResult is EasResult.Error && !alternateServerUrl.isNullOrBlank()
+        && com.dedovmosol.iwomail.data.model.isConnectionLevelError(foldersResult.message)
+    ) {
+        val primaryError = foldersResult.message
+        onStatusChange(tryingBackupServerText)
+        client = try {
+            EasClient(
+                serverUrl = alternateServerUrl,
+                username = username,
+                password = password,
+                domain = domain,
+                acceptAllCerts = acceptAllCerts,
+                port = port,
+                useHttps = useSSL,
+                deviceIdSuffix = email,
+                certificatePath = certificatePath,
+                clientCertificatePath = clientCertificatePath,
+                clientCertificatePassword = clientCertificatePassword
+            )
+        } catch (_: IllegalArgumentException) {
+            return VerificationResult.Error(primaryError)
+        }
+        foldersResult = client.folderSync()
+        if (foldersResult is EasResult.Error) {
+            return VerificationResult.Error(primaryError)
+        }
+    }
+
     if (foldersResult is EasResult.Error) {
         return VerificationResult.Error(foldersResult.message)
     }

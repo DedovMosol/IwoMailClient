@@ -68,6 +68,9 @@ import kotlinx.coroutines.flow.first
 private data class FolderDisplayData(val id: String, val name: String, val count: Int, val unreadCount: Int, val type: Int)
 private data class FolderColorsData(val icon: ImageVector, val gradientColors: List<Color>)
 
+private val TaskCardColor = Color(0xFF006D77)
+private val TaskCardColorDark = Color(0xFF005F73)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -843,6 +846,7 @@ fun MainScreen(
                 onEventsTodayClick = onNavigateToCalendarToday,
                 onTasksTodayClick = onNavigateToTasksToday,
                 onComposeToEmail = onComposeToEmail,
+                onAccountSettingsClick = onNavigateToAccountSettings,
                 modifier = Modifier.padding(padding)
             )
         }
@@ -877,6 +881,7 @@ private fun HomeContent(
     onEventsTodayClick: () -> Unit = {},
     onTasksTodayClick: () -> Unit = {},
     onComposeToEmail: (String) -> Unit = {},
+    onAccountSettingsClick: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -968,6 +973,15 @@ private fun HomeContent(
         // Реактивный баннер "Нет сети" - показывается сразу при отключении
         item {
             NetworkBanner(modifier = Modifier.padding(bottom = 4.dp))
+        }
+
+        item {
+            com.dedovmosol.iwomail.ui.components.ServerStatusBanner(
+                accountId = activeAccount?.id,
+                onRetry = onSyncFolders,
+                onDetails = { activeAccount?.id?.let { onAccountSettingsClick(it) } },
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
         }
         
         // Индикатор синхронизации (карточка)
@@ -1837,7 +1851,7 @@ private fun TodayStatsCard(
                         icon = AppIcons.Task,
                         count = tasksCount,
                         label = if (isRussian) Strings.pluralTasks(tasksCount) else if (tasksCount == 1) "task" else "tasks",
-                        color = Color(0xFF7B1FA2), // Purple — как Задачи
+                        color = TaskCardColor,
                         onClick = onTasksClick
                     )
                 }
@@ -2006,7 +2020,7 @@ private fun FolderCardDisplay(
         -2 -> FolderColorsData(AppIcons.People, listOf(Color(0xFF1565C0), Color(0xFF1260B8)))
         -3 -> FolderColorsData(AppIcons.StickyNote, listOf(Color(0xFF2E7D32), Color(0xFF28742D)))
         -4 -> FolderColorsData(AppIcons.CalendarMonth, listOf(Color(0xFF1E88E5), Color(0xFF1A7FDB)))
-        -5 -> FolderColorsData(AppIcons.Task, listOf(Color(0xFFE91E63), Color(0xFFD81B60)))
+        -5 -> FolderColorsData(AppIcons.Task, listOf(TaskCardColor, TaskCardColorDark))
         -6 -> FolderColorsData(AppIcons.Folder, listOf(Color(0xFFD84315), Color(0xFFCF3E12)))
         else -> FolderColorsData(AppIcons.Folder, listOf(Color(0xFF546E7A), Color(0xFF4E6672)))
     }

@@ -40,16 +40,18 @@ class DeletedIdsTracker(
     }
 
     private fun save(context: Context) {
-        try {
-            val snapshot = if (ttlMs > 0) {
-                val now = System.currentTimeMillis()
-                ids.entries.filter { now - it.value < ttlMs }.map { it.key }.toSet()
-            } else {
-                ids.keys.toSet()
-            }
-            context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-                .edit().putStringSet(prefsKey, snapshot).apply()
-        } catch (_: Exception) { }
+        synchronized(this) {
+            try {
+                val snapshot = if (ttlMs > 0) {
+                    val now = System.currentTimeMillis()
+                    ids.entries.filter { now - it.value < ttlMs }.map { it.key }.toSet()
+                } else {
+                    ids.keys.toSet()
+                }
+                context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+                    .edit().putStringSet(prefsKey, snapshot).apply()
+            } catch (_: Exception) { }
+        }
     }
 
     private fun evictExpired() {

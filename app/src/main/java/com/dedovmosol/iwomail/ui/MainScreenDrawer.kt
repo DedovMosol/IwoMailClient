@@ -13,6 +13,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
+import com.dedovmosol.iwomail.data.model.ServerProblemType
+import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.ui.theme.AppColors
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 
@@ -244,7 +247,7 @@ fun DrawerContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(AppIcons.CheckCircle, null, tint = AppColors.tasks)
+                    Icon(AppIcons.Task, null, tint = AppColors.tasks)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = Strings.tasks,
@@ -492,27 +495,44 @@ fun AccountItem(
     isActive: Boolean,
     onClick: () -> Unit
 ) {
-    // PERF: remember — Color() не пересоздаётся при каждой рекомпозиции AccountItem
     val accountColor = remember(account.color) {
         try { Color(account.color) } catch (_: Exception) { null }
     } ?: MaterialTheme.colorScheme.primary
-    
+
+    val health by AccountServerHealthRepository.healthFlow(account.id)
+        .collectAsState()
+    val dotColor = when (health.problemType) {
+        ServerProblemType.None -> null
+        ServerProblemType.PrimaryDownUsingFallback -> Color(0xFFFFA000)
+        else -> MaterialTheme.colorScheme.error
+    }
+
     ListItem(
         headlineContent = { Text(account.displayName) },
         supportingContent = { Text(account.email) },
         leadingContent = {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(accountColor),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = account.displayName.firstOrNull()?.uppercase() ?: "?",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(accountColor),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = account.displayName.firstOrNull()?.uppercase() ?: "?",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                if (dotColor != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(dotColor)
+                    )
+                }
             }
         },
         trailingContent = {

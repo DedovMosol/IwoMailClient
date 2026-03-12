@@ -1,6 +1,6 @@
 # Privacy Policy / Политика конфиденциальности
 
-**Last updated / Последнее обновление:** February 28, 2026
+**Last updated / Последнее обновление:** March 11, 2026
 
 ---
 
@@ -24,6 +24,7 @@ The following data is stored only on your device:
 - Email messages and attachments (cached locally)
 - Drafts (stored locally and/or on the mail server)
 - Scheduled (deferred) emails awaiting send time
+- Downloaded update / rollback APK files and other app-managed local files (until deleted by you or auto-cleanup)
 - HTML signatures with formatting
 - Contacts (personal and from corporate address book)
 - Calendar events and reminders
@@ -32,7 +33,7 @@ The following data is stored only on your device:
 - Server certificates (if configured)
 - Certificate pinning data (SHA-256 hashes for MITM protection)
 - App settings and preferences
-- Sync history
+- Sync history, sync checkpoints, and notification metadata used for deduplication/reliable delivery
 - Widget display data
 
 ### Data Transmission
@@ -116,6 +117,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 - Письма и вложения (локальный кэш)
 - Черновики (хранятся локально и/или на почтовом сервере)
 - Отложенные письма, ожидающие времени отправки
+- Скачанные APK-файлы обновлений/откатов и другие локальные файлы приложения (пока вы их не удалите или их не удалит автоочистка)
 - HTML-подписи с форматированием
 - Контакты (личные и из корпоративной адресной книги)
 - События календаря и напоминания
@@ -124,7 +126,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 - Сертификаты серверов (если настроены)
 - Данные закрепления сертификатов (SHA-256 хэши для защиты от MITM)
 - Настройки приложения
-- История синхронизации
+- История синхронизации, контрольные точки синхронизации и служебные метаданные уведомлений для дедупликации и надёжной доставки
 - Данные для отображения виджета
 
 ### Передача данных

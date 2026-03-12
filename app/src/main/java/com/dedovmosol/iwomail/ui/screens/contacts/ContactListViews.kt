@@ -26,6 +26,7 @@ import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.components.DragSelectionIndicator
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier
 import com.dedovmosol.iwomail.ui.theme.AppColors
@@ -440,12 +441,10 @@ internal fun ExchangeContactItem(
             }
         },
         leadingContent = {
-            if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() }
-                )
-            } else {
+            Box(
+                modifier = Modifier.size(44.dp),
+                contentAlignment = Alignment.Center
+            ) {
                 Box(
                     modifier = Modifier
                         .size(40.dp)
@@ -457,6 +456,14 @@ internal fun ExchangeContactItem(
                         text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
                         color = Color.White,
                         fontWeight = FontWeight.Bold
+                    )
+                }
+                if (isSelectionMode) {
+                    DragSelectionIndicator(
+                        selected = isSelected,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(22.dp)
                     )
                 }
             }
@@ -604,12 +611,10 @@ internal fun ContactItemWithGroup(
             }
         },
         leadingContent = {
-            if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() }
-                )
-            } else {
+            Box(
+                modifier = Modifier.size(44.dp),
+                contentAlignment = Alignment.Center
+            ) {
                 Box(
                     modifier = Modifier
                         .size(40.dp)
@@ -621,6 +626,14 @@ internal fun ContactItemWithGroup(
                         text = contact.displayName.firstOrNull()?.uppercase() ?: "?",
                         color = Color.White,
                         fontWeight = FontWeight.Bold
+                    )
+                }
+                if (isSelectionMode) {
+                    DragSelectionIndicator(
+                        selected = isSelected,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(22.dp)
                     )
                 }
             }

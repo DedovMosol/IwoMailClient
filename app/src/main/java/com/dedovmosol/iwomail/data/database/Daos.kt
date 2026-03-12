@@ -119,6 +119,9 @@ interface AccountDao {
     @Query("UPDATE accounts SET certificatePinningEnabled = :enabled WHERE id = :accountId")
     suspend fun updateCertificatePinningEnabled(accountId: Long, enabled: Boolean)
     
+    @Query("UPDATE accounts SET alternateServerUrl = :url WHERE id = :accountId")
+    suspend fun updateAlternateServerUrl(accountId: Long, url: String?)
+    
     @Query("UPDATE accounts SET draftMode = :mode WHERE id = :accountId")
     suspend fun updateDraftMode(accountId: Long, mode: String)
     
@@ -364,10 +367,18 @@ interface EmailDao {
     suspend fun getCountsByAccount(accountId: Long): List<FolderEmailCounts>
     
     @Query("""
-        SELECT * FROM emails 
-        WHERE accountId = :accountId 
-        AND (subject LIKE '%' || :query || '%' ESCAPE '\' OR `from` LIKE '%' || :query || '%' ESCAPE '\' OR body LIKE '%' || :query || '%' ESCAPE '\')
+        SELECT * FROM emails
+        WHERE accountId = :accountId
+        AND (
+            subject LIKE '%' || :query || '%' ESCAPE '\'
+            OR `from` LIKE '%' || :query || '%' ESCAPE '\'
+            OR fromName LIKE '%' || :query || '%' ESCAPE '\'
+            OR `to` LIKE '%' || :query || '%' ESCAPE '\'
+            OR cc LIKE '%' || :query || '%' ESCAPE '\'
+            OR body LIKE '%' || :query || '%' ESCAPE '\'
+        )
         ORDER BY dateReceived DESC
+        LIMIT 500
     """)
     suspend fun search(accountId: Long, query: String): List<EmailEntity>
     
@@ -404,19 +415,22 @@ interface EmailDao {
      * КРИТИЧНО: НЕ зависит от статуса прочитанности!
      * Если письмо прочитано на другом устройстве (Outlook, смартфон) до синхронизации,
      * уведомление всё равно будет показано.
+     *
+     * Возвращает лёгкую проекцию без body: это критично при лавине новых писем,
+     * чтобы notification path не вытаскивал из БД тяжёлые HTML-тела тысяч сообщений.
      * 
      * @param accountId ID аккаунта
      * @param afterTime Время в миллисекундах - показывать письма полученные ПОСЛЕ этого времени
      */
     @Query("""
-        SELECT e.* FROM emails e 
+        SELECT e.id, e.`from`, e.fromName, e.subject, e.dateReceived FROM emails e 
         INNER JOIN folders f ON e.folderId = f.id 
         WHERE e.accountId = :accountId 
         AND f.type = 2 
         AND e.dateReceived > :afterTime 
         ORDER BY e.dateReceived DESC
     """)
-    suspend fun getNewEmailsForNotification(accountId: Long, afterTime: Long): List<EmailEntity>
+    suspend fun getNewEmailsForNotification(accountId: Long, afterTime: Long): List<NotificationEmailSummary>
     
     /**
      * Получает все непрочитанные письма из Inbox для аккаунта

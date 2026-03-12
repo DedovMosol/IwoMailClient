@@ -60,6 +60,10 @@ class BootReceiver : BroadcastReceiver() {
                     
                     RescheduleRemindersWorker.enqueue(context)
                     
+                    // Обновляем виджет — на ряде устройств ACTION_APPWIDGET_UPDATE
+                    // не отправляется после MY_PACKAGE_REPLACED
+                    com.dedovmosol.iwomail.widget.updateMailWidget(context)
+                    
                 } catch (e: Exception) {
                     android.util.Log.e(TAG, "Failed to handle boot completed", e)
                 } finally {

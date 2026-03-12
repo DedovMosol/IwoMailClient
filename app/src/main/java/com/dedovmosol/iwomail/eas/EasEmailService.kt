@@ -7,6 +7,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import android.util.Base64
+import com.dedovmosol.iwomail.util.MimeHtmlProcessor
 
 /**
  * Сервис для работы с email Exchange (EAS/EWS)
@@ -1379,77 +1380,13 @@ $deleteCommands
     }
     
     private fun extractBodyFromMime(mimeData: String): String {
-        // RFC 2045 §6.1: Content-Transfer-Encoding applies per MIME part independently
-        val htmlPartPattern = "(Content-Type:\\s*text/html[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
-        )
-        val htmlMatch = htmlPartPattern.find(mimeData)
-        if (htmlMatch != null) {
-            return decodeMimePartContent(htmlMatch.groupValues[1], htmlMatch.groupValues[2].trim())
-        }
-        
-        val textPartPattern = "(Content-Type:\\s*text/plain[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
-        )
-        val textMatch = textPartPattern.find(mimeData)
-        if (textMatch != null) {
-            return decodeMimePartContent(textMatch.groupValues[1], textMatch.groupValues[2].trim())
-        }
-        
-        return mimeData
+        return MimeHtmlProcessor.extractHtmlFromMime(mimeData)
     }
 
     private fun decodeMimeData(mimeData: String): String = try {
-        if (looksLikeBase64(mimeData)) {
-            String(Base64.decode(mimeData, Base64.DEFAULT), Charsets.UTF_8)
-        } else {
-            mimeData
-        }
+        if (looksLikeBase64(mimeData)) MimeHtmlProcessor.decodeMimeWrapper(mimeData) else mimeData
     } catch (_: Exception) {
         mimeData
-    }
-    
-    private fun decodeMimePartContent(headers: String, body: String): String {
-        val encodingMatch = "Content-Transfer-Encoding:\\s*(\\S+)".toRegex(RegexOption.IGNORE_CASE).find(headers)
-        val encoding = encodingMatch?.groupValues?.get(1)?.lowercase() ?: "7bit"
-        return when (encoding) {
-            "base64" -> try {
-                String(android.util.Base64.decode(body, android.util.Base64.DEFAULT), Charsets.UTF_8)
-            } catch (_: Exception) { body }
-            "quoted-printable" -> decodeQuotedPrintable(body)
-            else -> body
-        }
-    }
-    
-    /**
-     * Декодирует quoted-printable кодировку
-     */
-    private fun decodeQuotedPrintable(input: String): String {
-        val text = input.replace("=\r\n", "").replace("=\n", "")
-        val bytes = mutableListOf<Byte>()
-        var i = 0
-        
-        while (i < text.length) {
-            if (text[i] == '=' && i + 2 < text.length) {
-                try {
-                    val hex = text.substring(i + 1, i + 3)
-                    bytes.add(hex.toInt(16).toByte())
-                    i += 3
-                } catch (_: Exception) {
-                    bytes.add(text[i].code.toByte())
-                    i++
-                }
-            } else {
-                bytes.add(text[i].code.toByte())
-                i++
-            }
-        }
-        
-        return try {
-            String(bytes.toByteArray(), Charsets.UTF_8)
-        } catch (_: Exception) {
-            input
-        }
     }
     
     private fun parseMoveItemsResponse(xml: String): Map<String, String> {

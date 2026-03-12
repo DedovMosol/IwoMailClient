@@ -29,10 +29,15 @@ class SyncWorker(
 ) : CoroutineWorker(context, params) {
     
     private val mailRepo = RepositoryProvider.getMailRepository(applicationContext)
+    private val accountRepo = RepositoryProvider.getAccountRepository(applicationContext)
     private val settingsRepo = SettingsRepository.getInstance(applicationContext)
     private val database = MailDatabase.getInstance(applicationContext)
     
     override suspend fun doWork(): Result {
+        if (!doWorkMutex.tryLock()) {
+            android.util.Log.i("SyncWorker", "Another SyncWorker is already running, skipping")
+            return Result.success()
+        }
         return try {
             doWorkInternal()
         } catch (e: Throwable) {
@@ -40,6 +45,8 @@ class SyncWorker(
             android.util.Log.e("SyncWorker", "CRITICAL ERROR in doWork", e)
             cancelSyncNotification()
             Result.failure()
+        } finally {
+            doWorkMutex.unlock()
         }
     }
     
@@ -73,10 +80,7 @@ class SyncWorker(
         // Это дополнительная защита на случай если сервис был остановлен системой
         checkAndStartPushService(accounts)
         
-        val globalNotifFallback = settingsRepo.getLastNotificationCheckTimeSync()
-        
-        // Собираем новые письма по аккаунтам
-        val newEmailsByAccount = mutableMapOf<Long, MutableList<NotificationHelper.NewEmailInfo>>()
+        val notificationCheckedAccounts = mutableSetOf<Long>()
         var hasErrors = false
         
         // Общий бюджет времени на email sync всех аккаунтов.
@@ -154,78 +158,92 @@ class SyncWorker(
                     || folder.id in unsyncedUserFolderIds
                 val success = syncFolderWithRetry(
                     mailRepo, account.id, folder.id,
-                    allowFullResync = allowFull, tag = "SyncWorker"
+                    allowFullResync = allowFull, tag = "SyncWorker",
+                    accountRepo = accountRepo
                 )
                 if (!success) hasErrors = true
             }
             
-            var accountNotifCheck = getNotifCheckTime(applicationContext, account.id, globalNotifFallback)
-            if (accountNotifCheck == 0L) {
-                accountNotifCheck = System.currentTimeMillis() - 60_000
-            }
-
-            val newEmailEntities = database.emailDao().getNewEmailsForNotification(account.id, accountNotifCheck)
-            
-            val shownNotifications = NotificationHelper.getShownNotifications(applicationContext)
-            val filteredEmails = newEmailEntities.filter { email ->
-                val notifKey = "${account.id}_${email.id}"
-                !shownNotifications.contains(notifKey)
-            }
-            
-            if (filteredEmails.isNotEmpty()) {
-                val accountEmails = newEmailsByAccount.getOrPut(account.id) { mutableListOf() }
-                for (email in filteredEmails) {
-                    accountEmails.add(NotificationHelper.NewEmailInfo(email.id, email.fromName, email.from, email.subject, email.dateReceived))
-                }
-            }
-
-            saveNotifCheckTime(applicationContext, account.id, System.currentTimeMillis())
+            notificationCheckedAccounts.add(account.id)
         }
         
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
-        // Показываем уведомления для каждого аккаунта отдельно
-        if (newEmailsByAccount.isNotEmpty()) {
-            // КРИТИЧНО: Предзагружаем тело писем ДО показа уведомлений
-            // Это позволяет пользователю сразу видеть текст при переходе по уведомлению
-            for ((accountId, emails) in newEmailsByAccount) {
-                for (emailInfo in emails) {
-                    try {
-                        // Загружаем тело только если оно пустое
-                        val email = database.emailDao().getEmail(emailInfo.id)
-                        if (email != null && email.body.isEmpty()) {
-                            mailRepo.loadEmailBody(emailInfo.id)
-                        }
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        android.util.Log.w("SyncWorker", "Failed to preload body for ${emailInfo.id}", e)
-                        // Продолжаем с другими письмами
+        if (notificationCheckedAccounts.isNotEmpty()) {
+            val notificationsEnabled = settingsRepo.notificationsEnabled.first()
+            val notificationsCheckpointTime = System.currentTimeMillis()
+            NotificationHelper.notificationMutex.withLock {
+                for (account in activeAccounts) {
+                    if (account.id !in notificationCheckedAccounts) continue
+
+                    var accountNotifCheck = settingsRepo.getLastNotificationCheckTime(account.id)
+                    if (accountNotifCheck == 0L) {
+                        accountNotifCheck = System.currentTimeMillis() - 60_000
                     }
+
+                    val newEmailEntities =
+                        database.emailDao().getNewEmailsForNotification(account.id, accountNotifCheck)
+                    val shownNow = NotificationHelper.getShownNotifications(applicationContext)
+                    val filteredEmails = newEmailEntities.filter { email ->
+                        !shownNow.contains("${account.id}_${email.id}")
+                    }
+
+                    if (notificationsEnabled && filteredEmails.isNotEmpty()) {
+                        val totalCount = filteredEmails.size
+                        val displayEmails = filteredEmails
+                            .take(NotificationHelper.MAX_DISPLAY_EMAILS)
+                            .map { email ->
+                                NotificationHelper.NewEmailInfo(
+                                    email.id,
+                                    email.fromName,
+                                    email.from,
+                                    email.subject,
+                                    email.dateReceived
+                                )
+                            }
+                        val markReadEmailIds =
+                            if (totalCount <= NotificationHelper.MAX_MARK_READ_ACTION_EMAILS) {
+                                filteredEmails.map { it.id }
+                            } else {
+                                emptyList()
+                            }
+                        NotificationHelper.showNewMailNotification(
+                            context = applicationContext,
+                            displayEmails = displayEmails,
+                            totalCount = totalCount,
+                            markReadEmailIds = markReadEmailIds,
+                            accountId = account.id,
+                            accountEmail = account.email,
+                            settingsRepo = settingsRepo
+                        )
+                        NotificationHelper.markNotificationsAsShown(
+                            applicationContext,
+                            filteredEmails
+                                .take(NotificationHelper.MAX_SHOWN_ENTRIES)
+                                .map { "${account.id}_${it.id}" }
+                        )
+                    }
+
+                    settingsRepo.setLastNotificationCheckTime(account.id, notificationsCheckpointTime)
                 }
             }
-            
-            val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-            if (notificationsEnabled) {
-                NotificationHelper.notificationMutex.withLock {
-                    for ((accountId, emails) in newEmailsByAccount) {
-                        val shownNow = NotificationHelper.getShownNotifications(applicationContext)
-                        val filtered = emails.filter { e ->
-                            !shownNow.contains("${accountId}_${e.id}")
-                        }
-                        if (filtered.isEmpty()) continue
-                        val account = accounts.find { it.id == accountId } ?: continue
-                        NotificationHelper.showNewMailNotification(applicationContext, filtered, accountId, account.email, settingsRepo)
-                        NotificationHelper.markNotificationsAsShown(applicationContext, filtered.map { "${accountId}_${it.id}" })
-                    }
-                }
+
+            // Глобальный fallback обновляем только если проверка уведомлений завершилась
+            // для всех activeAccounts. Иначе новый аккаунт без per-account checkpoint
+            // может пропустить письма, если этот цикл оборвался по budget.
+            if (notificationCheckedAccounts.size == activeAccounts.size) {
+                settingsRepo.setLastNotificationCheckTime(notificationsCheckpointTime)
             }
         }
-        
-        settingsRepo.setLastNotificationCheckTime(System.currentTimeMillis())
         
         // Автоочистка папок (фиксируем успех только при полном успешном проходе)
         val cleanupSucceeded = performAutoTrashCleanup(accounts)
         if (!cleanupSucceeded) {
+            hasErrors = true
+        }
+
+        val appFileCleanupSucceeded = performAppFileCleanup()
+        if (!appFileCleanupSucceeded) {
             hasErrors = true
         }
         
@@ -454,6 +472,57 @@ class SyncWorker(
         }
     }
     
+    private suspend fun performAppFileCleanup(): Boolean {
+        try {
+            val now = System.currentTimeMillis()
+            val cleanupService = com.dedovmosol.iwomail.data.repository.AppFileCleanupService(applicationContext)
+            var hasCleanupErrors = false
+
+            val dlDays = settingsRepo.getAutoCleanupDownloadsDays()
+            if (dlDays > 0) {
+                val lastRun = settingsRepo.getLastAutoCleanupDownloadsTime()
+                if (now - lastRun >= dlDays * ONE_DAY_MS) {
+                    val result = cleanupService.cleanupDownloads(dlDays)
+                    if (!result.hadErrors) {
+                        settingsRepo.setLastAutoCleanupDownloadsTime(now)
+                    } else {
+                        hasCleanupErrors = true
+                    }
+                    if (result.deletedCount > 0) {
+                        android.util.Log.i(
+                            "SyncWorker",
+                            "App file cleanup: deleted ${result.deletedCount} downloads older than $dlDays days"
+                        )
+                    }
+                }
+            }
+
+            val rbDays = settingsRepo.getAutoCleanupRollbackDays()
+            if (rbDays > 0) {
+                val lastRun = settingsRepo.getLastAutoCleanupRollbackTime()
+                if (now - lastRun >= rbDays * ONE_DAY_MS) {
+                    val result = cleanupService.cleanupRollback(rbDays)
+                    if (!result.hadErrors) {
+                        settingsRepo.setLastAutoCleanupRollbackTime(now)
+                    } else {
+                        hasCleanupErrors = true
+                    }
+                    if (result.deletedCount > 0) {
+                        android.util.Log.i(
+                            "SyncWorker",
+                            "App file cleanup: deleted ${result.deletedCount} rollback files older than $rbDays days"
+                        )
+                    }
+                }
+            }
+            return !hasCleanupErrors
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("SyncWorker", "App file cleanup failed", e)
+            return false
+        }
+    }
+
     /**
      * Синхронизация контактов из GAL для Exchange аккаунтов
      * Загружает контакты и сохраняет в локальную БД
@@ -583,43 +652,13 @@ class SyncWorker(
     }
     
     companion object {
+        private val doWorkMutex = kotlinx.coroutines.sync.Mutex()
+
         private const val WORK_NAME = "mail_sync"
         private const val NIGHT_MODE_INTERVAL = 60L // 60 минут ночью
         private const val SYNC_COMPLETE_NOTIFICATION_ID = 9999
         private const val SYNC_NOTIFICATION_ID = 9998 // ID для foreground уведомления
         const val ONE_DAY_MS = 24 * 60 * 60 * 1000L // 24 часа в миллисекундах
-
-        private const val NOTIF_PREFS = "sync_worker_notif_check"
-        private val perAccountNotifTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
-        @Volatile private var notifTimesLoaded = false
-
-        private fun loadNotifTimes(context: Context) {
-            if (notifTimesLoaded) return
-            synchronized(perAccountNotifTimes) {
-                if (notifTimesLoaded) return
-                try {
-                    val prefs = context.getSharedPreferences(NOTIF_PREFS, Context.MODE_PRIVATE)
-                    for ((key, value) in prefs.all) {
-                        val accountId = key.toLongOrNull() ?: continue
-                        perAccountNotifTimes[accountId] = (value as? Long) ?: continue
-                    }
-                } catch (_: Exception) {}
-                notifTimesLoaded = true
-            }
-        }
-
-        private fun getNotifCheckTime(context: Context, accountId: Long, globalFallback: Long): Long {
-            loadNotifTimes(context)
-            return perAccountNotifTimes[accountId] ?: globalFallback
-        }
-
-        private fun saveNotifCheckTime(context: Context, accountId: Long, time: Long) {
-            perAccountNotifTimes[accountId] = time
-            try {
-                context.getSharedPreferences(NOTIF_PREFS, Context.MODE_PRIVATE)
-                    .edit().putLong(accountId.toString(), time).apply()
-            } catch (_: Exception) {}
-        }
         
         fun schedule(context: Context, intervalMinutes: Long = 15, wifiOnly: Boolean = false) {
             if (intervalMinutes <= 0) {

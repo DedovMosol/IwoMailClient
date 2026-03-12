@@ -49,6 +49,13 @@ object HtmlRegex {
     }
 }
 
+private val HTML_EMAIL_FRAGMENT = Regex(
+    "(?i)<\\s*(html|body|div|p|br|table|tr|td|th|tbody|thead|span|a|img|strong|b|i|em|u|blockquote|ul|ol|li|font|style|head)\\b"
+)
+private val ENCODED_HTML_EMAIL_FRAGMENT = Regex(
+    "(?i)&lt;\\s*(html|body|div|p|br|table|tr|td|th|tbody|thead|span|a|img|strong|b|i|em|u|blockquote|ul|ol|li|font|style|head)\\b"
+)
+
 /**
  * XSS protection: removes script tags, event handlers, and javascript: URIs.
  * Idempotent — safe to call multiple times on the same HTML.
@@ -70,6 +77,18 @@ fun sanitizeEmailHtml(html: String): String = html
     .replace(SANITIZE_EVENT_UNQUOTED, "")
     .replace(SANITIZE_JS_URI_DOUBLE, """$1="#"""")
     .replace(SANITIZE_JS_URI_SINGLE, """$1='#'""")
+
+/**
+ * Email HTML часто приходит как fragment без <html>/<body>:
+ * например только <br>, <strong>, <table>, <blockquote>.
+ * Для Exchange/Outlook это нормальный сценарий, поэтому не ограничиваемся
+ * только полными document wrappers.
+ */
+fun looksLikeHtmlEmailContent(text: String): Boolean =
+    HTML_EMAIL_FRAGMENT.containsMatchIn(text)
+
+fun looksLikeEncodedHtmlEmailContent(text: String): Boolean =
+    ENCODED_HTML_EMAIL_FRAGMENT.containsMatchIn(text)
 
 /**
  * Очистка HTML-тегов из текста, если он содержит HTML-разметку.

@@ -121,6 +121,9 @@ object Strings {
     val autoCleanupTrash: String @Composable get() = if (isRussian()) "Корзина" else "Trash"
     val autoCleanupDrafts: String @Composable get() = if (isRussian()) "Черновики" else "Drafts"
     val autoCleanupSpam: String @Composable get() = if (isRussian()) "Спам" else "Spam"
+    val autoCleanupAppFiles: String @Composable get() = if (isRussian()) "Файлы приложения" else "App files"
+    val autoCleanupDownloads: String @Composable get() = if (isRussian()) "Загрузки" else "Downloads"
+    val autoCleanupRollback: String @Composable get() = if (isRussian()) "Файлы отката" else "Rollback files"
     
     // Настройки
     val settings: String @Composable get() = if (isRussian()) "Настройки" else "Settings"
@@ -1170,6 +1173,43 @@ object Strings {
     val rollbackConfirm: String @Composable get() = if (isRussian()) "Удалить и установить" else "Uninstall & Install"
     val rollbackNotAvailable: String @Composable get() = if (isRussian()) "Предыдущая версия недоступна" else "Previous version not available"
     val rollbackChecking: String @Composable get() = if (isRussian()) "Проверка..." else "Checking..."
+
+    // Статус сервера
+    val serverUnavailable: String @Composable get() = if (isRussian()) "Сервер недоступен" else "Server unavailable"
+    val bothServersUnavailable: String @Composable get() = if (isRussian()) "Оба сервера недоступны" else "Both servers unavailable"
+    val authErrorServer: String @Composable get() = if (isRussian()) "Ошибка авторизации на сервере" else "Server authentication error"
+    val certErrorServer: String @Composable get() = if (isRussian()) "Ошибка сертификата сервера" else "Server certificate error"
+    val serverError5xx: String @Composable get() = if (isRussian()) "Сервер возвращает ошибку" else "Server error"
+    val serverTimeout: String @Composable get() = if (isRussian()) "Сервер не отвечает" else "Server not responding"
+    val dataMayBeOutdated: String @Composable get() = if (isRussian()) "Данные могут быть неактуальны" else "Data may be outdated"
+    val retrySync: String @Composable get() = if (isRussian()) "Повторить" else "Retry"
+    val connectionDetails: String @Composable get() = if (isRussian()) "Подробнее" else "Details"
+    val connectedOk: String @Composable get() = if (isRussian()) "Подключён" else "Connected"
+    val usingFallbackServer: String @Composable get() = if (isRussian()) "Используется резервный сервер" else "Using backup server"
+    val tryingBackupServer: String @Composable get() = if (isRussian()) "Пробуем резервный сервер..." else "Trying backup server..."
+    val connectionStatus: String @Composable get() = if (isRussian()) "Состояние подключения" else "Connection status"
+    val activeEndpoint: String @Composable get() = if (isRussian()) "Сервер" else "Server"
+    val lastError: String @Composable get() = if (isRussian()) "Последняя ошибка" else "Last error"
+    @Composable
+    fun timeAgo(ms: Long): String {
+        if (ms <= 0L) return never
+        val seconds = (System.currentTimeMillis() - ms) / 1000
+        return when {
+            seconds < 60 -> if (isRussian()) "Только что" else "Just now"
+            seconds < 3600 -> {
+                val m = (seconds / 60).toInt()
+                if (isRussian()) "$m мин. назад" else "$m min ago"
+            }
+            seconds < 86400 -> {
+                val h = (seconds / 3600).toInt()
+                if (isRussian()) "$h ч. назад" else "$h h ago"
+            }
+            else -> {
+                val d = (seconds / 86400).toInt()
+                if (isRussian()) "$d дн. назад" else "$d d ago"
+            }
+        }
+    }
 }
 
 /**

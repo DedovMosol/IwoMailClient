@@ -76,7 +76,8 @@ fun SetupScreen(
         email: String, displayName: String, serverUrl: String, username: String,
         password: String, domain: String, acceptAllCerts: Boolean, color: Int,
         incomingPort: Int, outgoingServer: String, outgoingPort: Int, useSSL: Boolean, syncMode: String,
-        certificatePath: String?, clientCertificatePath: String?, clientCertificatePassword: String?
+        certificatePath: String?, clientCertificatePath: String?, clientCertificatePassword: String?,
+        alternateServerUrl: String?
     ) -> Unit)? = null,
     onBackClick: (() -> Unit)? = null
 ) {
@@ -91,6 +92,7 @@ fun SetupScreen(
     var email by rememberSaveable { mutableStateOf("") }
     var serverUrl by rememberSaveable { mutableStateOf("") }
     var username by rememberSaveable { mutableStateOf("") }
+    // Секреты намеренно НЕ saveable: не кладём пароли в saved instance state Bundle.
     var password by remember { mutableStateOf("") }
     var domain by rememberSaveable { mutableStateOf("") }
     var acceptAllCerts by rememberSaveable { mutableStateOf(false) }
@@ -128,6 +130,7 @@ fun SetupScreen(
             }
         }
     }
+    var alternateServerUrl by rememberSaveable { mutableStateOf("") }
     var incomingPort by rememberSaveable { mutableStateOf("443") }
     var outgoingServer by rememberSaveable { mutableStateOf("") }
     var outgoingPort by rememberSaveable { mutableStateOf("587") }
@@ -143,6 +146,7 @@ fun SetupScreen(
     // Клиентский сертификат (.p12/.pfx)
     var clientCertificatePath by rememberSaveable { mutableStateOf<String?>(null) }
     var clientCertificateFileName by rememberSaveable { mutableStateOf<String?>(null) }
+    // Пароль клиентского сертификата тоже не сохраняем в Bundle.
     var clientCertificatePassword by remember { mutableStateOf("") }
     var clientCertPasswordVisible by rememberSaveable { mutableStateOf(false) }
     
@@ -325,6 +329,9 @@ fun SetupScreen(
                     clientCertificatePath = parts[13]
                     clientCertificateFileName = File(parts[13]).name
                 }
+                if (parts.size >= 15 && parts[14].isNotBlank()) {
+                    alternateServerUrl = parts[14]
+                }
             }
             errorMessage = emailMismatchText
         } else if (initialError != null && initialError.startsWith("EMAIL_MISMATCH:")) {
@@ -377,13 +384,16 @@ fun SetupScreen(
                     domain = parts[12]
                     username = parts[13]
                 }
+                if (parts.size >= 15 && parts[14].isNotBlank()) {
+                    alternateServerUrl = parts[14]
+                }
             }
         }
     }
     
     // Диалог выбора языка
-    var showLanguageDialog by remember { mutableStateOf(false) }
-    var showHelpScreen by remember { mutableStateOf(false) }
+    var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
+    var showHelpScreen by rememberSaveable { mutableStateOf(false) }
     
     val isEditing = editAccountId != null
     
@@ -443,6 +453,7 @@ fun SetupScreen(
                 outgoingPort = account.outgoingPort.toString()
                 useSSL = account.useSSL
                 syncMode = try { SyncMode.valueOf(account.syncMode) } catch (_: Exception) { SyncMode.PUSH }
+                alternateServerUrl = account.alternateServerUrl ?: ""
                 // Загружаем путь к серверному сертификату
                 certificatePath = account.certificatePath
                 certificatePath?.let { path ->
@@ -812,6 +823,37 @@ fun SetupScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
             )
             
+            // Резервный сервер (опционально, только для Exchange)
+            if (accountType == AccountType.EXCHANGE) {
+                val altUrlError = if (alternateServerUrl.isNotBlank() && 
+                    alternateServerUrl.trim().equals(serverUrl.trim(), ignoreCase = true)) {
+                    if (isRussian()) "Совпадает с основным сервером" else "Same as primary server"
+                } else null
+
+                OutlinedTextField(
+                    value = alternateServerUrl,
+                    onValueChange = { alternateServerUrl = it },
+                    label = {
+                        Text(if (isRussian()) "Резервный сервер (опционально)" else "Backup server (optional)")
+                    },
+                    placeholder = { Text("192.168.1.10") },
+                    supportingText = {
+                        if (altUrlError != null) {
+                            Text(altUrlError, color = MaterialTheme.colorScheme.error)
+                        } else {
+                            Text(
+                                if (isRussian()) "Внутренний или внешний адрес (автопереключение при недоступности основного)"
+                                else "Internal or external address (auto-fallback when primary is unreachable)"
+                            )
+                        }
+                    },
+                    isError = altUrlError != null,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+                )
+            }
+
             // Порт для Exchange
             if (accountType == AccountType.EXCHANGE) {
                 OutlinedTextField(
@@ -1361,7 +1403,8 @@ fun SetupScreen(
                                 // Обновление существующего аккаунта — без верификации
                                 val account = accountRepo.getAccount(editAccountId)
                                 if (account != null) {
-                                    accountRepo.updateAccount(
+                                    val trimmedAltUrl = alternateServerUrl.trim().takeIf { it.isNotBlank() && !it.equals(serverUrl.trim(), ignoreCase = true) }
+                                    when (val updateResult = accountRepo.updateAccount(
                                         account.copy(
                                             displayName = displayName,
                                             email = email,
@@ -1371,6 +1414,7 @@ fun SetupScreen(
                                             acceptAllCerts = acceptAllCerts,
                                             color = selectedColor,
                                             accountType = accountType.name,
+                                            alternateServerUrl = trimmedAltUrl,
                                             incomingPort = incomingPort.toIntOrNull() ?: 993,
                                             outgoingServer = outgoingServer,
                                             outgoingPort = outgoingPort.toIntOrNull() ?: 587,
@@ -1380,18 +1424,22 @@ fun SetupScreen(
                                             clientCertificatePath = clientCertificatePath
                                         ),
                                         password = if (password.isNotBlank()) password else null
-                                    )
-                                    // Обновляем пароль клиентского сертификата
-                                    if (clientCertificatePath != null) {
-                                        // Сертификат указан - сохраняем/обновляем пароль
-                                        if (clientCertificatePassword.isNotBlank()) {
-                                            accountRepo.updateClientCertificatePassword(editAccountId, clientCertificatePassword)
+                                    )) {
+                                        is EasResult.Success -> {
+                                            // Обновляем пароль клиентского сертификата
+                                            if (clientCertificatePath != null) {
+                                                // Сертификат указан - сохраняем/обновляем пароль
+                                                if (clientCertificatePassword.isNotBlank()) {
+                                                    accountRepo.updateClientCertificatePassword(editAccountId, clientCertificatePassword)
+                                                }
+                                            } else {
+                                                // Сертификат удален - удаляем пароль
+                                                accountRepo.updateClientCertificatePassword(editAccountId, null)
+                                            }
+                                            EasResult.Success(editAccountId)
                                         }
-                                    } else {
-                                        // Сертификат удален - удаляем пароль
-                                        accountRepo.updateClientCertificatePassword(editAccountId, null)
+                                        is EasResult.Error -> EasResult.Error(updateResult.message)
                                     }
-                                    EasResult.Success(editAccountId)
                                 } else {
                                     EasResult.Error("Аккаунт не найден")
                                 }
@@ -1399,6 +1447,7 @@ fun SetupScreen(
                                 // Для Exchange — переходим на экран верификации
                                 isLoading = false
                                 accountSaved = true
+                                val trimmedAltUrlForNav = alternateServerUrl.trim().takeIf { it.isNotBlank() && !it.equals(serverUrl.trim(), ignoreCase = true) }
                                 onNavigateToVerification(
                                     email, displayName, serverUrl, username, password, domain,
                                     acceptAllCerts, selectedColor,
@@ -1408,7 +1457,8 @@ fun SetupScreen(
                                     useSSL, syncMode.name,
                                     certificatePath,
                                     clientCertificatePath,
-                                    clientCertificatePassword.ifBlank { null }
+                                    clientCertificatePassword.ifBlank { null },
+                                    trimmedAltUrlForNav
                                 )
                                 return@launch // Выходим, навигация произойдёт
                             } else {
@@ -1579,6 +1629,19 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                 )
                 
                 HelpSection(
+                    icon = "🔄",
+                    title = "Резервный сервер (опционально)",
+                    description = "Альтернативный адрес того же Exchange сервера. Используется когда основной сервер недоступен (например, внутренний IP для корпоративной сети и внешний домен для интернета).",
+                    example = "Пример: 192.168.1.10 или mail-internal.corp.local",
+                    benefits = listOf(
+                        "✓ Автоматическое переключение при недоступности основного",
+                        "✓ Credentials не передаются при проверке (TCP-проба)",
+                        "✓ Совместимо с Exchange 2007 SP1+",
+                        "⚠️ Не расходует батарею — проверка только при ошибке соединения"
+                    )
+                )
+                
+                HelpSection(
                     icon = "🔢",
                     title = "Порт",
                     description = "Порт для подключения к серверу",
@@ -1653,6 +1716,19 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                     title = "Server",
                     description = "Exchange server address without protocol (http:// or https://)",
                     example = "Example: mail.company.com"
+                )
+                
+                HelpSection(
+                    icon = "🔄",
+                    title = "Backup server (optional)",
+                    description = "Alternative address for the same Exchange server. Used when primary is unreachable (e.g., internal IP for corporate network and external domain for internet).",
+                    example = "Example: 192.168.1.10 or mail-internal.corp.local",
+                    benefits = listOf(
+                        "✓ Automatic fallback when primary is unreachable",
+                        "✓ Credentials are not sent during probe (TCP only)",
+                        "✓ Compatible with Exchange 2007 SP1+",
+                        "⚠️ Battery-friendly — probe only on connection failure"
+                    )
                 )
                 
                 HelpSection(

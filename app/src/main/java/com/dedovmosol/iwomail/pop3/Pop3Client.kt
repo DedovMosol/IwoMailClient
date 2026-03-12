@@ -39,6 +39,8 @@ class Pop3Client(
             if (account.acceptAllCerts) {
                 put("mail.pop3.ssl.trust", "*")
                 put("mail.pop3s.ssl.trust", "*")
+                put("mail.pop3.ssl.checkserveridentity", "false")
+                put("mail.pop3s.ssl.checkserveridentity", "false")
             }
             // Таймауты для обоих протоколов
             put("mail.pop3.connectiontimeout", "15000")

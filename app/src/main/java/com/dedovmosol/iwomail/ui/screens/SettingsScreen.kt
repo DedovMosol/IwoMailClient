@@ -525,19 +525,22 @@ fun AutoCleanupDialog(
     trashDays: Int,
     draftsDays: Int,
     spamDays: Int,
+    downloadsDays: Int,
+    rollbackDays: Int,
     onTrashDaysChange: (Int) -> Unit,
     onDraftsDaysChange: (Int) -> Unit,
     onSpamDaysChange: (Int) -> Unit,
+    onDownloadsDaysChange: (Int) -> Unit,
+    onRollbackDaysChange: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     var selectedFolder by rememberSaveable { mutableStateOf<String?>(null) }
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(Strings.autoCleanup) },
         text = {
             Column {
-                // Корзина
                 AutoCleanupFolderItem(
                     icon = AppIcons.Delete,
                     title = Strings.autoCleanupTrash,
@@ -547,10 +550,9 @@ fun AutoCleanupDialog(
                     onExpandClick = { selectedFolder = if (selectedFolder == "trash") null else "trash" },
                     onDaysChange = onTrashDaysChange
                 )
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
-                // Черновики
+
                 AutoCleanupFolderItem(
                     icon = AppIcons.Drafts,
                     title = Strings.autoCleanupDrafts,
@@ -560,10 +562,9 @@ fun AutoCleanupDialog(
                     onExpandClick = { selectedFolder = if (selectedFolder == "drafts") null else "drafts" },
                     onDaysChange = onDraftsDaysChange
                 )
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
-                // Спам
+
                 AutoCleanupFolderItem(
                     icon = AppIcons.Report,
                     title = Strings.autoCleanupSpam,
@@ -572,6 +573,39 @@ fun AutoCleanupDialog(
                     isExpanded = selectedFolder == "spam",
                     onExpandClick = { selectedFolder = if (selectedFolder == "spam") null else "spam" },
                     onDaysChange = onSpamDaysChange
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = Strings.autoCleanupAppFiles,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Download,
+                    title = Strings.autoCleanupDownloads,
+                    currentDays = downloadsDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "downloads",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "downloads") null else "downloads" },
+                    onDaysChange = onDownloadsDaysChange
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                AutoCleanupFolderItem(
+                    icon = AppIcons.Restore,
+                    title = Strings.autoCleanupRollback,
+                    currentDays = rollbackDays,
+                    isRu = isRu,
+                    isExpanded = selectedFolder == "rollback",
+                    onExpandClick = { selectedFolder = if (selectedFolder == "rollback") null else "rollback" },
+                    onDaysChange = onRollbackDaysChange
                 )
             }
         },

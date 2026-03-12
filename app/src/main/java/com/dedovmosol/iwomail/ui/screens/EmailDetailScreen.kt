@@ -77,6 +77,8 @@ import com.dedovmosol.iwomail.util.extractEmailAddress
 import com.dedovmosol.iwomail.util.parseRecipientPairs
 import com.dedovmosol.iwomail.util.formatFullDate
 import com.dedovmosol.iwomail.util.formatFileSize
+import com.dedovmosol.iwomail.util.looksLikeEncodedHtmlEmailContent
+import com.dedovmosol.iwomail.util.looksLikeHtmlEmailContent
 import com.dedovmosol.iwomail.util.sanitizeEmailHtml
 import java.io.File
 
@@ -1481,13 +1483,26 @@ fun EmailDetailScreen(
                                     val data = fetchAttachmentBytes(attachment)
                                     if (data != null) {
                                         val safeFileName = attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")
+                                        val profilePath = withContext(Dispatchers.IO) {
+                                            accountRepo.getResolvedProfileRelativePath(currentEmail.accountId)
+                                        } ?: run {
+                                            Toast.makeText(
+                                                context,
+                                                NotificationStrings.localizeError(
+                                                    com.dedovmosol.iwomail.data.repository.RepositoryErrors.ACCOUNT_NOT_FOUND,
+                                                    isRussian
+                                                ),
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            return@launch
+                                        }
                                         withContext(Dispatchers.IO) {
                                             val contentValues = android.content.ContentValues().apply {
                                                 put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
                                                 put(android.provider.MediaStore.Downloads.MIME_TYPE,
                                                     android.webkit.MimeTypeMap.getSingleton()
                                                         .getMimeTypeFromExtension(File(safeFileName).extension) ?: "application/octet-stream")
-                                                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, "Download/IwoMail")
+                                                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, profilePath)
                                             }
                                             val uri = context.contentResolver.insert(
                                                 android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
@@ -1496,7 +1511,8 @@ fun EmailDetailScreen(
                                                 context.contentResolver.openOutputStream(it)?.use { out -> out.write(data) }
                                             }
                                         }
-                                        Toast.makeText(context, if (isRussian) "Сохранено в Downloads/IwoMail/" else "Saved to Downloads/IwoMail/", Toast.LENGTH_SHORT).show()
+                                        val toastPath = "Downloads/${profilePath.removePrefix("Download/")}"
+                                        Toast.makeText(context, if (isRussian) "Сохранено в $toastPath/" else "Saved to $toastPath/", Toast.LENGTH_SHORT).show()
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1641,17 +1657,7 @@ fun EmailDetailScreen(
                     // В parseEmail() мы уже добавили unescapeXml, но старые закэшированные
                     // письма в БД всё ещё содержат encoded entities. Этот safety-net
                     // исправляет и старые, и новые данные.
-                    val unescapedBody = if (rawBody.contains("&lt;") && (
-                            rawBody.contains("&lt;html", ignoreCase = true) ||
-                            rawBody.contains("&lt;body", ignoreCase = true) ||
-                            rawBody.contains("&lt;div", ignoreCase = true) ||
-                            rawBody.contains("&lt;br", ignoreCase = true) ||
-                            rawBody.contains("&lt;p>", ignoreCase = true) ||
-                            rawBody.contains("&lt;p ", ignoreCase = true) ||
-                            rawBody.contains("&lt;table", ignoreCase = true) ||
-                            rawBody.contains("&lt;span", ignoreCase = true) ||
-                            rawBody.contains("&lt;a ", ignoreCase = true)
-                        )) {
+                    val unescapedBody = if (rawBody.contains("&lt;") && looksLikeEncodedHtmlEmailContent(rawBody)) {
                         rawBody
                             .replace("&lt;", "<")
                             .replace("&gt;", ">")
@@ -1670,10 +1676,7 @@ fun EmailDetailScreen(
                         .replace(EXCHANGE_SEPARATOR_4_REGEX, "") // Убираем остатки типа *~ или *~~
                         .trim()
                     val bodyText = cleanedBody.ifEmpty { Strings.noText }
-                    val isHtml = bodyText.contains("<html", ignoreCase = true) || 
-                                 bodyText.contains("<body", ignoreCase = true) ||
-                                 bodyText.contains("<div", ignoreCase = true) ||
-                                 bodyText.contains("<p>", ignoreCase = true)
+                    val isHtml = looksLikeHtmlEmailContent(bodyText)
                     
                     if (isHtml) {
                         // HTML контент - используем WebView с белым фоном
@@ -1809,15 +1812,18 @@ fun EmailDetailScreen(
                                                     super.onPageFinished(view, url)
                                                     val measureJs = "(function(){var b=document.body,d=document.documentElement;return Math.max(b.scrollHeight||0,b.offsetHeight||0,d.scrollHeight||0);})()"
                                                     fun measure(v: WebView) {
+                                                        if (v !== webViewRef) return
                                                         try {
                                                             v.evaluateJavascript(measureJs) { result ->
+                                                                if (v !== webViewRef) return@evaluateJavascript
                                                                 val cssH = result?.replace("\"", "")?.toIntOrNull()
                                                                 if (cssH != null && cssH > 0) {
                                                                     @Suppress("DEPRECATION")
                                                                     val scale = v.scale
-                                                                    val h = (cssH.toFloat() * scale).toInt()
-                                                                    if (h > 0 && h < 20000) {
-                                                                        webViewHeight = h + 16
+                                                                    val density = v.resources.displayMetrics.density
+                                                                    val dpH = (cssH.toFloat() * scale / density).toInt()
+                                                                    if (dpH > 0 && dpH < 20000) {
+                                                                        webViewHeight = dpH + 16
                                                                     }
                                                                 }
                                                             }

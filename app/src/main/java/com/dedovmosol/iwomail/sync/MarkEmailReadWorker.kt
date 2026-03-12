@@ -3,6 +3,7 @@ package com.dedovmosol.iwomail.sync
 import android.content.Context
 import androidx.work.*
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import java.security.MessageDigest
 
 /**
  * Worker для пометки писем как прочитанных на сервере Exchange.
@@ -58,7 +59,22 @@ class MarkEmailReadWorker(
                 )
                 .build()
 
-            WorkManager.getInstance(context).enqueue(request)
+            val uniqueName = buildWorkName(emailIds)
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                uniqueName,
+                ExistingWorkPolicy.KEEP,
+                request
+            )
+        }
+
+        private fun buildWorkName(emailIds: Array<String>): String {
+            val normalized = emailIds.sortedArray()
+            val payload = normalized.joinToString("|")
+            val hash = MessageDigest.getInstance("SHA-256")
+                .digest(payload.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+                .take(16)
+            return "${WORK_NAME}_$hash"
         }
     }
 }

@@ -37,7 +37,12 @@ object NotificationHelper {
 
     private const val PREFS_NAME = "push_notifications"
     private const val KEY_SHOWN = "shown_notifications"
-    private const val MAX_SHOWN_ENTRIES = 500
+    // Crash-guard для уже показанных уведомлений. Храним ограниченный sliding window.
+    const val MAX_SHOWN_ENTRIES = 500
+    // Для UI summary достаточно первых N писем; остальное отображается счётчиком.
+    const val MAX_DISPLAY_EMAILS = 20
+    // Большой массив emailIds в PendingIntent рискует упереться в Binder limit.
+    const val MAX_MARK_READ_ACTION_EMAILS = 25
 
     fun getShownNotifications(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -67,12 +72,15 @@ object NotificationHelper {
 
     suspend fun showNewMailNotification(
         context: Context,
-        newEmails: List<NewEmailInfo>,
+        displayEmails: List<NewEmailInfo>,
+        totalCount: Int,
+        markReadEmailIds: List<String>,
         accountId: Long,
         accountEmail: String,
         settingsRepo: SettingsRepository
     ) {
-        val count = newEmails.size
+        val count = totalCount
+        if (displayEmails.isEmpty()) return
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val hasPermission = ContextCompat.checkSelfPermission(
@@ -84,8 +92,8 @@ object NotificationHelper {
         val languageCode = settingsRepo.language.first()
         val isRussian = languageCode == "ru"
 
-        val latestEmail = newEmails.maxByOrNull { it.dateReceived }
-            ?: newEmails.firstOrNull()
+        val latestEmail = displayEmails.maxByOrNull { it.dateReceived }
+            ?: displayEmails.firstOrNull()
         val senderName = latestEmail?.senderName?.takeIf { it.isNotBlank() }
             ?: latestEmail?.senderEmail?.substringBefore("@")
         val subject = latestEmail?.subject?.takeIf { it.isNotBlank() }
@@ -118,6 +126,7 @@ object NotificationHelper {
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle(NotificationStrings.getNewMailTitle(count, senderName, isRussian))
             .setContentText(NotificationStrings.getNewMailText(count, subject, isRussian))
+            .setNumber(count)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent)
@@ -127,7 +136,7 @@ object NotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_EMAIL)
 
         if (count > 1) {
-            val senders = newEmails.mapNotNull { email ->
+            val senders = displayEmails.mapNotNull { email ->
                 email.senderName?.takeIf { it.isNotBlank() }
                     ?: email.senderEmail?.substringBefore("@")
             }
@@ -142,23 +151,25 @@ object NotificationHelper {
         }
 
         val notificationId = 200_000 + accountId.toInt()
-        val markReadIntent = Intent(context, MailNotificationActionReceiver::class.java).apply {
-            action = MailNotificationActionReceiver.ACTION_MARK_READ
-            putExtra(MailNotificationActionReceiver.EXTRA_ACCOUNT_ID, accountId)
-            putExtra(MailNotificationActionReceiver.EXTRA_EMAIL_IDS, newEmails.map { it.id }.toTypedArray())
-            putExtra(MailNotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        if (markReadEmailIds.isNotEmpty()) {
+            val markReadIntent = Intent(context, MailNotificationActionReceiver::class.java).apply {
+                action = MailNotificationActionReceiver.ACTION_MARK_READ
+                putExtra(MailNotificationActionReceiver.EXTRA_ACCOUNT_ID, accountId)
+                putExtra(MailNotificationActionReceiver.EXTRA_EMAIL_IDS, markReadEmailIds.toTypedArray())
+                putExtra(MailNotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            }
+            val markReadPendingIntent = PendingIntent.getBroadcast(
+                context,
+                MailNotificationActionReceiver.requestCodeForAccount(accountId),
+                markReadIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                com.dedovmosol.iwomail.R.drawable.ic_check,
+                context.getString(com.dedovmosol.iwomail.R.string.notification_mark_read),
+                markReadPendingIntent
+            )
         }
-        val markReadPendingIntent = PendingIntent.getBroadcast(
-            context,
-            MailNotificationActionReceiver.requestCodeForAccount(accountId),
-            markReadIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        builder.addAction(
-            com.dedovmosol.iwomail.R.drawable.ic_check,
-            context.getString(com.dedovmosol.iwomail.R.string.notification_mark_read),
-            markReadPendingIntent
-        )
 
         notificationManager.notify(notificationId, builder.build())
         com.dedovmosol.iwomail.util.SoundPlayer.playReceiveSound(context)

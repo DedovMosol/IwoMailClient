@@ -36,6 +36,13 @@ class AccountRepository(private val context: Context) {
     private val easClientCache = ConcurrentHashMap<Long, EasClient>()
     // Per-account Mutex для атомарного создания EasClient (избегаем computeIfAbsent из-за suspend)
     private val easClientLocks = ConcurrentHashMap<Long, Mutex>()
+    // Метки времени fallback-клиентов для auto-switchback к primary (10 мин TTL)
+    private val fallbackTimestamps = ConcurrentHashMap<Long, Long>()
+    // Метки инвалидации для уведомления PushService о смене конфигурации клиента
+    private val clientInvalidationTimestamps = ConcurrentHashMap<Long, Long>()
+    private companion object {
+        const val FALLBACK_PROBE_INTERVAL_MS = 10 * 60 * 1000L
+    }
     
     private val securePrefs by lazy {
         try {
@@ -67,6 +74,18 @@ class AccountRepository(private val context: Context) {
     suspend fun getAccount(id: Long): AccountEntity? = accountDao.getAccount(id)
     
     suspend fun getAccountCount(): Int = accountDao.getCount()
+
+    suspend fun getResolvedProfileRelativePath(accountId: Long): String? {
+        val accounts = accountDao.getAllAccountsList()
+        val account = accounts.firstOrNull { it.id == accountId } ?: return null
+        return ProfilePathResolver.getProfileRelativePath(accounts, account.id, account.displayName)
+    }
+
+    suspend fun getResolvedCalendarRelativePath(accountId: Long): String? {
+        val accounts = accountDao.getAllAccountsList()
+        val account = accounts.firstOrNull { it.id == accountId } ?: return null
+        return ProfilePathResolver.getCalendarRelativePath(accounts, account.id, account.displayName)
+    }
     
     /**
      * Добавляет новый аккаунт после проверки подключения
@@ -88,7 +107,8 @@ class AccountRepository(private val context: Context) {
         syncMode: SyncMode = SyncMode.SCHEDULED,
         certificatePath: String? = null,
         clientCertificatePath: String? = null,
-        clientCertificatePassword: String? = null
+        clientCertificatePassword: String? = null,
+        alternateServerUrl: String? = null
     ): EasResult<Long> {
         // Проверяем что аккаунт с таким email ещё не добавлен
         val existingAccounts = accountDao.getAllAccountsList()
@@ -105,27 +125,25 @@ class AccountRepository(private val context: Context) {
         val connectionResult: EasResult<Unit> = try {
             when (accountType) {
                 AccountType.EXCHANGE -> {
-                    val client = try {
-                        EasClient(
-                            serverUrl = serverUrl,
-                            username = username,
-                            password = password,
-                            domain = domain,
-                            acceptAllCerts = acceptAllCerts,
-                            port = incomingPort,
-                            useHttps = useSSL,
-                            deviceIdSuffix = email, // Используем email для стабильного deviceId
-                            certificatePath = certificatePath,
-                            clientCertificatePath = clientCertificatePath,
-                            clientCertificatePassword = clientCertificatePassword
+                    val primaryResult = testExchangeServer(
+                        serverUrl, username, password, domain, acceptAllCerts,
+                        incomingPort, useSSL, email, certificatePath,
+                        clientCertificatePath, clientCertificatePassword
+                    )
+                    if (primaryResult is EasResult.Success) {
+                        primaryResult
+                    } else if (!alternateServerUrl.isNullOrBlank()
+                        && com.dedovmosol.iwomail.data.model.isConnectionLevelError(
+                            (primaryResult as EasResult.Error).message)
+                    ) {
+                        val altResult = testExchangeServer(
+                            alternateServerUrl, username, password, domain, acceptAllCerts,
+                            incomingPort, useSSL, email, certificatePath,
+                            clientCertificatePath, clientCertificatePassword
                         )
-                    } catch (e: IllegalArgumentException) {
-                        // Клиентский сертификат указан без пароля
-                        return EasResult.Error(e.message ?: "CLIENT_CERT_PASSWORD_REQUIRED")
-                    }
-                    when (val result = client.testConnection()) {
-                        is EasResult.Success -> EasResult.Success(Unit)
-                        is EasResult.Error -> EasResult.Error(result.message)
+                        if (altResult is EasResult.Success) altResult else primaryResult
+                    } else {
+                        primaryResult
                     }
                 }
                 AccountType.IMAP -> {
@@ -197,6 +215,7 @@ class AccountRepository(private val context: Context) {
                     email = email,
                     displayName = displayName,
                     serverUrl = serverUrl,
+                    alternateServerUrl = alternateServerUrl,
                     username = username,
                     domain = domain,
                     acceptAllCerts = acceptAllCerts,
@@ -223,9 +242,19 @@ class AccountRepository(private val context: Context) {
                 
                 // Делаем новый аккаунт активным
                 accountDao.setActiveAccount(accountId)
+
+                // Если добавление аккаунта создало коллизию имён папок, переносим
+                // существующие файлы затронутых аккаунтов в уникальные подпапки.
+                reconcileProfileFolderChanges(
+                    beforeAccounts = existingAccounts,
+                    afterAccounts = accountDao.getAllAccountsList()
+                )
                 
-                // Запускаем немедленную синхронизацию для нового аккаунта
-                com.dedovmosol.iwomail.sync.SyncWorker.syncNow(context)
+                // Планируем периодическую синхронизацию (без немедленного запуска).
+                // InitialSyncController.startSyncIfNeeded() (VerificationScreen) обеспечит
+                // первичную синхронизацию нового аккаунта. SyncWorker.syncNow() НЕ вызывается,
+                // чтобы избежать дублирующих конкурентных запросов к Exchange 2007 SP1.
+                com.dedovmosol.iwomail.sync.SyncWorker.scheduleWithNightMode(context)
                 
                 // Запускаем PushService только для Exchange аккаунтов с режимом PUSH
                 if (accountType == AccountType.EXCHANGE && syncMode == SyncMode.PUSH) {
@@ -238,43 +267,51 @@ class AccountRepository(private val context: Context) {
         }
     }
     
-    suspend fun updateAccount(account: AccountEntity, password: String? = null) {
+    suspend fun updateAccount(account: AccountEntity, password: String? = null): EasResult<Unit> {
         // Получаем старый аккаунт для очистки кэша сертификатов
         val oldAccount = accountDao.getAccount(account.id)
+            ?: return EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
+        val beforeAccounts = accountDao.getAllAccountsList()
         
         // Очищаем кэш HTTP клиентов если изменились пути к сертификатам
-        if (oldAccount != null) {
-            // Очищаем кеш для старого серверного сертификата
-            if (oldAccount.certificatePath != account.certificatePath) {
-                oldAccount.certificatePath?.let { 
-                    com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
-                }
-                // Также очищаем кеш для нового пути (если он есть)
-                account.certificatePath?.let {
-                    com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
-                }
+        // Очищаем кеш для старого серверного сертификата
+        if (oldAccount.certificatePath != account.certificatePath) {
+            oldAccount.certificatePath?.let {
+                com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
             }
-            // Очищаем кеш для старого клиентского сертификата
-            if (oldAccount.clientCertificatePath != account.clientCertificatePath) {
-                oldAccount.clientCertificatePath?.let { 
-                    com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
-                }
-                // Также очищаем кеш для нового пути (если он есть)
-                account.clientCertificatePath?.let {
-                    com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
-                }
+            // Также очищаем кеш для нового пути (если он есть)
+            account.certificatePath?.let {
+                com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
+            }
+        }
+        // Очищаем кеш для старого клиентского сертификата
+        if (oldAccount.clientCertificatePath != account.clientCertificatePath) {
+            oldAccount.clientCertificatePath?.let {
+                com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
+            }
+            // Также очищаем кеш для нового пути (если он есть)
+            account.clientCertificatePath?.let {
+                com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(it)
             }
         }
         
         // Очищаем кэшированный клиент чтобы при следующем запросе создался новый с актуальными настройками
         clearEasClientCache(account.id)
+        AccountServerHealthRepository.resetHealth(account.id)
         accountDao.update(account)
         password?.let { savePassword(account.id, it) }
+        
+        reconcileProfileFolderChanges(
+            beforeAccounts = beforeAccounts,
+            afterAccounts = accountDao.getAllAccountsList()
+        )
+        return EasResult.Success(Unit)
     }
     
     suspend fun deleteAccount(accountId: Long) {
         // Очищаем кэшированный клиент
         clearEasClientCache(accountId)
+        clientInvalidationTimestamps.remove(accountId)
         
         // Очищаем кэш PushService (heartbeat и EasClient)
         com.dedovmosol.iwomail.sync.PushService.clearAccountCache(context, accountId)
@@ -285,9 +322,14 @@ class AccountRepository(private val context: Context) {
         // Сбрасываем состояние синхронизации для этого аккаунта
         com.dedovmosol.iwomail.sync.InitialSyncController.resetAccount(accountId)
         
+        // Очищаем данные мониторинга здоровья сервера
+        AccountServerHealthRepository.clearAccount(accountId)
+        
         // Очищаем флаг первой синхронизации
         val settingsRepo = SettingsRepository.getInstance(context)
         settingsRepo.resetInitialSyncFlag(accountId)
+        settingsRepo.resetLastNotificationCheckTime(accountId)
+        val beforeAccounts = accountDao.getAllAccountsList()
         
         // Собираем пути файлов ДО удаления из БД (каскад уничтожит записи)
         val localPaths = withContext(Dispatchers.IO) {
@@ -300,11 +342,15 @@ class AccountRepository(private val context: Context) {
         val account = accountDao.getAccount(accountId)
         val certPath = account?.certificatePath
         val clientCertPath = account?.clientCertificatePath
+        val deletedProfileFolderName = account?.let {
+            ProfilePathResolver.resolveProfileFolderName(beforeAccounts, it.id, it.displayName)
+        }
         
         // Сначала удаляем из БД (каскадно удалятся папки, письма, вложения, контакты)
         accountDao.delete(accountId)
         deletePassword(accountId)
         deleteClientCertPassword(accountId)
+        val afterAccounts = accountDao.getAllAccountsList()
         
         // Только после успешного удаления из БД — чистим файлы с диска
         withContext(Dispatchers.IO) {
@@ -323,7 +369,15 @@ class AccountRepository(private val context: Context) {
                     com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(p)
                 } catch (_: Exception) {}
             }
+            
+            // Удаляем подпапку профиля из Downloads (вложения писем + календаря)
+            deletedProfileFolderName?.let { ProfilePathResolver.deleteProfileFolderByName(context, it) }
         }
+
+        reconcileProfileFolderChanges(
+            beforeAccounts = beforeAccounts,
+            afterAccounts = afterAccounts
+        )
         
         // Если удалили активный аккаунт, активируем первый доступный
         if (accountDao.getActiveAccountSync() == null) {
@@ -336,6 +390,30 @@ class AccountRepository(private val context: Context) {
         com.dedovmosol.iwomail.widget.updateMailWidget(context)
     }
     
+    private suspend fun testExchangeServer(
+        url: String, username: String, password: String, domain: String,
+        acceptAllCerts: Boolean, port: Int, useSSL: Boolean, email: String,
+        certificatePath: String?, clientCertificatePath: String?,
+        clientCertificatePassword: String?
+    ): EasResult<Unit> {
+        val client = try {
+            EasClient(
+                serverUrl = url, username = username, password = password,
+                domain = domain, acceptAllCerts = acceptAllCerts, port = port,
+                useHttps = useSSL, deviceIdSuffix = email,
+                certificatePath = certificatePath,
+                clientCertificatePath = clientCertificatePath,
+                clientCertificatePassword = clientCertificatePassword
+            )
+        } catch (e: IllegalArgumentException) {
+            return EasResult.Error(e.message ?: "CLIENT_CERT_PASSWORD_REQUIRED")
+        }
+        return when (val result = client.testConnection()) {
+            is EasResult.Success -> EasResult.Success(Unit)
+            is EasResult.Error -> EasResult.Error(result.message)
+        }
+    }
+
     suspend fun setActiveAccount(accountId: Long) {
         accountDao.setActiveAccount(accountId)
     }
@@ -382,6 +460,12 @@ class AccountRepository(private val context: Context) {
      * Кэширование предотвращает создание множества OkHttpClient и утечки памяти
      */
     suspend fun createEasClient(accountId: Long): EasClient? {
+        // Auto-switchback: если fallback-клиент просрочен, сбрасываем кэш → пробуем primary
+        val fbTime = fallbackTimestamps[accountId]
+        if (fbTime != null && System.currentTimeMillis() - fbTime > FALLBACK_PROBE_INTERVAL_MS) {
+            fallbackTimestamps.remove(accountId)
+            easClientCache.remove(accountId)
+        }
         // Fast path — без блокировки
         easClientCache[accountId]?.let { return it }
         
@@ -412,19 +496,20 @@ class AccountRepository(private val context: Context) {
             val client = try {
                 EasClient(
                     serverUrl = account.serverUrl,
+                    alternateServerUrl = account.alternateServerUrl,
                     username = account.username,
                     password = password,
                     domain = account.domain,
                     acceptAllCerts = account.acceptAllCerts,
                     port = account.incomingPort,
                     useHttps = account.useSSL,
-                    deviceIdSuffix = account.email, // Используем email для стабильного deviceId
-                    initialPolicyKey = account.policyKey, // Передаём сохранённый PolicyKey
+                    deviceIdSuffix = account.email,
+                    initialPolicyKey = account.policyKey,
                     certificatePath = account.certificatePath,
                     clientCertificatePath = account.clientCertificatePath,
                     clientCertificatePassword = clientCertPassword,
-                    pinnedCertInfo = pinnedCertInfo,  // Передаём информацию для Certificate Pinning
-                    accountId = accountId  // Передаём ID для отслеживания изменений
+                    pinnedCertInfo = pinnedCertInfo,
+                    accountId = accountId
                 )
             } catch (e: IllegalArgumentException) {
                 // Клиентский сертификат указан без пароля
@@ -439,12 +524,74 @@ class AccountRepository(private val context: Context) {
     }
     
     /**
-     * Очищает кэшированный клиент для аккаунта (при удалении или изменении настроек)
+     * Dual-URL fallback: при ошибке соединения с primary пробует alternate URL.
+     * Вызывать ТОЛЬКО при connection-level ошибках (timeout, unreachable),
+     * НЕ при auth-ошибках и НЕ при отсутствии интернета.
+     */
+    suspend fun tryFallbackToAlternate(accountId: Long): EasClient? {
+        val account = accountDao.getAccount(accountId) ?: return null
+        val altUrl = account.alternateServerUrl
+        if (altUrl.isNullOrBlank()) return null
+
+        if (!isNetworkAvailable()) return null
+
+        if (!EasClient.probeAlternateUrl(altUrl, account.incomingPort)) return null
+
+        clearEasClientCache(accountId)
+        val password = getPassword(accountId) ?: return null
+        val clientCertPassword = getClientCertPassword(accountId)
+        val pinnedCertInfo = if (account.pinnedCertificateHash != null &&
+            account.certificatePinningEnabled) {
+            com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo(
+                hash = account.pinnedCertificateHash,
+                cn = account.pinnedCertificateCN ?: "Unknown",
+                organization = account.pinnedCertificateOrg ?: "Unknown",
+                validFrom = account.pinnedCertificateValidFrom ?: 0L,
+                validTo = account.pinnedCertificateValidTo ?: 0L
+            )
+        } else null
+
+        val client = try {
+            EasClient(
+                serverUrl = altUrl,
+                alternateServerUrl = account.serverUrl,
+                username = account.username,
+                password = password,
+                domain = account.domain,
+                acceptAllCerts = account.acceptAllCerts,
+                port = account.incomingPort,
+                useHttps = account.useSSL,
+                deviceIdSuffix = account.email,
+                initialPolicyKey = account.policyKey,
+                certificatePath = account.certificatePath,
+                clientCertificatePath = account.clientCertificatePath,
+                clientCertificatePassword = clientCertPassword,
+                pinnedCertInfo = pinnedCertInfo,
+                accountId = accountId
+            )
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            return null
+        }
+
+        easClientCache[accountId] = client
+        fallbackTimestamps[accountId] = System.currentTimeMillis()
+        return client
+    }
+
+    /**
+     * Очищает кэшированный клиент для аккаунта (при удалении или изменении настроек).
+     * Также помечает момент инвалидации, чтобы PushService подхватил изменение.
      */
     fun clearEasClientCache(accountId: Long) {
         easClientCache.remove(accountId)
         easClientLocks.remove(accountId)
+        fallbackTimestamps.remove(accountId)
+        clientInvalidationTimestamps[accountId] = System.currentTimeMillis()
     }
+
+    fun getLastClientInvalidation(accountId: Long): Long =
+        clientInvalidationTimestamps[accountId] ?: 0L
 
     /**
      * Очищает весь кэш клиентов
@@ -741,7 +888,7 @@ class AccountRepository(private val context: Context) {
                 
                 val certInfo = com.dedovmosol.iwomail.network.HttpClientProvider.extractCertificateInfo(cert)
                 
-                // Сохраняем всю информацию о сертификате
+                // Сохраняем всю информацию о сертификате и гарантируем что pinning включён
                 accountDao.updatePinnedCertificate(
                     accountId = accountId,
                     hash = certInfo.hash,
@@ -750,6 +897,7 @@ class AccountRepository(private val context: Context) {
                     validFrom = certInfo.validFrom,
                     validTo = certInfo.validTo
                 )
+                accountDao.updateCertificatePinningEnabled(accountId, true)
                 accountDao.updateCertificatePinningFailCount(accountId, 0)
                 com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.clearChange(accountId)
                 clearEasClientCache(accountId)
@@ -820,6 +968,68 @@ class AccountRepository(private val context: Context) {
     
     suspend fun updateDraftMode(accountId: Long, mode: String) {
         accountDao.updateDraftMode(accountId, mode)
+    }
+
+    suspend fun updateAlternateServerUrl(accountId: Long, url: String?) {
+        accountDao.updateAlternateServerUrl(accountId, url?.takeIf { it.isNotBlank() })
+        clearEasClientCache(accountId)
+        AccountServerHealthRepository.resetHealth(accountId)
+    }
+
+    suspend fun hasAlternateUrl(accountId: Long): Boolean {
+        return accountDao.getAccount(accountId)?.alternateServerUrl?.isNotBlank() == true
+    }
+
+    private suspend fun reconcileProfileFolderChanges(
+        beforeAccounts: List<AccountEntity>,
+        afterAccounts: List<AccountEntity>
+    ) {
+        val beforeFolders = beforeAccounts.associate { account ->
+            account.id to ProfilePathResolver.resolveProfileFolderName(
+                accounts = beforeAccounts,
+                accountId = account.id,
+                displayName = account.displayName
+            )
+        }
+        val afterFolders = afterAccounts.associate { account ->
+            account.id to ProfilePathResolver.resolveProfileFolderName(
+                accounts = afterAccounts,
+                accountId = account.id,
+                displayName = account.displayName
+            )
+        }
+
+        val renames = buildList {
+            afterFolders.forEach { (accountId, newFolderName) ->
+                val oldFolderName = beforeFolders[accountId] ?: return@forEach
+                if (oldFolderName != newFolderName) {
+                    add(Triple(accountId, oldFolderName, newFolderName))
+                }
+            }
+        }
+        if (renames.isEmpty()) return
+
+        withContext(Dispatchers.IO) {
+            val oldNames = renames.map { it.second }.toSet()
+            val newNames = renames.map { it.third }.toSet()
+            val hasConflict = oldNames.intersect(newNames).isNotEmpty()
+
+            if (!hasConflict) {
+                renames.forEach { (_, old, new) ->
+                    ProfilePathResolver.renameProfileFolder(context, old, new)
+                }
+            } else {
+                val temps = renames.associate { (id, _, _) ->
+                    id to ".reconcile_tmp_$id"
+                }
+                renames.forEach { (id, old, _) ->
+                    ProfilePathResolver.renameProfileFolder(context, old, temps.getValue(id))
+                }
+                renames.forEach { (id, _, new) ->
+                    ProfilePathResolver.renameProfileFolder(context, temps.getValue(id), new)
+                }
+            }
+        }
     }
 }
 

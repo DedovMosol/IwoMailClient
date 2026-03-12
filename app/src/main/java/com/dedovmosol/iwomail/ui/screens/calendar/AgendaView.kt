@@ -42,6 +42,7 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.screens.CalendarDateFilter
+import com.dedovmosol.iwomail.ui.components.DragSelectionIndicator
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import java.text.SimpleDateFormat
@@ -421,12 +422,11 @@ private fun RecurringSeriesFolder(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (isSelectionMode) {
-                TriStateCheckbox(
+                DragSelectionIndicator(
                     state = selectionState,
-                    onClick = onSelectionToggle,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(28.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(12.dp))
             }
             Icon(
                 AppIcons.Refresh,
@@ -542,11 +542,11 @@ internal fun EventCard(
         ) {
             // Чекбокс выбора в режиме множественного выбора
             if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() }
+                DragSelectionIndicator(
+                    selected = isSelected,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(12.dp))
             }
             
             // Цветная полоска статуса
