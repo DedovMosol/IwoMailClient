@@ -841,14 +841,21 @@ fun AppNavigation(
             val dec = { s: String -> try { URLDecoder.decode(s, "UTF-8") } catch (_: Exception) { s } }
             val parts = rawParts.map { dec(it) }
             val setupBackStackEntry = navController.previousBackStackEntry
-            // Секреты читаем один раз при первом входе на экран.
-            // Иначе после onSuccess/onError (где секреты очищаются) возможна
-            // ложная ветка "Verification session expired" на промежуточной рекомпозиции.
-            val passwordAvailable = remember(backStackEntry.id) {
+            // rememberSaveable: значение выживает при смене конфигурации (поворот экрана).
+            // Обычный remember пересчитывается после recreate Activity — а к тому моменту
+            // onDispose уже успевает очистить секреты → ложный "session expired".
+            val passwordAvailable = rememberSaveable(backStackEntry.id) {
                 VerificationSecrets.password?.isNotEmpty() == true
             }
+            val activityContext = LocalContext.current
             DisposableEffect(backStackEntry.id) {
-                onDispose { VerificationSecrets.clear() }
+                onDispose {
+                    val isConfigChange = (activityContext as? android.app.Activity)
+                        ?.isChangingConfigurations == true
+                    if (!isConfigChange) {
+                        VerificationSecrets.clear()
+                    }
+                }
             }
             if (!passwordAvailable) {
                 VerificationSecrets.clear()

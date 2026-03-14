@@ -120,7 +120,7 @@ object ScrollbarDefaults {
     /** Отступ от правого края (dp) */
     const val PADDING_END = 2f
     /** Прозрачность при полной видимости */
-    const val ALPHA = 0.85f
+    const val ALPHA = 0.425f
     /** Время появления (мс) */
     const val FADE_IN_MS = 150
     /** Время исчезновения (мс) */
@@ -172,7 +172,7 @@ fun BoxScope.LazyColumnScrollbar(
     }
     
     val alpha by animateFloatAsState(
-        targetValue = if (alwaysVisible && canScroll) 1f else if (showScrollbar && canScroll) ScrollbarDefaults.ALPHA else 0f,
+        targetValue = if ((alwaysVisible || showScrollbar) && canScroll) ScrollbarDefaults.ALPHA else 0f,
         animationSpec = tween(
             durationMillis = if (showScrollbar) ScrollbarDefaults.FADE_IN_MS else ScrollbarDefaults.FADE_OUT_MS
         ),

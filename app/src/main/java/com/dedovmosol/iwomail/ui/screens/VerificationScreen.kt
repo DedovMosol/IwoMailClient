@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -44,22 +43,13 @@ sealed class AccessVerificationResult {
     data class Error(val message: String) : AccessVerificationResult()
 }
 
-private const val ACCESS_CHECK_NONE = ""
-private const val ACCESS_CHECK_HAS_ACCESS = "has_access"
-private const val ACCESS_CHECK_NO_ACCESS = "no_access"
-private const val ACCESS_CHECK_ERROR = "error"
+private const val VERIFICATION_INVALID_EMAIL = "VERIFICATION_INVALID_EMAIL"
+private const val VERIFICATION_INCONCLUSIVE = "VERIFICATION_INCONCLUSIVE"
 
-private fun restoreAccessVerificationResult(
-    status: String,
-    errorMessage: String
-): AccessVerificationResult? {
-    return when (status) {
-        ACCESS_CHECK_HAS_ACCESS -> AccessVerificationResult.HasAccess
-        ACCESS_CHECK_NO_ACCESS -> AccessVerificationResult.NoAccess
-        ACCESS_CHECK_ERROR -> AccessVerificationResult.Error(errorMessage)
-        else -> null
-    }
-}
+private data class VerificationEmailMatch(
+    val email: com.dedovmosol.iwomail.eas.EasEmail,
+    val syncKey: String
+)
 
 /**
  * Экран верификации email при добавлении Exchange аккаунта
@@ -102,6 +92,63 @@ fun VerificationScreen(
     val emailMismatchTitle = Strings.emailMismatch
     val tryingBackupServerText = Strings.tryingBackupServer
     val isRussianLang = com.dedovmosol.iwomail.ui.isRussian()
+
+    fun localizeVerificationError(message: String): String {
+        return when {
+            message == "CLIENT_CERT_PASSWORD_REQUIRED" -> {
+                if (isRussianLang) {
+                    "Требуется пароль клиентского сертификата"
+                } else {
+                    "Client certificate password required"
+                }
+            }
+            message == "CLIENT_CERT_LOAD_FAILED" -> {
+                if (isRussianLang) {
+                    "Не удалось загрузить клиентский сертификат. Проверьте пароль."
+                } else {
+                    "Failed to load client certificate. Check the password."
+                }
+            }
+            message == VERIFICATION_INVALID_EMAIL -> {
+                if (isRussianLang) {
+                    "Введите корректный email адрес"
+                } else {
+                    "Enter a valid email address"
+                }
+            }
+            message == VERIFICATION_INCONCLUSIVE -> {
+                if (isRussianLang) {
+                    "Не удалось подтвердить введённый email. Проверьте адрес или повторите попытку позже."
+                } else {
+                    "Could not verify the entered email. Check the address or try again later."
+                }
+            }
+            message.startsWith("Неверный адрес получателя:") -> {
+                val invalidAddress = message.substringAfter(":").trim()
+                if (isRussianLang) {
+                    "Неверный адрес получателя: $invalidAddress"
+                } else {
+                    "Invalid recipient address: $invalidAddress"
+                }
+            }
+            message.startsWith("Ошибка отправки письма:") -> {
+                val details = message.substringAfter(":").trim()
+                if (isRussianLang) {
+                    "Ошибка отправки письма: $details"
+                } else {
+                    "Email send error: $details"
+                }
+            }
+            message.startsWith("Ошибка отправки письма (") -> {
+                if (isRussianLang) {
+                    message
+                } else {
+                    message.replace("Ошибка отправки письма", "Email send error")
+                }
+            }
+            else -> NotificationStrings.localizeError(message, isRussianLang)
+        }
+    }
     
     // Функция для создания savedData (пароль не сохраняем)
     fun createSavedData(): String {
@@ -118,36 +165,73 @@ fun VerificationScreen(
         return "$email|$displayName|$serverUrl|$acceptAllCerts|$color|$incomingPort|$outgoingServer|$outgoingPort|$useSSL|${syncMode.name}|$certPath|$domain|$username|$clientCertPath|$altUrl"
     }
     
-    var statusText by rememberSaveable { mutableStateOf(verifyingAccountText) }
-    var showMismatchDialog by rememberSaveable { mutableStateOf(false) }
-    var mismatchEnteredEmail by rememberSaveable { mutableStateOf("") }
-    var mismatchActualEmail by rememberSaveable { mutableStateOf("") }
-    var initialVerificationFinished by rememberSaveable { mutableStateOf(false) }
+    var statusText by remember { mutableStateOf(verifyingAccountText) }
+    var showMismatchDialog by remember { mutableStateOf(false) }
+    var mismatchEnteredEmail by remember { mutableStateOf("") }
+    var mismatchActualEmail by remember { mutableStateOf("") }
     var isCheckingAccess by remember { mutableStateOf(false) }
-    var accessCheckStatus by rememberSaveable { mutableStateOf(ACCESS_CHECK_NONE) }
-    var accessCheckErrorMessage by rememberSaveable { mutableStateOf("") }
-    val accessCheckResult = remember(accessCheckStatus, accessCheckErrorMessage) {
-        restoreAccessVerificationResult(accessCheckStatus, accessCheckErrorMessage)
+    var accessCheckResult by remember { mutableStateOf<AccessVerificationResult?>(null) }
+
+    fun startInitialSync(accountId: Long) {
+        val appContext = context.applicationContext
+        val mailRepo = RepositoryProvider.getMailRepository(appContext)
+        val settingsRepo = RepositoryProvider.getSettingsRepository(appContext)
+        com.dedovmosol.iwomail.sync.InitialSyncController.startSyncIfNeeded(
+            context = appContext,
+            accountId = accountId,
+            mailRepo = mailRepo,
+            settingsRepo = settingsRepo
+        )
     }
 
-    fun updateAccessCheckResult(result: AccessVerificationResult?) {
-        when (result) {
-            null -> {
-                accessCheckStatus = ACCESS_CHECK_NONE
-                accessCheckErrorMessage = ""
+    suspend fun tryEnableCertificatePinning(accountId: Long, sourceTag: String) {
+        if (certificatePath == null) return
+        try {
+            val pinResult = accountRepo.pinCertificate(accountId)
+            if (pinResult is EasResult.Success) {
+                android.util.Log.d("VerificationScreen", "Certificate Pinning enabled automatically ($sourceTag)")
+            } else if (pinResult is EasResult.Error) {
+                android.util.Log.w("VerificationScreen", "Failed to auto-enable Certificate Pinning ($sourceTag): ${pinResult.message}")
             }
-            is AccessVerificationResult.HasAccess -> {
-                accessCheckStatus = ACCESS_CHECK_HAS_ACCESS
-                accessCheckErrorMessage = ""
+        } catch (e: Exception) {
+            android.util.Log.w("VerificationScreen", "Exception during auto-enable Certificate Pinning ($sourceTag)", e)
+        }
+    }
+
+    suspend fun saveVerifiedExchangeAccount(
+        verifiedEmail: String,
+        errorSavedData: String,
+        sourceTag: String
+    ) {
+        val addResult = accountRepo.addAccount(
+            email = verifiedEmail,
+            displayName = displayName,
+            serverUrl = serverUrl,
+            username = username,
+            password = password,
+            domain = domain,
+            acceptAllCerts = acceptAllCerts,
+            color = color,
+            accountType = AccountType.EXCHANGE,
+            incomingPort = incomingPort,
+            outgoingServer = outgoingServer,
+            outgoingPort = outgoingPort,
+            useSSL = useSSL,
+            syncMode = syncMode,
+            certificatePath = certificatePath,
+            clientCertificatePath = clientCertificatePath,
+            clientCertificatePassword = clientCertificatePassword,
+            alternateServerUrl = alternateServerUrl
+        )
+
+        when (addResult) {
+            is EasResult.Success -> {
+                val accountId = addResult.data
+                tryEnableCertificatePinning(accountId, sourceTag)
+                startInitialSync(accountId)
+                onSuccess()
             }
-            is AccessVerificationResult.NoAccess -> {
-                accessCheckStatus = ACCESS_CHECK_NO_ACCESS
-                accessCheckErrorMessage = ""
-            }
-            is AccessVerificationResult.Error -> {
-                accessCheckStatus = ACCESS_CHECK_ERROR
-                accessCheckErrorMessage = result.message
-            }
+            is EasResult.Error -> onError(addResult.message, errorSavedData)
         }
     }
     
@@ -155,8 +239,7 @@ fun VerificationScreen(
     val rotation = rememberRotation(animationsEnabled, durationMs = 1000)
 
     // Запускаем верификацию
-    LaunchedEffect(showMismatchDialog, initialVerificationFinished) {
-        if (showMismatchDialog || initialVerificationFinished) return@LaunchedEffect
+    LaunchedEffect(Unit) {
         val result = verifyEmail(
             email = email,
             serverUrl = serverUrl,
@@ -178,63 +261,14 @@ fun VerificationScreen(
             tryingBackupServerText = tryingBackupServerText,
             onStatusChange = { statusText = it }
         )
-        initialVerificationFinished = true
         
         when (result) {
             is VerificationResult.Success -> {
-                val addResult = accountRepo.addAccount(
-                    email = email,
-                    displayName = displayName,
-                    serverUrl = serverUrl,
-                    username = username,
-                    password = password,
-                    domain = domain,
-                    acceptAllCerts = acceptAllCerts,
-                    color = color,
-                    accountType = AccountType.EXCHANGE,
-                    incomingPort = incomingPort,
-                    outgoingServer = outgoingServer,
-                    outgoingPort = outgoingPort,
-                    useSSL = useSSL,
-                    syncMode = syncMode,
-                    certificatePath = certificatePath,
-                    clientCertificatePath = clientCertificatePath,
-                    clientCertificatePassword = clientCertificatePassword,
-                    alternateServerUrl = alternateServerUrl
+                saveVerifiedExchangeAccount(
+                    verifiedEmail = email,
+                    errorSavedData = createSavedData(),
+                    sourceTag = "initial verification"
                 )
-                
-                when (addResult) {
-                    is EasResult.Success -> {
-                        val accountId = addResult.data
-                        
-                        // Автоматически включаем Certificate Pinning если был загружен сертификат
-                        if (certificatePath != null) {
-                            try {
-                                val pinResult = accountRepo.pinCertificate(accountId)
-                                if (pinResult is EasResult.Success) {
-                                    android.util.Log.d("VerificationScreen", "Certificate Pinning enabled automatically for new account")
-                                } else if (pinResult is EasResult.Error) {
-                                    android.util.Log.w("VerificationScreen", "Failed to auto-enable Certificate Pinning: ${pinResult.message}")
-                                }
-                            } catch (e: Exception) {
-                                android.util.Log.w("VerificationScreen", "Exception during auto-enable Certificate Pinning", e)
-                            }
-                        }
-                        
-                        // Запускаем начальную синхронизацию в фоне
-                        scope.launch {
-                            val mailRepo = com.dedovmosol.iwomail.data.repository.MailRepository(context)
-                            val settingsRepo = com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
-                            com.dedovmosol.iwomail.sync.InitialSyncController.startSyncIfNeeded(
-                                context, accountId, mailRepo, settingsRepo
-                            )
-                        }
-                        
-                        // Пароль клиентского сертификата уже сохранен в addAccount()
-                        onSuccess()
-                    }
-                    is EasResult.Error -> onError(addResult.message, createSavedData())
-                }
             }
             is VerificationResult.EmailMismatch -> {
                 // Показываем диалог
@@ -243,22 +277,7 @@ fun VerificationScreen(
                 showMismatchDialog = true
             }
             is VerificationResult.Error -> {
-                val errorMessage = when (result.message) {
-                    "CLIENT_CERT_PASSWORD_REQUIRED" -> {
-                        if (isRussianLang) 
-                            "Требуется пароль клиентского сертификата" 
-                        else 
-                            "Client certificate password required"
-                    }
-                    "CLIENT_CERT_LOAD_FAILED" -> {
-                        if (isRussianLang)
-                            "Не удалось загрузить клиентский сертификат. Проверьте пароль."
-                        else
-                            "Failed to load client certificate. Check the password."
-                    }
-                    else -> NotificationStrings.localizeError(result.message, isRussianLang)
-                }
-                onError(errorMessage, createSavedData())
+                onError(localizeVerificationError(result.message), createSavedData())
             }
         }
     }
@@ -395,7 +414,7 @@ fun VerificationScreen(
                                     )
                                 }
                                 is AccessVerificationResult.Error -> {
-                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussianLang)
+                                    val localizedMsg = localizeVerificationError(result.message)
                                     Text(
                                         if (isRussianLang) "✗ Ошибка проверки: $localizedMsg" else "✗ Check error: $localizedMsg",
                                         style = MaterialTheme.typography.bodyMedium,
@@ -438,47 +457,11 @@ fun VerificationScreen(
                                 onClick = {
                                     scope.launch {
                                         showMismatchDialog = false
-                                        val addResult = accountRepo.addAccount(
-                                            email = mismatchActualEmail,
-                                            displayName = displayName,
-                                            serverUrl = serverUrl,
-                                            username = username,
-                                            password = password,
-                                            domain = domain,
-                                            acceptAllCerts = acceptAllCerts,
-                                            color = color,
-                                            accountType = AccountType.EXCHANGE,
-                                            incomingPort = incomingPort,
-                                            outgoingServer = outgoingServer,
-                                            outgoingPort = outgoingPort,
-                                            useSSL = useSSL,
-                                            syncMode = syncMode,
-                                            certificatePath = certificatePath,
-                                            clientCertificatePath = clientCertificatePath,
-                                            clientCertificatePassword = clientCertificatePassword,
-                                            alternateServerUrl = alternateServerUrl
+                                        saveVerifiedExchangeAccount(
+                                            verifiedEmail = mismatchActualEmail,
+                                            errorSavedData = createSavedData(),
+                                            sourceTag = "email mismatch actual mailbox"
                                         )
-                                        
-                                        when (addResult) {
-                                            is EasResult.Success -> {
-                                                val accountId = addResult.data
-                                                
-                                                // Автоматически включаем Certificate Pinning если был загружен сертификат
-                                                if (certificatePath != null) {
-                                                    try {
-                                                        val pinResult = accountRepo.pinCertificate(accountId)
-                                                        if (pinResult is EasResult.Success) {
-                                                            android.util.Log.d("VerificationScreen", "Certificate Pinning enabled automatically (mismatch case 1)")
-                                                        }
-                                                    } catch (e: Exception) {
-                                                        android.util.Log.w("VerificationScreen", "Exception during auto-enable Certificate Pinning", e)
-                                                    }
-                                                }
-                                                
-                                                onSuccess()
-                                            }
-                                            is EasResult.Error -> onError(addResult.message, createSavedData())
-                                        }
                                     }
                                 },
                                 text = if (isRussianLang) 
@@ -494,7 +477,7 @@ fun VerificationScreen(
                                 onClick = {
                                     scope.launch {
                                         isCheckingAccess = true
-                                        updateAccessCheckResult(null)
+                                        accessCheckResult = null
                                         
                                         // Создаём временный клиент для проверки
                                         val tempClient = try {
@@ -513,7 +496,7 @@ fun VerificationScreen(
                                             )
                                         } catch (e: Exception) {
                                             isCheckingAccess = false
-                                            updateAccessCheckResult(AccessVerificationResult.Error(e.message ?: "Unknown error"))
+                                            accessCheckResult = AccessVerificationResult.Error(e.message ?: "Unknown error")
                                             return@launch
                                         }
                                         
@@ -523,6 +506,7 @@ fun VerificationScreen(
                                             val folders = foldersResult.data.folders
                                             val inboxFolder = folders.find { it.type == FolderType.INBOX }
                                             val sentFolder = folders.find { it.type == FolderType.SENT_ITEMS }
+                                            val accessVerificationSubject = buildVerificationSubject(testEmailSubjectText)
                                             
                                             // Проверяем доступ
                                             val result = verifyAccessToEnteredEmail(
@@ -530,60 +514,23 @@ fun VerificationScreen(
                                                 enteredEmail = mismatchEnteredEmail,
                                                 inboxFolder = inboxFolder,
                                                 sentFolder = sentFolder,
-                                                testEmailSubject = testEmailSubjectText
+                                                testEmailSubject = accessVerificationSubject
                                             )
                                             
-                                            updateAccessCheckResult(result)
+                                            accessCheckResult = result
                                             
                                             // Если доступ подтверждён (письмо найдено в Inbox) - сохраняем с введённым email
                                             if (result is AccessVerificationResult.HasAccess) {
                                                 delay(1000) // Показываем результат
                                                 showMismatchDialog = false
-                                                
-                                                val addResult = accountRepo.addAccount(
-                                                    email = mismatchEnteredEmail,
-                                                    displayName = displayName,
-                                                    serverUrl = serverUrl,
-                                                    username = username,
-                                                    password = password,
-                                                    domain = domain,
-                                                    acceptAllCerts = acceptAllCerts,
-                                                    color = color,
-                                                    accountType = AccountType.EXCHANGE,
-                                                    incomingPort = incomingPort,
-                                                    outgoingServer = outgoingServer,
-                                                    outgoingPort = outgoingPort,
-                                                    useSSL = useSSL,
-                                                    syncMode = syncMode,
-                                                    certificatePath = certificatePath,
-                                                    clientCertificatePath = clientCertificatePath,
-                                                    clientCertificatePassword = clientCertificatePassword,
-                                                    alternateServerUrl = alternateServerUrl
+                                                saveVerifiedExchangeAccount(
+                                                    verifiedEmail = mismatchEnteredEmail,
+                                                    errorSavedData = createSavedData(),
+                                                    sourceTag = "email mismatch delegated mailbox"
                                                 )
-                                                
-                                                when (addResult) {
-                                                    is EasResult.Success -> {
-                                                        val accountId = addResult.data
-                                                        
-                                                        // Автоматически включаем Certificate Pinning если был загружен сертификат
-                                                        if (certificatePath != null) {
-                                                            try {
-                                                                val pinResult = accountRepo.pinCertificate(accountId)
-                                                                if (pinResult is EasResult.Success) {
-                                                                    android.util.Log.d("VerificationScreen", "Certificate Pinning enabled automatically (mismatch case 2)")
-                                                                }
-                                                            } catch (e: Exception) {
-                                                                android.util.Log.w("VerificationScreen", "Exception during auto-enable Certificate Pinning", e)
-                                                            }
-                                                        }
-                                                        
-                                                        onSuccess()
-                                                    }
-                                                    is EasResult.Error -> onError(addResult.message, createSavedData())
-                                                }
                                             }
                                         } else {
-                                            updateAccessCheckResult(AccessVerificationResult.Error((foldersResult as EasResult.Error).message))
+                                            accessCheckResult = AccessVerificationResult.Error((foldersResult as EasResult.Error).message)
                                         }
                                         
                                         isCheckingAccess = false
@@ -604,7 +551,7 @@ fun VerificationScreen(
                             com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                                 onClick = {
                                     showMismatchDialog = false
-                                    updateAccessCheckResult(null)
+                                    accessCheckResult = null
                                     onError("CLEAR_EMAIL", createSavedDataForEmailMismatch())
                                 },
                                 text = if (isRussianLang) "Отменить" else "Cancel",
@@ -694,6 +641,52 @@ private fun emailsMatch(email1: String, email2: String): Boolean {
     return e1.equals(e2, ignoreCase = true)
 }
 
+private fun extractVerifiedEmail(str: String): String? {
+    val bracketMatch = BRACKET_EMAIL_REGEX.find(str)
+    if (bracketMatch != null) {
+        return bracketMatch.groupValues[1].lowercase().trim()
+    }
+
+    val emailMatch = SIMPLE_EMAIL_REGEX.find(str)
+    if (emailMatch != null) {
+        return emailMatch.groupValues[1].lowercase().trim()
+    }
+
+    return null
+}
+
+private fun extractAllEmailsFromString(str: String): List<String> {
+    val bracketMatches = BRACKET_EMAIL_REGEX.findAll(str)
+        .map { it.groupValues[1].lowercase().trim() }
+        .toList()
+    if (bracketMatches.isNotEmpty()) {
+        return bracketMatches.distinct()
+    }
+
+    return SIMPLE_EMAIL_REGEX.findAll(str)
+        .map { it.groupValues[1].lowercase().trim() }
+        .distinct()
+        .toList()
+}
+
+private fun addressContainsEmail(addresses: String, targetEmail: String): Boolean {
+    val normalizedTargetEmail = extractVerifiedEmail(targetEmail) ?: return false
+    return extractAllEmailsFromString(addresses).any { it.equals(normalizedTargetEmail, ignoreCase = true) }
+}
+
+private fun buildVerificationSubject(baseSubject: String): String {
+    val token = buildString {
+        append(java.lang.Long.toString(System.currentTimeMillis(), 36))
+        append("-")
+        append(java.lang.Long.toString(System.nanoTime(), 36))
+    }
+    return "$baseSubject [$token]"
+}
+
+private fun subjectsMatch(actualSubject: String, expectedSubject: String): Boolean {
+    return actualSubject.trim().equals(expectedSubject.trim(), ignoreCase = true)
+}
+
 /**
  * Основная логика верификации email
  */
@@ -718,6 +711,8 @@ private suspend fun verifyEmail(
     tryingBackupServerText: String = "",
     onStatusChange: (String) -> Unit
 ): VerificationResult {
+    val normalizedEmail = extractVerifiedEmail(email)
+        ?: return VerificationResult.Error(VERIFICATION_INVALID_EMAIL)
     var client = try {
         EasClient(
             serverUrl = serverUrl,
@@ -790,10 +785,10 @@ private suspend fun verifyEmail(
         val sentResult = client.fetchOneEmailForVerification(sentFolder.serverId)
         if (sentResult is EasResult.Success && sentResult.data != null) {
             val sentEmail = sentResult.data
-            val fromEmail = extractEmailFromString(sentEmail.from)
+            val fromEmail = extractVerifiedEmail(sentEmail.from)
             
-            if (fromEmail.isNotEmpty() && fromEmail.contains("@")) {
-                if (emailsMatch(email, fromEmail)) {
+            if (fromEmail != null) {
+                if (emailsMatch(normalizedEmail, fromEmail)) {
                     return VerificationResult.Success
                 } else {
                     return VerificationResult.EmailMismatch(email, fromEmail)
@@ -809,98 +804,83 @@ private suspend fun verifyEmail(
         val inboxResult = client.fetchOneEmailForVerification(inboxFolder.serverId)
         if (inboxResult is EasResult.Success && inboxResult.data != null) {
             val inboxEmail = inboxResult.data
-            val toEmail = extractEmailFromString(inboxEmail.to)
-            
-            if (toEmail.isNotEmpty() && toEmail.contains("@")) {
-                if (emailsMatch(email, toEmail)) {
-                    return VerificationResult.Success
-                } else {
-                    return VerificationResult.EmailMismatch(email, toEmail)
-                }
+            val recipientEmails = extractAllEmailsFromString(inboxEmail.to)
+
+            // Inbox.To — это только список адресатов конкретного письма.
+            // Для Exchange 2007 SP1 / EAS 12.1 это не является надёжным источником
+            // "основного адреса" ящика: письмо могло прийти по alias, группе или BCC.
+            if (recipientEmails.any { emailsMatch(normalizedEmail, it) }) {
+                return VerificationResult.Success
             }
         }
     }
     
-    // Шаг 4: Отправляем тестовое письмо и проверяем "From"
+    // Шаг 4: Отправляем тестовое письмо и подтверждаем адрес по уникальному subject.
     onStatusChange(sendingTestEmailText)
+    val verificationSubject = buildVerificationSubject(testEmailSubjectText)
     
     val sendResult = client.sendMail(
-        to = email,
-        subject = testEmailSubjectText,
+        to = normalizedEmail,
+        subject = verificationSubject,
         body = testEmailBodyText
     )
     
     if (sendResult is EasResult.Error) {
-        // Не удалось отправить — считаем что email верный (fallback)
-        return VerificationResult.Success
+        return VerificationResult.Error(sendResult.message)
     }
     
     // Ждём пока письмо дойдёт
     delay(3000)
     
-    // Проверяем "From" в отправленных, итерируясь по всем batch'ам
-    var fromEmail: String? = null
-    
-    if (sentFolder != null) {
-        var found = false
-        try {
-            val initSync = client.sync(sentFolder.serverId, "0", 1)
-            if (initSync is EasResult.Success) {
-                var syncKey = initSync.data.syncKey
-                var moreAvailable = true
-                var iterations = 0
-                
-                while (moreAvailable && iterations < 30 && !found) {
-                    iterations++
-                    val batchResult = client.sync(sentFolder.serverId, syncKey, 50)
-                    if (batchResult !is EasResult.Success) break
-                    
-                    syncKey = batchResult.data.syncKey
-                    moreAvailable = batchResult.data.moreAvailable
-                    
-                    val testEmail = batchResult.data.emails.find {
-                        it.subject.contains(testEmailSubjectText, ignoreCase = true)
-                    }
-                    if (testEmail != null) {
-                        found = true
-                        fromEmail = extractEmailFromString(testEmail.from)
-                        // Удаляем тестовое письмо из Отправленных
-                        try {
-                            client.deleteEmailPermanently(sentFolder.serverId, testEmail.serverId, syncKey)
-                        } catch (_: Exception) { }
-                    }
-                    
-                    if (batchResult.data.emails.isEmpty() && batchResult.data.deletedIds.isEmpty()
-                        && batchResult.data.changedEmails.isEmpty()) break
-                }
-            }
-        } catch (_: Exception) { }
-        
-        // Если не нашли в первой итерации — повторная попытка через задержку
-        if (!found) {
-            delay(3000)
-            try {
-                findAndDeleteTestEmail(client, sentFolder.serverId, testEmailSubjectText)
-            } catch (_: Exception) { }
+    val sentMatch = sentFolder?.let {
+        findTestEmailWithRetry(
+            client = client,
+            folderId = it.serverId,
+            testSubject = verificationSubject,
+            retryDelaysMs = listOf(0L, 3000L)
+        )
+    }
+    val fromEmail = sentMatch?.let { extractVerifiedEmail(it.email.from) }
+
+    val inboxMatch = inboxFolder?.let {
+        findTestEmailWithRetry(
+            client = client,
+            folderId = it.serverId,
+            testSubject = verificationSubject,
+            targetEmail = normalizedEmail,
+            retryDelaysMs = listOf(0L, 4000L)
+        )
+    }
+
+    sentFolder?.let { folder ->
+        if (sentMatch != null) {
+            deleteMatchedEmail(client, folder.serverId, sentMatch)
+        } else {
+            findAndDeleteTestEmail(client, folder.serverId, verificationSubject)
         }
     }
-    
-    // Также удаляем из Входящих (письмо пришло самому себе)
-    if (inboxFolder != null) {
-        findAndDeleteTestEmail(client, inboxFolder.serverId, testEmailSubjectText)
+
+    inboxFolder?.let { folder ->
+        if (inboxMatch != null) {
+            deleteMatchedEmail(client, folder.serverId, inboxMatch)
+        } else {
+            findAndDeleteTestEmail(client, folder.serverId, verificationSubject, normalizedEmail)
+        }
     }
-    
-    // Проверяем FROM
-    if (fromEmail != null && fromEmail.isNotEmpty() && fromEmail.contains("@")) {
-        return if (emailsMatch(email, fromEmail)) {
+
+    if (fromEmail != null) {
+        return if (emailsMatch(normalizedEmail, fromEmail)) {
             VerificationResult.Success
         } else {
             VerificationResult.EmailMismatch(email, fromEmail)
         }
     }
-    
-    // Если ничего не сработало — считаем email верным (fallback)
-    return VerificationResult.Success
+
+    if (inboxMatch != null) {
+        return VerificationResult.Success
+    }
+
+    return VerificationResult.Error(VERIFICATION_INCONCLUSIVE)
 }
 
 /**
@@ -917,11 +897,14 @@ private suspend fun verifyAccessToEnteredEmail(
     if (inboxFolder == null) {
         return AccessVerificationResult.Error("Inbox folder not found")
     }
+
+    val normalizedEnteredEmail = extractVerifiedEmail(enteredEmail)
+        ?: return AccessVerificationResult.Error(VERIFICATION_INVALID_EMAIL)
     
     try {
         // Отправляем тестовое письмо НА введённый email
         val sendResult = client.sendMail(
-            to = enteredEmail,
+            to = normalizedEnteredEmail,
             subject = testEmailSubject,
             body = "Verification: checking access to mailbox"
         )
@@ -935,18 +918,18 @@ private suspend fun verifyAccessToEnteredEmail(
         delay(3000)
         
         // Проверяем входящие - пришло ли письмо (попытка 1)
-        var testEmail = findTestEmail(client, inboxFolder.serverId, testEmailSubject, enteredEmail)
+        var testEmail = findTestEmail(client, inboxFolder.serverId, testEmailSubject, normalizedEnteredEmail)
         
         // Если не нашли - ждём ещё и пробуем снова
         if (testEmail == null) {
             delay(4000)
-            testEmail = findTestEmail(client, inboxFolder.serverId, testEmailSubject, enteredEmail)
+            testEmail = findTestEmail(client, inboxFolder.serverId, testEmailSubject, normalizedEnteredEmail)
         }
         
         if (testEmail != null) {
             // Письмо найдено в Inbox - ДОКАЗАТЕЛЬСТВО доступа
             // Удаляем тестовое письмо из Входящих
-            findAndDeleteTestEmail(client, inboxFolder.serverId, testEmailSubject)
+            deleteMatchedEmail(client, inboxFolder.serverId, testEmail)
             
             // Удаляем из Отправленных (с повторной попыткой и задержкой)
             deleteSentTestEmail(client, sentFolder, testEmailSubject)
@@ -973,12 +956,12 @@ private suspend fun verifyAccessToEnteredEmail(
  */
 private suspend fun findTestEmail(
     client: EasClient,
-    inboxFolderId: String,
+    folderId: String,
     testSubject: String,
-    targetEmail: String
-): com.dedovmosol.iwomail.eas.EasEmail? {
+    targetEmail: String? = null
+): VerificationEmailMatch? {
     return try {
-        val initSync = client.sync(inboxFolderId, "0", 1)
+        val initSync = client.sync(folderId, "0", 1)
         if (initSync !is EasResult.Success) return null
         
         var syncKey = initSync.data.syncKey
@@ -987,17 +970,17 @@ private suspend fun findTestEmail(
         
         while (moreAvailable && iterations < 30) {
             iterations++
-            val result = client.sync(inboxFolderId, syncKey, 50)
+            val result = client.sync(folderId, syncKey, 50)
             if (result !is EasResult.Success) break
             
             syncKey = result.data.syncKey
             moreAvailable = result.data.moreAvailable
             
             val found = result.data.emails.find {
-                it.subject.contains(testSubject, ignoreCase = true) &&
-                it.to.contains(targetEmail, ignoreCase = true)
+                subjectsMatch(it.subject, testSubject) &&
+                (targetEmail == null || addressContainsEmail(it.to, targetEmail))
             }
-            if (found != null) return found
+            if (found != null) return VerificationEmailMatch(found, syncKey)
             
             if (result.data.emails.isEmpty() && result.data.deletedIds.isEmpty() 
                 && result.data.changedEmails.isEmpty()) break
@@ -1006,6 +989,35 @@ private suspend fun findTestEmail(
     } catch (_: Exception) {
         null
     }
+}
+
+private suspend fun findTestEmailWithRetry(
+    client: EasClient,
+    folderId: String,
+    testSubject: String,
+    targetEmail: String? = null,
+    retryDelaysMs: List<Long>
+): VerificationEmailMatch? {
+    for (retryDelayMs in retryDelaysMs) {
+        if (retryDelayMs > 0) {
+            delay(retryDelayMs)
+        }
+        val match = findTestEmail(client, folderId, testSubject, targetEmail)
+        if (match != null) {
+            return match
+        }
+    }
+    return null
+}
+
+private suspend fun deleteMatchedEmail(
+    client: EasClient,
+    folderId: String,
+    match: VerificationEmailMatch
+) {
+    try {
+        client.deleteEmailPermanently(folderId, match.email.serverId, match.syncKey)
+    } catch (_: Exception) { }
 }
 
 /**
@@ -1034,35 +1046,13 @@ private suspend fun deleteSentTestEmail(
 private suspend fun findAndDeleteTestEmail(
     client: EasClient,
     folderId: String,
-    subjectContains: String
+    subjectContains: String,
+    targetEmail: String? = null
 ): Boolean {
+    val match = findTestEmail(client, folderId, subjectContains, targetEmail) ?: return false
     return try {
-        val initSync = client.sync(folderId, "0", 1)
-        if (initSync !is EasResult.Success) return false
-        
-        var syncKey = initSync.data.syncKey
-        var moreAvailable = true
-        var iterations = 0
-        
-        while (moreAvailable && iterations < 30) {
-            iterations++
-            val result = client.sync(folderId, syncKey, 50)
-            if (result !is EasResult.Success) break
-            
-            syncKey = result.data.syncKey
-            moreAvailable = result.data.moreAvailable
-            
-            val found = result.data.emails.find {
-                it.subject.contains(subjectContains, ignoreCase = true)
-            }
-            if (found != null) {
-                client.deleteEmailPermanently(folderId, found.serverId, syncKey)
-                return true
-            }
-            if (result.data.emails.isEmpty() && result.data.deletedIds.isEmpty()
-                && result.data.changedEmails.isEmpty()) break
-        }
-        false
+        client.deleteEmailPermanently(folderId, match.email.serverId, match.syncKey)
+        true
     } catch (_: Exception) {
         false
     }
