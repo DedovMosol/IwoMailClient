@@ -48,10 +48,12 @@ class EasCalendarSyncService(
         val easResult = syncCalendarEasFromFolders(folders)
 
         if (easResult is EasResult.Success && easResult.data.events.isNotEmpty()) {
+            var attachmentMetadataReliable = easResult.data.attachmentMetadataReliable
             val withAttFix = try {
                 attachmentService.supplementAttachmentsViaEws(easResult.data.events)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                attachmentMetadataReliable = false
                 android.util.Log.w("EasCalendarSyncService", "supplementAttachmentsViaEws failed: ${e.message}")
                 easResult.data.events
             }
@@ -59,7 +61,8 @@ class EasCalendarSyncService(
                 EasCalendarService.CalendarSyncResult(
                     events = withAttFix,
                     deletedServerIds = easResult.data.deletedServerIds,
-                    isAuthoritativeSnapshot = easResult.data.isAuthoritativeSnapshot
+                    isAuthoritativeSnapshot = easResult.data.isAuthoritativeSnapshot,
+                    attachmentMetadataReliable = attachmentMetadataReliable
                 )
             )
         }
@@ -148,7 +151,6 @@ class EasCalendarSyncService(
             <GetChanges/>
             <WindowSize>100</WindowSize>
             <Options>
-                <FilterType>0</FilterType>
                 <airsyncbase:BodyPreference>
                     <airsyncbase:Type>1</airsyncbase:Type>
                     <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
@@ -361,6 +363,9 @@ class EasCalendarSyncService(
                 android.util.Log.d("EasCalendarSyncService",
                     "syncCalendarEwsNtlm: ${needAttachments.size} events need attachment fetch via GetItem")
                 val attachmentMap = attachmentService.fetchCalendarAttachmentsEws(ewsUrl, needAttachments.map { it.serverId })
+                if (attachmentMap.size < needAttachments.size) {
+                    return EasResult.Error("EWS GetItem returned partial attachment metadata")
+                }
                 val updatedEvents = events.map { event ->
                     val att = attachmentMap[event.serverId]
                     if (!att.isNullOrBlank()) event.copy(attachments = att) else event

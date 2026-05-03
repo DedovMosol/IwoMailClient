@@ -31,13 +31,17 @@ import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.components.RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppColorTheme
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.util.HtmlRegex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,11 +56,11 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val isRu = isRussian()
-    
+
     val accounts by accountRepo.accounts.collectAsState(initial = emptyList())
     var accountToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
     val accountToDelete = accountToDeleteId?.let { id -> accounts.find { it.id == id } }
-    
+
     // Диалог подтверждения удаления — стиль единый с удалением писем, событий, задач и т.д.
     accountToDelete?.let { account ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -83,7 +87,7 @@ fun SettingsScreen(
             }
         )
     }
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -129,7 +133,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(16.dp)
                 )
             }
-            
+
             items(accounts, key = { it.id }) { account ->
                 AccountCard(
                     account = account,
@@ -137,7 +141,7 @@ fun SettingsScreen(
                     onSettingsClick = { onNavigateToAccountSettings(account.id) }
                 )
             }
-            
+
             // Кнопка добавления аккаунта
             item {
                 ListItem(
@@ -160,11 +164,11 @@ fun SettingsScreen(
                     modifier = Modifier.clickable(onClick = onAddAccount)
                 )
             }
-            
+
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
-            
+
             // === СЕКЦИЯ: ВНЕШНИЙ ВИД ===
             item {
                 Text(
@@ -174,7 +178,7 @@ fun SettingsScreen(
                     modifier = Modifier.padding(16.dp)
                 )
             }
-            
+
             // Персонализация интерфейса - открывает отдельный экран
             item {
                 ListItem(
@@ -187,7 +191,7 @@ fun SettingsScreen(
                     modifier = Modifier.clickable { onNavigateToPersonalization() }
                 )
             }
-            
+
         }
         LazyColumnScrollbar(
             listState = listState,
@@ -211,13 +215,13 @@ private fun AccountCard(
     } catch (_: Exception) {
         AccountType.EXCHANGE
     }
-    
+
     val accountColor = try {
         Color(account.color)
     } catch (_: Exception) {
         MaterialTheme.colorScheme.primary
     }
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -229,13 +233,13 @@ private fun AccountCard(
         Column {
             // Заголовок аккаунта
             ListItem(
-                headlineContent = { 
+                headlineContent = {
                     Text(
                         account.displayName,
                         fontWeight = if (account.isActive) FontWeight.Bold else FontWeight.Normal
                     )
                 },
-                supportingContent = { 
+                supportingContent = {
                     Column {
                         Text(account.email)
                         // Показываем сертификат если есть (кликабельный — ведёт в настройки аккаунта)
@@ -296,7 +300,7 @@ private fun AccountCard(
                         }
                         IconButton(onClick = onDeleteClick) {
                             Icon(
-                                AppIcons.Delete, 
+                                AppIcons.Delete,
                                 Strings.delete,
                                 tint = MaterialTheme.colorScheme.error
                             )
@@ -378,7 +382,7 @@ fun ContactsSyncDialog(
         14 to (NotificationStrings.getEveryTwoWeeks(isRu)),
         30 to (NotificationStrings.getMonthly(isRu))
     )
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(Strings.contactsSync) },
@@ -390,7 +394,7 @@ fun ContactsSyncDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
-                
+
                 options.forEach { (days, label) ->
                     Row(
                         modifier = Modifier
@@ -446,7 +450,7 @@ private fun DayThemeRow(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val currentTheme = AppColorTheme.fromCode(currentThemeCode)
-    
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -460,9 +464,9 @@ private fun DayThemeRow(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.width(110.dp)
         )
-        
+
         Spacer(modifier = Modifier.weight(1f))
-        
+
         // Кружок с цветом - выровнен по правому краю
         Box(
             modifier = Modifier
@@ -470,7 +474,7 @@ private fun DayThemeRow(
                 .clip(CircleShape)
                 .background(currentTheme.gradientStart)
         )
-        
+
         // Название темы - фиксированная ширина для выравнивания
         Text(
             text = getThemeDisplayName(currentTheme, isRu),
@@ -480,14 +484,14 @@ private fun DayThemeRow(
                 .width(100.dp)
                 .padding(start = 8.dp)
         )
-        
+
         Icon(
             AppIcons.ArrowDropDown,
             contentDescription = null,
             modifier = Modifier.size(20.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        
+
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
@@ -629,7 +633,7 @@ private fun AutoCleanupFolderItem(
     onDaysChange: (Int) -> Unit
 ) {
     val currentOption = SettingsRepository.AutoCleanupDays.fromDays(currentDays)
-    
+
     Column {
         Row(
             modifier = Modifier
@@ -662,7 +666,7 @@ private fun AutoCleanupFolderItem(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        
+
         if (isExpanded) {
             Column(modifier = Modifier.padding(start = 36.dp)) {
                 SettingsRepository.AutoCleanupDays.entries.forEach { option ->
@@ -704,13 +708,13 @@ fun SignaturesManagementDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val database = remember { com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context) }
-    
+
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     var editingSignatureId by rememberSaveable { mutableStateOf<Long?>(null) }
     val editingSignature = editingSignatureId?.let { id -> signatures.find { it.id == id } }
     var signatureToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
     val signatureToDelete = signatureToDeleteId?.let { id -> signatures.find { it.id == id } }
-    
+
     // Диалог добавления/редактирования подписи
     if (showAddDialog || editingSignature != null) {
         // Первая подпись всегда default
@@ -718,7 +722,7 @@ fun SignaturesManagementDialog(
         // Если редактируем единственную подпись — она тоже всегда default
         val isOnlySignature = signatures.size == 1 && editingSignature != null
         val forceDefault = isFirstSignature || isOnlySignature
-        
+
         SignatureEditDialog(
             isRu = isRu,
             signature = editingSignature,
@@ -731,7 +735,7 @@ fun SignaturesManagementDialog(
                     if (actualIsDefault) {
                         database.signatureDao().clearDefaultForAccount(accountId)
                     }
-                    
+
                     val currentEditing = editingSignature
                     if (currentEditing != null) {
                         // Редактирование — update
@@ -768,7 +772,7 @@ fun SignaturesManagementDialog(
             }
         )
     }
-    
+
     // Диалог подтверждения удаления
     signatureToDelete?.let { signature ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -782,7 +786,7 @@ fun SignaturesManagementDialog(
                         scope.launch {
                             val wasDefault = signature.isDefault
                             database.signatureDao().delete(signature.id)
-                            
+
                             // Если удалили default подпись — назначить следующую по createdAt
                             if (wasDefault) {
                                 val remaining = database.signatureDao().getSignaturesByAccountList(accountId)
@@ -794,7 +798,7 @@ fun SignaturesManagementDialog(
                                     }
                                 }
                             }
-                            
+
                             onSignaturesChanged(database.signatureDao().getSignaturesByAccountList(accountId))
                         }
                         signatureToDeleteId = null
@@ -810,7 +814,7 @@ fun SignaturesManagementDialog(
             }
         )
     }
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(Strings.signaturesTitle) },
@@ -878,7 +882,7 @@ fun SignaturesManagementDialog(
                         HorizontalDivider()
                     }
                 }
-                
+
                 // Кнопка добавления (максимум 5 подписей)
                 if (signatures.size < 5) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -918,7 +922,39 @@ private fun SignatureEditDialog(
     var text by rememberSaveable { mutableStateOf(signature?.text ?: "") }
     var isDefault by rememberSaveable { mutableStateOf(if (forceDefault) true else (signature?.isDefault ?: false)) }
     var isHtml by rememberSaveable { mutableStateOf(signature?.isHtml ?: false) }
-    
+    val richTextController = com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController()
+    val scope = rememberCoroutineScope()
+    var isSaving by remember { mutableStateOf(false) }
+
+    fun saveSignature() {
+        if (isSaving) return
+        isSaving = true
+        if (isHtml) {
+            scope.launch {
+                var flushId: Long? = null
+                val flushedHtml = withTimeoutOrNull(RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS) {
+                    suspendCancellableCoroutine<String?> { continuation ->
+                        flushId = richTextController.flushHtml { html ->
+                            if (continuation.isActive) continuation.resume(html)
+                        }
+                        if (flushId == null && continuation.isActive) {
+                            continuation.resume(null)
+                        }
+                        continuation.invokeOnCancellation {
+                            flushId?.let { richTextController.cancelPendingFlush(it) }
+                        }
+                    }
+                }
+                if (flushedHtml == null) {
+                    flushId?.let { richTextController.cancelPendingFlush(it) }
+                }
+                onSave(name, flushedHtml ?: text, isDefault, true)
+            }
+        } else {
+            onSave(name, text, isDefault, false)
+        }
+    }
+
     // Функция конвертации plain text → HTML
     fun plainToHtml(plain: String): String {
         return plain
@@ -927,7 +963,7 @@ private fun SignatureEditDialog(
             .replace(">", "&gt;")
             .replace("\n", "<br>")
     }
-    
+
     // Функция конвертации HTML → plain text (простая)
     fun htmlToPlain(html: String): String {
         return html
@@ -940,7 +976,7 @@ private fun SignatureEditDialog(
             .replace("&#39;", "'")
             .replace("&nbsp;", " ")
     }
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (signature != null) Strings.editTitle else Strings.newSignatureTitle) },
@@ -954,14 +990,14 @@ private fun SignatureEditDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
-                
+
                 // Переключатель HTML форматирования
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { 
+                        .clickable {
                             // Конвертируем текст при переключении режима
                             text = if (isHtml) {
                                 // HTML → plain text
@@ -970,7 +1006,7 @@ private fun SignatureEditDialog(
                                 // plain text → HTML
                                 plainToHtml(text)
                             }
-                            isHtml = !isHtml 
+                            isHtml = !isHtml
                         },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -993,14 +1029,13 @@ private fun SignatureEditDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(if (isRu) "HTML форматирование" else "HTML formatting")
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 if (isHtml) {
                     // HTML редактор
-                    val richTextController = com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController()
                     val isDarkTheme = !MaterialTheme.colorScheme.background.luminance().let { it > 0.5f }
-                    
+
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1042,9 +1077,9 @@ private fun SignatureEditDialog(
                         maxLines = 6
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
-                
+
                 // Галочка "По умолчанию" — нельзя снять если это единственная/первая подпись или уже default
                 val canToggleDefault = !forceDefault && !currentIsDefault
                 Row(
@@ -1068,9 +1103,9 @@ private fun SignatureEditDialog(
         },
         confirmButton = {
             com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                onClick = { onSave(name, text, isDefault, isHtml) },
+                onClick = { saveSignature() },
                 text = Strings.save,
-                enabled = name.isNotBlank() && text.isNotBlank()
+                enabled = !isSaving && name.isNotBlank() && text.isNotBlank()
             )
         },
         dismissButton = {

@@ -2,7 +2,7 @@ package com.dedovmosol.iwomail.ui.screens
 
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -46,6 +46,7 @@ import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.components.ContactPickerDialog
 import com.dedovmosol.iwomail.ui.components.NetworkBanner
+import com.dedovmosol.iwomail.ui.components.RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS
 import com.dedovmosol.iwomail.ui.components.RichTextEditor
 import com.dedovmosol.iwomail.ui.components.RichTextToolbar
 import com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController
@@ -78,7 +79,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,22 +104,22 @@ fun ComposeScreen(
     val currentLanguage = LocalLanguage.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
-    
+
     // Контроллер отложенной отправки
     val sendController = com.dedovmosol.iwomail.ui.components.LocalSendController.current
-    
+
     // Аккаунт отправителя
     var activeAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var allAccounts by remember { mutableStateOf<List<AccountEntity>>(emptyList()) }
     var showAccountPicker by rememberSaveable { mutableStateOf(false) }
     // Сохраняем ID активного аккаунта для восстановления после фона
     var savedActiveAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
-    
+
     var to by rememberSaveable { mutableStateOf("") }
     var cc by rememberSaveable { mutableStateOf("") }
     var bcc by rememberSaveable { mutableStateOf("") }
     var subject by rememberSaveable { mutableStateOf("") }
-    
+
     val isToValid by remember { derivedStateOf { to.isBlank() || isValidRecipientList(to) } }
     val isCcValid by remember { derivedStateOf { isValidRecipientList(cc) } }
     val isBccValid by remember { derivedStateOf { isValidRecipientList(bcc) } }
@@ -124,22 +128,47 @@ fun ComposeScreen(
     var body by rememberSaveable(stateSaver = bodySaver) { mutableStateOf("") }
     var isSending by rememberSaveable { mutableStateOf(false) }
     var showCcBcc by rememberSaveable { mutableStateOf(false) }
-    
+
     // Флаг для скрытия WebView перед навигацией (избегаем краша RenderThread)
     var hideWebView by remember { mutableStateOf(false) }
-    
+
     // Rich Text Editor контроллер
     val richTextController = rememberRichTextEditorController()
-    
+
+    suspend fun flushEditorHtml() {
+        var flushId: Long? = null
+        val flushedHtml = withTimeoutOrNull(RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS) {
+            suspendCancellableCoroutine<String?> { continuation ->
+                flushId = richTextController.flushHtml { html ->
+                    if (continuation.isActive) continuation.resume(html)
+                }
+                if (flushId == null && continuation.isActive) {
+                    continuation.resume(null)
+                }
+                continuation.invokeOnCancellation {
+                    flushId?.let { richTextController.cancelPendingFlush(it) }
+                }
+            }
+        }
+        if (flushedHtml != null) {
+            body = flushedHtml
+        } else {
+            flushId?.let { richTextController.cancelPendingFlush(it) }
+        }
+    }
+
     // Сохраняем вложения как строки для переживания поворота экрана
     var attachmentStrings by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
-    val attachments = remember(attachmentStrings) { 
-        attachmentStrings.mapNotNull { AttachmentInfo.fromSaveableString(it) } 
+    val attachments = remember(attachmentStrings) {
+        attachmentStrings.mapNotNull { AttachmentInfo.fromSaveableString(it) }
     }
     var requestReadReceipt by rememberSaveable { mutableStateOf(false) }
     var requestDeliveryReceipt by rememberSaveable { mutableStateOf(false) }
     var highPriority by rememberSaveable { mutableStateOf(false) }
-    
+    // SmartForward: сохраняем source для пересылки (MS-ASCMD §2.2.1.19)
+    var forwardSourceFolderServerId by rememberSaveable { mutableStateOf<String?>(null) }
+    var forwardSourceEmailServerId by rememberSaveable { mutableStateOf<String?>(null) }
+
     // Маппинг групп контактов: имя группы → список email
     // rememberSaveable чтобы не потерять при повороте (токены [GroupName] в полях переживают поворот)
     var groupMappingsJson by rememberSaveable { mutableStateOf("{}") }
@@ -200,7 +229,7 @@ fun ComposeScreen(
             shareAttachmentsLoaded = true
             val shareUris = com.dedovmosol.iwomail.ui.navigation.ShareIntentData.attachments
             com.dedovmosol.iwomail.ui.navigation.ShareIntentData.clear()
-            
+
             val newAttachmentStrings = mutableListOf<String>()
             for (uri in shareUris) {
                 try {
@@ -223,7 +252,7 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Инициализация из mailto: параметров
     var initialDataApplied by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(initialSubject, initialBody) {
@@ -233,22 +262,22 @@ fun ComposeScreen(
             if (initialBody != null && body.isBlank()) body = initialBody
         }
     }
-    
+
     // Подписи
     var signatures by remember { mutableStateOf<List<SignatureEntity>>(emptyList()) }
     var selectedSignature by remember { mutableStateOf<SignatureEntity?>(null) }
     var showSignaturePicker by rememberSaveable { mutableStateOf(false) }
-    
+
     // FocusRequester для полей ввода
     val toFocusRequester = remember { FocusRequester() }
     val ccFocusRequester = remember { FocusRequester() }
     val bccFocusRequester = remember { FocusRequester() }
     val subjectFocusRequester = remember { FocusRequester() }
     val bodyFocusRequester = remember { FocusRequester() }
-    
+
     // Сохранение фокуса при повороте экрана
     var focusedFieldIndex by rememberSaveable { mutableIntStateOf(-1) }
-    
+
     // Восстановление фокуса после поворота
     LaunchedEffect(focusedFieldIndex) {
         if (focusedFieldIndex >= 0) {
@@ -262,13 +291,13 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Меню и диалоги
     var showMenu by rememberSaveable { mutableStateOf(false) }
     var showScheduleDialog by rememberSaveable { mutableStateOf(false) }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
     var isSavingDraft by remember { mutableStateOf(false) }
-    
+
     // Предупреждение о дубликате email
     var duplicateEmail by rememberSaveable { mutableStateOf<String?>(null) }
     var duplicateField by rememberSaveable { mutableStateOf<String?>(null) }
@@ -279,11 +308,11 @@ fun ComposeScreen(
     var pendingGroupEmails by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var pendingGroupColor by rememberSaveable { mutableStateOf(0) }
     var pendingGroupSelections by remember { mutableStateOf<List<Triple<String, List<String>, Int>>>(emptyList()) }
-    
+
     // Диалог выбора контактов
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
     var contactPickerTarget by rememberSaveable { mutableStateOf("to") } // "to", "cc", "bcc"
-    
+
     // Автодополнение email
     val contactRepo = remember { ContactRepository(context) }
     var toSuggestions by remember { mutableStateOf<List<EmailSuggestion>>(emptyList()) }
@@ -312,7 +341,7 @@ fun ComposeScreen(
             toSuggestions = emptyList()
         }
     }
-    
+
     fun extractQueryPart(text: String): String {
         val separators = charArrayOf(',', ';', '\n')
         val lastSeparatorIndex = text.lastIndexOfAny(separators)
@@ -322,7 +351,7 @@ fun ComposeScreen(
             text.trim()
         }
     }
-    
+
     fun replaceLastRecipient(text: String, newEmail: String): String {
         val separators = charArrayOf(',', ';', '\n')
         val lastSeparatorIndex = text.lastIndexOfAny(separators)
@@ -351,7 +380,7 @@ fun ComposeScreen(
             "bcc" -> bcc = if (bcc.isBlank()) groupsStr else "${bcc.trimEnd(',', ' ')}, $groupsStr"
         }
     }
-    
+
     // Функция поиска подсказок
     fun searchSuggestions(query: String, accountId: Long, accountEmail: String) {
         suggestionSearchJob?.cancel()
@@ -370,21 +399,21 @@ fun ComposeScreen(
             showToSuggestions = false
             return
         }
-        
+
         // Email текущего аккаунта — не предлагаем самого себя
         val ownEmail = accountEmail.lowercase()
-        
+
         suggestionSearchJob = scope.launch {
             val suggestions = mutableListOf<EmailSuggestion>()
             val seenEmails = mutableSetOf<String>() // Для отслеживания дубликатов
-            
+
             // Функция нормализации email - извлекает email из формата "Name <email>" и приводит к lowercase
             fun normalizeEmail(email: String): String {
                 return extractEmailFromString(email, queryToken)?.lowercase() ?: ""
             }
-            
+
             val ownEmailNormalized = normalizeEmail(ownEmail)
-            
+
             // 0. Поиск по группам контактов (по имени группы)
             withContext(Dispatchers.IO) {
                 val groups = database.contactGroupDao().getGroupsByAccountList(accountId)
@@ -403,7 +432,7 @@ fun ComposeScreen(
                     }
                 }
             }
-            
+
             // 1. Поиск по локальным контактам (мгновенно)
             withContext(Dispatchers.IO) {
                 val contacts = database.contactDao().searchForAutocomplete(accountId, queryToken, ownEmail, 5)
@@ -421,7 +450,7 @@ fun ComposeScreen(
                     }
                 }
             }
-            
+
             // 2. Поиск по истории писем (мгновенно)
             withContext(Dispatchers.IO) {
                 val history = database.emailDao().searchEmailHistory(accountId, queryToken, ownEmail, 5)
@@ -440,12 +469,12 @@ fun ComposeScreen(
                     }
                 }
             }
-            
+
             // Проверяем что корутина не отменена (защита от race condition с выбором подсказки)
             kotlinx.coroutines.yield()
             toSuggestions = suggestions.take(8)
             showToSuggestions = suggestions.isNotEmpty() && toFieldFocused
-            
+
             // 3. Поиск по GAL с задержкой (если ≥3 символа)
             if (queryToken.length >= 3) {
                 delay(500) // Debounce
@@ -481,20 +510,20 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Отслеживание начального аккаунта для определения изменений
     var initialAccountId by rememberSaveable { mutableStateOf<Long?>(null) }
-    
+
     var backNavigationInProgress by remember { mutableStateOf(false) }
-    
+
     fun handleBackNavigation() {
         if (backNavigationInProgress) return
         backNavigationInProgress = true
         hideWebView = true
-        
+
         scope.launch {
             delay(100)
-            
+
             val currentAccountId = activeAccount?.id
             if (currentAccountId != null && initialAccountId != null && currentAccountId != initialAccountId) {
                 try {
@@ -503,11 +532,11 @@ fun ComposeScreen(
                     if (e is kotlinx.coroutines.CancellationException) throw e
                 }
             }
-            
+
             onBackClick()
         }
     }
-    
+
     // Загружаем активный аккаунт и все аккаунты
     LaunchedEffect(Unit) {
         // Восстанавливаем аккаунт по сохранённому ID или загружаем активный
@@ -529,18 +558,18 @@ fun ComposeScreen(
         }
         accountRepo.accounts.collect { allAccounts = it }
     }
-    
+
     // Перезагружаем подписи при смене аккаунта
     LaunchedEffect(activeAccount?.id) {
         activeAccount?.let { account ->
             signatures = database.signatureDao().getSignaturesByAccountList(account.id)
             // Выбираем подпись по умолчанию или первую
             val newSignature = signatures.find { it.isDefault } ?: signatures.firstOrNull()
-            
+
             // Обновляем подпись в body только для нового письма (не reply/forward/draft)
             if (replyToEmailId == null && forwardEmailId == null && editDraftId == null) {
                 val newSignatureHtml = formatHtmlSignature(newSignature?.text, newSignature?.isHtml ?: false)
-                
+
                 // Заменяем старую подпись на новую (HTML формат)
                 if (body.contains("<div class=\"signature\">")) {
                     body = body.replace(HTML_SIGNATURE_REGEX, newSignatureHtml)
@@ -549,7 +578,7 @@ fun ComposeScreen(
                     body = body + newSignatureHtml
                 }
             }
-            
+
             selectedSignature = newSignature
         } ?: run {
             // Аккаунт не выбран — очищаем подписи
@@ -557,7 +586,7 @@ fun ComposeScreen(
             selectedSignature = null
         }
     }
-    
+
     // Лаунчер для выбора файлов
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -576,12 +605,12 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Диалог выбора качества изображения
     var showImageQualityDialog by rememberSaveable { mutableStateOf(false) }
     var pendingImageUriString by rememberSaveable { mutableStateOf<String?>(null) }
     val pendingImageUri = pendingImageUriString?.let { Uri.parse(it) }
-    
+
     // Лаунчер для вставки изображений inline
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -591,7 +620,7 @@ fun ComposeScreen(
             showImageQualityDialog = true
         }
     }
-    
+
     // Функция вставки изображения с выбранным качеством
     fun insertImageWithQuality(uri: Uri, quality: ImageQuality) {
         scope.launch {
@@ -613,7 +642,7 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Локализованные строки для цитирования (нужно получить до LaunchedEffect)
     val originalMessageStr = Strings.originalMessage
     val forwardedMessageStr = Strings.forwardedMessage
@@ -621,7 +650,7 @@ fun ComposeScreen(
     val quoteDateStr = Strings.quoteDate
     val quoteSubjectStr = Strings.quoteSubject
     val quoteToStr = Strings.quoteTo
-    
+
     // Загружаем данные для ответа
     LaunchedEffect(replyToEmailId) {
         replyToEmailId?.let { emailId ->
@@ -631,11 +660,11 @@ fun ComposeScreen(
                     database.folderDao().getFolder(email.folderId)
                 }
                 val isSentFolder = folder?.type == FolderType.SENT_ITEMS
-                
+
                 // Если из Отправленных — отвечаем получателю, иначе отправителю
                 // normalizeRecipients() очищает формат "Name" <email> до чистого email
                 to = normalizeRecipients(if (isSentFolder) email.to else email.from)
-                
+
                 subject = if (email.subject.startsWith("Re:", ignoreCase = true)) {
                     email.subject
                 } else {
@@ -660,7 +689,7 @@ fun ComposeScreen(
                     toField = null,
                     originalBody = originalBody
                 )
-                
+
                 val originalAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(emailId) }
                 if (originalAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
@@ -669,7 +698,7 @@ fun ComposeScreen(
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
                     val collectionId = folder?.serverId
                     val emailServerId = email.serverId
-                    
+
                     withContext(Dispatchers.IO) {
                         for (att in originalAttachments) {
                             try {
@@ -694,14 +723,14 @@ fun ComposeScreen(
                                     val downloadResult = easClient.downloadAttachment(
                                         att.fileReference, collectionId, emailServerId
                                     )
-                                    
+
                                     if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
                                         val attachmentsDir = java.io.File(context.filesDir, "reply_attachments")
                                         if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
                                         val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
                                         val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                                         java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
-                                        
+
                                         if (att.isInline && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
                                             val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
@@ -727,17 +756,17 @@ fun ComposeScreen(
                             }
                         }
                     }
-                    
+
                     if (newAttachmentStrings.isNotEmpty()) {
                         attachmentStrings = attachmentStrings + newAttachmentStrings
                     }
-                    
+
                     if (body.contains("cid:", ignoreCase = true) && easClient != null) {
                         val allCids = CID_PATTERN.findAll(body).map { it.groupValues[1] }.toSet()
-                        val resolvedCids = inlineImages.keys.flatMap { 
+                        val resolvedCids = inlineImages.keys.flatMap {
                             listOf(it, it.removePrefix("<").removeSuffix(">"))
                         }.toSet()
-                        val missingCids = allCids.filter { cid -> 
+                        val missingCids = allCids.filter { cid ->
                             !resolvedCids.contains(cid) && !resolvedCids.contains("<$cid>")
                         }
                         if (missingCids.isNotEmpty() && collectionId != null) {
@@ -756,12 +785,12 @@ fun ComposeScreen(
                             } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         }
                     }
-                    
+
                     if (inlineImages.isNotEmpty() && body.contains("cid:", ignoreCase = true)) {
                         body = replaceCidWithDataUrl(body, inlineImages)
                     }
                 }
-                
+
                 if (body.contains("cid:", ignoreCase = true)) {
                     val fbAccount = accountRepo.getAccount(email.accountId)
                     val fbClient = fbAccount?.let { accountRepo.createEasClient(it.id) }
@@ -784,14 +813,21 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Загружаем данные для пересылки
     LaunchedEffect(forwardEmailId) {
         forwardEmailId?.let { emailId ->
             mailRepo.getEmailSync(emailId)?.let { email ->
+                // SmartForward: сохраняем source (collectionId + itemId)
+                val fwdFolderForSource = withContext(Dispatchers.IO) {
+                    database.folderDao().getFolder(email.folderId)
+                }
+                forwardSourceFolderServerId = fwdFolderForSource?.serverId
+                forwardSourceEmailServerId = email.serverId
+
                 // Поле "Кому" оставляем пустым - пользователь сам введёт
                 to = ""
-                subject = if (email.subject.startsWith("Fwd:", ignoreCase = true) || 
+                subject = if (email.subject.startsWith("Fwd:", ignoreCase = true) ||
                              email.subject.startsWith("Fw:", ignoreCase = true)) {
                     email.subject
                 } else {
@@ -816,19 +852,16 @@ fun ComposeScreen(
                     toField = email.to,
                     originalBody = originalBody
                 )
-                
+
                 val originalAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(emailId) }
                 if (originalAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
                     val inlineImages = mutableMapOf<String, String>()
                     val account = accountRepo.getAccount(email.accountId)
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
-                    val fwdFolder = withContext(Dispatchers.IO) {
-                        database.folderDao().getFolder(email.folderId)
-                    }
-                    val collectionId = fwdFolder?.serverId
+                    val collectionId = fwdFolderForSource?.serverId
                     val emailServerId = email.serverId
-                    
+
                     withContext(Dispatchers.IO) {
                         for (att in originalAttachments) {
                             try {
@@ -853,14 +886,14 @@ fun ComposeScreen(
                                     val downloadResult = easClient.downloadAttachment(
                                         att.fileReference, collectionId, emailServerId
                                     )
-                                    
+
                                     if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
                                         val attachmentsDir = java.io.File(context.filesDir, "forward_attachments")
                                         if (!attachmentsDir.exists()) attachmentsDir.mkdirs()
                                         val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
                                         val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                                         java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
-                                        
+
                                         if (att.isInline && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
                                             val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
@@ -889,13 +922,13 @@ fun ComposeScreen(
                     if (newAttachmentStrings.isNotEmpty()) {
                         attachmentStrings = attachmentStrings + newAttachmentStrings
                     }
-                    
+
                     if (body.contains("cid:", ignoreCase = true) && easClient != null) {
                         val allCids = CID_PATTERN.findAll(body).map { it.groupValues[1] }.toSet()
-                        val resolvedCids = inlineImages.keys.flatMap { 
+                        val resolvedCids = inlineImages.keys.flatMap {
                             listOf(it, it.removePrefix("<").removeSuffix(">"))
                         }.toSet()
-                        val missingCids = allCids.filter { cid -> 
+                        val missingCids = allCids.filter { cid ->
                             !resolvedCids.contains(cid) && !resolvedCids.contains("<$cid>")
                         }
                         if (missingCids.isNotEmpty() && collectionId != null) {
@@ -914,12 +947,12 @@ fun ComposeScreen(
                             } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                         }
                     }
-                    
+
                     if (inlineImages.isNotEmpty() && body.contains("cid:", ignoreCase = true)) {
                         body = replaceCidWithDataUrl(body, inlineImages)
                     }
                 }
-                
+
                 if (body.contains("cid:", ignoreCase = true)) {
                     val fbAccount = accountRepo.getAccount(email.accountId)
                     val fbClient = fbAccount?.let { accountRepo.createEasClient(it.id) }
@@ -945,7 +978,7 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Флаг: данные черновика уже загружены.
     // rememberSaveable — переживает поворот экрана и process death.
     // Предотвращает повторный запуск LaunchedEffect(editDraftId) при конфигурационных
@@ -959,7 +992,7 @@ fun ComposeScreen(
     val initialDraftBodySaver = remember { createLargeStringSaver(context.cacheDir, "draft_body") }
     var initialDraftBody by rememberSaveable(stateSaver = initialDraftBodySaver) { mutableStateOf("") }
     var initialDraftAttachments by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
-    
+
     // Загружаем данные черновика для редактирования
     LaunchedEffect(editDraftId) {
         if (draftLoaded) return@LaunchedEffect
@@ -1084,7 +1117,7 @@ fun ComposeScreen(
                         body = replaceCidWithDataUrl(body, inlineImages)
                     }
                 }
-                
+
                 // Fallback: если body всё ещё содержит cid: после обработки вложений —
                 // загружаем инлайн-картинки с сервера через fetchInlineImages (MIME extraction).
                 // Критично когда body содержит серверные cid: ссылки (после sync),
@@ -1132,7 +1165,7 @@ fun ComposeScreen(
                         }
                     }
                 }
-                
+
                 // КРИТИЧНО: Сохраняем разрешённый body (data: URLs) обратно в БД.
                 // После резолвинга cid: → data: тело содержит самодостаточные данные,
                 // которые не зависят от вложений и не требуют повторного разрешения.
@@ -1156,27 +1189,28 @@ fun ComposeScreen(
             }
         }
     }
-    
+
     // Локализованные строки для Toast (нужно получить до launch)
     val accountNotFoundMsg = Strings.accountNotFound
     val authErrorMsg = Strings.authError
     val sendScheduledMsg = Strings.sendScheduled
     val draftSavedMsg = Strings.draftSaved
     val draftSaveErrorMsg = Strings.draftSaveError
-    
+
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
         if (isSavingDraft) return
         scope.launch {
             isSavingDraft = true
-            
+            flushEditorHtml()
+
             val account = activeAccount
             if (account == null) {
-                Toast.makeText(context, accountNotFoundMsg, Toast.LENGTH_SHORT).show()
+                SafeToast.short(context, accountNotFoundMsg)
                 isSavingDraft = false
                 return@launch
             }
-            
+
             try {
                 val success: Boolean
                 // Файловые вложения — байты
@@ -1197,7 +1231,7 @@ fun ComposeScreen(
                         }
                     }
                 }
-                
+
                 // Извлекаем inline-картинки из body: data: URL → cid: ссылки.
                 // На сервер отправляем cleanBody (с cid:) + вложения через CreateAttachment.
                 // Локально храним body (с data: URL) — для отображения в приложении.
@@ -1235,12 +1269,12 @@ fun ComposeScreen(
                         android.util.Log.w("ComposeScreen", "Failed to decode inline image #$inlineCounter: ${e.message}")
                     }
                 }
-                
+
                 val allServerAttachments = fileDraftAttachments + inlineDraftAttachments
                 val normalizedTo = normalizeRecipients(to)
                 val normalizedCc = normalizeRecipients(cc)
                 val normalizedBcc = normalizeRecipients(bcc)
-                
+
                 // Если редактируем существующий черновик
                if (editDraftId != null && editDraftId != "synced" && !editDraftId.startsWith("local_draft_")) {
     val email = withContext(Dispatchers.IO) { database.emailDao().getEmail(editDraftId) }
@@ -1382,39 +1416,40 @@ fun ComposeScreen(
                     }
                     success = serverId != null
                 }
-                
+
                 if (success) {
-                    Toast.makeText(context, draftSavedMsg, Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, draftSavedMsg)
                     handleBackNavigation()
                 } else {
-                    Toast.makeText(context, draftSaveErrorMsg, Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, draftSaveErrorMsg)
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Toast.makeText(context, "${draftSaveErrorMsg}: ${e.message}", Toast.LENGTH_LONG).show()
+                SafeToast.long(context, "${draftSaveErrorMsg}: ${e.message}")
             } finally {
                 isSavingDraft = false
             }
         }
     }
-    
+
     // Локализованная строка для прогресс-бара
     val sendingMessageText = if (currentLanguage == AppLanguage.RUSSIAN) "Отправка письма..." else "Sending email..."
     val sendErrorText = Strings.sendError // Захватываем в Composable scope
-    
+
     fun sendEmail(scheduledTime: Long? = null) {
         if (isSending) return
         isSending = true
-        
+
         scope.launch {
             try {
+                flushEditorHtml()
                 val account = activeAccount
                 if (account == null) {
                     isSending = false
-                    Toast.makeText(context, accountNotFoundMsg, Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, accountNotFoundMsg)
                     return@launch
                 }
-                
+
                 if (scheduledTime != null) {
                     val delay = scheduledTime - System.currentTimeMillis()
                     if (delay > 0) {
@@ -1439,12 +1474,12 @@ fun ComposeScreen(
                             if (highPriority) 2 else 1,
                             scheduledAttachments
                         )
-                        Toast.makeText(context, sendScheduledMsg, Toast.LENGTH_SHORT).show()
+                        SafeToast.short(context, sendScheduledMsg)
                         onSent()
                         return@launch
                     }
                 }
-                
+
                 val attachmentDataList = withContext(Dispatchers.IO) {
                     attachments.mapNotNull { att ->
                         try {
@@ -1456,18 +1491,18 @@ fun ComposeScreen(
                         }
                     }
                 }
-                
+
                 val cleanBody = body
                     .replace(TRAILING_EMPTY_DIV_REGEX, "")
                     .replace(TRAILING_EMPTY_P_REGEX, "")
                     .replace(TRAILING_BR_REGEX, "")
                     .trimEnd()
                     .replace(NON_HTML_TAG_REGEX, "")
-                
+
                 val expandedTo = expandGroupTokens(to, groupMappings)
                 val expandedCc = expandGroupTokens(cc, groupMappings)
                 val expandedBcc = expandGroupTokens(bcc, groupMappings)
-                
+
                 val pendingEmail = com.dedovmosol.iwomail.ui.components.PendingEmail(
                     account = account,
                     to = expandedTo,
@@ -1479,9 +1514,11 @@ fun ComposeScreen(
                     importance = if (highPriority) 2 else 1,
                     requestReadReceipt = requestReadReceipt,
                     requestDeliveryReceipt = requestDeliveryReceipt,
-                    draftId = editDraftId
+                    draftId = editDraftId,
+                    forwardSourceFolderId = forwardSourceFolderServerId,
+                    forwardSourceItemId = forwardSourceEmailServerId
                 )
-                
+
                 sendController.startSend(
                     email = pendingEmail,
                     message = sendingMessageText,
@@ -1490,10 +1527,10 @@ fun ComposeScreen(
                     onSuccess = { },
                     onCancel = { }
                 )
-                
+
                 hideWebView = true
                 kotlinx.coroutines.delay(100)
-                
+
                 richTextController.webView?.let { webView ->
                     webView.stopLoading()
                     webView.loadUrl("about:blank")
@@ -1502,7 +1539,7 @@ fun ComposeScreen(
                 }
                 richTextController.webView = null
                 richTextController.isLoaded = false
-                
+
                 kotlinx.coroutines.delay(50)
                 try {
                     onSent()
@@ -1512,11 +1549,11 @@ fun ComposeScreen(
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 isSending = false
-                Toast.makeText(context, "${sendErrorText}: ${e.message}", Toast.LENGTH_LONG).show()
+                SafeToast.long(context, "${sendErrorText}: ${e.message}")
             }
         }
     }
-    
+
     // Диалог подтверждения выхода — сохранить или нет
     if (showDiscardDialog) {
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -1526,7 +1563,7 @@ fun ComposeScreen(
             text = { Text(if (editDraftId != null) (if (currentLanguage == AppLanguage.RUSSIAN) "Черновик был изменён" else "Draft has been modified") else Strings.draftWillBeDeleted) },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { 
+                    onClick = {
                         showDiscardDialog = false
                         saveDraft()
                     },
@@ -1536,7 +1573,7 @@ fun ComposeScreen(
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { 
+                    onClick = {
                         showDiscardDialog = false
                         handleBackNavigation()
                     },
@@ -1546,7 +1583,7 @@ fun ComposeScreen(
             }
         )
     }
-    
+
     // Диалог планирования отправки
     if (showScheduleDialog) {
         ScheduleSendDialog(
@@ -1557,7 +1594,7 @@ fun ComposeScreen(
             }
         )
     }
-    
+
     // Диалог выбора подписи
     if (showSignaturePicker) {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -1619,7 +1656,7 @@ fun ComposeScreen(
             }
         )
     }
-    
+
     // Диалог выбора аккаунта отправителя
     if (showAccountPicker) {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -1633,7 +1670,7 @@ fun ComposeScreen(
                         } catch (_: Exception) {
                             MaterialTheme.colorScheme.primary
                         }
-                        
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1691,7 +1728,7 @@ fun ComposeScreen(
             }
         )
     }
-    
+
     // Диалог предупреждения о дубликате email
     if (duplicateEmail != null) {
         val isRu = currentLanguage == AppLanguage.RUSSIAN
@@ -1797,7 +1834,7 @@ fun ComposeScreen(
             }
         )
     }
-    
+
     // Диалог выбора контактов
     if (showContactPicker) {
         activeAccount?.id?.let { accountId ->
@@ -1813,7 +1850,7 @@ fun ComposeScreen(
                         extractAllEmails(bcc, groupMappings)
                     val dupes = emails.filter { it.lowercase() in allExisting }
                     val unique = emails.filter { it.lowercase() !in allExisting }
-                    
+
                     if (dupes.isNotEmpty() && unique.isEmpty()) {
                         // Все адреса — дубликаты, показываем предупреждение
                         duplicateEmail = dupes.first()
@@ -1867,12 +1904,12 @@ fun ComposeScreen(
             )
         }
     }
-    
+
     // Диалог выбора качества изображения
     if (showImageQualityDialog && pendingImageUri != null) {
         val imageQualityTitle = if (currentLanguage == AppLanguage.RUSSIAN) "Качество изображения" else "Image Quality"
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { 
+            onDismissRequest = {
                 showImageQualityDialog = false
                 pendingImageUriString = null
             },
@@ -1908,7 +1945,7 @@ fun ComposeScreen(
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { 
+                    onClick = {
                         showImageQualityDialog = false
                         pendingImageUriString = null
                     },
@@ -1917,27 +1954,30 @@ fun ComposeScreen(
             }
         )
     }
-    
+
     // Единая логика проверки при выходе (DRY)
     fun handleBackPress() {
-        if (editDraftId != null) {
-            val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || subject != initialDraftSubject || body != initialDraftBody || attachmentStrings != initialDraftAttachments
-            if (hasDraftChanges) showDiscardDialog = true else handleBackNavigation()
-        } else {
-            // Проверяем есть ли реальный контент (body может содержать пустой HTML и подпись)
-            val bodyPlainText = body
-                .replace(SIGNATURE_DIV_REGEX, "")
-                .replace(HTML_TAG_STRIP_REGEX, "")
-                .replace("&nbsp;", " ")
-                .trim()
-            val hasContent = to.isNotBlank() || subject.isNotBlank() || bodyPlainText.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
-            if (hasContent) showDiscardDialog = true else handleBackNavigation()
+        scope.launch {
+            flushEditorHtml()
+            if (editDraftId != null) {
+                val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || subject != initialDraftSubject || body != initialDraftBody || attachmentStrings != initialDraftAttachments
+                if (hasDraftChanges) showDiscardDialog = true else handleBackNavigation()
+            } else {
+                // Проверяем есть ли реальный контент (body может содержать пустой HTML и подпись)
+                val bodyPlainText = body
+                    .replace(SIGNATURE_DIV_REGEX, "")
+                    .replace(HTML_TAG_STRIP_REGEX, "")
+                    .replace("&nbsp;", " ")
+                    .trim()
+                val hasContent = to.isNotBlank() || subject.isNotBlank() || bodyPlainText.isNotBlank() || attachments.isNotEmpty() || (activeAccount?.id != initialAccountId && initialAccountId != null)
+                if (hasContent) showDiscardDialog = true else handleBackNavigation()
+            }
         }
     }
-    
+
     // Перехват системного жеста "назад" (свайп)
     BackHandler { handleBackPress() }
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2056,7 +2096,7 @@ fun ComposeScreen(
         ) {
             // Баннер "Нет сети"
             NetworkBanner()
-            
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -2071,10 +2111,10 @@ fun ComposeScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    Strings.from, 
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, 
-                    modifier = Modifier.widthIn(min = 80.dp, max = 120.dp), 
-                    maxLines = 1, 
+                    Strings.from,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.widthIn(min = 80.dp, max = 120.dp),
+                    maxLines = 1,
                     softWrap = false
                 )
                 Text(
@@ -2091,7 +2131,7 @@ fun ComposeScreen(
                 }
             }
             HorizontalDivider()
-            
+
             // Кому с автодополнением
             Box {
                 Row(
@@ -2102,10 +2142,10 @@ fun ComposeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        Strings.to, 
-                        color = if (!isToValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, 
-                        modifier = Modifier.widthIn(min = 80.dp, max = 120.dp), 
-                        maxLines = 1, 
+                        Strings.to,
+                        color = if (!isToValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.widthIn(min = 80.dp, max = 120.dp),
+                        maxLines = 1,
                         softWrap = false
                     )
                     TextField(
@@ -2147,9 +2187,9 @@ fun ComposeScreen(
                         maxLines = 3
                     )
                     // Кнопка выбора контактов
-                    IconButton(onClick = { 
+                    IconButton(onClick = {
                         contactPickerTarget = "to"
-                        showContactPicker = true 
+                        showContactPicker = true
                     }) {
                         Icon(
                             AppIcons.PersonAdd,
@@ -2163,7 +2203,7 @@ fun ComposeScreen(
                         )
                     }
                 }
-                
+
                 // Выпадающий список подсказок
                 DropdownMenu(
                     expanded = showToSuggestions && toSuggestions.isNotEmpty(),
@@ -2196,7 +2236,7 @@ fun ComposeScreen(
                                 // иначе он может завершиться и снова показать подсказки
                                 suggestionSearchJob?.cancel()
                                 suggestionJustSelected = true
-                                
+
                                 // Проверка дубликатов: извлекаем подтверждённую часть to (без текущего ввода)
                                 val separators = charArrayOf(',', ';', '\n')
                                 val lastSepIdx = to.lastIndexOfAny(separators)
@@ -2210,7 +2250,7 @@ fun ComposeScreen(
                                     extractAllEmails(cc, groupMappings) +
                                     extractAllEmails(bcc, groupMappings)
                                 val dupes = emailsToCheck.filter { it.lowercase() in allExisting }
-                                
+
                                 if (dupes.isNotEmpty()) {
                                     // Показываем предупреждение о дубликате
                                     duplicateEmail = dupes.first()
@@ -2282,7 +2322,7 @@ fun ComposeScreen(
                 }
             }
             HorizontalDivider()
-            
+
             // Копия и Скрытая копия
             if (showCcBcc) {
                 Row(
@@ -2293,10 +2333,10 @@ fun ComposeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        Strings.cc, 
-                        color = if (!isCcValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, 
-                        modifier = Modifier.widthIn(min = 80.dp, max = 120.dp), 
-                        maxLines = 1, 
+                        Strings.cc,
+                        color = if (!isCcValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.widthIn(min = 80.dp, max = 120.dp),
+                        maxLines = 1,
                         softWrap = false
                     )
                     TextField(
@@ -2317,9 +2357,9 @@ fun ComposeScreen(
                         maxLines = 3
                     )
                     // Кнопка выбора контактов для Cc
-                    IconButton(onClick = { 
+                    IconButton(onClick = {
                         contactPickerTarget = "cc"
-                        showContactPicker = true 
+                        showContactPicker = true
                     }) {
                         Icon(
                             AppIcons.PersonAdd,
@@ -2328,7 +2368,7 @@ fun ComposeScreen(
                     }
                 }
                 HorizontalDivider()
-                
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2337,10 +2377,10 @@ fun ComposeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        Strings.hiddenCopy, 
-                        color = if (!isBccValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, 
-                        modifier = Modifier.widthIn(min = 80.dp, max = 120.dp), 
-                        maxLines = 1, 
+                        Strings.hiddenCopy,
+                        color = if (!isBccValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.widthIn(min = 80.dp, max = 120.dp),
+                        maxLines = 1,
                         softWrap = false
                     )
                     TextField(
@@ -2361,9 +2401,9 @@ fun ComposeScreen(
                         maxLines = 3
                     )
                     // Кнопка выбора контактов для Bcc
-                    IconButton(onClick = { 
+                    IconButton(onClick = {
                         contactPickerTarget = "bcc"
-                        showContactPicker = true 
+                        showContactPicker = true
                     }) {
                         Icon(
                             AppIcons.PersonAdd,
@@ -2373,7 +2413,7 @@ fun ComposeScreen(
                 }
                 HorizontalDivider()
             }
-            
+
             // Тема
             TextField(
                 value = subject,
@@ -2393,7 +2433,7 @@ fun ComposeScreen(
                 singleLine = true
             )
             HorizontalDivider()
-            
+
             // Тело письма - Rich Text Editor (скрываем перед навигацией чтобы избежать краша)
             if (!hideWebView) {
                 val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -2417,7 +2457,7 @@ fun ComposeScreen(
                     isDarkTheme = isDarkTheme
                 )
             }
-            
+
             // Вложения - внизу после текста
             if (attachments.isNotEmpty()) {
                 HorizontalDivider()
@@ -2444,8 +2484,8 @@ fun ComposeScreen(
                                     Text(formatAttachmentSize(att.size), style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                IconButton(onClick = { 
-                                    attachmentStrings = attachmentStrings - att.toSaveableString() 
+                                IconButton(onClick = {
+                                    attachmentStrings = attachmentStrings - att.toSaveableString()
                                 }) {
                                     Icon(AppIcons.Close, Strings.delete, modifier = Modifier.size(20.dp))
                                 }

@@ -27,6 +27,8 @@ import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.util.escapeHtml
 
+internal const val RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS = 2_000L
+
 /**
  * Парсит цвет из разных форматов (hex, rgb(), rgba(), название)
  * @param colorString строка с цветом
@@ -67,7 +69,7 @@ private fun parseColor(colorString: String, asHex: Boolean = false): Any? {
                 android.graphics.Color.parseColor(colorString)
             }
         }
-        
+
         if (asHex) {
             String.format("#%06X", 0xFFFFFF and androidColor).uppercase()
         } else {
@@ -100,7 +102,11 @@ private fun normalizeColor(colorString: String): String {
 class RichTextEditorController {
     internal var webView: WebView? = null
     internal var isLoaded = false
-    
+    @Volatile
+    internal var latestHtml: String = ""
+    private val pendingFlushCallbacks = linkedMapOf<Long, (String?) -> Unit>()
+    private var pendingFlushId = 0L
+
     // Состояние форматирования
     var isBold by mutableStateOf(false)
         internal set
@@ -118,7 +124,7 @@ class RichTextEditorController {
         internal set
     var currentAlignment by mutableStateOf<String>("left")
         internal set
-    
+
     fun toggleBold() = execJs("toggleBold()")
     fun toggleItalic() = execJs("toggleItalic()")
     fun toggleUnderline() = execJs("toggleUnderline()")
@@ -155,7 +161,36 @@ class RichTextEditorController {
         val escaped = sanitized.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
         execJs("setHtml(\"$escaped\")")
     }
-    
+    fun flushHtml(onHtml: (String?) -> Unit): Long? {
+        val targetWebView = webView ?: return null
+        if (!isLoaded) return null
+        val flushId = pendingFlushId + 1
+        pendingFlushId = flushId
+        pendingFlushCallbacks[flushId] = onHtml
+        return try {
+            targetWebView.evaluateJavascript("flushHtmlToAndroid();", null)
+            flushId
+        } catch (_: Exception) {
+            pendingFlushCallbacks.remove(flushId)
+            null
+        }
+    }
+    fun cancelPendingFlush(flushId: Long) {
+        pendingFlushCallbacks.remove(flushId)
+    }
+    internal fun clearPendingFlush() {
+        val callbacks = pendingFlushCallbacks.values.toList()
+        pendingFlushCallbacks.clear()
+        pendingFlushId++
+        callbacks.forEach { it(null) }
+    }
+    internal fun completePendingFlush(html: String) {
+        val callbacks = pendingFlushCallbacks.values.toList()
+        pendingFlushCallbacks.clear()
+        pendingFlushId++
+        callbacks.forEach { it(html) }
+    }
+
     internal fun stripDangerousTags(html: String): String {
         return html
             .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
@@ -171,15 +206,15 @@ class RichTextEditorController {
     fun focus() = execJs("focusEditor()")
     fun checkFormatState() = execJs("checkFormatState()")
     fun saveSelection() = execJs("saveCurrentSelection()")
-    
+
     private fun execJs(script: String) {
         if (isLoaded) {
             webView?.evaluateJavascript(script, null)
         }
     }
-    
+
     companion object {
-        val Saver: androidx.compose.runtime.saveable.Saver<RichTextEditorController, Map<String, Any?>> = 
+        val Saver: androidx.compose.runtime.saveable.Saver<RichTextEditorController, Map<String, Any?>> =
             androidx.compose.runtime.saveable.Saver(
                 save = { controller ->
                     mapOf(
@@ -190,7 +225,8 @@ class RichTextEditorController {
                         "currentHighlightColor" to controller.currentHighlightColor,
                         "currentFontSize" to controller.currentFontSize,
                         "currentFontName" to controller.currentFontName,
-                        "currentAlignment" to controller.currentAlignment
+                        "currentAlignment" to controller.currentAlignment,
+                        "latestHtml" to controller.latestHtml.takeIf { it.length < 500_000 }
                     )
                 },
                 restore = { saved ->
@@ -203,6 +239,7 @@ class RichTextEditorController {
                         currentFontSize = saved["currentFontSize"] as? String
                         currentFontName = saved["currentFontName"] as? String ?: "Arial"
                         currentAlignment = saved["currentAlignment"] as? String ?: "left"
+                        latestHtml = saved["latestHtml"] as? String ?: ""
                     }
                 }
             )
@@ -211,8 +248,8 @@ class RichTextEditorController {
 
 @Composable
 fun rememberRichTextEditorController(): RichTextEditorController {
-    return rememberSaveable(saver = RichTextEditorController.Saver) { 
-        RichTextEditorController() 
+    return rememberSaveable(saver = RichTextEditorController.Saver) {
+        RichTextEditorController()
     }
 }
 
@@ -232,17 +269,17 @@ fun RichTextEditor(
     isDarkTheme: Boolean = false
 ) {
     var isLoaded by remember { mutableStateOf(false) }
-    
+
     // Используем общую функцию escapeHtml из HtmlUtils
     val escapedPlaceholder = placeholder.escapeHtml()
-    
+
     // Цвета для темы
     val bgColor = if (isDarkTheme) "#1C1B1F" else "#FFFFFF"
     val textColor = if (isDarkTheme) "#E6E1E5" else "#1C1B1F"
     val placeholderColor = if (isDarkTheme) "#938F99" else "#79747E"
     val quoteColor = if (isDarkTheme) "#938F99" else "#666666"
     val borderColor = if (isDarkTheme) "#49454F" else "#CCCCCC"
-    
+
     // HTML шаблон редактора
     val editorHtml = remember(escapedPlaceholder, minHeight, bgColor, textColor, placeholderColor, quoteColor, borderColor) {
         """
@@ -253,9 +290,9 @@ fun RichTextEditor(
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 * { box-sizing: border-box; }
-                html, body { 
-                    margin: 0; 
-                    padding: 0; 
+                html, body {
+                    margin: 0;
+                    padding: 0;
                     height: 100%;
                     font-family: Arial, sans-serif;
                     font-size: 16px;
@@ -312,7 +349,37 @@ fun RichTextEditor(
                 var lastSelectionRange = null;
                 var ignoreNextFormatCheck = false; // Флаг для игнорирования checkFormatState после removeHighlight
                 var forceHighlightOff = false; // Принудительно выключаем highlight для ввода
-                
+                var htmlChangeTimer = null;
+
+                function sendHtmlToAndroid() {
+                    var html = editor.innerHTML;
+                    Android.onHtmlChanged(html);
+                    return html;
+                }
+
+                function notifyHtmlChanged(immediate) {
+                    if (htmlChangeTimer !== null) {
+                        clearTimeout(htmlChangeTimer);
+                        htmlChangeTimer = null;
+                    }
+                    if (immediate) {
+                        return sendHtmlToAndroid();
+                    }
+                    htmlChangeTimer = setTimeout(function() {
+                        htmlChangeTimer = null;
+                        sendHtmlToAndroid();
+                    }, 180);
+                    return null;
+                }
+
+                function flushHtmlToAndroid() {
+                    if (htmlChangeTimer !== null) {
+                        clearTimeout(htmlChangeTimer);
+                        htmlChangeTimer = null;
+                    }
+                    return sendHtmlToAndroid();
+                }
+
                 // Явное сохранение выделения (вызывается перед открытием меню)
                 function saveCurrentSelection() {
                     var sel = window.getSelection();
@@ -320,12 +387,13 @@ fun RichTextEditor(
                         lastSelectionRange = sel.getRangeAt(0).cloneRange();
                     }
                 }
-                
+
                 // Отправляем HTML в Kotlin при изменении
                 editor.addEventListener('input', function() {
-                    Android.onHtmlChanged(editor.innerHTML);
+                    Android.cacheHtml(editor.innerHTML);
+                    notifyHtmlChanged(false);
                 });
-                
+
                 // Функции форматирования
                 function execCmd(cmd, value) {
                     // Восстанавливаем выделение если оно потерялось (например, при открытии меню)
@@ -338,19 +406,19 @@ fun RichTextEditor(
                     }
                     document.execCommand(cmd, false, value);
                     editor.focus();
-                    Android.onHtmlChanged(editor.innerHTML);
+                    notifyHtmlChanged(true);
                     checkFormatState(); // Обновляем состояние после применения форматирования
                 }
-                
+
                 function toggleBold() { execCmd('bold'); }
                 function toggleItalic() { execCmd('italic'); }
                 function toggleUnderline() { execCmd('underline'); }
-                
+
                 function alignLeft() { execCmd('justifyLeft'); }
                 function alignCenter() { execCmd('justifyCenter'); }
                 function alignRight() { execCmd('justifyRight'); }
                 function alignJustify() { execCmd('justifyFull'); }
-                
+
                 function setFontSize(size) { execCmd('fontSize', size); }
                 function setFontName(name) {
                     // Используем CSS font-family с fallback для корректной работы на Android
@@ -384,11 +452,11 @@ fun RichTextEditor(
                         execCmd('fontName', name);
                     }
                     editor.focus();
-                    Android.onHtmlChanged(editor.innerHTML);
+                    notifyHtmlChanged(true);
                     checkFormatState();
                 }
                 function setTextColor(color) { execCmd('foreColor', color); }
-                
+
                 function supportsCommand(cmd) {
                     try {
                         return document.queryCommandSupported && document.queryCommandSupported(cmd);
@@ -396,7 +464,7 @@ fun RichTextEditor(
                         return false;
                     }
                 }
-                
+
                 function hasHighlightStyle(el) {
                     if (!el || el.nodeType !== 1) return false;
                     if (el.tagName !== 'SPAN') return false;
@@ -404,7 +472,7 @@ fun RichTextEditor(
                     if (el.hasAttribute && el.hasAttribute('bgcolor')) return true;
                     return false;
                 }
-                
+
                 function findHighlightSpan(node) {
                     var el = node && node.nodeType === 1 ? node : (node ? node.parentNode : null);
                     while (el && el !== editor && el !== document.body) {
@@ -413,7 +481,7 @@ fun RichTextEditor(
                     }
                     return null;
                 }
-                
+
                 function cloneSpanWithoutBackground(span) {
                     var clone = span.cloneNode(false);
                     if (clone.style) {
@@ -425,18 +493,18 @@ fun RichTextEditor(
                     }
                     return clone;
                 }
-                
+
                 function exitHighlightAtCaret(selection) {
                     if (!selection || !selection.rangeCount) return false;
                     var range = selection.getRangeAt(0);
                     if (!range.collapsed) return false;
-                    
+
                     var highlightSpan = findHighlightSpan(range.startContainer);
                     if (!highlightSpan) return false;
-                    
+
                     var container = range.startContainer;
                     var offset = range.startOffset;
-                    
+
                     if (container.nodeType === 3) {
                         if (offset < container.nodeValue.length) {
                             var afterText = container.splitText(offset);
@@ -457,7 +525,7 @@ fun RichTextEditor(
                             }
                         }
                     }
-                    
+
                     // Если не смогли разделить — ставим курсор после highlight-спана
                     var textNode = document.createTextNode('\u200B');
                     highlightSpan.parentNode.insertBefore(textNode, highlightSpan.nextSibling);
@@ -467,7 +535,7 @@ fun RichTextEditor(
                     selection.addRange(range);
                     return true;
                 }
-                
+
                 function wrapSelectionWithSpan(color) {
                     var selection = window.getSelection();
                     if (!selection.rangeCount) return false;
@@ -480,8 +548,8 @@ fun RichTextEditor(
                     selection.addRange(range);
                     return true;
                 }
-                
-                function setHighlightColor(color) { 
+
+                function setHighlightColor(color) {
                     forceHighlightOff = false;
                     var selection = window.getSelection();
                     if (!selection.rangeCount && lastSelectionRange) {
@@ -501,11 +569,11 @@ fun RichTextEditor(
                         wrapSelectionWithSpan(color);
                     }
                 }
-                
+
                 function removeHighlight() {
                     var selection = window.getSelection();
                     forceHighlightOff = true;
-                    
+
                     // Восстанавливаем выделение если потеряно
                     if (!selection.rangeCount && lastSelectionRange) {
                         try {
@@ -513,15 +581,15 @@ fun RichTextEditor(
                             selection.addRange(lastSelectionRange);
                         } catch (e) {}
                     }
-                    
+
                     if (!selection.rangeCount) {
                         // Нет выделения — просто выходим
                         return;
                     }
-                    
+
                     var range = selection.getRangeAt(0);
                     var editor = document.getElementById('editor');
-                    
+
                     // Функция для удаления backgroundColor у элемента
                     function clearBackground(el) {
                         if (!el || el.nodeType !== 1) return;
@@ -533,7 +601,7 @@ fun RichTextEditor(
                             el.removeAttribute('bgcolor');
                         }
                     }
-                    
+
                     // Функция для удаления пустых span
                     function cleanupSpan(el) {
                         if (el && el.tagName === 'SPAN' && el.style && el.style.cssText.trim() === '') {
@@ -546,13 +614,13 @@ fun RichTextEditor(
                             }
                         }
                     }
-                    
+
                     // Если есть выделенный текст
                     if (!range.collapsed) {
                         // Получаем все текстовые узлы в выделении
                         var startNode = range.startContainer;
                         var endNode = range.endContainer;
-                        
+
                         // Собираем все родительские элементы до editor
                         var parentsToClean = [];
                         var node = startNode;
@@ -567,11 +635,11 @@ fun RichTextEditor(
                             }
                             node = node.parentNode;
                         }
-                        
+
                         // Находим общий контейнер
                         var container = range.commonAncestorContainer;
                         if (container.nodeType === 3) container = container.parentNode;
-                        
+
                         // Собираем все элементы внутри выделения
                         var elementsInRange = [];
                         if (container && container !== editor) {
@@ -585,18 +653,18 @@ fun RichTextEditor(
                                 } catch (e) {}
                             }
                         }
-                        
+
                         // Очищаем все найденные элементы
                         parentsToClean.forEach(clearBackground);
                         elementsInRange.forEach(clearBackground);
-                        
+
                         // Удаляем пустые span
                         parentsToClean.forEach(cleanupSpan);
                         elementsInRange.forEach(cleanupSpan);
-                        
+
                         // Устанавливаем флаг чтобы игнорировать автоматический checkFormatState
                         ignoreNextFormatCheck = true;
-                        
+
                         // Явно отправляем состояние с пустым highlightColor
                         var bold = document.queryCommandState('bold');
                         var italic = document.queryCommandState('italic');
@@ -609,7 +677,7 @@ fun RichTextEditor(
                         if (document.queryCommandState('justifyCenter')) alignment = 'center';
                         else if (document.queryCommandState('justifyRight')) alignment = 'right';
                         else if (document.queryCommandState('justifyFull')) alignment = 'justify';
-                        
+
                         Android.onFormatStateChanged(bold, italic, underline, textColor, '', fontSize, fontName, alignment);
                     } else {
                         // Курсор без выделения - вставляем пустой текстовый узел чтобы "выйти" из span с фоном
@@ -628,10 +696,10 @@ fun RichTextEditor(
                             selection.removeAllRanges();
                             selection.addRange(range);
                         }
-                        
+
                         // Устанавливаем флаг чтобы игнорировать автоматический checkFormatState
                         ignoreNextFormatCheck = true;
-                        
+
                         // Принудительно отправляем состояние с пустым highlightColor
                         var bold = document.queryCommandState('bold');
                         var italic = document.queryCommandState('italic');
@@ -644,15 +712,15 @@ fun RichTextEditor(
                         if (document.queryCommandState('justifyCenter')) alignment = 'center';
                         else if (document.queryCommandState('justifyRight')) alignment = 'right';
                         else if (document.queryCommandState('justifyFull')) alignment = 'justify';
-                        
+
                         Android.onFormatStateChanged(bold, italic, underline, textColor, '', fontSize, fontName, alignment);
                     }
                 }
-                
+
                 function insertImage(src) {
                     execCmd('insertImage', src);
                 }
-                
+
                 function insertImageBase64(base64, mimeType) {
                     var img = document.createElement('img');
                     img.src = 'data:' + mimeType + ';base64,' + base64;
@@ -712,9 +780,9 @@ fun RichTextEditor(
                         selection.removeAllRanges();
                         selection.addRange(endRange);
                     }
-                    Android.onHtmlChanged(editor.innerHTML);
+                    notifyHtmlChanged(true);
                 }
-                
+
                 function sanitizeHtml(html) {
                     var temp = document.createElement('div');
                     temp.innerHTML = html;
@@ -728,7 +796,7 @@ fun RichTextEditor(
                             var name = attrs[m].toLowerCase();
                             if (name.indexOf('on') === 0) { all[j].removeAttribute(attrs[m]); continue; }
                             var val_ = (all[j].getAttribute(attrs[m]) || '').trim().toLowerCase();
-                            if ((name === 'href' || name === 'src' || name === 'action') && 
+                            if ((name === 'href' || name === 'src' || name === 'action') &&
                                 (val_.indexOf('javascript:') === 0 || val_.indexOf('data:text/html') === 0 || val_.indexOf('vbscript:') === 0)) {
                                 all[j].removeAttribute(attrs[m]);
                             }
@@ -736,7 +804,7 @@ fun RichTextEditor(
                     }
                     return temp.innerHTML;
                 }
-                
+
                 function setHtml(html) {
                     editor.innerHTML = sanitizeHtml(html);
                     // Не вызываем onHtmlChanged чтобы избежать цикла
@@ -745,11 +813,11 @@ fun RichTextEditor(
                         checkFormatState();
                     }, 100);
                 }
-                
+
                 function getHtml() {
                     return editor.innerHTML;
                 }
-                
+
                 function focusEditor() {
                     editor.focus();
                     // Восстанавливаем выделение если потерялось (после закрытия меню)
@@ -761,7 +829,7 @@ fun RichTextEditor(
                         } catch (e) {}
                     }
                 }
-                
+
                 // Проверка состояния форматирования
                 function checkFormatState() {
                     // Если только что удалили highlight — игнорируем этот вызов
@@ -776,7 +844,7 @@ fun RichTextEditor(
                             lastSelectionRange = sel.getRangeAt(0).cloneRange();
                         }
                     } catch (e) {}
-                    
+
                     if (forceHighlightOff && sel && sel.rangeCount > 0) {
                         var range = sel.getRangeAt(0);
                         if (range.collapsed) {
@@ -785,7 +853,7 @@ fun RichTextEditor(
                             }
                         }
                     }
-                    
+
                     var isCollapsedSelection = false;
                     if (sel && sel.rangeCount > 0) {
                         isCollapsedSelection = sel.getRangeAt(0).collapsed;
@@ -797,27 +865,27 @@ fun RichTextEditor(
                     var highlightColor = document.queryCommandValue('hiliteColor') || '';
                     var fontSize = document.queryCommandValue('fontSize') || '';
                     var fontName = document.queryCommandValue('fontName') || '';
-                    
+
                     // Вспомогательная функция: является ли цвет «прозрачным»
                     function isTransparentColor(c) {
                         return !c || c === 'transparent' || c === 'rgba(0, 0, 0, 0)' || c === 'initial' || c === 'inherit';
                     }
-                    
+
                     // Если fontName или highlightColor пустые, пробуем getComputedStyle
                     try {
                         if (sel && sel.rangeCount > 0) {
                             var range = sel.getRangeAt(0);
                             var container = range.commonAncestorContainer;
                             var element = container.nodeType === 3 ? container.parentNode : container;
-                            
+
                             if (element && element !== document.body && element !== editor) {
                                 var style = window.getComputedStyle(element);
-                                
+
                                 // Получаем fontFamily если пустой
                                 if (!fontName && style.fontFamily) {
                                     fontName = style.fontFamily;
                                 }
-                                
+
                                 // Получаем backgroundColor — обходим дерево вверх до editor
                                 if (isTransparentColor(highlightColor)) {
                                     var walkEl = container.nodeType === 3 ? container.parentNode : container;
@@ -835,37 +903,37 @@ fun RichTextEditor(
                     } catch (e) {
                         // Игнорируем ошибки getComputedStyle
                     }
-                    
+
                     if (forceHighlightOff && isCollapsedSelection) {
                         highlightColor = '';
                     }
-                    
+
                     // Убираем кавычки из fontName
                     fontName = fontName.replace(/['"]/g, '');
-                    
+
                     // Определяем выравнивание
                     var alignment = 'left';
                     if (document.queryCommandState('justifyLeft')) alignment = 'left';
                     else if (document.queryCommandState('justifyCenter')) alignment = 'center';
                     else if (document.queryCommandState('justifyRight')) alignment = 'right';
                     else if (document.queryCommandState('justifyFull')) alignment = 'justify';
-                    
+
                     Android.onFormatStateChanged(bold, italic, underline, textColor, highlightColor, fontSize, fontName, alignment);
                 }
-                
+
                 // Проверяем состояние при изменении выделения
                 document.addEventListener('selectionchange', function() {
                     checkFormatState();
                 });
-                
+
                 // Проверяем состояние при клике в редакторе
                 editor.addEventListener('click', function() {
-                    // Сбрасываем forceHighlightOff при явном клике — 
+                    // Сбрасываем forceHighlightOff при явном клике —
                     // пользователь переместил курсор, нужно показать актуальное состояние
                     forceHighlightOff = false;
                     checkFormatState();
                 });
-                
+
                 // Проверяем состояние при вводе
                 editor.addEventListener('keyup', function() {
                     checkFormatState();
@@ -875,42 +943,47 @@ fun RichTextEditor(
         </html>
         """.trimIndent()
     }
-    
+
     // Bundle для сохранения состояния WebView при повороте экрана
     val webViewStateBundle = rememberSaveable { android.os.Bundle() }
-    
+
     // Храним актуальный callback в ref
     val onHtmlChangedRef = rememberUpdatedState(onHtmlChanged)
-    
+
     // Храним актуальный initialHtml для использования в onPageFinished
     val initialHtmlRef = rememberUpdatedState(initialHtml)
-    
-    // Отслеживаем последний HTML из WebView чтобы избежать циклов
-    // Используем object чтобы можно было менять значение из jsInterface
-    val lastHtmlFromWebView = remember { mutableStateOf("") }
-    
+
+    val lastHtmlFromWebView = remember { arrayOf("") }
+
     // JS Interface для связи WebView → Kotlin
     // ВАЖНО: @JavascriptInterface методы вызываются на background thread,
     // поэтому нужно переключиться на main thread для обновления Compose state
     val jsInterface = remember(controller) {
         object {
             @JavascriptInterface
+            fun cacheHtml(html: String) {
+                controller.latestHtml = html
+            }
+
+            @JavascriptInterface
             fun onHtmlChanged(html: String) {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    lastHtmlFromWebView.value = html
+                    controller.latestHtml = html
+                    lastHtmlFromWebView[0] = html
                     if (html.length < 500_000) {
                         webViewStateBundle.putString("editor_html", html)
                     }
                     onHtmlChangedRef.value(html)
+                    controller.completePendingFlush(html)
                 }
             }
-            
+
             @JavascriptInterface
             fun onFormatStateChanged(
-                bold: Boolean, 
-                italic: Boolean, 
-                underline: Boolean, 
-                textColor: String, 
+                bold: Boolean,
+                italic: Boolean,
+                underline: Boolean,
+                textColor: String,
                 highlightColor: String,
                 fontSize: String,
                 fontName: String,
@@ -920,19 +993,19 @@ fun RichTextEditor(
                     controller.isBold = bold
                     controller.isItalic = italic
                     controller.isUnderline = underline
-                    
+
                     // Фильтруем дефолтные значения цветов (чёрный текст, без выделения)
                     // Браузер может вернуть цвет в разных форматах: rgb(), #hex, название
-                    controller.currentTextColor = textColor.takeIf { 
-                        it.isNotBlank() && 
-                        it != "rgb(0, 0, 0)" && 
-                        it != "#000000" && 
+                    controller.currentTextColor = textColor.takeIf {
+                        it.isNotBlank() &&
+                        it != "rgb(0, 0, 0)" &&
+                        it != "#000000" &&
                         it.lowercase() != "black"
                     }
-                    
+
                     // Для highlightColor нормализуем цвет перед сохранением
-                    val normalizedHighlight = if (highlightColor.isNotBlank() && 
-                        highlightColor != "transparent" && 
+                    val normalizedHighlight = if (highlightColor.isNotBlank() &&
+                        highlightColor != "transparent" &&
                         highlightColor != "rgba(0, 0, 0, 0)" &&
                         highlightColor != "rgb(0, 0, 0)") {
                         try {
@@ -944,10 +1017,10 @@ fun RichTextEditor(
                         null
                     }
                     controller.currentHighlightColor = normalizedHighlight
-                    
+
                     // Сохраняем размер шрифта (fontSize возвращает 1-7, нам нужно маппить)
                     controller.currentFontSize = fontSize.takeIf { it.isNotBlank() }
-                    
+
                     // Сохраняем семейство шрифта
                     // Дефолтные системные шрифты маппим на Arial, чтобы галочка ставилась корректно
                     val normalizedFont = fontName.replace("\"", "").replace("'", "").trim()
@@ -971,23 +1044,24 @@ fun RichTextEditor(
                         firstFamily.isNotBlank() -> firstFamily
                         else -> normalizedFont
                     }
-                    
+
                     // Сохраняем выравнивание
                     controller.currentAlignment = alignment
                 }
             }
         }
     }
-    
+
     // Обновляем WebView когда initialHtml меняется извне (Reply/Forward/Draft/Signature)
     // Но НЕ когда изменение пришло из самого WebView (пользователь печатает)
     LaunchedEffect(initialHtml, isLoaded) {
-        if (isLoaded && initialHtml != lastHtmlFromWebView.value) {
-            lastHtmlFromWebView.value = initialHtml // Обновляем чтобы избежать повторного вызова
+        if (isLoaded && initialHtml != lastHtmlFromWebView[0]) {
+            controller.latestHtml = initialHtml
+            lastHtmlFromWebView[0] = initialHtml // Обновляем чтобы избежать повторного вызова
             controller.setHtml(initialHtml)
         }
     }
-    
+
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
@@ -1002,9 +1076,9 @@ fun RichTextEditor(
                 setBackgroundColor(Color.TRANSPARENT)
                 // Скрываем WebView до загрузки чтобы не мерцал белый прямоугольник
                 alpha = 0f
-                
+
                 addJavascriptInterface(jsInterface, "Android")
-                
+
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
@@ -1013,9 +1087,14 @@ fun RichTextEditor(
                         isLoaded = true
                         controller.isLoaded = true
                         val savedHtml = webViewStateBundle.getString("editor_html")
-                        val currentInitialHtml = if (!savedHtml.isNullOrEmpty()) savedHtml else initialHtmlRef.value
+                        val currentInitialHtml = when {
+                            !savedHtml.isNullOrEmpty() -> savedHtml
+                            controller.latestHtml.isNotEmpty() -> controller.latestHtml
+                            else -> initialHtmlRef.value
+                        }
                         if (currentInitialHtml.isNotEmpty()) {
-                            lastHtmlFromWebView.value = currentInitialHtml
+                            controller.latestHtml = currentInitialHtml
+                            lastHtmlFromWebView[0] = currentInitialHtml
                             val sanitizedHtml = controller.stripDangerousTags(currentInitialHtml)
                             val escapedHtml = sanitizedHtml
                                 .replace("\\", "\\\\")
@@ -1029,24 +1108,32 @@ fun RichTextEditor(
                         evaluateJavascript("checkFormatState();", null)
                     }
                 }
-                
+
                 loadDataWithBaseURL(null, editorHtml, "text/html", "UTF-8", null)
                 controller.webView = this
             }
         },
         modifier = modifier,
         onRelease = { webView ->
-            // Правильно уничтожаем WebView чтобы избежать краша в RenderThread
-            webView.stopLoading()
-            webView.loadUrl("about:blank")
-            webView.clearHistory()
-            // Удаляем из parent
-            (webView.parent as? ViewGroup)?.removeView(webView)
-            webView.removeAllViews()
-            webView.destroy()
-            
-            controller.webView = null
-            controller.isLoaded = false
+            try {
+                val cachedHtml = controller.latestHtml
+                if (cachedHtml.length < 500_000) {
+                    webViewStateBundle.putString("editor_html", cachedHtml)
+                }
+                controller.clearPendingFlush()
+                // Правильно уничтожаем WebView чтобы избежать краша в RenderThread
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.clearHistory()
+                // Удаляем из parent
+                (webView.parent as? ViewGroup)?.removeView(webView)
+                webView.removeAllViews()
+                webView.destroy()
+            } catch (_: Exception) {
+            } finally {
+                controller.webView = null
+                controller.isLoaded = false
+            }
         },
         update = { webView ->
             controller.webView = webView
@@ -1070,20 +1157,20 @@ fun RichTextToolbar(
     var showHighlightMenu by rememberSaveable { mutableStateOf(false) }
     var showAlignMenu by rememberSaveable { mutableStateOf(false) }
     val isRu = isRussian()
-    
+
     // Цвета для активного состояния
     val activeColor = MaterialTheme.colorScheme.primaryContainer
     val activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer
     val inactiveContentColor = MaterialTheme.colorScheme.onSurface
-    
+
     // Размеры шрифта (fontSize использует значения 1-7)
     val fontSizes = listOf(
         Triple(1, "Мелкий", "Small"),
-        Triple(3, "Обычный", "Normal"), 
+        Triple(3, "Обычный", "Normal"),
         Triple(5, "Крупный", "Large"),
         Triple(7, "Очень крупный", "Extra Large")
     )
-    
+
     // Типы шрифтов (названия шрифтов не локализуются)
     val fontFamilies = listOf(
         "Arial",
@@ -1092,7 +1179,7 @@ fun RichTextToolbar(
         "Verdana",
         "Georgia"
     )
-    
+
     // Цвета текста
     val textColors = listOf(
         Triple("#000000", "Чёрный", "Black"),
@@ -1103,7 +1190,7 @@ fun RichTextToolbar(
         Triple("#800080", "Фиолетовый", "Purple"),
         Triple("#808080", "Серый", "Gray")
     )
-    
+
     // Цвета выделения
     val highlightColors = listOf(
         Triple("#FFFF00", "Жёлтый", "Yellow"),
@@ -1113,7 +1200,7 @@ fun RichTextToolbar(
         Triple("#FFA500", "Оранжевый", "Orange"),
         Triple(null, "Убрать", "Remove")
     )
-    
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -1127,9 +1214,9 @@ fun RichTextToolbar(
                 .size(36.dp)
                 .focusProperties { canFocus = false }
                 .then(
-                    if (controller.isBold) 
+                    if (controller.isBold)
                         Modifier.background(activeColor, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                    else 
+                    else
                         Modifier
                 )
                 .clickable(
@@ -1140,22 +1227,22 @@ fun RichTextToolbar(
             contentAlignment = androidx.compose.ui.Alignment.Center
         ) {
             Text(
-                "B", 
-                style = MaterialTheme.typography.titleMedium, 
+                "B",
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                 color = if (controller.isBold) activeContentColor else inactiveContentColor
             )
         }
-        
+
         // Italic
         androidx.compose.foundation.layout.Box(
             modifier = Modifier
                 .size(36.dp)
                 .focusProperties { canFocus = false }
                 .then(
-                    if (controller.isItalic) 
+                    if (controller.isItalic)
                         Modifier.background(activeColor, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                    else 
+                    else
                         Modifier
                 )
                 .clickable(
@@ -1166,22 +1253,22 @@ fun RichTextToolbar(
             contentAlignment = androidx.compose.ui.Alignment.Center
         ) {
             Text(
-                "I", 
-                style = MaterialTheme.typography.titleMedium, 
+                "I",
+                style = MaterialTheme.typography.titleMedium,
                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                 color = if (controller.isItalic) activeContentColor else inactiveContentColor
             )
         }
-        
+
         // Underline
         androidx.compose.foundation.layout.Box(
             modifier = Modifier
                 .size(36.dp)
                 .focusProperties { canFocus = false }
                 .then(
-                    if (controller.isUnderline) 
+                    if (controller.isUnderline)
                         Modifier.background(activeColor, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                    else 
+                    else
                         Modifier
                 )
                 .clickable(
@@ -1192,15 +1279,15 @@ fun RichTextToolbar(
             contentAlignment = androidx.compose.ui.Alignment.Center
         ) {
             Text(
-                "U", 
-                style = MaterialTheme.typography.titleMedium, 
+                "U",
+                style = MaterialTheme.typography.titleMedium,
                 textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
                 color = if (controller.isUnderline) activeContentColor else inactiveContentColor
             )
         }
-        
+
         VerticalDivider(modifier = Modifier.height(24.dp))
-        
+
         // Шрифт (размер + тип) — объединённое меню
         Box {
             androidx.compose.foundation.layout.Box(
@@ -1209,7 +1296,7 @@ fun RichTextToolbar(
                     .focusProperties { canFocus = false }
                     .pointerInput(Unit) {
                         detectTapGestures(
-                            onTap = { 
+                            onTap = {
                                 controller.saveSelection()
                                 showFontMenu = true
                             }
@@ -1221,7 +1308,7 @@ fun RichTextToolbar(
                 }
                 DropdownMenu(
                     expanded = showFontMenu,
-                    onDismissRequest = { 
+                    onDismissRequest = {
                         showFontMenu = false
                         controller.focus()
                     },
@@ -1237,9 +1324,9 @@ fun RichTextToolbar(
                     )
                     fontSizes.forEach { (size, labelRu, labelEn) ->
                         val isActive = controller.currentFontSize == size.toString()
-                        
+
                         DropdownMenuItem(
-                            text = { 
+                            text = {
                                 Row(
                                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
@@ -1272,9 +1359,9 @@ fun RichTextToolbar(
                     )
                     fontFamilies.forEach { fontName ->
                         val isActive = controller.currentFontName?.equals(fontName, ignoreCase = true) == true
-                        
+
                         DropdownMenuItem(
-                            text = { 
+                            text = {
                                 Row(
                                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
@@ -1299,7 +1386,7 @@ fun RichTextToolbar(
                     }
                 }
             }
-        
+
         // Цвет текста
         Box {
             val hasTextColor = controller.currentTextColor != null
@@ -1308,16 +1395,16 @@ fun RichTextToolbar(
                     .size(36.dp)
                     .focusProperties { canFocus = false }
                     .then(
-                        if (hasTextColor) 
+                        if (hasTextColor)
                             Modifier.background(activeColor, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                        else 
+                        else
                             Modifier
                     )
                     .pointerInput(Unit) {
                         detectTapGestures(
-                            onTap = { 
+                            onTap = {
                                 controller.saveSelection()
-                                showTextColorMenu = true 
+                                showTextColorMenu = true
                             }
                         )
                     },
@@ -1326,14 +1413,14 @@ fun RichTextToolbar(
                 // Буква A с цветной полоской снизу (как в Word/Google Docs)
                 Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                     Text(
-                        "A", 
+                        "A",
                         style = MaterialTheme.typography.titleSmall,
                         color = if (hasTextColor) activeContentColor else inactiveContentColor
                     )
                     // Полоска с тонкой обводкой для видимости на любом фоне
                     val textColorVal = controller.currentTextColor
                     val colorBarColor = if (hasTextColor && textColorVal != null) {
-                        parseColorSafe(textColorVal) 
+                        parseColorSafe(textColorVal)
                             ?: MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.onSurface
@@ -1356,7 +1443,7 @@ fun RichTextToolbar(
             }
             DropdownMenu(
                 expanded = showTextColorMenu,
-                onDismissRequest = { 
+                onDismissRequest = {
                     showTextColorMenu = false
                     controller.focus()
                 },
@@ -1366,16 +1453,16 @@ fun RichTextToolbar(
                     textColors.forEach { (color, labelRu, labelEn) ->
                         // Чёрный цвет (#000000) считается активным когда currentTextColor == null
                         val isActive = if (color == "#000000") {
-                            controller.currentTextColor == null || 
+                            controller.currentTextColor == null ||
                             normalizeColor(controller.currentTextColor ?: "") == normalizeColor(color)
                         } else {
-                            controller.currentTextColor?.let { 
+                            controller.currentTextColor?.let {
                                 normalizeColor(it) == normalizeColor(color)
                             } ?: false
                         }
-                        
+
                         DropdownMenuItem(
-                            text = { 
+                            text = {
                                 Row(
                                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
@@ -1409,7 +1496,7 @@ fun RichTextToolbar(
                     }
                 }
             }
-        
+
         // Выделение цветом (highlight)
         Box {
             val hasHighlight = controller.currentHighlightColor != null
@@ -1418,16 +1505,16 @@ fun RichTextToolbar(
                     .size(36.dp)
                     .focusProperties { canFocus = false }
                     .then(
-                        if (hasHighlight) 
+                        if (hasHighlight)
                             Modifier.background(activeColor, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                        else 
+                        else
                             Modifier
                     )
                     .pointerInput(Unit) {
                         detectTapGestures(
-                            onTap = { 
+                            onTap = {
                                 controller.saveSelection() // Сохраняем выделение перед открытием меню
-                                showHighlightMenu = true 
+                                showHighlightMenu = true
                             }
                         )
                     },
@@ -1436,7 +1523,7 @@ fun RichTextToolbar(
                 // Иконка маркера с цветной полоской снизу
                 Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                     Icon(
-                        AppIcons.FormatColorFill, 
+                        AppIcons.FormatColorFill,
                         contentDescription = null,
                         modifier = Modifier.size(20.dp),
                         tint = if (hasHighlight) activeContentColor else inactiveContentColor
@@ -1450,7 +1537,7 @@ fun RichTextToolbar(
                                 .width(14.dp)
                                 .height(3.dp)
                                 .background(
-                                    parseColorSafe(highlightColorVal) 
+                                    parseColorSafe(highlightColorVal)
                                         ?: MaterialTheme.colorScheme.primary,
                                     androidx.compose.foundation.shape.RoundedCornerShape(1.dp)
                                 )
@@ -1465,7 +1552,7 @@ fun RichTextToolbar(
             }
             DropdownMenu(
                 expanded = showHighlightMenu,
-                onDismissRequest = { 
+                onDismissRequest = {
                     showHighlightMenu = false
                     controller.focus()
                 },
@@ -1474,16 +1561,16 @@ fun RichTextToolbar(
                 ) {
                     highlightColors.forEach { (color, labelRu, labelEn) ->
                         val isActive = if (color != null) {
-                            controller.currentHighlightColor?.let { 
+                            controller.currentHighlightColor?.let {
                                 normalizeColor(it) == normalizeColor(color)
                             } ?: false
                         } else {
                             // Для "Убрать" показываем галочку когда выделения нет
                             controller.currentHighlightColor == null
                         }
-                        
+
                         DropdownMenuItem(
-                            text = { 
+                            text = {
                                 Row(
                                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
@@ -1525,9 +1612,9 @@ fun RichTextToolbar(
                     }
                 }
             }
-        
+
         VerticalDivider(modifier = Modifier.height(24.dp))
-        
+
         // Выравнивание — объединённое меню
         Box {
             // Определяем иконку в зависимости от текущего выравнивания
@@ -1537,16 +1624,16 @@ fun RichTextToolbar(
                 "justify" -> AppIcons.FormatAlignJustify
                 else -> AppIcons.FormatAlignLeft // left или null
             }
-            
+
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .size(36.dp)
                     .focusProperties { canFocus = false }
                     .pointerInput(Unit) {
                         detectTapGestures(
-                            onTap = { 
+                            onTap = {
                                 controller.saveSelection()
-                                showAlignMenu = true 
+                                showAlignMenu = true
                             }
                         )
                     },
@@ -1556,7 +1643,7 @@ fun RichTextToolbar(
             }
             DropdownMenu(
                 expanded = showAlignMenu,
-                onDismissRequest = { 
+                onDismissRequest = {
                     showAlignMenu = false
                     controller.focus()
                 },
@@ -1564,7 +1651,7 @@ fun RichTextToolbar(
                 properties = PopupProperties(focusable = false)
             ) {
                 DropdownMenuItem(
-                    text = { 
+                    text = {
                         Row(
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -1589,7 +1676,7 @@ fun RichTextToolbar(
                     }
                 )
                 DropdownMenuItem(
-                    text = { 
+                    text = {
                         Row(
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -1614,7 +1701,7 @@ fun RichTextToolbar(
                     }
                 )
                 DropdownMenuItem(
-                    text = { 
+                    text = {
                         Row(
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -1639,7 +1726,7 @@ fun RichTextToolbar(
                     }
                 )
                 DropdownMenuItem(
-                    text = { 
+                    text = {
                         Row(
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -1665,9 +1752,9 @@ fun RichTextToolbar(
                 )
             }
             }
-        
+
         Spacer(modifier = Modifier.weight(1f))
-        
+
         // Вставка изображения
         if (showInsertImage) {
             androidx.compose.foundation.layout.Box(

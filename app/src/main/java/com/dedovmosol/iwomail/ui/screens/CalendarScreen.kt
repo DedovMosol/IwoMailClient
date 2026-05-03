@@ -1,6 +1,6 @@
-package com.dedovmosol.iwomail.ui.screens
+﻿package com.dedovmosol.iwomail.ui.screens
 
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -56,7 +56,7 @@ internal fun expandRecurringForRange(
     rangeEnd: Long
 ): List<CalendarEventEntity> {
     val result = mutableListOf<CalendarEventEntity>()
-    
+
     for (event in events) {
         if (event.isRecurring && event.recurrenceRule.isNotBlank()) {
             // Генерируем экземпляры серии в диапазоне
@@ -89,7 +89,7 @@ internal fun expandRecurringForRange(
             }
         }
     }
-    
+
     return result.sortedBy { it.startTime }
 }
 
@@ -116,26 +116,26 @@ fun CalendarScreen(
     val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-    
+
     // Отдельный scope для синхронизации, чтобы не отменялась при навигации
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
-    
+
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
 
     val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsState(initial = emptyList())
     val deletedEvents by remember(accountId) { calendarRepo.getDeletedEvents(accountId) }.collectAsState(initial = emptyList())
-    
+
     // ID аккаунта, для которого уже был запущен автосинк.
     // rememberSaveable: сохраняется при повороте → не запускает повторный синк для того же аккаунта.
     // При смене accountId значение не совпадёт → синк запустится для нового аккаунта.
     var syncedForAccountId by rememberSaveable { mutableStateOf(0L) }
 
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
-    
+
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedSearchQuery by rememberDebouncedState(searchQuery)
-    
+
     // Сохранение фокуса поиска при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
     var isSearchFocused by rememberSaveable { mutableStateOf(false) }
@@ -146,7 +146,7 @@ fun CalendarScreen(
         }
     }
     var isSyncing by remember { mutableStateOf(false) }
-    
+
     // Автоматическая синхронизация при первом открытии экрана или смене аккаунта.
     // syncedForAccountId != accountId → синк не запускался для этого аккаунта → запускаем.
     // При повороте экрана accountId не меняется → syncedForAccountId совпадает → синк не повторяется.
@@ -181,14 +181,14 @@ fun CalendarScreen(
     var cachedOccurrenceEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var showEditChoiceDialog by rememberSaveable { mutableStateOf(false) }
     var pendingEditOccurrenceId by rememberSaveable { mutableStateOf<String?>(null) }
-    
+
     // Множественный выбор
     val haptic = LocalHapticFeedback.current
     var selectedEventIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedEventIds.isNotEmpty()
-    
+
     // Определяем, есть ли среди выделенных удалённые события (для корректного TopBar/диалога)
     val deletedEventIdSet = remember(deletedEvents) { deletedEvents.map { it.id }.toSet() }
     val resolvedSelectedIds = remember(selectedEventIds, deletedEventIdSet) {
@@ -204,7 +204,7 @@ fun CalendarScreen(
     }
     val hasDeletedSelected = selectedDeletedResolvedIds.isNotEmpty()
     val hasActiveSelected = selectedActiveResolvedIds.isNotEmpty()
-    
+
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
@@ -221,18 +221,18 @@ fun CalendarScreen(
     var pendingOccurrenceIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
-    
+
     // Состояние списка для автоскролла
     val listState = rememberLazyListState()
-    
+
     // Фильтр по дате (аналогично задачам)
     var dateFilter by rememberSaveable { mutableStateOf(initialDateFilter) }
-    
+
     // Обработка кнопки Back в режиме выбора
     androidx.activity.compose.BackHandler(enabled = isSelectionMode) {
         selectedEventIds = emptySet()
     }
-    
+
     // Фильтрация по поиску и по дате (с разворачиванием повторяющихся событий)
     val filteredEvents = remember(events, deletedEvents, debouncedSearchQuery, dateFilter) {
         // Сначала фильтруем по дате
@@ -300,7 +300,7 @@ fun CalendarScreen(
             }
         }
     }
-    
+
     val renamedOccurrenceIds = remember(filteredEvents) {
         val occsByMaster = mutableMapOf<String, MutableList<CalendarEventEntity>>()
         filteredEvents.forEach { evt ->
@@ -335,7 +335,7 @@ fun CalendarScreen(
             event.body.contains(debouncedSearchQuery, ignoreCase = true)
         }
     }
-    
+
     // Виртуальные occurrence (_occ_) ищутся в filteredEvents (содержит развёрнутые повторения),
     // чтобы показать корректное время occurrence, а не базового события.
     val selectedEvent = remember(selectedEventId, filteredEvents, events, deletedEvents) {
@@ -393,7 +393,7 @@ fun CalendarScreen(
         val eventsRestoredText = Strings.eventsRestored
         val eventRestoredText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие восстановлено" else "Event restored"
         val eventDeletedPermanentlyText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие удалено навсегда" else "Event permanently deleted"
-        
+
         if (event.isDeleted) {
             // Диалог для удалённого события — восстановить или удалить навсегда
             DeletedEventDetailDialog(
@@ -401,7 +401,7 @@ fun CalendarScreen(
                 onDismiss = { selectedEventId = null },
                 onRestoreClick = {
                     selectedEventId = null  // Закрываем диалог СРАЗУ
-                    
+
                     deletionController.startDeletion(
                         emailIds = listOf(event.id),
                         message = restoringOneEventText,
@@ -415,7 +415,7 @@ fun CalendarScreen(
                         when (result) {
                             is EasResult.Error -> {
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                             else -> {}
@@ -425,7 +425,7 @@ fun CalendarScreen(
                 onDeletePermanentlyClick = {
                     selectedEventId = null
                     com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                    
+
                     deletionController.startDeletion(
                         emailIds = listOf(event.id),
                         message = deletingOneEventText,
@@ -439,7 +439,7 @@ fun CalendarScreen(
                         when (result) {
                             is EasResult.Error -> {
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                             else -> {}
@@ -455,7 +455,7 @@ fun CalendarScreen(
             } else {
                 event
             }
-            
+
             // Обычный диалог для активного события (показываем данные occurrence, но операции — над оригиналом)
             EventDetailDialog(
                 event = event,
@@ -494,10 +494,10 @@ fun CalendarScreen(
                             }
                             when (result) {
                                 is EasResult.Success -> {
-                                    Toast.makeText(context, eventDeletedText, Toast.LENGTH_SHORT).show()
+                                    SafeToast.short(context, eventDeletedText)
                                 }
                                 is EasResult.Error -> {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                         }
@@ -506,35 +506,35 @@ fun CalendarScreen(
             )
         }
     }
-    
+
     // Диалог подтверждения удаления событий
     if (showDeleteConfirmDialog) {
         val eventsDeletedText = Strings.eventDeleted
         val eventsDeletedPermanentlyText = Strings.eventsDeletedPermanently
         val undoText = Strings.undo
         val eventsRestoredText = Strings.eventsRestored
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = {
                 showDeleteConfirmDialog = false
                 deleteConfirmTargetIds = emptySet()
             },
             icon = { Icon(if (deleteConfirmIsPermanent) AppIcons.DeleteForever else AppIcons.Delete, null) },
-            title = { 
+            title = {
                 Text(
-                    if (deleteConfirmIsPermanent) 
-                        Strings.deleteEventsPermanently 
-                    else 
+                    if (deleteConfirmIsPermanent)
+                        Strings.deleteEventsPermanently
+                    else
                         Strings.deleteEvents
-                ) 
+                )
             },
-            text = { 
+            text = {
                 Text(
                     if (deleteConfirmCount == 1)
                         if (deleteConfirmIsPermanent) Strings.deleteEventPermanentlyConfirm else Strings.deleteEventConfirm
                     else
                         if (deleteConfirmIsPermanent) Strings.deleteEventsPermanentlyConfirm(deleteConfirmCount) else Strings.deleteEventsConfirm(deleteConfirmCount)
-                ) 
+                )
             },
             confirmButton = {
                 val deletingEventsMessage = Strings.deletingEvents(deleteConfirmCount)
@@ -542,7 +542,7 @@ fun CalendarScreen(
                     onClick = {
                         showDeleteConfirmDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                        
+
                         // Ищем выбранные события в обоих списках
                         // Для виртуальных occurrence ID (содержат _occ_) берём оригинальный ID серии
                         val eventsToDelete = (events + deletedEvents).filter { it.id in deleteConfirmTargetIds }
@@ -551,7 +551,7 @@ fun CalendarScreen(
                             id in deleteConfirmTargetIds ||
                                 (id.contains("_occ_") && id.substringBefore("_occ_") in deleteConfirmTargetIds)
                         }.toSet()
-                        
+
                         if (eventIds.isNotEmpty()) {
                             if (deleteConfirmIsPermanent) {
                                 // Окончательное удаление из корзины — с прогрессбаром
@@ -571,7 +571,7 @@ fun CalendarScreen(
                                     }
                                     if (deleted > 0) {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, "$eventsDeletedPermanentlyText: $deleted", Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, "$eventsDeletedPermanentlyText: $deleted")
                                         }
                                     }
                                 }
@@ -588,10 +588,10 @@ fun CalendarScreen(
                                         is EasResult.Error -> 0
                                     }
                                     if (deleted > 0) {
-                                        Toast.makeText(context, "$eventsDeletedText: $deleted", Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, "$eventsDeletedText: $deleted")
                                     }
                                     if (result is EasResult.Error) {
-                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        SafeToast.long(context, result.message)
                                     }
                                 }
                             }
@@ -608,7 +608,7 @@ fun CalendarScreen(
             }
         )
     }
-    
+
     // Диалог выбора: удалить конкретное вхождение или всю серию
     if (showOccurrenceDeleteChoice) {
         val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
@@ -667,9 +667,9 @@ fun CalendarScreen(
                             }
                             withContext(Dispatchers.Main) {
                                 if (successCount > 0 || nonOccurrenceResolvedIds.isNotEmpty()) {
-                                    Toast.makeText(context, if (isRussian) "Удалено" else "Deleted", Toast.LENGTH_SHORT).show()
+                                    SafeToast.short(context, if (isRussian) "Удалено" else "Deleted")
                                 } else if (errorMsg != null) {
-                                    Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, errorMsg)
                                 }
                             }
                         }
@@ -696,16 +696,16 @@ fun CalendarScreen(
     if (showEmptyTrashDialog) {
         val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
         val trashEmptiedText = if (isRussian) "Корзина очищена" else "Trash emptied"
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showEmptyTrashDialog = false },
             icon = { Icon(AppIcons.DeleteForever, null) },
             title = { Text(if (isRussian) "Очистить корзину?" else "Empty trash?") },
-            text = { 
+            text = {
                 Text(
                     if (isRussian) "Удалить навсегда ${deletedEvents.size} событий из корзины?"
                     else "Permanently delete ${deletedEvents.size} events from trash?"
-                ) 
+                )
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
@@ -718,10 +718,10 @@ fun CalendarScreen(
                             }
                             when (result) {
                                 is EasResult.Success -> {
-                                    Toast.makeText(context, trashEmptiedText, Toast.LENGTH_SHORT).show()
+                                    SafeToast.short(context, trashEmptiedText)
                                 }
                                 is EasResult.Error -> {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                         }
@@ -737,7 +737,7 @@ fun CalendarScreen(
             }
         )
     }
-    
+
     // Диалог выбора: «Изменить это вхождение» или «Изменить всю серию»
     if (showEditChoiceDialog) {
         val occId = pendingEditOccurrenceId
@@ -824,7 +824,7 @@ fun CalendarScreen(
             isCreating = isCreating,
             accountId = accountId,
             ownEmail = activeAccount?.email ?: "",
-            onDismiss = { 
+            onDismiss = {
                 showCreateDialog = false
                 editingEventId = null
                 editingOccurrenceStartTime = null
@@ -840,7 +840,7 @@ fun CalendarScreen(
                         val attendeeList = attendees.split(",", ";")
                             .map { it.trim() }
                             .filter { it.contains("@") }
-                        
+
                         val eventToEdit = editingEvent
                         val occStartTime = editingOccurrenceStartTime
                         val result = if (eventToEdit != null && occStartTime != null) {
@@ -899,7 +899,7 @@ fun CalendarScreen(
                                 )
                             }
                         }
-                        
+
                         when (result) {
                             is EasResult.Success -> {
                                 // НЕ вызываем syncCalendar() здесь:
@@ -932,9 +932,9 @@ fun CalendarScreen(
                                     !eventToEdit.isRecurring &&
                                     recurrenceType >= 0
 
-                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, message)
                                 if (showRecurringConversionHint) {
-                                    Toast.makeText(context, recurringConversionHintText, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, recurringConversionHintText)
                                 }
                                 showCreateDialog = false
                                 editingEventId = null
@@ -947,7 +947,7 @@ fun CalendarScreen(
                                 }
                             }
                             is EasResult.Error -> {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, result.message)
                             }
                         }
                     } finally {
@@ -957,7 +957,7 @@ fun CalendarScreen(
             }
         )
     }
-    
+
     Scaffold(
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
@@ -981,7 +981,7 @@ fun CalendarScreen(
                                 id in selectedDeletedResolvedIds ||
                                     (id.contains("_occ_") && id.substringBefore("_occ_") in selectedDeletedResolvedIds)
                             }.toSet()
-                            
+
                             if (eventIds.isNotEmpty()) {
                                 deletionController.startDeletion(
                                     emailIds = eventIds,
@@ -1001,10 +1001,11 @@ fun CalendarScreen(
                                     }
                                     withContext(Dispatchers.Main) {
                                         if (restored > 0) {
-                                            Toast.makeText(context, "$eventsRestoredText: $restored", Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, "$eventsRestoredText: $restored")
                                         }
-                                        if (lastError != null) {
-                                            Toast.makeText(context, lastError, Toast.LENGTH_LONG).show()
+                                        val err = lastError
+                                        if (err != null) {
+                                            SafeToast.long(context, err)
                                         }
                                     }
                                 }
@@ -1061,9 +1062,12 @@ fun CalendarScreen(
                                 }
                                 withContext(Dispatchers.Main) {
                                     if (successCount > 0) {
-                                        Toast.makeText(context, deletedText, Toast.LENGTH_SHORT).show()
-                                    } else if (lastError != null) {
-                                        Toast.makeText(context, lastError, Toast.LENGTH_LONG).show()
+                                        SafeToast.short(context, deletedText)
+                                    } else {
+                                        val err = lastError
+                                        if (err != null) {
+                                            SafeToast.long(context, err)
+                                        }
                                     }
                                 }
                             }
@@ -1115,7 +1119,7 @@ fun CalendarScreen(
                                 tint = Color.White
                             )
                         }
-                        
+
                         // Кнопка синхронизации
                         val calendarSyncedText = Strings.calendarSynced
                         IconButton(
@@ -1128,14 +1132,10 @@ fun CalendarScreen(
                                         }
                                         when (result) {
                                             is EasResult.Success -> {
-                                                Toast.makeText(
-                                                    context,
-                                                    "$calendarSyncedText: ${result.data}",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                                SafeToast.short(context, "$calendarSyncedText: ${result.data}")
                                             }
                                             is EasResult.Error -> {
-                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                                SafeToast.long(context, result.message)
                                             }
                                         }
                                     } catch (e: Exception) {

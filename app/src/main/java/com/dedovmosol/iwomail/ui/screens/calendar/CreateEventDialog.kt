@@ -1,7 +1,7 @@
-package com.dedovmosol.iwomail.ui.screens.calendar
+﻿package com.dedovmosol.iwomail.ui.screens.calendar
 
 import android.provider.OpenableColumns
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -104,11 +104,11 @@ internal fun CreateEventDialog(
 ) {
     val context = LocalContext.current
     val isEditing = event != null
-    
+
     // Получаем строки заранее для использования в onClick
     val invalidDateTimeText = Strings.invalidDateTime
     val endBeforeStartText = Strings.endBeforeStart
-    
+
     // Состояния полей
     var subject by rememberSaveable { mutableStateOf(event?.subject ?: "") }
     var location by rememberSaveable { mutableStateOf(event?.location ?: "") }
@@ -127,7 +127,7 @@ internal fun CreateEventDialog(
     }
     // Диалог выбора контактов
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
-    
+
     // Вложения
     var pendingAttachments by rememberSaveable(stateSaver = PendingCalendarAttachmentsSaver) {
         mutableStateOf(emptyList())
@@ -167,15 +167,7 @@ internal fun CreateEventDialog(
             }
 
             if (bytes == null) {
-                Toast.makeText(
-                    context,
-                    if (isRussianCallback) {
-                        "Не удалось восстановить вложение ${attachment.name}"
-                    } else {
-                        "Failed to restore attachment ${attachment.name}"
-                    },
-                    Toast.LENGTH_LONG
-                ).show()
+                SafeToast.long(context, if (isRussianCallback) "Не удалось восстановить вложение ${attachment.name}" else "Failed to restore attachment ${attachment.name}")
                 return null
             }
 
@@ -203,15 +195,11 @@ internal fun CreateEventDialog(
                     val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
                     if (size > maxSingleFile) {
                         val sizeMB = size / 1024 / 1024
-                        Toast.makeText(context,
-                            Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback),
-                            Toast.LENGTH_LONG).show()
+                        SafeToast.long(context, Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback))
                         return@use
                     }
                     if (currentTotal + size > maxTotal) {
-                        Toast.makeText(context,
-                            Strings.attachmentLimitExceeded(isRussianCallback),
-                            Toast.LENGTH_LONG).show()
+                        SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
                         return@use
                     }
                     val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
@@ -243,25 +231,17 @@ internal fun CreateEventDialog(
                     if (copiedSize == null && streamExceededSingleLimit) {
                         deletePendingAttachmentFile(tempFile.absolutePath)
                         val sizeMB = maxSingleFile / 1024 / 1024
-                        Toast.makeText(context,
-                            Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback),
-                            Toast.LENGTH_LONG).show()
+                        SafeToast.long(context, Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback))
                         return@use
                     }
                     if (copiedSize == null && streamExceededTotalLimit) {
                         deletePendingAttachmentFile(tempFile.absolutePath)
-                        Toast.makeText(context,
-                            Strings.attachmentLimitExceeded(isRussianCallback),
-                            Toast.LENGTH_LONG).show()
+                        SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
                         return@use
                     }
                     if (copiedSize == null) {
                         deletePendingAttachmentFile(tempFile.absolutePath)
-                        Toast.makeText(
-                            context,
-                            if (isRussianCallback) "Не удалось прочитать вложение" else "Failed to read attachment",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        SafeToast.long(context, if (isRussianCallback) "Не удалось прочитать вложение" else "Failed to read attachment")
                         return@use
                     }
                     currentTotal += copiedSize
@@ -275,27 +255,27 @@ internal fun CreateEventDialog(
             }
         }
     }
-    
+
     // Текстовые поля для дат и времени
     var startDateText by rememberSaveable { mutableStateOf("") }
     var startTimeText by rememberSaveable { mutableStateOf("") }
     var endDateText by rememberSaveable { mutableStateOf("") }
     var endTimeText by rememberSaveable { mutableStateOf("") }
-    
+
     var showReminderMenu by rememberSaveable { mutableStateOf(false) }
     var showStatusMenu by rememberSaveable { mutableStateOf(false) }
-    
+
     // Состояния для DatePicker / TimePicker диалогов
     var showStartDatePicker by rememberSaveable { mutableStateOf(false) }
     var showStartTimePicker by rememberSaveable { mutableStateOf(false) }
     var showEndDatePicker by rememberSaveable { mutableStateOf(false) }
     var showEndTimePicker by rememberSaveable { mutableStateOf(false) }
-    
+
     // Инициализация текстовых полей из существующих дат
     LaunchedEffect(event, initialDate) {
         // КРИТИЧНО: НЕ устанавливаем UTC, т.к. пользователь работает в LOCAL timezone
         // БД хранит UTC, но отображаем в LOCAL
-        
+
         if (event != null) {
             startDateText = dateFormat().format(Date(event.startTime))
             startTimeText = timeFormat().format(Date(event.startTime))
@@ -308,21 +288,21 @@ internal fun CreateEventDialog(
             calendar.set(Calendar.SECOND, 0)
             calendar.set(Calendar.MILLISECOND, 0)
             calendar.add(Calendar.HOUR_OF_DAY, 1)
-            
+
             startDateText = dateFormat().format(calendar.time)
             startTimeText = timeFormat().format(calendar.time)
-            
+
             calendar.add(Calendar.HOUR_OF_DAY, 1)
             endDateText = dateFormat().format(calendar.time)
             endTimeText = timeFormat().format(calendar.time)
         }
     }
-    
+
     // Валидация
     val isValid = subject.isNotBlank()
-    
+
     val lazyListState = rememberLazyListState()
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = { if (!isCreating) dismissDialog() },
         scrollable = false, // Отключаем автоскролл диалога
@@ -360,9 +340,9 @@ internal fun CreateEventDialog(
                         isError = subject.isBlank()
                     )
                 }
-                
+
                 item {
-                    
+
                     // Весь день
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -376,16 +356,16 @@ internal fun CreateEventDialog(
                         )
                     }
                 }
-                
+
                 item {
-                    
+
                     // Дата начала
                     Text(
                         text = Strings.startDate,
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
-                
+
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -393,7 +373,7 @@ internal fun CreateEventDialog(
                     ) {
                         OutlinedTextField(
                             value = startDateText,
-                            onValueChange = { 
+                            onValueChange = {
                                 val filtered = it.filter { c -> c.isDigit() || c == '.' }
                                 if (filtered.length <= 10) {
                                     startDateText = filtered
@@ -434,7 +414,7 @@ internal fun CreateEventDialog(
                         }
                         if (startDateText.isNotEmpty() || startTimeText.isNotEmpty()) {
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     startDateText = ""
                                     startTimeText = ""
                                 }
@@ -444,7 +424,7 @@ internal fun CreateEventDialog(
                         }
                     }
                 }
-                
+
                 item {
                     val endLabel = if (recurrenceType != -1) Strings.endOfEachEvent else Strings.endDate
                     Text(
@@ -459,7 +439,7 @@ internal fun CreateEventDialog(
                         )
                     }
                 }
-                
+
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -467,7 +447,7 @@ internal fun CreateEventDialog(
                     ) {
                         OutlinedTextField(
                             value = endDateText,
-                            onValueChange = { 
+                            onValueChange = {
                                 val filtered = it.filter { c -> c.isDigit() || c == '.' }
                                 if (filtered.length <= 10) {
                                     endDateText = filtered
@@ -508,7 +488,7 @@ internal fun CreateEventDialog(
                         }
                         if (endDateText.isNotEmpty() || endTimeText.isNotEmpty()) {
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     endDateText = ""
                                     endTimeText = ""
                                 }
@@ -518,7 +498,7 @@ internal fun CreateEventDialog(
                         }
                     }
                 }
-                
+
                 item {
                     // Место
                     OutlinedTextField(
@@ -529,7 +509,7 @@ internal fun CreateEventDialog(
                         singleLine = true
                     )
                 }
-                
+
                 item {
                     // Пригласить участников
                     OutlinedTextField(
@@ -547,7 +527,7 @@ internal fun CreateEventDialog(
                         }
                     )
                 }
-                
+
                 item {
                     // Напоминание
                     Box {
@@ -575,7 +555,7 @@ internal fun CreateEventDialog(
                                 disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         )
-                        
+
                         DropdownMenu(
                             expanded = showReminderMenu,
                             onDismissRequest = { showReminderMenu = false }
@@ -600,7 +580,7 @@ internal fun CreateEventDialog(
                         }
                     }
                 }
-                
+
                 item {
                     // Статус занятости
                     Box {
@@ -625,7 +605,7 @@ internal fun CreateEventDialog(
                                 disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         )
-                        
+
                         DropdownMenu(
                             expanded = showStatusMenu,
                             onDismissRequest = { showStatusMenu = false }
@@ -647,7 +627,7 @@ internal fun CreateEventDialog(
                         }
                     }
                 }
-                
+
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
@@ -683,7 +663,7 @@ internal fun CreateEventDialog(
                         }
                     }
                 }
-                
+
                 item {
                     // Описание
                     OutlinedTextField(
@@ -696,7 +676,7 @@ internal fun CreateEventDialog(
                         maxLines = 5
                     )
                 }
-                
+
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         // Существующие вложения с сервера (при редактировании)
@@ -715,8 +695,8 @@ internal fun CreateEventDialog(
                                     }.filter { !it.isInline }
                                 } catch (_: Exception) { emptyList() }
                             }
-                            val visibleAttachments = existingAttachments.filter { 
-                                it.fileReference !in removedExistingAttachmentRefs 
+                            val visibleAttachments = existingAttachments.filter {
+                                it.fileReference !in removedExistingAttachmentRefs
                             }
                             if (visibleAttachments.isNotEmpty()) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -794,7 +774,7 @@ internal fun CreateEventDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(Strings.attachFile)
                         }
-                        
+
                         if (pendingAttachments.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
                             pendingAttachments.forEachIndexed { index, att ->
@@ -842,7 +822,7 @@ internal fun CreateEventDialog(
                     }
                 }
             }
-            
+
             LazyColumnScrollbar(lazyListState)
             }
         },
@@ -856,20 +836,20 @@ internal fun CreateEventDialog(
                         } else {
                             parseDateTime(startDateText, startTimeText)
                         }
-                        
+
                         val endTime = if (allDayEvent) {
                             parseDateTime(endDateText, "23:59")
                         } else {
                             parseDateTime(endDateText, endTimeText)
                         }
-                        
+
                         if (startTime <= 0 || endTime <= 0) {
-                            Toast.makeText(context, invalidDateTimeText, Toast.LENGTH_SHORT).show()
+                            SafeToast.short(context, invalidDateTimeText)
                             return@ThemeOutlinedButton
                         }
-                        
+
                         if (endTime <= startTime) {
-                            Toast.makeText(context, endBeforeStartText, Toast.LENGTH_SHORT).show()
+                            SafeToast.short(context, endBeforeStartText)
                             return@ThemeOutlinedButton
                         }
 
@@ -904,7 +884,7 @@ internal fun CreateEventDialog(
             )
         }
     )
-    
+
     // Диалог выбора контактов
     if (showContactPicker) {
         val database = remember { com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context) }
@@ -925,10 +905,10 @@ internal fun CreateEventDialog(
             }
         )
     }
-    
+
     // DatePicker и TimePicker диалоги
     val pickerDateFormat = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
-    
+
     if (showStartDatePicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = try {
@@ -950,7 +930,7 @@ internal fun CreateEventDialog(
             }
         ) { DatePicker(state = datePickerState) }
     }
-    
+
     if (showEndDatePicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = try {
@@ -972,7 +952,7 @@ internal fun CreateEventDialog(
             }
         ) { DatePicker(state = datePickerState) }
     }
-    
+
     if (showStartTimePicker) {
         val initHour = try { startTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
         val initMinute = try { startTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
@@ -994,7 +974,7 @@ internal fun CreateEventDialog(
             }
         }
     }
-    
+
     if (showEndTimePicker) {
         val initHour = try { endTimeText.split(":")[0].toInt() } catch (_: Exception) { 10 }
         val initMinute = try { endTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }

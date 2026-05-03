@@ -12,7 +12,7 @@ import com.dedovmosol.iwomail.util.MimeHtmlProcessor
 /**
  * Сервис для работы с email Exchange (EAS/EWS)
  * Выделен из EasClient для соблюдения принципа SRP (Single Responsibility)
- * 
+ *
  * Отвечает за:
  * - Синхронизацию писем (Sync)
  * - Отправку писем (SendMail)
@@ -23,11 +23,11 @@ import com.dedovmosol.iwomail.util.MimeHtmlProcessor
 class EasEmailService internal constructor(
     private val deps: EmailServiceDependencies
 ) {
-    
+
     interface EasCommandExecutor {
         suspend operator fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T>
     }
-    
+
     /**
      * Зависимости для EasEmailService
      */
@@ -54,13 +54,13 @@ class EasEmailService internal constructor(
         val buildEwsSoapRequest: (String) -> String,
         val extractEwsError: (String) -> String
     )
-    
+
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         private const val SENTINEL_NOT_FOUND = "OBJECT_NOT_FOUND"
 
         private val EMAIL_PATTERN = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
-        
+
         private fun isValidEmailAddress(addresses: String): Boolean =
             addresses.split(";", ",").all { addr ->
                 val trimmed = addr.trim()
@@ -75,13 +75,13 @@ class EasEmailService internal constructor(
         private val BOUNDARY_REGEX get() = EasPatterns.BOUNDARY
         private val AIRSYNC_DATA_REGEX = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val HEADER_FOLDING_REGEX = "\r?\n[ \t]+".toRegex()
-        
+
         private val CONTENT_ID_PATTERN = "Content-ID:\\s*<([^>]+)>".toRegex(RegexOption.IGNORE_CASE)
         private val CONTENT_TYPE_IMAGE_PATTERN = "Content-Type:\\s*(image/[^;\\r\\n]+)".toRegex(RegexOption.IGNORE_CASE)
         private val DATA_PATTERN = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val DATA_IMAGE_SRC_REGEX = Regex("""src="data:image/[^;]+;base64,[^"]+"""")
     }
-    
+
     /**
      * Синхронизация писем (Sync)
      */
@@ -126,11 +126,11 @@ class EasEmailService internal constructor(
     </Collections>
 </Sync>""".trimIndent()
         }
-        
+
         val result = deps.executeEasCommand("Sync", xml) { responseXml ->
             parseSyncResponse(responseXml)
         }
-        
+
         if (result is EasResult.Error && result.message.contains("Пустой ответ")) {
             return EasResult.Success(SyncResponse(
                 syncKey = syncKey,
@@ -139,7 +139,7 @@ class EasEmailService internal constructor(
                 emails = emptyList()
             ))
         }
-        
+
         if (result is EasResult.Error && result.message.contains("449")) {
             when (val provResult = deps.provision()) {
                 is EasResult.Success -> {
@@ -155,10 +155,10 @@ class EasEmailService internal constructor(
                 }
             }
         }
-        
+
         return result
     }
-    
+
     /**
      * Отправка письма (SendMail)
      */
@@ -175,20 +175,20 @@ class EasEmailService internal constructor(
         if (to.isBlank() || !isValidEmailAddress(to)) {
             return EasResult.Error("Неверный адрес получателя: $to")
         }
-        
+
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         return withContext(Dispatchers.IO) {
             try {
                 val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance)
-                
+
                 val easVersion = deps.getEasVersion()
                 val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
                 val url = deps.buildUrl("SendMail") +
                     if (majorVersion < 14) "&SaveInSent=T" else ""
-                
+
                 val (requestBody, contentType) = if (majorVersion >= 14) {
                     val clientId = System.currentTimeMillis().toString()
                     val wbxml = deps.wbxmlParser.generateSendMail(clientId, mimeBytes)
@@ -196,7 +196,7 @@ class EasEmailService internal constructor(
                 } else {
                     Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
                 }
-                
+
                 val requestBuilder = Request.Builder()
                     .url(url)
                     .post(requestBody)
@@ -204,11 +204,11 @@ class EasEmailService internal constructor(
                     .header("MS-ASProtocolVersion", easVersion)
                     .header("Content-Type", contentType)
                     .header("User-Agent", "Android/12-EAS-2.0")
-                
+
                 deps.getPolicyKey()?.let { key ->
                     requestBuilder.header("X-MS-PolicyKey", key)
                 }
-                
+
                 val request = requestBuilder.build()
                 deps.executeRequest(request).use { response ->
                     if (response.isSuccessful || response.code == 200) {
@@ -237,7 +237,7 @@ class EasEmailService internal constructor(
                                         .header("User-Agent", "Android/12-EAS-2.0")
                                         .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
                                         .build()
-                                    
+
                                     deps.executeRequest(retryRequest).use { retryResponse ->
                                         if (retryResponse.isSuccessful) {
                                             return@withContext EasResult.Success(true)
@@ -258,7 +258,128 @@ class EasEmailService internal constructor(
             }
         }
     }
-    
+
+    /**
+     * Пересылка письма через SmartForward (MS-ASCMD §2.2.1.19)
+     *
+     * Сервер автоматически включает тело и вложения оригинального письма.
+     * Клиент отправляет ТОЛЬКО новый текст (пользовательский ввод + подпись).
+     *
+     * EAS 12.1: raw MIME, CollectionId/ItemId в query-параметрах URL
+     * EAS 14.0+: WBXML с Source/FolderId/ItemId элементами
+     *
+     * @param collectionId ServerId папки оригинального письма
+     * @param itemId ServerId оригинального письма
+     */
+    suspend fun smartForward(
+        to: String,
+        subject: String,
+        body: String,
+        cc: String = "",
+        bcc: String = "",
+        collectionId: String,
+        itemId: String,
+        importance: Int = 1,
+        requestReadReceipt: Boolean = false,
+        requestDeliveryReceipt: Boolean = false
+    ): EasResult<Boolean> {
+        if (to.isBlank() || !isValidEmailAddress(to)) {
+            return EasResult.Error("Неверный адрес получателя: $to")
+        }
+
+        if (!deps.isVersionDetected()) {
+            deps.detectEasVersion()
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val mimeBytes = buildMimeMessageBytes(
+                    to, subject, body, cc, bcc,
+                    requestReadReceipt, requestDeliveryReceipt, importance
+                )
+
+                val easVersion = deps.getEasVersion()
+                val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
+
+                // MS-ASCMD: EAS 12.1 → CollectionId/ItemId в URL query params + SaveInSent=T
+                // EAS 14.0+ → WBXML body с Source/FolderId/ItemId
+                val url = deps.buildUrl("SmartForward") +
+                    if (majorVersion < 14) {
+                        "&CollectionId=${java.net.URLEncoder.encode(collectionId, "UTF-8")}" +
+                        "&ItemId=${java.net.URLEncoder.encode(itemId, "UTF-8")}" +
+                        "&SaveInSent=T"
+                    } else ""
+
+                val (requestBody, contentType) = if (majorVersion >= 14) {
+                    val clientId = System.currentTimeMillis().toString()
+                    val wbxml = deps.wbxmlParser.generateSmartForward(clientId, collectionId, itemId, mimeBytes)
+                    Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
+                } else {
+                    Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
+                }
+
+                val requestBuilder = Request.Builder()
+                    .url(url)
+                    .post(requestBody)
+                    .header("Authorization", deps.getAuthHeader())
+                    .header("MS-ASProtocolVersion", easVersion)
+                    .header("Content-Type", contentType)
+                    .header("User-Agent", "Android/12-EAS-2.0")
+
+                deps.getPolicyKey()?.let { key ->
+                    requestBuilder.header("X-MS-PolicyKey", key)
+                }
+
+                val request = requestBuilder.build()
+                deps.executeRequest(request).use { response ->
+                    if (response.isSuccessful || response.code == 200) {
+                        val responseBody = response.body?.bytes()
+                        if (responseBody != null && responseBody.isNotEmpty()) {
+                            if (responseBody[0] == 0x03.toByte()) {
+                                val xml = deps.wbxmlParser.parse(responseBody)
+                                val status = deps.extractValue(xml, "Status")
+                                if (status != null && status != "1") {
+                                    val statusDesc = getStatusDescription(status)
+                                    return@withContext EasResult.Error("SmartForward ошибка: $statusDesc (Status: $status)")
+                                }
+                            }
+                        }
+                        EasResult.Success(true)
+                    } else {
+                        if (response.code == 449) {
+                            when (val provResult = deps.provision()) {
+                                is EasResult.Success -> {
+                                    val retryRequest = Request.Builder()
+                                        .url(url)
+                                        .post(requestBody)
+                                        .header("Authorization", deps.getAuthHeader())
+                                        .header("MS-ASProtocolVersion", easVersion)
+                                        .header("Content-Type", contentType)
+                                        .header("User-Agent", "Android/12-EAS-2.0")
+                                        .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
+                                        .build()
+
+                                    deps.executeRequest(retryRequest).use { retryResponse ->
+                                        if (retryResponse.isSuccessful) {
+                                            return@withContext EasResult.Success(true)
+                                        }
+                                    }
+                                }
+                                is EasResult.Error -> {
+                                    android.util.Log.w("EasEmailService", "SmartForward provision retry failed: ${provResult.message}")
+                                }
+                            }
+                        }
+                        EasResult.Error("SmartForward ошибка (HTTP ${response.code})")
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error("SmartForward ошибка: ${e.message}")
+            }
+        }
+    }
+
     /**
      * Загрузка тела письма с MDN информацией
      * Сначала пробует MIME (Type=4) для парсинга заголовков, потом HTML, потом plain text
@@ -271,15 +392,15 @@ class EasEmailService internal constructor(
                 bodyType = 4, truncationSize = 5_242_880,
                 mimeSupport = 2, includeBodyFallback = false
             )
-            
+
             if (mimeResult is EasResult.Success && mimeResult.data == SENTINEL_NOT_FOUND) {
                 return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
             }
-            
+
             var mdnRequestedBy: String? = null
             var originalMessageId: String? = null
             var bodyContent = ""
-            
+
             if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty()) {
                 val decodedMimeData = decodeMimeData(mimeResult.data)
                 val mimeHeaders = extractTopLevelMimeHeaders(decodedMimeData)
@@ -287,41 +408,41 @@ class EasEmailService internal constructor(
                 originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
                 bodyContent = extractBodyFromMime(decodedMimeData)
             }
-            
+
             // HTML fallback (Type=2)
             if (bodyContent.isEmpty()) {
                 val htmlResult = fetchItemBody(
                     collectionId, serverId,
                     bodyType = 2, truncationSize = 512_000
                 )
-                
+
                 if (htmlResult is EasResult.Success && htmlResult.data == SENTINEL_NOT_FOUND) {
                     return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
                 }
-                
+
                 if (htmlResult is EasResult.Success && htmlResult.data.isNotBlank()) {
                     bodyContent = htmlResult.data
                 }
             }
-            
+
             // Plain text fallback (Type=1)
             if (bodyContent.isEmpty()) {
                 val plainResult = fetchItemBody(
                     collectionId, serverId,
                     bodyType = 1, truncationSize = 512_000
                 )
-                
+
                 if (plainResult is EasResult.Success && plainResult.data == SENTINEL_NOT_FOUND) {
                     return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
                 }
-                
+
                 if (plainResult is EasResult.Success) {
                     bodyContent = plainResult.data
                 } else if (plainResult is EasResult.Error) {
                     return@withTimeoutOrNull EasResult.Error(plainResult.message)
                 }
             }
-            
+
             EasResult.Success(
                 EmailBodyResult(
                     body = bodyContent,
@@ -331,7 +452,7 @@ class EasEmailService internal constructor(
             )
         } ?: EasResult.Error("Timeout loading email body")
     }
-    
+
     /**
      * Выполняет ItemOperations Fetch для получения тела письма заданного типа.
      * Поддерживает EAS 12.1+: BodyPreference (Type + TruncationSize) и MIMESupport.
@@ -386,7 +507,7 @@ class EasEmailService internal constructor(
             )
         }
     }
-    
+
     /**
      * Парсит вложения из XML (Sync или ItemOperations ответ)
      * Поддерживает оба варианта: с namespace prefix (airsyncbase:) и без
@@ -461,7 +582,7 @@ class EasEmailService internal constructor(
             MDN_RETURN_RECEIPT_REGEX,
             MDN_CONFIRM_READING_REGEX
         )
-        
+
         for (pattern in patterns) {
             val match = pattern.find(mimeHeaders)
             if (match != null) {
@@ -470,7 +591,7 @@ class EasEmailService internal constructor(
                 return emailMatch?.groupValues?.get(1) ?: email
             }
         }
-        
+
         return null
     }
 
@@ -496,28 +617,28 @@ class EasEmailService internal constructor(
         return mimeData.substring(0, headerEnd)
             .replace(HEADER_FOLDING_REGEX, " ")
     }
-    
+
     /**
      * Извлекает inline изображения из MIME данных
      * Возвращает Map<contentId, base64DataUrl>
      */
     fun extractInlineImagesFromMime(mimeData: String): Map<String, String> {
         val images = mutableMapOf<String, String>()
-        
+
         if (!mimeData.contains("Content-Type:", ignoreCase = true)) {
             return images
         }
-        
+
         // КРИТИЧНО: Рекурсивно обрабатываем вложенные multipart-структуры.
         // При наличии файловых вложений MIME имеет вид:
         //   multipart/mixed { multipart/related { text/html + image(s) } + attachment(s) }
         // Старая версия разбивала только по внешнему boundary и не находила
         // inline-картинки во вложенном multipart/related.
         extractImagesRecursive(mimeData, images)
-        
+
         return images
     }
-    
+
     /**
      * Рекурсивно извлекает inline-картинки из вложенных multipart-структур MIME
      */
@@ -526,7 +647,7 @@ class EasEmailService internal constructor(
         val boundaryMatch = BOUNDARY_REGEX.find(mimeSection) ?: return
         val boundary = boundaryMatch.groupValues[1]
         val parts = mimeSection.split("--$boundary")
-        
+
         for (part in parts) {
             // Если часть содержит вложенный multipart — рекурсивно обрабатываем
             val isNestedMultipart = part.contains("Content-Type: multipart/", ignoreCase = true) ||
@@ -535,39 +656,39 @@ class EasEmailService internal constructor(
                 extractImagesRecursive(part, images, depth + 1)
                 continue
             }
-            
+
             val isImage = part.contains("Content-Type: image/", ignoreCase = true) ||
                          part.contains("Content-Type:image/", ignoreCase = true)
-            
+
             if (!isImage) continue
-            
+
             val cidMatch = CONTENT_ID_PATTERN.find(part)
             val contentId = cidMatch?.groupValues?.get(1) ?: continue
-            
+
             val typeMatch = CONTENT_TYPE_IMAGE_PATTERN.find(part)
             val contentType = typeMatch?.groupValues?.get(1)?.trim() ?: "image/png"
-            
+
             val contentStart = part.indexOf("\r\n\r\n")
             if (contentStart == -1) continue
-            
+
             var content = part.substring(contentStart + 4).trim()
             if (content.endsWith("--")) {
                 content = content.dropLast(2).trim()
             }
             content = content.replace("\r\n", "").replace("\n", "").replace(" ", "")
-            
+
             if (content.isNotBlank()) {
                 val dataUrl = "data:$contentType;base64,$content"
                 images[contentId] = dataUrl
             }
         }
     }
-    
+
     /**
      * Загружает полный MIME письма и извлекает inline изображения
      */
     suspend fun fetchInlineImages(collectionId: String, serverId: String): EasResult<Map<String, String>> {
-        
+
         // КРИТИЧНО: Увеличен TruncationSize с 10 МБ до 20 МБ для надёжности.
         // Также добавлена проверка Truncated флага — если MIME обрезан, inline-картинки
         // не будут полностью в MIME и парсинг вернёт пустую карту (неочевидная ошибка).
@@ -588,14 +709,14 @@ class EasEmailService internal constructor(
         </Options>
     </Fetch>
 </ItemOperations>""".trimIndent()
-        
+
         return deps.executeEasCommand("ItemOperations", mimeXml) { responseXml ->
             val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
-            
+
             if (status == 8) {
                 return@executeEasCommand emptyMap() // Object not found
             }
-            
+
             // КРИТИЧНО: Проверяем Truncated флаг.
             // Если MIME обрезан, inline-картинки могут быть неполными — не парсим.
             val truncated = deps.extractValue(responseXml, "Truncated")
@@ -603,24 +724,24 @@ class EasEmailService internal constructor(
                 android.util.Log.w("EasEmailService", "fetchInlineImages: MIME truncated even at 20MB, skipping parse")
                 return@executeEasCommand emptyMap()
             }
-            
-            val mimeData = XmlUtils.unescape(deps.extractValue(responseXml, "Data") 
+
+            val mimeData = XmlUtils.unescape(deps.extractValue(responseXml, "Data")
                 ?: run {
                     AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                 }
                 ?: "")
-            
+
             if (mimeData.isBlank()) {
                 return@executeEasCommand emptyMap()
             }
-            
+
             extractInlineImagesFromMime(mimeData)
         }
     }
-    
+
     /**
      * Отметка письма как прочитанного/непрочитанного
-     * 
+     *
      * КРИТИЧНО: Используем GetChanges=0 чтобы сервер не присылал серверные
      * изменения в ответе — нам нужен только новый SyncKey и подтверждение.
      * Без GetChanges=0 Exchange 2007 SP1 может вернуть серверные изменения,
@@ -652,16 +773,16 @@ class EasEmailService internal constructor(
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         val easResult = deps.executeEasCommand("Sync", xml) { responseXml ->
             android.util.Log.d("EasEmailService", "markAsRead response len=${responseXml.length}")
-            
+
             // Проверяем статус коллекции
             val collectionStatus = deps.extractValue(responseXml, "Status")
             if (collectionStatus != null && collectionStatus != "1") {
                 throw Exception("markAsRead failed: Collection Status=$collectionStatus")
             }
-            
+
             // Проверяем статус операции Change (если есть в Responses)
             if (responseXml.contains("<Responses>") && responseXml.contains("<Change>")) {
                 val changeStatusMatch = Regex("<Change>.*?<Status>(\\d+)</Status>", RegexOption.DOT_MATCHES_ALL)
@@ -673,10 +794,10 @@ class EasEmailService internal constructor(
                     }
                 }
             }
-            
+
             deps.extractValue(responseXml, "SyncKey") ?: syncKey
         }
-        
+
         // EWS дублирование: EAS Sync Change может не применять Read на Exchange 2007 SP1
         // (пустой ответ, stale SyncKey, серверный баг).
         // EWS UpdateItem с SetItemField message:IsRead — надёжный способ.
@@ -689,10 +810,10 @@ class EasEmailService internal constructor(
                 android.util.Log.w("EasEmailService", "markAsReadViaEws failed: ${e.message}")
             }
         }
-        
+
         return easResult
     }
-    
+
     /**
      * Батч-пометка нескольких писем как прочитанных/непрочитанных в одном Sync-запросе.
      * Все письма должны быть из одной папки (одинаковый collectionId + syncKey).
@@ -706,7 +827,7 @@ class EasEmailService internal constructor(
         read: Boolean = true
     ): EasResult<String> {
         if (serverIds.isEmpty()) return EasResult.Success(syncKey)
-        
+
         val readValue = if (read) "1" else "0"
         val esc = deps.escapeXml
         val changesXml = serverIds.joinToString("\n") { sid ->
@@ -730,19 +851,19 @@ $changesXml
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         return deps.executeEasCommand("Sync", xml) { responseXml ->
             android.util.Log.d("EasEmailService", "markAsReadBatch(${serverIds.size}) response len=${responseXml.length}")
-            
+
             val collectionStatus = deps.extractValue(responseXml, "Status")
             if (collectionStatus != null && collectionStatus != "1") {
                 throw Exception("markAsReadBatch failed: Collection Status=$collectionStatus")
             }
-            
+
             deps.extractValue(responseXml, "SyncKey") ?: syncKey
         }
     }
-    
+
     /**
      * NTLM-only аутентификация для EWS SOAP запросов.
      * EasEmailService не использует Basic Auth fallback.
@@ -761,7 +882,7 @@ $changesXml
         val ewsUrl = deps.getEwsUrl()
         val escapedSubject = deps.escapeXml(subject)
         val isReadValue = if (read) "true" else "false"
-        
+
         // 1. FindItem по Subject + IsRead (ищем во ВСЕХ папках через msgfolderroot)
         val findBody = """<m:FindItem Traversal="Shallow">
     <m:ItemShape>
@@ -791,14 +912,14 @@ $changesXml
     </m:ParentFolderIds>
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
-        
+
         val findResponse = executeEwsNtlmOnly(ewsUrl, findRequest, "FindItem") ?: return
-        
+
         // Извлекаем все ItemId + ChangeKey
         val itemPattern = """<t:ItemId Id="([^"]+)"\s+ChangeKey="([^"]+)"""".toRegex()
         val matches = itemPattern.findAll(findResponse).toList()
         if (matches.isEmpty()) return
-        
+
         // 2. UpdateItem для каждого найденного письма
         val itemChanges = matches.joinToString("") { match ->
             val itemId = deps.escapeXml(match.groupValues[1])
@@ -815,17 +936,17 @@ $changesXml
     </t:Updates>
 </t:ItemChange>"""
         }
-        
+
         val updateBody = """<m:UpdateItem ConflictResolution="AutoResolve" MessageDisposition="SaveOnly">
     <m:ItemChanges>
 $itemChanges
     </m:ItemChanges>
 </m:UpdateItem>""".trimIndent()
         val updateRequest = deps.buildEwsSoapRequest(updateBody)
-        
+
         executeEwsNtlmOnly(ewsUrl, updateRequest, "UpdateItem")
     }
-    
+
     /**
      * Переключение флага письма (избранное)
      */
@@ -856,12 +977,12 @@ $itemChanges
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         return deps.executeEasCommand("Sync", xml) { responseXml ->
             deps.extractValue(responseXml, "SyncKey") ?: syncKey
         }
     }
-    
+
     /**
      * Удаление письма (в корзину)
      */
@@ -886,12 +1007,12 @@ $itemChanges
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         return deps.executeEasCommand("Sync", xml) { responseXml ->
             deps.extractValue(responseXml, "SyncKey") ?: syncKey
         }
     }
-    
+
     /**
      * Окончательное удаление письма через EWS HardDelete
      * Используется как fallback для Exchange 2007
@@ -903,31 +1024,31 @@ $itemChanges
     ): EasResult<Unit> = withContext(Dispatchers.IO) {
         try {
             val ewsUrl = deps.getEwsUrl()
-            
+
             val ewsItemId = if (serverId.length < 50 || serverId.contains(":")) {
                 findEwsEmailItemId(ewsUrl, subject)
             } else {
                 serverId
             }
-            
+
             if (ewsItemId == null) {
                 android.util.Log.w("EasEmailService", "EWS delete: could not find ItemId for serverId=$serverId")
                 return@withContext EasResult.Error("Could not find EWS ItemId for serverId=$serverId")
             }
-            
+
             val escapedItemId = deps.escapeXml(ewsItemId)
-            
+
             val deleteBody = """<m:DeleteItem DeleteType="HardDelete">
   <m:ItemIds>
     <t:ItemId Id="$escapedItemId"/>
   </m:ItemIds>
 </m:DeleteItem>""".trimIndent()
-            
+
             val soapEnvelope = deps.buildEwsSoapRequest(deleteBody)
-            
+
             val responseXml = executeEwsNtlmOnly(ewsUrl, soapEnvelope, "DeleteItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
-            
+
             if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
                 EasResult.Success(Unit)
             } else {
@@ -939,7 +1060,7 @@ $itemChanges
             EasResult.Error("EWS delete error: ${e.message}")
         }
     }
-    
+
     /**
      * Находит EWS ItemId письма по Subject (EWS FindItem с Restriction).
      * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
@@ -967,13 +1088,13 @@ $itemChanges
     </m:ParentFolderIds>
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
-        
+
         val responseXml = executeEwsNtlmOnly(ewsUrl, findRequest, "FindItem") ?: return null
-        
+
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
         return itemIdPattern.find(responseXml)?.groupValues?.get(1)
     }
-    
+
     /**
      * Окончательное удаление письма через EAS Sync Delete
      * Использует DeletesAsMoves=0 + GetChanges (как в AOSP)
@@ -984,7 +1105,7 @@ $itemChanges
         serverId: String,
         syncKey: String
     ): EasResult<String> {
-        
+
         // КРИТИЧНО: GetChanges=0 — НЕ запрашиваем серверные изменения в ответе Delete.
         // С <GetChanges/> (=TRUE) сервер возвращает pending Adds в ответе,
         // а SyncKey продвигается мимо них. Если эти Adds не обработать —
@@ -1010,11 +1131,11 @@ $itemChanges
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         return deps.executeEasCommand("Sync", xml) { responseXml ->
             val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
             val newSyncKey = deps.extractValue(responseXml, "SyncKey") ?: syncKey
-            
+
             when (status) {
                 1 -> newSyncKey
                 8 -> newSyncKey // Object not found - уже удалено
@@ -1023,7 +1144,7 @@ $itemChanges
             }
         }
     }
-    
+
     /**
      * Batch удаление писем (несколько писем одним запросом)
      * Решает проблему syncKey race condition при последовательном удалении
@@ -1034,7 +1155,7 @@ $itemChanges
         syncKey: String
     ): EasResult<String> {
         if (serverIds.isEmpty()) return EasResult.Success(syncKey)
-        
+
         // КРИТИЧНО: Для ВСЕХ версий Exchange сначала пробуем EAS batch delete.
         // Для элементов в Deleted Items (Корзине) DeletesAsMoves неважен —
         // серверу некуда перемещать, он обязан удалить безвозвратно.
@@ -1045,7 +1166,7 @@ $itemChanges
                                 <ServerId>${esc(sid)}</ServerId>
                             </Delete>"""
         }
-        
+
         // Per MS-ASCMD specification (learn.microsoft.com):
         //
         // 1. GetChanges=0 (MS-ASCMD 2.2.3.84): сервер НЕ возвращает pending changes.
@@ -1074,11 +1195,11 @@ $deleteCommands
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         val easResult = deps.executeEasCommand("Sync", xml) { responseXml ->
             val status = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
             val newSyncKey = deps.extractValue(responseXml, "SyncKey") ?: syncKey
-            
+
             when (status) {
                 1 -> newSyncKey
                 8 -> newSyncKey // Object not found - некоторые уже удалены
@@ -1086,12 +1207,12 @@ $deleteCommands
                 else -> throw Exception("Batch delete failed: Status=$status")
             }
         }
-        
+
         // Если EAS batch delete удался — возвращаем результат
         if (easResult is EasResult.Success) {
             return easResult
         }
-        
+
         // EAS batch delete не удался — ошибка пробрасывается к caller'у.
         // Caller (EmailOperationsService) выполнит individual EWS deletes
         // с Subject-based поиском, что безопаснее batch позиционного подхода.
@@ -1106,11 +1227,11 @@ $deleteCommands
                 }
             }
         }
-        
+
         // Для Exchange 2010+ возвращаем оригинальную ошибку
         return easResult
     }
-    
+
     /**
      * Перемещение писем между папками
      */
@@ -1121,7 +1242,7 @@ $deleteCommands
         if (items.isEmpty()) {
             return EasResult.Success(emptyMap())
         }
-        
+
         val esc = deps.escapeXml
         val safeDst = esc(dstFolderId)
         val movesXml = items.joinToString("") { (srcFolderId, serverId) ->
@@ -1133,19 +1254,19 @@ $deleteCommands
                 </Move>
             """.trimIndent()
         }
-        
+
         val xml = """<?xml version="1.0" encoding="UTF-8"?>
 <MoveItems xmlns="Move">
     $movesXml
 </MoveItems>""".trimIndent()
-        
+
         return deps.executeEasCommand("MoveItems", xml) { responseXml ->
             parseMoveItemsResponse(responseXml)
         }
     }
-    
+
     // ==================== Private methods ====================
-    
+
     private fun buildMimeMessageBytes(
         to: String,
         subject: String,
@@ -1159,14 +1280,14 @@ $deleteCommands
         val fromEmail = deps.getFromEmail()
         val deviceId = deps.getDeviceId()
         val messageId = "<${System.currentTimeMillis()}.${System.nanoTime()}@$deviceId>"
-        
+
         val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
         val date = dateFormat.format(java.util.Date())
-        
+
         // Извлекаем inline картинки из data: URLs
         val dataImagePattern = Regex("""<img[^>]*src="data:image/(jpeg|jpg|png|gif);base64,([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
         val matches = dataImagePattern.findAll(body).toList()
-        
+
         val sb = StringBuilder()
         sb.appendMimeHeaders(
             date = date,
@@ -1180,7 +1301,7 @@ $deleteCommands
             requestReadReceipt = requestReadReceipt,
             requestDeliveryReceipt = requestDeliveryReceipt
         )
-        
+
         if (matches.isEmpty()) {
             sb.append("Content-Type: text/html; charset=UTF-8\r\n")
             sb.append("Content-Transfer-Encoding: base64\r\n")
@@ -1193,41 +1314,41 @@ $deleteCommands
             sb.append("\r\n")
             sb.append("This is a multi-part message in MIME format.\r\n")
             sb.append("\r\n")
-            
+
             // Часть 1: HTML body с замененными cid:
             sb.append("--$boundary\r\n")
             sb.append("Content-Type: text/html; charset=UTF-8\r\n")
             sb.append("Content-Transfer-Encoding: base64\r\n")
             sb.append("\r\n")
-            
+
             var modifiedBody = body
             matches.forEachIndexed { index, match ->
                 val fullMatch = match.value
                 val contentId = "image${index + 1}@$deviceId"
-                
+
                 val replacement = fullMatch.replace(
                     DATA_IMAGE_SRC_REGEX,
                     """src="cid:$contentId""""
                 )
                 modifiedBody = modifiedBody.replace(fullMatch, replacement)
             }
-            
+
             sb.append(android.util.Base64.encodeToString(modifiedBody.toByteArray(Charsets.UTF_8), android.util.Base64.CRLF))
             sb.append("\r\n")
-            
+
             // Часть 2..N: Inline картинки
             matches.forEachIndexed { index, match ->
                 val imageType = match.groupValues[1]
                 val base64Data = match.groupValues[2]
                 val contentId = "image${index + 1}@$deviceId"
-                
+
                 sb.append("--$boundary\r\n")
                 sb.append("Content-Type: image/$imageType\r\n")
                 sb.append("Content-Transfer-Encoding: base64\r\n")
                 sb.append("Content-ID: <$contentId>\r\n")
                 sb.append("Content-Disposition: inline\r\n")
                 sb.append("\r\n")
-                
+
                 // Разбиваем base64 на строки по 76 символов (RFC 2045)
                 val lines = base64Data.chunked(76)
                 lines.forEach { line ->
@@ -1236,45 +1357,45 @@ $deleteCommands
                 }
                 sb.append("\r\n")
             }
-            
+
             sb.append("--$boundary--\r\n")
         }
-        
+
         return sb.toString().toByteArray(Charsets.UTF_8)
     }
-    
+
     private fun parseSyncResponse(xml: String): SyncResponse {
         val syncKey = deps.extractValue(xml, "SyncKey") ?: "0"
         val status = deps.extractValue(xml, "Status")?.toIntOrNull() ?: 1
         val moreAvailable = xml.contains("<MoreAvailable/>") || xml.contains("<MoreAvailable>")
-        
+
         val emails = mutableListOf<EasEmail>()
         val deletedIds = mutableListOf<String>()
         val changedEmails = mutableListOf<EasEmailChange>()
-        
+
         for (addXml in XmlUtils.extractTopLevelBlocks(xml, "Add")) {
             val email = parseEmailFromXml(addXml)
             if (email != null) emails.add(email)
         }
-        
+
         for (changeXml in XmlUtils.extractTopLevelBlocks(xml, "Change")) {
             val serverId = deps.extractValue(changeXml, "ServerId")
             if (serverId != null) {
                 val readValue = deps.extractValue(changeXml, "Read")
                 val read = readValue?.let { it == "1" }
-                
+
                 val flagXml = XmlUtils.extractTagValue(changeXml, "Flag")
                 val flagStatus = flagXml?.let { deps.extractValue(it, "FlagStatus") }
                 val flagged = flagStatus?.let { it == "2" }
-                
+
                 val bodySection = XmlUtils.extractTagValue(changeXml, "Body")
                 val body = if (bodySection != null) extractBody(changeXml) else ""
                 val bodyType = if (body.isNotBlank() && bodySection != null) {
                     deps.extractValue(bodySection, "Type")?.toIntOrNull() ?: 1
                 } else null
-                
+
                 val attachments = parseAttachmentsFromXml(changeXml)
-                
+
                 changedEmails.add(EasEmailChange(
                     serverId, read, flagged,
                     body = body.takeIf { it.isNotBlank() },
@@ -1283,14 +1404,14 @@ $deleteCommands
                 ))
             }
         }
-        
+
         for (block in XmlUtils.extractTopLevelBlocks(xml, "Delete")) {
             deps.extractValue(block, "ServerId")?.let { deletedIds.add(it) }
         }
         for (block in XmlUtils.extractTopLevelBlocks(xml, "SoftDelete")) {
             deps.extractValue(block, "ServerId")?.let { deletedIds.add(it) }
         }
-        
+
         return SyncResponse(
             syncKey = syncKey,
             status = status,
@@ -1300,13 +1421,13 @@ $deleteCommands
             changedEmails = changedEmails
         )
     }
-    
+
     private fun parseEmailFromXml(xml: String): EasEmail? {
         val serverId = deps.extractValue(xml, "ServerId") ?: return null
-        
+
         // Парсим вложения (DRY: используем общий helper)
         val attachments = parseAttachmentsFromXml(xml)
-        
+
         // Извлекаем <Type> из секции <Body>, а не из полного XML,
         // т.к. тег "Type" существует в нескольких code page WBXML
         // (AirSyncBase, Email/Recurrence, Tasks и др.).
@@ -1317,12 +1438,12 @@ $deleteCommands
             deps.extractValue(xml, "Type")?.toIntOrNull() ?: 1
         }
         val rawBody = extractBody(xml)
-        
+
         // КРИТИЧНО: Для Type=4 (MIME) сохраняем полный MIME (не извлекаем HTML)
         // Это нужно для inline-картинок в Sent Items
         // HTML будет извлечен при отображении в EmailDetailScreen
         val body = rawBody
-        
+
         // MS-ASEMAIL 2.2.2.58: Read — optional. "1" = read, "0" = unread.
         // Exchange 2007 SP1 may omit <Read> for some emails (old system entries).
         // Per spec, omission ≠ "0". Default to true (read) when absent:
@@ -1353,7 +1474,7 @@ $deleteCommands
             messageClass = messageClass
         )
     }
-    
+
     private fun extractBody(xml: String): String {
         // Пробуем разные варианты извлечения body
         val patterns = listOf(DATA_PATTERN, AIRSYNC_DATA_REGEX)
@@ -1367,7 +1488,7 @@ $deleteCommands
         }
         return ""
     }
-    
+
     /**
      * Извлекает HTML/текст из MIME данных (для bodyType=4)
      */
@@ -1378,7 +1499,7 @@ $deleteCommands
         }
         return true
     }
-    
+
     private fun extractBodyFromMime(mimeData: String): String {
         return MimeHtmlProcessor.extractHtmlFromMime(mimeData)
     }
@@ -1388,25 +1509,25 @@ $deleteCommands
     } catch (_: Exception) {
         mimeData
     }
-    
+
     private fun parseMoveItemsResponse(xml: String): Map<String, String> {
         val result = mutableMapOf<String, String>()
         val responsePattern = "<Response>(.*?)</Response>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        
+
         responsePattern.findAll(xml).forEach { match ->
             val responseXml = match.groupValues[1]
             val srcMsgId = deps.extractValue(responseXml, "SrcMsgId")
             val dstMsgId = deps.extractValue(responseXml, "DstMsgId")
             val status = deps.extractValue(responseXml, "Status")
-            
+
             if (srcMsgId != null && status == "3" && dstMsgId != null) {
                 result[srcMsgId] = dstMsgId
             }
         }
-        
+
         return result
     }
-    
+
     private fun getStatusDescription(status: String): String = when (status) {
         "110" -> "Ошибка формата сообщения"
         "111" -> "Неверный получатель"

@@ -1,7 +1,7 @@
-package com.dedovmosol.iwomail.ui.components
+﻿package com.dedovmosol.iwomail.ui.components
 
 import android.content.Context
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import com.dedovmosol.iwomail.ui.theme.AppIcons
@@ -42,7 +42,9 @@ data class PendingEmail(
     val importance: Int,
     val requestReadReceipt: Boolean,
     val requestDeliveryReceipt: Boolean,
-    val draftId: String? = null // ID черновика для удаления после отправки
+    val draftId: String? = null, // ID черновика для удаления после отправки
+    val forwardSourceFolderId: String? = null, // ServerId папки оригинального письма (для SmartForward)
+    val forwardSourceItemId: String? = null    // ServerId оригинального письма (для SmartForward)
 )
 
 /**
@@ -66,15 +68,15 @@ enum class SendPhase {
 class SendController {
     var state by mutableStateOf(SendState())
         private set
-    
+
     private var sendJob: Job? = null
     private var isCancelled = false
     private var pendingEmail: PendingEmail? = null
     private var onCancelCallback: (() -> Unit)? = null
-    
+
     // Собственный scope для отправки (не зависит от UI)
     private val sendScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    
+
     /**
      * Запускает отправку с обратным отсчётом
      */
@@ -91,19 +93,19 @@ class SendController {
         isCancelled = false
         pendingEmail = email
         onCancelCallback = onCancel
-        
+
         state = SendState(
             isActive = true,
             progress = 0f,
             message = message,
             phase = SendPhase.COUNTDOWN
         )
-        
+
         // Обратный отсчёт: 3 секунды
         val countdownMs = 3000L
         val stepMs = 50L
         val steps = (countdownMs / stepMs).toInt()
-        
+
         sendJob = sendScope.launch {
             try {
                 // Фаза 1: Обратный отсчёт
@@ -112,28 +114,83 @@ class SendController {
                     delay(stepMs)
                     state = state.copy(progress = i.toFloat() / steps)
                 }
-                
+
                 if (isCancelled) return@launch
-                
+
                 // Фаза 2: Реальная отправка
                 state = state.copy(
                     phase = SendPhase.SENDING,
                     progress = 0f
                 )
-                
+
                 val accountRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context)
                 val client = accountRepo.createEasClient(email.account.id)
                 if (client == null) {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Failed to create client", Toast.LENGTH_LONG).show()
+                        SafeToast.long(context, "Failed to create client")
                     }
                     return@launch
                 }
-                
+
                 val attachmentDataList = email.attachments.map { Triple(it.name, it.mimeType, it.data) }
-                
+                val fwdFolderId = email.forwardSourceFolderId
+                val fwdItemId = email.forwardSourceItemId
+                val isSmartForward = fwdFolderId != null && fwdItemId != null
+
                 val result = withContext(Dispatchers.IO) {
-                    if (attachmentDataList.isEmpty()) {
+                    if (isSmartForward) {
+                        // MS-ASCMD §2.2.1.19: SmartForward — сервер автоматически
+                        // включает оригинальные вложения и тело исходного письма.
+                        val sfResult = if (attachmentDataList.isEmpty()) {
+                            client.smartForward(
+                                to = email.to,
+                                subject = email.subject,
+                                body = email.body,
+                                cc = email.cc,
+                                bcc = email.bcc,
+                                collectionId = fwdFolderId!!,
+                                itemId = fwdItemId!!,
+                                importance = email.importance,
+                                requestReadReceipt = email.requestReadReceipt,
+                                requestDeliveryReceipt = email.requestDeliveryReceipt
+                            )
+                        } else {
+                            client.smartForwardWithAttachments(
+                                to = email.to,
+                                subject = email.subject,
+                                body = email.body,
+                                cc = email.cc,
+                                bcc = email.bcc,
+                                attachments = attachmentDataList,
+                                collectionId = fwdFolderId!!,
+                                itemId = fwdItemId!!,
+                                requestReadReceipt = email.requestReadReceipt,
+                                requestDeliveryReceipt = email.requestDeliveryReceipt,
+                                importance = email.importance
+                            )
+                        }
+                        // Fallback: если SmartForward не поддерживается сервером,
+                        // откатываемся на обычный SendMail (без оригинальных вложений).
+                        if (sfResult is EasResult.Error) {
+                            android.util.Log.w("SendController", "SmartForward failed: ${sfResult.message}, falling back to SendMail")
+                            if (attachmentDataList.isEmpty()) {
+                                client.sendMail(
+                                    to = email.to, subject = email.subject, body = email.body,
+                                    cc = email.cc, bcc = email.bcc, importance = email.importance,
+                                    requestReadReceipt = email.requestReadReceipt,
+                                    requestDeliveryReceipt = email.requestDeliveryReceipt
+                                )
+                            } else {
+                                client.sendMailWithAttachments(
+                                    to = email.to, subject = email.subject, body = email.body,
+                                    cc = email.cc, bcc = email.bcc, attachments = attachmentDataList,
+                                    requestReadReceipt = email.requestReadReceipt,
+                                    requestDeliveryReceipt = email.requestDeliveryReceipt,
+                                    importance = email.importance
+                                )
+                            }
+                        } else sfResult
+                    } else if (attachmentDataList.isEmpty()) {
                         client.sendMail(
                             to = email.to,
                             subject = email.subject,
@@ -158,7 +215,7 @@ class SendController {
                         )
                     }
                 }
-                
+
                 when (result) {
                     is EasResult.Success -> {
                         // Удаляем черновик если был
@@ -179,7 +236,7 @@ class SendController {
                                 }
                             }
                         }
-                        
+
                         // Воспроизводим звук отправки
                         com.dedovmosol.iwomail.util.SoundPlayer.playSendSound(context)
                         // Синхронизируем папку "Отправленные" в фоне с retry.
@@ -192,7 +249,7 @@ class SendController {
                                 val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
                                 val sentFolder = database.folderDao().getFoldersByAccountList(accountId)
                                     .find { it.type == 5 }
-                                
+
                                 sentFolder?.let { folder ->
                                     val delays = longArrayOf(3000L, 6000L, 10000L)
                                     for (attempt in delays.indices) {
@@ -232,7 +289,7 @@ class SendController {
                                 // Ошибки sync не должны крашить UI
                             }
                         }
-                        
+
                         onSuccess()
                     }
                     is EasResult.Error -> {
@@ -243,7 +300,7 @@ class SendController {
                             result.message.contains("NoRouteToHost", ignoreCase = true) ||
                             result.message.contains("Network", ignoreCase = true) ||
                             !NetworkMonitor.isNetworkAvailable(context)
-                        
+
                         if (isNetworkError && email.attachments.isEmpty()) {
                             // Добавляем в очередь отправки (только без вложений)
                             OutboxWorker.enqueue(
@@ -258,19 +315,19 @@ class SendController {
                             )
                             withContext(Dispatchers.Main) {
                                 val isRu = java.util.Locale.getDefault().language == "ru"
-                                val msg = if (isRu) "Нет сети. Письмо добавлено в очередь отправки" 
+                                val msg = if (isRu) "Нет сети. Письмо добавлено в очередь отправки"
                                     else "No network. Email added to outbox queue"
-                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, msg)
                             }
                             onSuccess() // Закрываем экран — письмо в очереди
                         } else {
                             withContext(Dispatchers.Main) {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, result.message)
                             }
                         }
                     }
                 }
-                
+
                 delay(300)
             } finally {
                 state = SendState()
@@ -279,7 +336,7 @@ class SendController {
             }
         }
     }
-    
+
     /**
      * Отменяет отправку (только в фазе обратного отсчёта)
      */
@@ -315,7 +372,7 @@ fun SendProgressBar(
     modifier: Modifier = Modifier
 ) {
     val state = controller.state
-    
+
     if (state.isActive) {
         Surface(
             modifier = modifier
@@ -351,7 +408,7 @@ fun SendProgressBar(
                             color = SendContentColor.copy(alpha = 0.7f)
                         )
                     }
-                    
+
                     // Кнопка отмены только в фазе обратного отсчёта
                     if (state.phase == SendPhase.COUNTDOWN) {
                         TextButton(
@@ -377,9 +434,9 @@ fun SendProgressBar(
                         )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 LinearProgressIndicator(
                     progress = { if (state.phase == SendPhase.SENDING) 1f else state.progress },
                     modifier = Modifier

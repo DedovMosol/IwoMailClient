@@ -1,7 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -60,6 +59,7 @@ import com.dedovmosol.iwomail.ui.utils.formatRelativeDate
 import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -111,11 +111,11 @@ fun EmailListScreen(
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
     val hapticScreen = LocalHapticFeedback.current
-    
+
     val isFavorites = folderId == "favorites"
     val isTodayAll = folderId == "TODAY_ALL"
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-    
+
     // Подписываемся на Flow напрямую - Room автоматически обновляет при изменении данных
     val emails by remember(folderId, activeAccount?.id) {
         if (isTodayAll) {
@@ -125,27 +125,27 @@ fun EmailListScreen(
             mailRepo.getEmails(folderId)
         }
     }.collectAsState(initial = emptyList())
-    
+
     val favoriteEmails by remember(activeAccount?.id) {
         mailRepo.getFlaggedEmails(activeAccount?.id ?: 0)
     }.collectAsState(initial = emptyList())
-    
+
     var folder by remember { mutableStateOf<FolderEntity?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    
+
     // Определяем тип папки
     val isSpamFolder = folder?.type == FolderType.JUNK_EMAIL
     val isTrashFolder = folder?.type == FolderType.DELETED_ITEMS
     val isDraftsFolder = folder?.type == FolderType.DRAFTS
     val isSentFolder = folder?.type == FolderType.SENT_ITEMS
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-    
+
     // Фильтры - используем initialFilter / initialDateFilter как начальные значения
     var showFilters by rememberSaveable { mutableStateOf(initialFilter != MailFilter.ALL || initialDateFilter != EmailDateFilter.ALL) }
     var mailFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var dateFilter by rememberSaveable { mutableStateOf(initialDateFilter) }
-    
+
     // Режим выбора
     var selectedIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
@@ -186,7 +186,7 @@ fun EmailListScreen(
         }
         val needsDateFilter = dateCutoff > 0L
         val needsMailFilter = mailFilter != MailFilter.ALL
-        
+
         displayEmails
             .distinctBy { it.id }
             .filter { email ->
@@ -201,12 +201,12 @@ fun EmailListScreen(
                 matchesMail && matchesDate
             }.sortedByDescending { it.dateReceived }
     }
-    
+
     // Количество активных фильтров
     val activeFiltersCount by remember { derivedStateOf {
         listOf(mailFilter != MailFilter.ALL, dateFilter != EmailDateFilter.ALL).count { it }
     } }
-    
+
     // Загружаем папки для перемещения
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
@@ -214,7 +214,7 @@ fun EmailListScreen(
             database.folderDao().getFoldersByAccountList(accountId)
         }
     }
-    
+
     // Флаг: начальная синхронизация черновиков уже выполнена.
     // rememberSaveable — переживает поворот экрана и process death.
     // Без этого: LaunchedEffect перезапускается при повороте (recomposition
@@ -222,28 +222,28 @@ fun EmailListScreen(
     // Повторный sync при повороте: (1) лишняя нагрузка на сервер,
     // (2) потенциальная гонка с PushService → INVALID_SYNCKEY → full resync → потеря данных.
     var draftsSynced by rememberSaveable { mutableStateOf(false) }
-    
+
     // Загружаем папку + отменяем уведомление при входе во Входящие
     LaunchedEffect(folderId, activeAccount?.id) {
         if (!isFavorites && !isTodayAll) {
             val loadedFolder = withContext(Dispatchers.IO) { database.folderDao().getFolder(folderId) }
             folder = loadedFolder
-            
+
             // Отменяем уведомление о новых письмах при входе в папку Входящие
             val accId = activeAccount?.id
             if (accId != null && loadedFolder?.type == FolderType.INBOX) {
                 val nm = context.getSystemService(android.app.NotificationManager::class.java)
                 nm?.cancel(3000 + accId.toInt())
             }
-            
+
             // Автоматическая синхронизация для черновиков при входе в папку
             // (только один раз — не при повороте экрана)
             if (!draftsSynced && loadedFolder?.type == FolderType.DRAFTS && loadedFolder.accountId > 0) {
                 draftsSynced = true
                 isRefreshing = true
                 try {
-                    withContext(Dispatchers.IO) { 
-                        mailRepo.syncEmails(loadedFolder.accountId, folderId) 
+                    withContext(Dispatchers.IO) {
+                        mailRepo.syncEmails(loadedFolder.accountId, folderId)
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -257,24 +257,24 @@ fun EmailListScreen(
 
     fun refresh() {
         if (isFavorites || isTodayAll) return
-        
+
         // Защита от повторного запуска (быстрые свайпы / двойные нажатия)
         if (isRefreshing) return
-        
+
         // Проверяем сеть перед синхронизацией
         if (!NetworkMonitor.isNetworkAvailable(context)) {
             val isRussian = currentLanguage == AppLanguage.RUSSIAN
             val message = if (isRussian) "Нет сети" else "No network"
-            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+            com.dedovmosol.iwomail.util.SafeToast.short(context, message)
             return
         }
-        
+
         // Используем folder.accountId если есть, иначе activeAccount.id
         val accountId = folder?.accountId ?: activeAccount?.id ?: return
         scope.launch {
             isRefreshing = true
             errorMessage = null
-            
+
             try {
                 // Синхронизируем папку (для Черновиков вызовется syncDrafts)
                 // Используем инкрементальную синхронизацию (forceFullSync=false).
@@ -297,7 +297,7 @@ fun EmailListScreen(
             }
         }
     }
-    
+
     fun deleteSelected() {
         val isRussian = currentLanguage == AppLanguage.RUSSIAN
         val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
@@ -310,43 +310,31 @@ fun EmailListScreen(
             when (result) {
                 is EasResult.Success -> {
                     if (result.data > 0) {
-                        android.widget.Toast.makeText(
-                            context,
-                            NotificationStrings.getMovedToTrash(isRussian),
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        com.dedovmosol.iwomail.util.SafeToast.short(context, NotificationStrings.getMovedToTrash(isRussian))
                     } else {
-                        android.widget.Toast.makeText(
-                            context,
-                            nothingDeletedMsg,
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        com.dedovmosol.iwomail.util.SafeToast.short(context, nothingDeletedMsg)
                     }
                 }
                 is EasResult.Error -> {
                     val localizedMessage = NotificationStrings.localizeError(result.message, isRussian)
-                    android.widget.Toast.makeText(
-                        context,
-                        localizedMessage,
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
+                    com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMessage)
                 }
             }
             selectedIds = emptySet()
         }
     }
-    
+
     fun deleteSelectedPermanently() {
         val isRussian = currentLanguage == AppLanguage.RUSSIAN
         val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
-        
+
         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
         val emailIds = selectedIds.toList()
         if (emailIds.isEmpty()) {
             selectedIds = emptySet()
             return
         }
-        
+
         // Для черновиков используем специализированный deleteDrafts (удаляет с сервера через EWS)
         if (isDraftsFolder) {
             scope.launch {
@@ -356,33 +344,21 @@ fun EmailListScreen(
                 when (result) {
                     is EasResult.Success -> {
                         if (result.data > 0) {
-                            android.widget.Toast.makeText(
-                                context, 
-                                NotificationStrings.getDeletedPermanently(isRussian), 
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            com.dedovmosol.iwomail.util.SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
                         } else {
-                            android.widget.Toast.makeText(
-                                context,
-                                nothingDeletedMsg,
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            com.dedovmosol.iwomail.util.SafeToast.short(context, nothingDeletedMsg)
                         }
                     }
                     is EasResult.Error -> {
                         val localizedMessage = NotificationStrings.localizeError(result.message, isRussian)
-                        android.widget.Toast.makeText(
-                            context, 
-                            localizedMessage, 
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
+                        com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMessage)
                     }
                 }
                 selectedIds = emptySet()
             }
             return
         }
-        
+
         // Для корзины/спама используем ту же логику, что и при очистке корзины
         deletionController.startDeletion(
             emailIds = emailIds,
@@ -397,32 +373,20 @@ fun EmailListScreen(
             when (result) {
                 is EasResult.Success -> {
                     if (result.data > 0) {
-                        android.widget.Toast.makeText(
-                            context, 
-                            NotificationStrings.getDeletedPermanently(isRussian), 
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        com.dedovmosol.iwomail.util.SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
                     } else {
-                        android.widget.Toast.makeText(
-                            context,
-                            nothingDeletedMsg,
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        com.dedovmosol.iwomail.util.SafeToast.short(context, nothingDeletedMsg)
                     }
                 }
                 is EasResult.Error -> {
                     val localizedMessage = NotificationStrings.localizeError(result.message, isRussian)
-                    android.widget.Toast.makeText(
-                        context, 
-                        localizedMessage, 
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
+                    com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMessage)
                 }
             }
             selectedIds = emptySet()
         }
     }
-    
+
     fun markSelectedAsRead(read: Boolean) {
         scope.launch {
             val ids = selectedIds.toList()
@@ -430,12 +394,12 @@ fun EmailListScreen(
             when (val result = mailRepo.markAsReadBatch(ids, read)) {
                 is EasResult.Success -> { /* OK */ }
                 is EasResult.Error -> {
-                    android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_SHORT).show()
+                    com.dedovmosol.iwomail.util.SafeToast.short(context, result.message)
                 }
             }
         }
     }
-    
+
     fun starSelected() {
         scope.launch {
             try {
@@ -451,7 +415,7 @@ fun EmailListScreen(
             } finally { selectedIds = emptySet() }
         }
     }
-    
+
     fun clearFilters() {
         mailFilter = MailFilter.ALL
         dateFilter = EmailDateFilter.ALL
@@ -464,11 +428,11 @@ fun EmailListScreen(
             onDismissRequest = { showDeleteDialog = false },
             icon = { Icon(AppIcons.Delete, null) },
             title = { Text(if (count == 1) Strings.deleteEmail else Strings.deleteEmails) },
-            text = { 
+            text = {
                 Text(
-                    if (count == 1) Strings.emailWillBeMovedToTrash 
+                    if (count == 1) Strings.emailWillBeMovedToTrash
                     else Strings.emailsWillBeMovedToTrash(count)
-                ) 
+                )
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
@@ -487,7 +451,7 @@ fun EmailListScreen(
             }
         )
     }
-    
+
     // Диалог подтверждения окончательного удаления
     if (showDeletePermanentlyDialog) {
         val count = selectedIds.size
@@ -495,11 +459,11 @@ fun EmailListScreen(
             onDismissRequest = { showDeletePermanentlyDialog = false },
             icon = { Icon(AppIcons.DeleteForever, null) },
             title = { Text(Strings.deleteForever) },
-            text = { 
+            text = {
                 Text(
-                    if (count == 1) Strings.emailWillBeDeletedPermanently 
+                    if (count == 1) Strings.emailWillBeDeletedPermanently
                     else Strings.emailsWillBeDeletedPermanently(count)
-                ) 
+                )
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
@@ -518,12 +482,12 @@ fun EmailListScreen(
             }
         )
     }
-    
+
     // Диалог очистки корзины
     if (showEmptyTrashDialog) {
         val deletingMessage = Strings.deletingEmails(displayEmails.size)
         val trashEmptiedMsg = Strings.trashEmptied
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showEmptyTrashDialog = false },
             icon = { Icon(AppIcons.DeleteForever, null) },
@@ -534,7 +498,7 @@ fun EmailListScreen(
                     onClick = {
                         showEmptyTrashDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                        
+
                         val allEmailIds = displayEmails.map { it.id }
                         if (allEmailIds.isNotEmpty()) {
                             deletionController.startDeletion(
@@ -550,15 +514,11 @@ fun EmailListScreen(
                                 }
                                 when (result) {
                                     is EasResult.Success -> {
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            trashEmptiedMsg,
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
+                                        com.dedovmosol.iwomail.util.SafeToast.short(context, trashEmptiedMsg)
                                     }
                                     is EasResult.Error -> {
                                         val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                        android.widget.Toast.makeText(context, localizedMsg, android.widget.Toast.LENGTH_LONG).show()
+                                        com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMsg)
                                     }
                                 }
                             }
@@ -579,7 +539,7 @@ fun EmailListScreen(
     // Диалог перемещения
     if (showMoveDialog) {
         var isMoving by remember { mutableStateOf(false) }
-        
+
         // Типы папок НЕ для писем — скрыты в навигации, не должны появляться в диалоге переноса.
         // КРИТИЧНО: Должны совпадать с фильтром в EmailDetailScreen!
         // 7=Tasks, 8=Calendar, 9=Contacts, 10=Notes,
@@ -593,17 +553,17 @@ fun EmailListScreen(
             FolderType.OUTBOX, FolderType.DRAFTS,
             13, 14, 15, 17, 18  // Journal, RecipientInfo и пользовательские Calendar/Contacts/Tasks
         )
-        
+
         val availableFolders = folders.filter { targetFolder ->
             // Исключаем текущую папку
             if (targetFolder.id == folderId) return@filter false
-            
+
             // Исключаем все не-почтовые и служебные папки
             if (targetFolder.type in nonMailFolderTypes) return@filter false
-            
+
             true
         }
-        
+
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = { if (!isMoving) showMoveDialog = false },
             title = { Text(Strings.moveTo) },
@@ -633,15 +593,15 @@ fun EmailListScreen(
                                             }
                                             isMoving = false
                                             showMoveDialog = false
-                                            
+
                                             when (result) {
                                                 is EasResult.Success -> {
                                                     val msg = NotificationStrings.getMoved(isRussian) + ": ${result.data}"
-                                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                                    com.dedovmosol.iwomail.util.SafeToast.short(context, msg)
                                             }
                                             is EasResult.Error -> {
                                                 val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                android.widget.Toast.makeText(context, localizedMsg, android.widget.Toast.LENGTH_LONG).show()
+                                                com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMsg)
                                             }
                                         }
                                         selectedIds = emptySet()
@@ -654,7 +614,7 @@ fun EmailListScreen(
                     }
                 }
             },
-            confirmButton = { 
+            confirmButton = {
                 if (isMoving) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                 } else {
@@ -682,17 +642,17 @@ fun EmailListScreen(
                             when (result) {
                                 is EasResult.Success -> {
                                     val msg = NotificationStrings.getRestored(isRussian) + ": ${result.data}"
-                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                    com.dedovmosol.iwomail.util.SafeToast.short(context, msg)
                                 }
                                 is EasResult.Error -> {
                                     val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                    android.widget.Toast.makeText(context, localizedMsg, android.widget.Toast.LENGTH_LONG).show()
+                                    com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMsg)
                                 }
                             }
                             selectedIds = emptySet()
                         }
                     },
-                    onDelete = { 
+                    onDelete = {
                         // Для черновиков и удалённых - окончательное удаление
                         if (isDraftsFolder || isTrashFolder) {
                             showDeletePermanentlyDialog = true
@@ -713,16 +673,16 @@ fun EmailListScreen(
                             when (result) {
                                 is EasResult.Success -> {
                                     val msg = NotificationStrings.getMovedToSpam(isRussian) + ": ${result.data}"
-                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                    com.dedovmosol.iwomail.util.SafeToast.short(context, msg)
                                 }
                                 is EasResult.Error -> {
-                                    android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_LONG).show()
+                                    com.dedovmosol.iwomail.util.SafeToast.long(context, result.message)
                                 }
                             }
                             selectedIds = emptySet()
                         }
                     },
-                    onDeletePermanently = { 
+                    onDeletePermanently = {
                         showDeletePermanentlyDialog = true
                     },
                     isSentFolder = isSentFolder,
@@ -734,7 +694,7 @@ fun EmailListScreen(
                 )
             } else {
                 TopAppBar(
-                    title = { 
+                    title = {
                         val folderName = when {
                             isFavorites -> Strings.favorites
                             isTodayAll -> Strings.today
@@ -751,7 +711,7 @@ fun EmailListScreen(
                         // В корзине показываем кнопку очистки вместо поиска
                         if (isTrashFolder) {
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     showEmptyTrashDialog = true
                                 },
                                 enabled = displayEmails.isNotEmpty()
@@ -793,8 +753,8 @@ fun EmailListScreen(
                 ) {
                     // FAB всегда карандаш в списке писем
                     Icon(
-                        AppIcons.Edit, 
-                        Strings.compose, 
+                        AppIcons.Edit,
+                        Strings.compose,
                         tint = Color.White
                     )
                 }
@@ -804,7 +764,7 @@ fun EmailListScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             // Баннер "Нет сети"
             NetworkBanner()
-            
+
             // Панель фильтров
             FilterPanel(
                 showFilters = showFilters,
@@ -818,7 +778,7 @@ fun EmailListScreen(
                 totalCount = displayEmails.size,
                 filteredCount = filteredEmails.size
             )
-            
+
             // Список писем
             EmailList(
                 emails = filteredEmails,
@@ -885,7 +845,7 @@ private fun FilterPanel(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            
+
             TextButton(onClick = onToggleFilters) {
                 Icon(
                     AppIcons.FilterList,
@@ -896,7 +856,7 @@ private fun FilterPanel(
                 Text(if (showFilters) Strings.hideFilters else if (activeFiltersCount > 0) "${Strings.filters} ($activeFiltersCount)" else Strings.showFilters)
             }
         }
-        
+
         // Панель фильтров (скрываемая)
         AnimatedVisibility(
             visible = showFilters,
@@ -941,11 +901,11 @@ private fun FilterPanel(
                         )
                     }
                 }
-                
+
                 // Пользователь сам выбирает «Все письма» в фильтре при необходимости
             }
         }
-        
+
         HorizontalDivider()
     }
 }
@@ -1065,7 +1025,7 @@ private fun EmailList(
     val isAtTop by remember { derivedStateOf { listState.firstVisibleItemIndex < 3 } }
     val showScrollButton = emails.size > 5
     val pullRefreshState = rememberPullRefreshState(isRefreshing, onRetry)
-    
+
     var previousEmailCount by remember { mutableStateOf(emails.size) }
     LaunchedEffect(emails.size) {
         if (emails.size > previousEmailCount && previousEmailCount > 0 &&
@@ -1074,7 +1034,7 @@ private fun EmailList(
         }
         previousEmailCount = emails.size
     }
-    
+
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             errorMessage != null && emails.isEmpty() -> {
@@ -1097,7 +1057,7 @@ private fun EmailList(
                             message = if (isFavorites) Strings.noFavoriteEmails else Strings.noEmails,
                             modifier = Modifier.fillMaxSize()
                         )
-                        
+
                         // Индикатор при pull-to-refresh пустого списка
                         if (!isFavorites && !isTodayAll && pullRefreshState.progress > 0) {
                             EnvelopeRefreshIndicator(
@@ -1129,10 +1089,10 @@ private fun EmailList(
                         onDismissError = onDismissError,
                         onDragSelect = onDragSelect
                     )
-                    
+
                     // Скроллбар
                     LazyColumnScrollbar(listState)
-                    
+
                     // Кастомный индикатор с конвертиком
                     if (!isFavorites) {
                         EnvelopeRefreshIndicator(
@@ -1178,15 +1138,15 @@ private fun EnvelopeRefreshIndicator(
 ) {
     val colorTheme = LocalColorTheme.current
     val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
-    
+
     // Анимации (только если включены)
     val rotation = rememberRotation(animationsEnabled, durationMs = 1000)
     val scale = rememberPulseScale(animationsEnabled, from = 0.9f, to = 1.1f, durationMs = 500)
     val wobble = rememberShake(animationsEnabled, amplitude = 15f, durationMs = 300)
-    
+
     // Прогресс вытягивания (0..1)
     val progress = if (refreshing) 1f else state.progress.coerceIn(0f, 1f)
-    
+
     Box(
         modifier = modifier
             .padding(top = 16.dp)
@@ -1216,7 +1176,7 @@ private fun EnvelopeRefreshIndicator(
                     shape = CircleShape
                 )
         )
-        
+
         // Конвертик
         Icon(
             imageVector = AppIcons.Email,
@@ -1262,45 +1222,58 @@ private fun EmailListContent(
     val context = LocalContext.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
-    
+
     val stableOnEmailClick by rememberUpdatedState(onEmailClick)
     val stableOnLongClick by rememberUpdatedState(onLongClick)
     val stableOnStarClick by rememberUpdatedState(onStarClick)
-    
+
     var imagePreviewCache by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
-    
-    LaunchedEffect(emails.size) {
+    val emailById = remember(emails) { emails.associateBy { it.id } }
+
+    LaunchedEffect(emails) {
         val emailIds = emails.map { it.id }.toSet()
         val staleKeys = imagePreviewCache.keys - emailIds
         if (staleKeys.isNotEmpty()) {
             imagePreviewCache = imagePreviewCache - staleKeys
         }
-        val emailsWithAttachments = emails.filter { it.hasAttachments && it.id !in imagePreviewCache }
-        if (emailsWithAttachments.isNotEmpty()) {
-            withContext(Dispatchers.IO) {
-                // Batch query вместо N+1
-                val emailIds = emailsWithAttachments.map { it.id }
-                val allAttachments = emailIds.chunked(500).flatMap { database.attachmentDao().getAttachmentsForEmails(it) }
+    }
+
+    LaunchedEffect(emailById, listState) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo
+                .mapNotNull { it.key as? String }
+                .filter { id -> emailById[id]?.hasAttachments == true }
+                .distinct()
+        }.distinctUntilChanged().collect { visibleEmailIds ->
+            val missingIds = visibleEmailIds.filter { it !in imagePreviewCache }
+            if (missingIds.isEmpty()) return@collect
+
+            val newPreviews = withContext(Dispatchers.IO) {
+                val allAttachments = missingIds.chunked(50).flatMap { database.attachmentDao().getAttachmentsForEmails(it) }
                 val attachmentsByEmail = allAttachments.groupBy { it.emailId }
-                
-                val newPreviews = mutableMapOf<String, String?>()
-                emailsWithAttachments.forEach { email ->
-                    val attachments = attachmentsByEmail[email.id] ?: emptyList()
-                    // Ищем первое скачанное изображение
-                    val imageAttachment = attachments.firstOrNull { att ->
-                        att.downloaded && att.localPath != null && 
-                        att.contentType.startsWith("image/", ignoreCase = true)
-                    }
-                    newPreviews[email.id] = imageAttachment?.localPath
+
+                missingIds.associateWith { emailId ->
+                    attachmentsByEmail[emailId]
+                        ?.firstOrNull { att ->
+                            att.downloaded &&
+                                att.localPath != null &&
+                                att.contentType.startsWith("image/", ignoreCase = true)
+                        }
+                        ?.localPath
                 }
+            }
+
+            if (newPreviews.isNotEmpty()) {
                 val combined = imagePreviewCache + newPreviews
                 imagePreviewCache = if (combined.size > 200) {
                     combined.entries.toList().takeLast(200).associate { it.toPair() }
-                } else combined
+                } else {
+                    combined
+                }
             }
         }
     }
-    
+
     // === Drag Selection (переиспользуемый модификатор) ===
     val emailKeys = remember(emails) { emails.map { it.id } }
     val dragSelectModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
@@ -1309,7 +1282,7 @@ private fun EmailListContent(
         selectedIds = selectedIds,
         onSelectionChange = onDragSelect
     )
-    
+
     LazyColumn(
         state = listState,
         modifier = dragSelectModifier
@@ -1327,11 +1300,11 @@ private fun EmailListContent(
                 HorizontalDivider()
             }
         }
-        
+
         if (errorMessage != null) {
             item { ErrorBanner(message = errorMessage, onDismiss = onDismissError) }
         }
-        
+
         items(emails, key = { it.id }) { email ->
             val latestEmail by rememberUpdatedState(email)
             EmailListItem(
@@ -1376,15 +1349,12 @@ private fun EmailListItem(
         }
     }
 
-    val backgroundColor by animateColorAsState(
-        targetValue = when {
+    val backgroundColor = when {
             isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
             !email.read -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
             else -> MaterialTheme.colorScheme.surface
-        },
-        label = "bg"
-    )
-    
+        }
+
     Surface(
         modifier = Modifier.fillMaxWidth().then(
             if (isSelectionMode) {
@@ -1410,7 +1380,7 @@ private fun EmailListItem(
                     null
                 }
             }
-            
+
             // Очищаем fromName от email части (формат "Имя <email>" или "Имя/email")
             val cleanFromName = remember(email.fromName) {
                 val cleaned = email.fromName
@@ -1418,7 +1388,7 @@ private fun EmailListItem(
                     .substringBefore("/").trim()  // Убираем всё после /
                     .trim('"')  // Убираем кавычки
                     .trim()  // Убираем пробелы
-                
+
                 // КРИТИЧНО: Если после очистки остался email - возвращаем null
                 if (cleaned.isBlank() || cleaned.contains("@")) {
                     null
@@ -1426,7 +1396,7 @@ private fun EmailListItem(
                     cleaned
                 }
             }
-            
+
             // Для папки Отправленные показываем получателя, иначе отправителя
             val displayName = if (isSent) {
                 val toField = email.to
@@ -1448,7 +1418,7 @@ private fun EmailListItem(
                 }
                 finalName.ifBlank { Strings.unknownSender }
             }
-            
+
             // Аватар с цветом на основе имени (получателя для Отправленных, отправителя для остальных)
             val avatarName = if (isSent) {
                 // Извлекаем чистое имя для аватара
@@ -1462,14 +1432,14 @@ private fun EmailListItem(
                 cachedSenderName ?: cleanFromName ?: email.from
             }
             val avatarColor = getAvatarColor(avatarName)
-            
+
             // Первая буква/цифра для аватара
             val avatarInitial = avatarName
                 .trim()
                 .firstOrNull { it.isLetterOrDigit() }
                 ?.uppercase()
                 ?: "?"
-            
+
             Box(
                 modifier = Modifier
                     .size(44.dp)
@@ -1501,9 +1471,9 @@ private fun EmailListItem(
                     )
                 }
             }
-            
+
             Spacer(modifier = Modifier.width(12.dp))
-            
+
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -1517,9 +1487,9 @@ private fun EmailListItem(
                     // Иконка высокого приоритета (важное)
                     if (email.importance == 2) {
                         Icon(
-                            AppIcons.PriorityHigh, 
+                            AppIcons.PriorityHigh,
                             contentDescription = Strings.important,
-                            modifier = Modifier.size(16.dp), 
+                            modifier = Modifier.size(16.dp),
                             tint = com.dedovmosol.iwomail.ui.theme.AppColors.trash
                         )
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1544,7 +1514,7 @@ private fun EmailListItem(
                     )
                 }
                 Spacer(modifier = Modifier.height(2.dp))
-                
+
                 // Строка с темой и превью картинки
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -1555,7 +1525,7 @@ private fun EmailListItem(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    
+
                     // Миниатюра изображения (если есть скачанная картинка)
                     if (imagePreviewPath != null) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -1576,7 +1546,7 @@ private fun EmailListItem(
                         )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = email.preview,
@@ -1586,9 +1556,9 @@ private fun EmailListItem(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            
+
             Spacer(modifier = Modifier.width(8.dp))
-            
+
             if (showStar) {
                 IconButton(onClick = onStarClick, modifier = Modifier.size(40.dp)) {
                     Icon(

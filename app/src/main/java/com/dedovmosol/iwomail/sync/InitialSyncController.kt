@@ -407,12 +407,6 @@ object InitialSyncController {
                     }
                     val foldersToSync = currentFolders.filter { it.type in emailFolderTypes }
 
-                    val account = withContext(Dispatchers.IO) {
-                        com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
-                            .accountDao().getAccount(accountId)
-                    }
-                    val isExchange = account?.accountType == com.dedovmosol.iwomail.data.database.AccountType.EXCHANGE.name
-
                     val syncSemaphore = kotlinx.coroutines.sync.Semaphore(2)
                     withContext(Dispatchers.IO) {
                         supervisorScope {
@@ -420,10 +414,8 @@ object InitialSyncController {
                                 launch {
                                     syncSemaphore.acquire()
                                     try {
-                                        val forceFullSync = isExchange && folder.type == FolderType.SENT_ITEMS
-                                        val timeout = if (forceFullSync) 600_000L else 120_000L
-                                        withTimeoutOrNull(timeout) {
-                                            mailRepo.syncEmails(accountId, folder.id, forceFullSync = forceFullSync)
+                                        withTimeoutOrNull(120_000L) {
+                                            mailRepo.syncEmails(accountId, folder.id)
                                         }
                                     } catch (e: Exception) {
                                         if (e is CancellationException) throw e

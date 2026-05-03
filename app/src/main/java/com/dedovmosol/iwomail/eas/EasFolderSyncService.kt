@@ -35,6 +35,18 @@ class EasFolderSyncService(
         private val FOLDER_REGEX get() = EasPatterns.FOLDER
     }
 
+    /**
+     * Инвалидирует кэш FolderSync(0).
+     * MS-ASCMD: любая мутация иерархии (FolderCreate/Delete/Update) меняет SyncKey,
+     * поэтому кэшированный ответ со старым ключом становится недействительным.
+     */
+    private fun invalidateHierarchyCache() {
+        synchronized(folderSyncCacheLock) {
+            cachedFolderSyncResult = null
+            folderSyncCacheTimeMs = 0L
+        }
+    }
+
     suspend fun folderSync(syncKey: String = "0"): EasResult<FolderSyncResponse> {
         if (syncKey == "0") {
             synchronized(folderSyncCacheLock) {
@@ -122,7 +134,7 @@ class EasFolderSyncService(
                 }
                 throw Exception(errorMsg)
             }
-        }
+        }.onSuccessResult { invalidateHierarchyCache() }
     }
 
     suspend fun deleteFolder(
@@ -151,7 +163,7 @@ class EasFolderSyncService(
                 }
                 throw Exception(errorMsg)
             }
-        }
+        }.onSuccessResult { invalidateHierarchyCache() }
     }
 
     suspend fun renameFolder(
@@ -185,7 +197,7 @@ class EasFolderSyncService(
                 }
                 throw Exception(errorMsg)
             }
-        }
+        }.onSuccessResult { invalidateHierarchyCache() }
     }
 
     // ========================= Folder ID helpers =========================
@@ -279,6 +291,9 @@ class EasFolderSyncService(
             }
         } else {
             for (block in XmlUtils.extractTopLevelBlocks(xml, "Add")) {
+                parseFolder(block)?.let { folders.add(it) }
+            }
+            for (block in XmlUtils.extractTopLevelBlocks(xml, "Update")) {
                 parseFolder(block)?.let { folders.add(it) }
             }
         }

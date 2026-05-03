@@ -1,8 +1,8 @@
-package com.dedovmosol.iwomail.ui.screens
+﻿package com.dedovmosol.iwomail.ui.screens
 
 import android.app.Activity
 import android.content.ContextWrapper
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -63,7 +63,7 @@ fun AboutScreen(
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
     var protocolTapCount by rememberSaveable { mutableStateOf(0) }
     var base64Revealed by rememberSaveable { mutableStateOf(persistedHintRevealed) }
-    val hintToastRef = remember { mutableStateOf<Toast?>(null) }
+
 
     Scaffold(
         topBar = {
@@ -106,7 +106,7 @@ fun AboutScreen(
                     leadingContent = { Icon(AppIcons.Lightbulb, null) },
                     modifier = Modifier.clickable { onNavigateToOnboarding() }
                 )
-                
+
                 // Обновление ПО
                 ListItem(
                     headlineContent = { Text(if (isRu) "Обновление ПО" else "Software update") },
@@ -115,7 +115,7 @@ fun AboutScreen(
                     trailingContent = { Icon(AppIcons.ChevronRight, null) },
                     modifier = Modifier.clickable { onNavigateToUpdates() }
                 )
-                
+
                 // Поддерживаемые протоколы
                 ListItem(
                     headlineContent = { Text(Strings.supportedProtocols) },
@@ -126,14 +126,7 @@ fun AboutScreen(
                             protocolTapCount++
                             val remaining = 7 - protocolTapCount
                             if (remaining in 1..3) {
-                                hintToastRef.value?.cancel()
-                                val toast = Toast.makeText(
-                                    context,
-                                    if (isRu) "iwo — подсказка близко" else "iwo — hint is near",
-                                    Toast.LENGTH_SHORT
-                                )
-                                toast.show()
-                                hintToastRef.value = toast
+                                SafeToast.short(context, if (isRu) "iwo — подсказка близко" else "iwo — hint is near")
                             }
                             if (protocolTapCount >= 7) {
                                 base64Revealed = true
@@ -142,9 +135,9 @@ fun AboutScreen(
                         }
                     }
                 )
-                
+
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                
+
                 // Разработчик
                 ListItem(
                     headlineContent = { Text(Strings.developer) },
@@ -155,7 +148,7 @@ fun AboutScreen(
                         uriHandler.openUri("https://github.com/DedovMosol/")
                     }
                 )
-                
+
                 // Политика конфиденциальности
                 ListItem(
                     headlineContent = { Text(Strings.privacyPolicy) },
@@ -165,9 +158,9 @@ fun AboutScreen(
                         uriHandler.openUri("https://github.com/DedovMosol/IwoMailClient/blob/main/docs/PRIVACY_POLICY.md")
                     }
                 )
-                
+
                 Spacer(modifier = Modifier.weight(1f))
-                
+
                 // Footer: гитара (если нашёл) или Base64 подсказка
                 Column(
                     modifier = Modifier
@@ -200,11 +193,7 @@ fun AboutScreen(
                                 onClick = {},
                                 onLongClick = {
                                     clipboardManager.setText(AnnotatedString(base64Text))
-                                    Toast.makeText(
-                                        context,
-                                        if (isRu) "Скопировано" else "Copied",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    SafeToast.short(context, if (isRu) "Скопировано" else "Copied")
                                 }
                             )
                         )
@@ -214,7 +203,7 @@ fun AboutScreen(
             ScrollColumnScrollbar(scrollState)
         }
     }
-    
+
     // Останавливаем музыку при уходе с экрана (свайп назад / навигация)
     DisposableEffect(Unit) {
         onDispose {

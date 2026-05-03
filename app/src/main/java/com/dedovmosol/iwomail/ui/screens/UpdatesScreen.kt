@@ -1,5 +1,6 @@
-package com.dedovmosol.iwomail.ui.screens
+﻿package com.dedovmosol.iwomail.ui.screens
 
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -49,7 +50,7 @@ fun UpdatesScreen(
     val updateChecker = remember { UpdateChecker(context) }
     val isRu = isRussian()
     val colorTheme = LocalColorTheme.current
-    
+
     // Saver для UpdateCheckState (сохраняем только простые состояния, Available требует перепроверки)
     val updateStateSaver = Saver<UpdateCheckState, String>(
         save = { state ->
@@ -72,7 +73,7 @@ fun UpdatesScreen(
             }
         }
     )
-    
+
     // Saver для RollbackCheckState
     val rollbackStateSaver = Saver<RollbackCheckState, String>(
         save = { state ->
@@ -95,46 +96,46 @@ fun UpdatesScreen(
             }
         }
     )
-    
+
     var updateState by rememberSaveable(stateSaver = updateStateSaver) { mutableStateOf(UpdateCheckState.Idle) }
     var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<com.dedovmosol.iwomail.update.UpdateInfo?>(null) }
-    
+
     // Состояние для отката
     var rollbackState by rememberSaveable(stateSaver = rollbackStateSaver) { mutableStateOf(RollbackCheckState.Idle) }
     var showRollbackDialog by rememberSaveable { mutableStateOf(false) }
     var previousVersionInfo by remember { mutableStateOf<PreviousVersionInfo?>(null) }
-    
+
     val updateCheckInterval by settingsRepo.updateCheckInterval.collectAsState(
         initial = SettingsRepository.UpdateCheckInterval.DAILY
     )
-    
+
     // Диалог обновления
     val safeUpdateInfo = updateInfo
     if (showUpdateDialog && safeUpdateInfo != null) {
         UpdateDownloadDialog(
             updateInfo = safeUpdateInfo,
             updateChecker = updateChecker,
-            onDismiss = { 
+            onDismiss = {
                 showUpdateDialog = false
                 updateState = UpdateCheckState.Idle
             }
         )
     }
-    
+
     // Диалог отката
     val safePreviousInfo = previousVersionInfo
     if (showRollbackDialog && safePreviousInfo != null) {
         RollbackDialog(
             previousInfo = safePreviousInfo,
             updateChecker = updateChecker,
-            onDismiss = { 
+            onDismiss = {
                 showRollbackDialog = false
                 rollbackState = RollbackCheckState.Idle
             }
         )
     }
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -156,7 +157,7 @@ fun UpdatesScreen(
         // Dropdown для автопроверки
         var showIntervalMenu by rememberSaveable { mutableStateOf(false) }
         val scrollState = rememberScrollState()
-        
+
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -193,13 +194,13 @@ fun UpdatesScreen(
                         modifier = Modifier.size(48.dp),
                         tint = colorTheme.gradientStart
                     )
-                    
+
                     Text(
                         if (isRu) "Версия ${BuildConfig.VERSION_NAME}" else "Version ${BuildConfig.VERSION_NAME}",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold
                     )
-                    
+
                     // Статус обновления
                     Text(
                         when (updateState) {
@@ -217,9 +218,9 @@ fun UpdatesScreen(
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
                     )
-                    
+
                     Spacer(modifier = Modifier.height(4.dp))
-                    
+
                     // Кнопка проверки обновлений
                     Button(
                         onClick = {
@@ -270,7 +271,7 @@ fun UpdatesScreen(
                     }
                 }
             }
-            
+
             // Автопроверка — отдельная карточка с понятным dropdown
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -290,7 +291,7 @@ fun UpdatesScreen(
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
-                    
+
                     Box {
                         OutlinedButton(
                             onClick = { showIntervalMenu = true },
@@ -311,7 +312,7 @@ fun UpdatesScreen(
                                 )
                             }
                         }
-                        
+
                         DropdownMenu(
                             expanded = showIntervalMenu,
                             onDismissRequest = { showIntervalMenu = false }
@@ -340,9 +341,9 @@ fun UpdatesScreen(
                     }
                 }
             }
-            
+
             Spacer(modifier = Modifier.weight(1f))
-            
+
             // Карточка предыдущей версии внизу
             Card(
                 modifier = Modifier
@@ -415,7 +416,7 @@ fun UpdatesScreen(
                             )
                         }
                     }
-                    
+
                     // Текст
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -445,7 +446,7 @@ fun UpdatesScreen(
                             }
                         )
                     }
-                    
+
                     // Стрелка
                     if (rollbackState !is RollbackCheckState.Checking) {
                         Icon(
@@ -456,7 +457,7 @@ fun UpdatesScreen(
                     }
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
         }
         ScrollColumnScrollbar(scrollState)
@@ -517,9 +518,9 @@ private fun UpdateDownloadDialog(
     var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
     var downloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
+
     com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-        onDismissRequest = { 
+        onDismissRequest = {
             if (downloadState !is DownloadState.Downloading && downloadState !is DownloadState.Preparing) {
                 onDismiss()
             }
@@ -567,7 +568,7 @@ private fun UpdateDownloadDialog(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                
+
                 // Changelog
                 if (updateInfo.changelog.isNotBlank()) {
                     HorizontalDivider()
@@ -582,7 +583,7 @@ private fun UpdateDownloadDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
                 // Прогресс скачивания
                 when (val state = downloadState) {
                     is DownloadState.Downloading -> {
@@ -629,7 +630,7 @@ private fun UpdateDownloadDialog(
                     }
                     else -> {}
                 }
-                
+
                 // Кнопки
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(
@@ -654,7 +655,7 @@ private fun UpdateDownloadDialog(
                             text = Strings.cancel
                         )
                     }
-                    
+
                     // Кнопка действия справа с градиентом
                     when (downloadState) {
                         is DownloadState.Idle, is DownloadState.Error -> {
@@ -829,7 +830,7 @@ private fun RollbackDialog(
     var downloadedFile by remember { mutableStateOf<File?>(null) }
     var downloadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var showOverwriteAlert by rememberSaveable { mutableStateOf(false) }
-    
+
     val startDownload: () -> Unit = {
         if (downloadJob == null) {
             downloadState = DownloadState.Downloading(0, 0f, 0f)
@@ -868,7 +869,7 @@ private fun RollbackDialog(
             }
         }
     }
-    
+
     if (showOverwriteAlert) {
         AlertDialog(
             onDismissRequest = { showOverwriteAlert = false },
@@ -907,9 +908,9 @@ private fun RollbackDialog(
             }
         )
     }
-    
+
     com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-        onDismissRequest = { 
+        onDismissRequest = {
             if (downloadState !is DownloadState.Downloading && downloadState !is DownloadState.Preparing) {
                 onDismiss()
             }
@@ -947,7 +948,7 @@ private fun RollbackDialog(
                         }
                     }
                 }
-                
+
                 // Что потеряется
                 if (previousInfo.lostData.isNotEmpty()) {
                     HorizontalDivider()
@@ -967,14 +968,14 @@ private fun RollbackDialog(
                         }
                     }
                 }
-                
+
                 HorizontalDivider()
                 Text(
                     Strings.rollbackDataSync,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 // Предупреждение о процессе отката — для ВСЕХ версий Android
                 HorizontalDivider()
                 Card(
@@ -1007,7 +1008,7 @@ private fun RollbackDialog(
                         )
                     }
                 }
-                
+
                 // Прогресс скачивания и статус подготовки
                 when (val state = downloadState) {
                     is DownloadState.Downloading -> {
@@ -1079,7 +1080,7 @@ private fun RollbackDialog(
                     }
                     else -> {}
                 }
-                
+
                 // Кнопки
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(
@@ -1092,11 +1093,7 @@ private fun RollbackDialog(
                             onClick = {
                                 val opened = updateChecker.openDownloads()
                                 if (!opened) {
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        if (isRu) "Не удалось открыть файлы" else "Failed to open files",
-                                        android.widget.Toast.LENGTH_LONG
-                                    ).show()
+                                    SafeToast.long(context, if (isRu) "Не удалось открыть файлы" else "Failed to open files")
                                 }
                             }
                         ) {
@@ -1137,7 +1134,7 @@ private fun RollbackDialog(
                     } else {
                         Spacer(modifier = Modifier.weight(1f))
                     }
-                    
+
                     val actionBtnModifier = Modifier
                         .clip(RoundedCornerShape(24.dp))
                     when (downloadState) {
@@ -1227,11 +1224,7 @@ private fun RollbackDialog(
                                         try {
                                             updateChecker.requestUninstall()
                                         } catch (e: Exception) {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                if (isRu) "Ошибка удаления: ${e.message}" else "Uninstall error: ${e.message}",
-                                                android.widget.Toast.LENGTH_LONG
-                                            ).show()
+                                            SafeToast.long(context, if (isRu) "Ошибка удаления: ${e.message}" else "Uninstall error: ${e.message}")
                                         }
                                     }
                                     .padding(horizontal = 12.dp, vertical = 10.dp),

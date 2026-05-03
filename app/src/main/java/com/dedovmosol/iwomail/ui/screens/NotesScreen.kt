@@ -1,7 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import android.widget.Toast
-import androidx.compose.animation.animateColorAsState
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -69,14 +68,14 @@ fun NotesScreen(
     val noteRepo = remember { RepositoryProvider.getNoteRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-    
+
     // Отдельный scope для синхронизации, чтобы не отменялась при навигации
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
-    
+
     val haptic = LocalHapticFeedback.current
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
-    
+
     val notes by remember(accountId) { noteRepo.getNotes(accountId) }.collectAsState(initial = emptyList())
     val deletedNotes by remember(accountId) { noteRepo.getDeletedNotes(accountId) }.collectAsState(initial = emptyList())
     val deletedCount by remember(accountId) { noteRepo.getDeletedNotesCount(accountId) }.collectAsState(initial = 0)
@@ -85,9 +84,9 @@ fun NotesScreen(
     val noteRestoredText = Strings.noteRestored
     val notesRestoredText = Strings.notesRestored
     val deletedPermanentlyText = Strings.deletedPermanently
-    
+
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
-    
+
     // Таб: 0 = Активные, 1 = Удалённые
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showDeletedTab by rememberSaveable { mutableStateOf(false) }
@@ -95,10 +94,10 @@ fun NotesScreen(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
-    
+
  var searchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedSearchQuery by rememberDebouncedState(searchQuery)
-    
+
     // Сохранение фокуса поиска при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
     var isSearchFocused by rememberSaveable { mutableStateOf(false) }
@@ -114,7 +113,7 @@ fun NotesScreen(
     LaunchedEffect(notes) {
         if (notes.isNotEmpty()) dataLoaded = true
     }
-    
+
     // Автоматическая синхронизация при первом открытии если нет данных
     LaunchedEffect(accountId) {
         if (accountId > 0 && !dataLoaded) {
@@ -134,7 +133,7 @@ fun NotesScreen(
             }
         }
     }
-    
+
     var lastDeletedSyncMs by remember { mutableStateOf(0L) }
     LaunchedEffect(selectedTab) {
         val now = System.currentTimeMillis()
@@ -165,10 +164,10 @@ fun NotesScreen(
     var showEmptyTrashConfirm by rememberSaveable { mutableStateOf(false) }
     var showDeleteSelectedDialog by rememberSaveable { mutableStateOf(false) }
     var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
-    
+
     // Состояние списка для автоскролла
     val listState = rememberLazyListState()
-    
+
     // Состояние сортировки (true = новые сверху, false = старые сверху)
     var sortDescending by rememberSaveable { mutableStateOf(true) }
 
@@ -197,7 +196,7 @@ fun NotesScreen(
         val noteRestoredText = Strings.noteRestored
         val undoText = Strings.undo
         val deletingOneNoteText = Strings.deletingNotes(1)
-        
+
         NoteDetailDialog(
             note = note,
             onDismiss = { selectedNoteId = null },
@@ -208,11 +207,11 @@ fun NotesScreen(
             },
             onDeleteClick = {
                 selectedNoteId = null  // Закрываем диалог сразу
-                
+
                 if (note.isDeleted) {
                     // Окончательное удаление с прогрессом
                     com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                    
+
                     deletionController.startDeletion(
                         emailIds = listOf(note.id),
                         message = deletingOneNoteText,
@@ -226,7 +225,7 @@ fun NotesScreen(
                         when (result) {
                             is EasResult.Error -> {
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                             else -> {}
@@ -240,12 +239,12 @@ fun NotesScreen(
                         }
                         when (result) {
                             is EasResult.Success -> {
-                                Toast.makeText(context, noteMovedToTrashText, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, noteMovedToTrashText)
                                 showDeletedTab = true
                                 // Синхронизация уже происходит внутри deleteNote()
                             }
                             is EasResult.Error -> {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, result.message)
                             }
                         }
                     }
@@ -253,7 +252,7 @@ fun NotesScreen(
             },
             onRestoreClick = {
                 selectedNoteId = null  // Закрываем диалог
-                
+
                 // Восстанавливаем заметку с задержкой и возможностью отмены
                 deletionController.startDeletion(
                     emailIds = listOf(note.id),
@@ -271,7 +270,7 @@ fun NotesScreen(
                         }
                         is EasResult.Error -> {
                             withContext(Dispatchers.Main) {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, result.message)
                             }
                         }
                     }
@@ -279,7 +278,7 @@ fun NotesScreen(
             }
         )
     }
-    
+
     // Управляем видимостью вкладки "Удалённые"
     // Если удалённых заметок нет и мы на вкладке удалённых - возвращаемся на активные
     LaunchedEffect(deletedNotes.size) {
@@ -296,7 +295,7 @@ fun NotesScreen(
     if (showEmptyTrashConfirm) {
         val deletingMessage = Strings.deletingNotes(deletedNotes.size)
         val notesTrashEmptiedText = Strings.notesTrashEmptied
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showEmptyTrashConfirm = false },
             icon = { Icon(AppIcons.DeleteForever, null) },
@@ -307,7 +306,7 @@ fun NotesScreen(
                     onClick = {
                         showEmptyTrashConfirm = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                        
+
                         val noteIds = deletedNotes.map { it.id }
                         if (noteIds.isNotEmpty()) {
                             deletionController.startDeletion(
@@ -326,13 +325,13 @@ fun NotesScreen(
                                 when (result) {
                                     is EasResult.Success -> {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, notesTrashEmptiedText, Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, notesTrashEmptiedText)
                                             showDeletedTab = false
                                         }
                                     }
                                     is EasResult.Error -> {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            SafeToast.long(context, result.message)
                                         }
                                     }
                                 }
@@ -374,11 +373,11 @@ fun NotesScreen(
                                 }
                                 when (result) {
                                     is EasResult.Success -> {
-                                        Toast.makeText(context, movedToTrashMsg, Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, movedToTrashMsg)
                                         showDeletedTab = true
                                     }
                                     is EasResult.Error -> {
-                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        SafeToast.long(context, result.message)
                                     }
                                 }
                             }
@@ -415,10 +414,10 @@ fun NotesScreen(
                         val notesToDelete = deletedNotes.filter { it.id in selectedIds }
                         if (notesToDelete.isNotEmpty()) {
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                            
+
                             val noteIds = notesToDelete.map { it.id }
                             selectedIds = emptySet()
-                            
+
                             deletionController.startDeletion(
                                 emailIds = noteIds,
                                 message = deletingPermanentlyMessage,
@@ -433,7 +432,7 @@ fun NotesScreen(
                                 when (result) {
                                     is EasResult.Error -> {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            SafeToast.long(context, result.message)
                                         }
                                     }
                                     else -> {}
@@ -452,7 +451,7 @@ fun NotesScreen(
             }
         )
     }
-    
+
     // Диалог создания/редактирования заметки
     if (showCreateDialog) {
         val noteUpdatedText = Strings.noteUpdated
@@ -484,11 +483,7 @@ fun NotesScreen(
                     isCreating = false
                     when (result) {
                         is EasResult.Success -> {
-                            Toast.makeText(
-                                context,
-                                if (isEditing) noteUpdatedText else noteCreatedText,
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            SafeToast.short(context, if (isEditing) noteUpdatedText else noteCreatedText)
                             showCreateDialog = false
                             editingNoteId = null
                             // Автоскролл вверх после создания (с задержкой для обновления списка)
@@ -498,14 +493,14 @@ fun NotesScreen(
                             }
                         }
                         is EasResult.Error -> {
-                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            SafeToast.long(context, result.message)
                         }
                     }
                 }
             }
         )
     }
-    
+
     Scaffold(
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
@@ -532,10 +527,10 @@ fun NotesScreen(
                                 when (result) {
                                     is EasResult.Success -> {
                                         val msg = if (notesToRestore.size > 1) notesRestoredText else noteRestoredText
-                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, msg)
                                     }
                                     is EasResult.Error -> {
-                                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        SafeToast.long(context, result.message)
                                     }
                                 }
                                 selectedIds = emptySet()
@@ -571,14 +566,10 @@ fun NotesScreen(
                                         }
                                         when (result) {
                                             is EasResult.Success -> {
-                                                Toast.makeText(
-                                                    context,
-                                                    "$notesSyncedText: ${result.data}",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                                SafeToast.short(context, "$notesSyncedText: ${result.data}")
                                             }
                                             is EasResult.Error -> {
-                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                                SafeToast.long(context, result.message)
                                             }
                                         }
                                     } catch (e: Exception) {
@@ -661,7 +652,7 @@ fun NotesScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp)
             )
-            
+
             // Табы: Активные / Удалённые
             // Показываем только если есть удалённые заметки
             if (deletedNotes.isNotEmpty()) {
@@ -686,7 +677,7 @@ fun NotesScreen(
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        text = { 
+                        text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(Strings.deleted)
                                 if (deletedCount > 0) {
@@ -699,7 +690,7 @@ fun NotesScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
-            
+
             // Счётчик
             Text(
                 text = "${Strings.total}: ${filteredNotes.size}",
@@ -707,7 +698,7 @@ fun NotesScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
-            
+
             if (filteredNotes.isEmpty()) {
                 // Пустой список
                 Box(
@@ -745,7 +736,7 @@ fun NotesScreen(
                     selectedIds = selectedIds,
                     onSelectionChange = { newIds -> selectedIds = newIds }
                 )
-                
+
                 Box(modifier = Modifier.fillMaxSize()) {
                     LazyColumn(
                         state = listState,
@@ -830,12 +821,12 @@ private fun NoteCard(
         if (note.categories.isNotBlank()) note.categories.split(",").take(2).map { it.trim() }.filter { it.isNotBlank() }
         else emptyList()
     }
-    val backgroundColor by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        label = "noteBg"
-    )
-    
+    val backgroundColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -873,9 +864,9 @@ private fun NoteCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                
+
                 Spacer(modifier = Modifier.height(4.dp))
-                
+
                 // Превью текста
                 if (note.body.isNotBlank()) {
                     Text(
@@ -887,7 +878,7 @@ private fun NoteCard(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-                
+
                 // Дата и категории
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -899,7 +890,7 @@ private fun NoteCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
-                    
+
                     if (categoryChips.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             categoryChips.forEach { trimmed ->
@@ -978,7 +969,7 @@ private fun NoteDetailDialog(
         if (note.categories.isNotBlank()) note.categories.split(",").map { it.trim() }.filter { it.isNotBlank() }
         else emptyList()
     }
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -994,7 +985,7 @@ private fun NoteDetailDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 if (categoryChips.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(
@@ -1017,7 +1008,7 @@ private fun NoteDetailDialog(
                         }
                     }
                 }
-                
+
                 // Текст заметки с кликабельными ссылками
                 if (note.body.isNotBlank()) {
                     // Очищаем body от дубликатов
@@ -1031,7 +1022,7 @@ private fun NoteDetailDialog(
                             else { prev = trimmed.lowercase(); trimmed }
                         }.joinToString("\n")
                     }
-                    
+
                     Spacer(modifier = Modifier.height(8.dp))
                     SelectionContainer {
                         ClickableNoteText(
@@ -1124,20 +1115,20 @@ private fun ClickableNoteText(
     val primaryColor = MaterialTheme.colorScheme.primary
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
     val couldNotOpenLinkText = Strings.couldNotOpenLink
-    
+
     // Тип ссылки
     data class Part(val content: String, val isLink: Boolean, val url: String = "")
-    
+
     // Функция для поиска всех ссылок в строке (URL, email, телефон)
     fun findAllLinks(line: String): List<Part> {
         data class LinkMatch(val range: IntRange, val text: String, val url: String)
         val allMatches = mutableListOf<LinkMatch>()
-        
+
         // URL
         urlPattern.findAll(line).forEach { match ->
             allMatches.add(LinkMatch(match.range, match.value, match.value))
         }
-        
+
         // Email
         emailPattern.findAll(line).forEach { match ->
             // Проверяем что не пересекается с URL
@@ -1146,7 +1137,7 @@ private fun ClickableNoteText(
                 allMatches.add(LinkMatch(match.range, match.value, "mailto:${match.value}"))
             }
         }
-        
+
         // Телефон
         phonePattern.findAll(line).forEach { match ->
             // Проверяем что не пересекается с другими ссылками
@@ -1156,14 +1147,14 @@ private fun ClickableNoteText(
                 allMatches.add(LinkMatch(match.range, match.value, "tel:$cleanPhone"))
             }
         }
-        
+
         // Сортируем по позиции
         allMatches.sortBy { it.range.first }
-        
+
         // Собираем части
         val parts = mutableListOf<Part>()
         var lastIdx = 0
-        
+
         allMatches.forEach { match ->
             if (match.range.first > lastIdx) {
                 parts.add(Part(line.substring(lastIdx, match.range.first), false))
@@ -1171,30 +1162,30 @@ private fun ClickableNoteText(
             parts.add(Part(match.text, true, match.url))
             lastIdx = match.range.last + 1
         }
-        
+
         if (lastIdx < line.length) {
             parts.add(Part(line.substring(lastIdx), false))
         }
-        
+
         if (parts.isEmpty()) {
             parts.add(Part(line, false))
         }
-        
+
         return parts
     }
-    
+
     val parsedLines = remember(text) {
         text.split("\n").map { line ->
             if (line.isBlank()) null else findAllLinks(line)
         }
     }
-    
+
     Column {
         parsedLines.forEachIndexed { lineIndex, lineParts ->
             if (lineParts == null) {
                 Spacer(modifier = Modifier.height(8.dp))
             } else {
-                
+
                 // Отображаем строку
                 Row(modifier = Modifier.fillMaxWidth()) {
                     lineParts.forEach { part ->
@@ -1209,7 +1200,7 @@ private fun ClickableNoteText(
                                     try {
                                         uriHandler.openUri(part.url)
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, couldNotOpenLinkText, Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, couldNotOpenLinkText)
                                     }
                                 }
                             )
@@ -1223,7 +1214,7 @@ private fun ClickableNoteText(
                     }
                 }
             }
-            
+
             // Добавляем отступ между строками (кроме последней)
             if (lineIndex < parsedLines.size - 1 && parsedLines[lineIndex + 1] != null) {
                 Spacer(modifier = Modifier.height(2.dp))
@@ -1244,12 +1235,12 @@ private fun CreateNoteDialog(
     onSave: (subject: String, body: String) -> Unit
 ) {
     val isEditing = note != null
-    
+
     var subject by rememberSaveable { mutableStateOf(note?.subject ?: "") }
     var body by rememberSaveable { mutableStateOf(note?.body ?: "") }
-    
+
     val isValid = subject.isNotBlank()
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = { if (!isCreating) onDismiss() },
         scrollable = false,
@@ -1270,7 +1261,7 @@ private fun CreateNoteDialog(
                         singleLine = true,
                         isError = subject.isBlank()
                     )
-                    
+
                     // Текст заметки
                     OutlinedTextField(
                         value = body,

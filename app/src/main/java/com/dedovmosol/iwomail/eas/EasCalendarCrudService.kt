@@ -50,7 +50,7 @@ class EasCalendarCrudService(
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         var createdViaEws = false
 
@@ -112,7 +112,7 @@ class EasCalendarCrudService(
         } else {
             createCalendarEventEas(subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
         }
-        
+
         // Загружаем вложения после успешного создания
         if (attachments.isNotEmpty() && result is EasResult.Success) {
             val rawId = result.data
@@ -123,7 +123,7 @@ class EasCalendarCrudService(
                 // Единственный случай когда rawId уже EWS ItemId — когда createCalendarEventEws
                 // вернул "ItemId|ChangeKey" (rawId содержит '|').
                 // Во всех остальных случаях (EAS ServerId, pending_sync_) — ищем через FindItem.
-                val alreadyEwsId = !rawId.startsWith("pending_sync_") && 
+                val alreadyEwsId = !rawId.startsWith("pending_sync_") &&
                     (rawId.contains("|") || (createdViaEws && !rawId.contains(":")))
                 val isRecurring = recurrenceType >= 0
                 val ewsItemIdResult = if (alreadyEwsId && (!isRecurring || rawId.contains("|"))) {
@@ -166,10 +166,10 @@ class EasCalendarCrudService(
                 }
             }
         }
-        
+
         return result
     }
-    
+
     /**
      * Обновление события календаря
      */
@@ -188,7 +188,8 @@ class EasCalendarCrudService(
         oldSubject: String? = null,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        newAttendeesToAppend: List<String> = emptyList()
+        newAttendeesToAppend: List<String> = emptyList(),
+        oldSensitivity: Int? = null
     ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -207,7 +208,7 @@ class EasCalendarCrudService(
         }
 
         val isEwsItemId = serverId.length > 50 && !serverId.contains(":")
-        
+
         val result = if (majorVersion >= 14 && !isEwsItemId) {
             updateCalendarEventEas(serverId, subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
         } else {
@@ -225,7 +226,8 @@ class EasCalendarCrudService(
                 attendees,
                 oldSubject,
                 recurrenceType,
-                newAttendeesToAppend
+                newAttendeesToAppend,
+                oldSensitivity
             )
 
             // КРИТИЧНО: если sync идёт через EAS legacy (короткий ServerId),
@@ -254,9 +256,9 @@ class EasCalendarCrudService(
                 ewsResult
             }
         }
-        
+
         if (result is EasResult.Error) return EasResult.Error(result.message)
-        
+
         // Загружаем новые вложения после успешного обновления
         if (attachments.isNotEmpty()) {
             android.util.Log.d("EasCalendarCrudService", "updateCalendarEvent: uploading ${attachments.size} attachments, subject=$subject, recurrenceType=$recurrenceType")
@@ -298,10 +300,10 @@ class EasCalendarCrudService(
                 return EasResult.Success("")
             }
         }
-        
+
         return EasResult.Success("")
     }
-    
+
     /**
      * Обновление одного вхождения (occurrence) повторяющегося события.
      *
@@ -489,6 +491,7 @@ class EasCalendarCrudService(
                 val startStr = if (allDayEvent) CalendarDateUtils.formatEwsAllDayDate(startTime) else CalendarDateUtils.formatEwsDate(startTime)
                 val endStr = if (allDayEvent) CalendarDateUtils.formatEwsAllDayDate(endTime) else CalendarDateUtils.formatEwsDate(endTime)
                 val ewsBusyStatus = CalendarDateUtils.mapBusyStatusToEws(busyStatus)
+                val ewsSensitivity = CalendarDateUtils.mapSensitivityToEws(sensitivity)
 
                 val updateXml = buildString {
                     append("""<?xml version="1.0" encoding="utf-8"?>""")
@@ -562,9 +565,6 @@ class EasCalendarCrudService(
                         append("</t:SetItemField>")
                     }
 
-                    val ewsSensitivity = when (sensitivity) {
-                        1 -> "Personal"; 2 -> "Private"; 3 -> "Confidential"; else -> "Normal"
-                    }
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="item:Sensitivity"/>""")
                     append("<t:CalendarItem><t:Sensitivity>$ewsSensitivity</t:Sensitivity></t:CalendarItem>")
@@ -670,9 +670,9 @@ class EasCalendarCrudService(
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        
+
         // КРИТИЧНО: Определяем формат serverId.
         // EWS ItemId = длинный base64 (>50 символов, НЕ содержит ":")
         // EAS ServerId = короткий, содержит ":" (напр. "5:23")
@@ -680,7 +680,7 @@ class EasCalendarCrudService(
         // т.к. EAS Sync Delete НЕ понимает EWS ItemId → удаление фейлит → воскрешение!
         val isEwsItemId = (serverId.length > 50 && !serverId.contains(":")) || serverId.contains("|")
         val isEasServerId = serverId.contains(":") && serverId.length < 20
-        
+
         return if (isEwsItemId) {
             val ewsItemId = if (serverId.contains("|")) serverId.substringBefore("|") else serverId
             android.util.Log.d("EasCalendarCrudService", "deleteCalendarEvent: using EWS path for EWS ItemId (len=${serverId.length}), isRecurringSeries=$isRecurringSeries")
@@ -695,7 +695,8 @@ class EasCalendarCrudService(
             val calendarFolderId = syncService.getCalendarFolderId()
                 ?: return EasResult.Error("Папка календаря не найдена")
             if (isMeeting && !isOrganizer) {
-                meetingResponseEas(serverId, calendarFolderId, userResponse = 3)
+                val responseResult = meetingResponseEas(serverId, calendarFolderId, userResponse = 3)
+                if (responseResult is EasResult.Error) return responseResult
             }
             deleteCalendarEventEas(serverId, calendarFolderId)
         } else {
@@ -771,18 +772,11 @@ class EasCalendarCrudService(
                 if (ewsDecline.isNotEmpty()) {
                     val declinedItemIds = mutableListOf<String>()
                     for (itemId in ewsDecline) {
-                        val declineBody = """
-                            <m:CreateItem MessageDisposition="SendAndSaveCopy">
-                                <m:Items>
-                                    <t:DeclineItem>
-                                        <t:ReferenceItemId Id="${deps.escapeXml(itemId)}"/>
-                                    </t:DeclineItem>
-                                </m:Items>
-                            </m:CreateItem>
-                        """.trimIndent()
-                        val req = EasXmlTemplates.ewsSoapRequest(declineBody)
-                        runCatching { ewsRequest(ewsUrl, req, "CreateItem") }
-                        declinedItemIds.add(itemId)
+                        when (val declineResult = executeDeclineItem(ewsUrl, itemId)) {
+                            is EasResult.Success -> declinedItemIds.add(itemId)
+                            is EasResult.Error -> android.util.Log.w("EasCalendarCrudService",
+                                "deleteCalendarEventsBatch: DeclineItem failed: ${declineResult.message}")
+                        }
                     }
                     if (declinedItemIds.isNotEmpty()) {
                         val hardDeleteResult = deleteCalendarEventsBatchEws(declinedItemIds, "SendToNone")
@@ -882,6 +876,10 @@ class EasCalendarCrudService(
                     return@withContext EasResult.Error("Occurrence not found via EWS CalendarView")
                 }
 
+                if (isMeeting && !isOrganizer) {
+                    val declineResult = executeDeclineItem(ewsUrl, targetId)
+                    if (declineResult is EasResult.Error) return@withContext declineResult
+                }
                 val cancellations = if (isMeeting && isOrganizer) "SendToAllAndSaveCopy" else "SendToNone"
                 deleteCalendarEventEws(targetId, sendCancellations = cancellations, deleteType = "MoveToDeletedItems")
             } catch (e: Exception) {
@@ -908,23 +906,27 @@ class EasCalendarCrudService(
     ): EasResult<String> {
         val calendarFolderId = syncService.getCalendarFolderId()
             ?: return EasResult.Error("Папка календаря не найдена")
-        
+
         val syncKeyResult = syncService.getAdvancedSyncKey(calendarFolderId)
         val syncKey = when (syncKeyResult) {
             is EasResult.Success -> syncKeyResult.data
             is EasResult.Error -> return syncKeyResult
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        
+
         val clientId = UUID.randomUUID().toString().replace("-", "").take(32)
+        // MS-ASCAL §2.2.2.46: для protocol versions 2.5/12.0/12.1/14.0/14.1 клиент SHOULD
+        // генерировать UID при создании события (≤300 chars). Без него server MAY создать
+        // свой, но best practice — отправлять. Не отправляем для 16.0+ (там ClientUid).
+        val eventUid = UUID.randomUUID().toString()
         val startTimeStr = CalendarDateUtils.formatEasDate(startTime)
         val endTimeStr = CalendarDateUtils.formatEasDate(endTime)
-        
+
         val escapedSubject = deps.escapeXml(subject)
         val escapedLocation = deps.escapeXml(location)
         val escapedBody = deps.escapeXml(body)
-        
+
         val createXml = buildString {
             append("""<?xml version="1.0" encoding="UTF-8"?>""")
             if (majorVersion >= 14) {
@@ -942,25 +944,30 @@ class EasCalendarCrudService(
             append("<calendar:StartTime>$startTimeStr</calendar:StartTime>")
             append("<calendar:EndTime>$endTimeStr</calendar:EndTime>")
             append("<calendar:Location>$escapedLocation</calendar:Location>")
-            
+            // UID отправляется в protocol version 2.5/12.0/12.1/14.0/14.1.
+            // В 16.0+ запрещён (надо использовать ClientUid) — пропускаем.
+            if (majorVersion < 16) {
+                append("<calendar:UID>${deps.escapeXml(eventUid)}</calendar:UID>")
+            }
+
             if (majorVersion >= 14) {
                 append("<airsyncbase:Body>")
                 append("<airsyncbase:Type>1</airsyncbase:Type>")
                 append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
                 append("</airsyncbase:Body>")
             }
-            
+
             val tzBlob = if (allDayEvent) android.util.Base64.encodeToString(ByteArray(172), android.util.Base64.NO_WRAP) else CalendarDateUtils.buildDeviceTimezoneBlob()
             append("<calendar:Timezone>$tzBlob</calendar:Timezone>")
             append("<calendar:AllDayEvent>${if (allDayEvent) "1" else "0"}</calendar:AllDayEvent>")
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
             append("<calendar:Sensitivity>$sensitivity</calendar:Sensitivity>")
-            
+
             if (majorVersion >= 14) {
                 val meetingStatus = if (attendees.isNotEmpty()) 1 else 0
                 append("<calendar:MeetingStatus>$meetingStatus</calendar:MeetingStatus>")
-                
+
                 if (attendees.isNotEmpty()) {
                     append("<calendar:Attendees>")
                     for (email in attendees) {
@@ -974,16 +981,16 @@ class EasCalendarCrudService(
                     append("</calendar:Attendees>")
                 }
             }
-            
+
             val recurrenceXml = CalendarRecurrenceBuilder.buildEasRecurrenceXml(recurrenceType, startTime)
             if (recurrenceXml.isNotBlank()) append(recurrenceXml)
-            
+
             append("</ApplicationData>")
             append("</Add></Commands>")
             append("</Collection></Collections>")
             append("</Sync>")
         }
-        
+
         return deps.executeEasCommand("Sync", createXml) { responseXml ->
             val status = deps.extractValue(responseXml, "Status")
             if (status == "1") {
@@ -1005,7 +1012,7 @@ class EasCalendarCrudService(
             }
         }
     }
-    
+
     private suspend fun updateCalendarEventEas(
         serverId: String,
         subject: String,
@@ -1022,26 +1029,26 @@ class EasCalendarCrudService(
     ): EasResult<Boolean> {
         val calendarFolderId = syncService.getCalendarFolderId()
             ?: return EasResult.Error("Папка календаря не найдена")
-        
+
         val syncKeyResult = syncService.getAdvancedSyncKey(calendarFolderId)
         val syncKey = when (syncKeyResult) {
             is EasResult.Success -> syncKeyResult.data
             is EasResult.Error -> return syncKeyResult
         }
-        
+
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        
+
         val startTimeStr = CalendarDateUtils.formatEasDate(startTime)
         val endTimeStr = CalendarDateUtils.formatEasDate(endTime)
-        
+
         val escapedSubject = deps.escapeXml(subject)
         val escapedLocation = deps.escapeXml(location)
         val escapedBody = deps.escapeXml(body)
-        
+
         // КРИТИЧНО: Exchange 2007 (EAS 12.x) поддерживает в Calendar Change только:
         // Subject, StartTime, EndTime, Location, AllDayEvent, Reminder, BusyStatus, Sensitivity
         // Body, MeetingStatus, Attendees - НЕ поддерживаются (вызывают Status=6)
-        
+
         val updateXml = buildString {
             append("""<?xml version="1.0" encoding="UTF-8"?>""")
             if (majorVersion >= 14) {
@@ -1059,7 +1066,7 @@ class EasCalendarCrudService(
             append("<calendar:StartTime>$startTimeStr</calendar:StartTime>")
             append("<calendar:EndTime>$endTimeStr</calendar:EndTime>")
             append("<calendar:Location>$escapedLocation</calendar:Location>")
-            
+
             // Body только для EAS 14+ (Exchange 2010+)
             if (majorVersion >= 14) {
                 append("<airsyncbase:Body>")
@@ -1067,7 +1074,7 @@ class EasCalendarCrudService(
                 append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
                 append("</airsyncbase:Body>")
             }
-            
+
             if (majorVersion >= 14) {
                 val tzBlob = if (allDayEvent) android.util.Base64.encodeToString(ByteArray(172), android.util.Base64.NO_WRAP) else CalendarDateUtils.buildDeviceTimezoneBlob()
                 append("<calendar:Timezone>$tzBlob</calendar:Timezone>")
@@ -1076,12 +1083,12 @@ class EasCalendarCrudService(
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
             append("<calendar:Sensitivity>$sensitivity</calendar:Sensitivity>")
-            
+
             // MeetingStatus и Attendees только для EAS 14+ (Exchange 2010+)
             if (majorVersion >= 14) {
                 val meetingStatus = if (attendees.isNotEmpty()) 1 else 0
                 append("<calendar:MeetingStatus>$meetingStatus</calendar:MeetingStatus>")
-                
+
                 if (attendees.isNotEmpty()) {
                     append("<calendar:Attendees>")
                     for (email in attendees) {
@@ -1094,33 +1101,33 @@ class EasCalendarCrudService(
                     }
                     append("</calendar:Attendees>")
                 }
-                
+
                 val recurrenceXml = CalendarRecurrenceBuilder.buildEasRecurrenceXml(recurrenceType, startTime)
                 if (recurrenceXml.isNotBlank()) append(recurrenceXml)
             }
-            
+
             append("</ApplicationData>")
             append("</Change></Commands>")
             append("</Collection></Collections>")
             append("</Sync>")
         }
-        
+
         return deps.executeEasCommand("Sync", updateXml) { responseXml ->
             // Проверяем статус коллекции
             val collectionStatus = deps.extractValue(responseXml, "Status")
             if (collectionStatus != "1") {
                 throw Exception("Collection Status=$collectionStatus")
             }
-            
+
             // КРИТИЧНО: Проверяем статус конкретной операции Change
             // Согласно MS-ASCMD: "The server is not required to send an individual response
             // for every operation. The client only receives responses for failed changes."
             // Если <Responses><Change><Status> ЕСТЬ - проверяем его
             // Если НЕТ - считаем что SUCCESS
-            
+
             if (responseXml.contains("<Responses>") && responseXml.contains("<Change>")) {
                 val changeStatusMatch = CalendarXmlParser.CHANGE_STATUS_PATTERN.find(responseXml)
-                
+
                 if (changeStatusMatch != null) {
                     val changeStatus = changeStatusMatch.groupValues[1]
                     when (changeStatus) {
@@ -1140,17 +1147,17 @@ class EasCalendarCrudService(
             }
         }
     }
-    
+
     private suspend fun deleteCalendarEventEas(serverId: String, calendarFolderId: String): EasResult<Boolean> {
         var syncKeyResult = syncService.getAdvancedSyncKey(calendarFolderId)
         var syncKey = when (syncKeyResult) {
             is EasResult.Success -> syncKeyResult.data
             is EasResult.Error -> return syncKeyResult
         }
-        
+
         // Удаление
         val deleteResult = executeEasDelete(serverId, syncKey, calendarFolderId)
-        
+
         // Retry при INVALID_SYNCKEY (Status=3) или retriable ошибках сервера (Status=5,16)
         // MS-ASCMD §2.2.3.177.17:
         // - Status=3  -> вернуться к SyncKey=0 и повторить
@@ -1159,22 +1166,22 @@ class EasCalendarCrudService(
         val needsRetry = deleteResult is EasResult.Error &&
                          (deleteResult.message.contains("INVALID_SYNCKEY") ||
                           deleteResult.message.contains("RETRY_TRANSIENT"))
-        
+
         if (needsRetry) {
             android.util.Log.w("EasCalendarCrudService", "Delete failed, retrying with full SyncKey reset for serverId=$serverId")
-            
+
             syncKeyResult = syncService.getAdvancedSyncKey(calendarFolderId)
             syncKey = when (syncKeyResult) {
                 is EasResult.Success -> syncKeyResult.data
                 is EasResult.Error -> return deleteResult // Не смогли — возвращаем исходную ошибку
             }
-            
+
             return executeEasDelete(serverId, syncKey, calendarFolderId)
         }
-        
+
         return deleteResult
     }
-    
+
     /**
      * DRY: Выполнение EAS Sync Delete с указанным SyncKey.
      * Используется в deleteCalendarEventEas (основная попытка + retry).
@@ -1203,7 +1210,7 @@ class EasCalendarCrudService(
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         return deps.executeEasCommand("Sync", deleteXml) { responseXml ->
             val collectionStatus = deps.extractValue(responseXml, "Status")?.toIntOrNull() ?: 0
             when (collectionStatus) {
@@ -1247,19 +1254,20 @@ class EasCalendarCrudService(
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
-                
+
                 val escapedSubject = deps.escapeXml(subject)
                 val escapedLocation = deps.escapeXml(location)
                 val escapedBody = deps.escapeXml(body)
-                
+
                 val startTimeStr = if (allDayEvent) CalendarDateUtils.formatEwsAllDayDate(startTime) else CalendarDateUtils.formatEwsDate(startTime)
                 val endTimeStr = if (allDayEvent) CalendarDateUtils.formatEwsAllDayDate(endTime) else CalendarDateUtils.formatEwsDate(endTime)
-                
+
                 val ewsBusyStatus = CalendarDateUtils.mapBusyStatusToEws(busyStatus)
-                
+                val ewsSensitivity = CalendarDateUtils.mapSensitivityToEws(sensitivity)
+
                 // Если есть участники - это митинг, отправляем приглашения
                 val sendInvitations = if (attendees.isNotEmpty()) "SendToAllAndSaveCopy" else "SendToNone"
-                
+
                 // Формируем блок участников по официальному примеру Microsoft
                 val attendeesXml = if (attendees.isNotEmpty()) {
                     buildString {
@@ -1275,7 +1283,7 @@ class EasCalendarCrudService(
                         append("</RequiredAttendees>")
                     }
                 } else ""
-                
+
                 // Формируем SOAP запрос ТОЧНО по официальному примеру Microsoft:
                 // Внутри CalendarItem элементы БЕЗ префикса t:, используется xmlns на CalendarItem
                 val soapRequest = buildString {
@@ -1298,6 +1306,7 @@ class EasCalendarCrudService(
                     // CalendarItem с xmlns - внутренние элементы без префикса (как в официальном примере MS)
                     append("""<t:CalendarItem xmlns="http://schemas.microsoft.com/exchange/services/2006/types">""")
                     append("<Subject>$escapedSubject</Subject>")
+                    append("<Sensitivity>$ewsSensitivity</Sensitivity>")
                     if (escapedBody.isNotBlank()) {
                         append("""<Body BodyType="Text">$escapedBody</Body>""")
                     }
@@ -1324,26 +1333,26 @@ class EasCalendarCrudService(
                     append("</soap:Body>")
                     append("</soap:Envelope>")
                 }
-                
+
                 android.util.Log.d("EasCalendarCrudService", "createCalendarEventEws: Request: $soapRequest")
-                
+
                 val createResult = ewsRequest(ewsUrl, soapRequest, "CreateItem")
                 if (createResult is EasResult.Error) return@withContext createResult
                 val responseXml = (createResult as EasResult.Success).data
-                
+
                 android.util.Log.d("EasCalendarCrudService", "createCalendarEventEws: response length=${responseXml.length}, first 300: ${responseXml.take(300)}")
-                
+
                 // Проверяем на ошибки
                 if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
                     return@withContext EasResult.Error("Ошибка схемы EWS")
                 }
-                
+
                 val idMatch = CalendarXmlParser.EWS_ITEM_ID.find(responseXml)
                 val itemId = idMatch?.groupValues?.get(1)
                     ?: EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
                 val changeKey = idMatch?.groupValues?.get(2)
                 android.util.Log.d("EasCalendarCrudService", "createCalendarEventEws: itemId=${itemId?.take(40)}, changeKey=${changeKey?.take(20)}")
-                
+
                 // КРИТИЧНО: Проверяем ResponseClass и ResponseCode (namespace-tolerant)
                 val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
                 val responseCode = CalendarXmlParser.EWS_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)?.trim()
@@ -1363,7 +1372,7 @@ class EasCalendarCrudService(
             }
         }
     }
-    
+
     private suspend fun updateCalendarEventEws(
         serverId: String,
         subject: String,
@@ -1378,43 +1387,45 @@ class EasCalendarCrudService(
         attendees: List<String>,
         oldSubject: String? = null,
         recurrenceType: Int = -1,
-        newAttendeesToAppend: List<String> = emptyList()
+        newAttendeesToAppend: List<String> = emptyList(),
+        oldSensitivity: Int? = null
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
-                
+
                 // КРИТИЧНО: Получаем ПОЛНЫЙ EWS ItemId + ChangeKey через FindItem.
                 // Нужно в двух случаях:
                 // 1) serverId короткий EAS формат ("22:2") → нужен EWS ItemId
                 // 2) serverId — EWS ItemId без ChangeKey (длинный, без "|") → нужен ChangeKey
                 //    Exchange 2007 SP1 требует ChangeKey для UpdateItem!
                 var actualServerId = serverId
-                
+
                 val needsFindItem = (serverId.contains(":") && !serverId.contains("=")) ||
                     (serverId.length > 50 && !serverId.contains("|"))
-                
+
                 if (needsFindItem) {
                     // КРИТИЧНО: Используем СТАРЫЙ subject для поиска (если subject изменился)
                     val searchSubject = oldSubject ?: subject
-                    
+
                     val findResult = findCalendarItemIdBySubject(searchSubject, startTime)
-                    
+
                     if (findResult is EasResult.Success) {
                         actualServerId = findResult.data
                     }
                     // Если не найдёт - попробуем с исходным serverId (может сработать)
                 }
-                
+
                 val escapedSubject = deps.escapeXml(subject)
                 val escapedLocation = deps.escapeXml(location)
                 val escapedBody = deps.escapeXml(body)
-                
+
                 val startTimeStr = if (allDayEvent) CalendarDateUtils.formatEwsAllDayDate(startTime) else CalendarDateUtils.formatEwsDate(startTime)
                 val endTimeStr = if (allDayEvent) CalendarDateUtils.formatEwsAllDayDate(endTime) else CalendarDateUtils.formatEwsDate(endTime)
-                
+
                 val ewsBusyStatus = CalendarDateUtils.mapBusyStatusToEws(busyStatus)
-                
+                val ewsSensitivity = CalendarDateUtils.mapSensitivityToEws(sensitivity)
+
                 // КРИТИЧНО: Разбираем actualServerId на ItemId и ChangeKey
                 // Формат: "ItemId|ChangeKey" или просто "ItemId"
                 val (itemId, changeKey) = if (actualServerId.contains("|")) {
@@ -1423,7 +1434,7 @@ class EasCalendarCrudService(
                 } else {
                     actualServerId to null
                 }
-                
+
                 // КРИТИЧНО: Используем EWS UpdateItem вместо DELETE+CREATE!
                 // DELETE+CREATE вызывает дублирование событий!
                 // UpdateItem требует ItemId с ChangeKey для Exchange 2007 SP1
@@ -1448,7 +1459,7 @@ class EasCalendarCrudService(
                         append("""<t:ItemId Id="$safeItemId"/>""")
                     }
                     append("<t:Updates>")
-                    
+
                     // Subject
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="item:Subject"/>""")
@@ -1456,21 +1467,30 @@ class EasCalendarCrudService(
                     append("<t:Subject>$escapedSubject</t:Subject>")
                     append("</t:CalendarItem>")
                     append("</t:SetItemField>")
-                    
+
+                    if (oldSensitivity == null || oldSensitivity != sensitivity) {
+                        append("<t:SetItemField>")
+                        append("""<t:FieldURI FieldURI="item:Sensitivity"/>""")
+                        append("<t:CalendarItem>")
+                        append("<t:Sensitivity>$ewsSensitivity</t:Sensitivity>")
+                        append("</t:CalendarItem>")
+                        append("</t:SetItemField>")
+                    }
+
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="calendar:Start"/>""")
                     append("<t:CalendarItem>")
                     append("<t:Start>$startTimeStr</t:Start>")
                     append("</t:CalendarItem>")
                     append("</t:SetItemField>")
-                    
+
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="calendar:End"/>""")
                     append("<t:CalendarItem>")
                     append("<t:End>$endTimeStr</t:End>")
                     append("</t:CalendarItem>")
                     append("</t:SetItemField>")
-                    
+
                     // Location — всегда отправляем (SetItemField если есть, DeleteItemField если очищено)
                     if (escapedLocation.isNotBlank()) {
                         append("<t:SetItemField>")
@@ -1484,7 +1504,7 @@ class EasCalendarCrudService(
                         append("""<t:FieldURI FieldURI="calendar:Location"/>""")
                         append("</t:DeleteItemField>")
                     }
-                    
+
                     // Body — всегда отправляем
                     if (escapedBody.isNotBlank()) {
                         append("<t:SetItemField>")
@@ -1498,7 +1518,7 @@ class EasCalendarCrudService(
                         append("""<t:FieldURI FieldURI="item:Body"/>""")
                         append("</t:DeleteItemField>")
                     }
-                    
+
                     // IsAllDayEvent
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="calendar:IsAllDayEvent"/>""")
@@ -1506,7 +1526,7 @@ class EasCalendarCrudService(
                     append("<t:IsAllDayEvent>$allDayEvent</t:IsAllDayEvent>")
                     append("</t:CalendarItem>")
                     append("</t:SetItemField>")
-                    
+
                     // LegacyFreeBusyStatus
                     append("<t:SetItemField>")
                     append("""<t:FieldURI FieldURI="calendar:LegacyFreeBusyStatus"/>""")
@@ -1514,7 +1534,7 @@ class EasCalendarCrudService(
                     append("<t:LegacyFreeBusyStatus>$ewsBusyStatus</t:LegacyFreeBusyStatus>")
                     append("</t:CalendarItem>")
                     append("</t:SetItemField>")
-                    
+
                     // Reminder — всегда отправляем для корректного снятия напоминания
                     if (reminder > 0) {
                         append("<t:SetItemField>")
@@ -1523,7 +1543,7 @@ class EasCalendarCrudService(
                         append("<t:ReminderIsSet>true</t:ReminderIsSet>")
                         append("</t:CalendarItem>")
                         append("</t:SetItemField>")
-                        
+
                         append("<t:SetItemField>")
                         append("""<t:FieldURI FieldURI="item:ReminderMinutesBeforeStart"/>""")
                         append("<t:CalendarItem>")
@@ -1538,11 +1558,11 @@ class EasCalendarCrudService(
                         append("</t:CalendarItem>")
                         append("</t:SetItemField>")
                     }
-                    
+
                     // Recurrence
                     val ewsRecurrenceUpdateXml = CalendarRecurrenceBuilder.buildEwsRecurrenceUpdateXml(recurrenceType, startTimeStr)
                     if (ewsRecurrenceUpdateXml.isNotBlank()) append(ewsRecurrenceUpdateXml)
-                    
+
                     // Exchange 2007 SP1: SetItemField NOT supported for RequiredAttendees.
                     // Only APPEND truly new attendees (diff computed by CalendarRepository).
                     if (newAttendeesToAppend.isNotEmpty()) {
@@ -1560,7 +1580,7 @@ class EasCalendarCrudService(
                             append("</t:AppendToItemField>")
                         }
                     }
-                    
+
                     append("</t:Updates>")
                     append("</t:ItemChange>")
                     append("</m:ItemChanges>")
@@ -1568,15 +1588,15 @@ class EasCalendarCrudService(
                     append("</soap:Body>")
                     append("</soap:Envelope>")
                 }
-                
+
                 val updateResult = ewsRequest(ewsUrl, soapRequest, "UpdateItem")
                 if (updateResult is EasResult.Error) return@withContext updateResult
                 val responseXml = (updateResult as EasResult.Success).data
-                
+
                 // Проверяем ResponseClass и ResponseCode (namespace-tolerant: m: или без префикса)
                 val hasSuccess = responseXml.contains("ResponseClass=\"Success\"")
                 val responseCode = CalendarXmlParser.EWS_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)?.trim()
-                
+
                 if (hasSuccess && (responseCode == "NoError" || responseCode == null)) {
                     EasResult.Success(true)
                 } else {
@@ -1588,7 +1608,7 @@ class EasCalendarCrudService(
             }
         }
     }
-    
+
     /**
      * EWS DeleteItem для календарных событий.
      * @param sendCancellations — значение SendMeetingCancellations:
@@ -1668,7 +1688,7 @@ class EasCalendarCrudService(
             else -> EasResult.Error("EWS DeleteItem: $responseCode")
         }
     }
-    
+
     /**
      * EWS DeclineItem — участник отклоняет встречу.
      * КРИТИЧНО: Предотвращает "воскрешение" Calendar Repair Assistant (CRA).
@@ -1687,22 +1707,9 @@ class EasCalendarCrudService(
             try {
                 val ewsUrl = deps.getEwsUrl()
                 val escapedId = deps.escapeXml(serverId)
-                // Шаг 1: DeclineItem — уведомляем организатора (предотвращает CRA resurrection).
-                // ReferenceItemId принимает только Id/ChangeKey; RecurringMasterItemId
-                // в ReferenceItemId не поддерживается. Для серии decline отправится
-                // по конкретному occurrence, а HardDelete ниже удалит всю серию.
-                val declineBody = """
-                    <m:CreateItem MessageDisposition="SendAndSaveCopy">
-                        <m:Items>
-                            <t:DeclineItem>
-                                <t:ReferenceItemId Id="$escapedId"/>
-                            </t:DeclineItem>
-                        </m:Items>
-                    </m:CreateItem>
-                """.trimIndent()
-                val request = EasXmlTemplates.ewsSoapRequest(declineBody)
-                runCatching { ewsRequest(ewsUrl, request, "CreateItem") }
-                
+                val declineResult = executeDeclineItem(ewsUrl, serverId)
+                if (declineResult is EasResult.Error) return@withContext declineResult
+
                 // Шаг 2: HardDelete — гарантируем физическое удаление из календаря.
                 // Для recurring series используем RecurringMasterItemId → удаляет всю серию.
                 val itemIdXml = if (isRecurringSeries) {
@@ -1725,7 +1732,7 @@ class EasCalendarCrudService(
             }
         }
     }
-    
+
     /**
      * EAS MeetingResponse — отклонение встречи через ActiveSync (Exchange 2010+).
      * MS-ASCMD §2.2.1.10: UserResponse=3 → Decline
@@ -1744,12 +1751,52 @@ class EasCalendarCrudService(
         <RequestId>${deps.escapeXml(serverId)}</RequestId>
     </Request>
 </MeetingResponse>""".trimIndent()
-        
+
         return try {
-            deps.executeEasCommand("MeetingResponse", meetingResponseXml) { true }
+            deps.executeEasCommand("MeetingResponse", meetingResponseXml) { responseXml ->
+                val status = deps.extractValue(responseXml, "Status")
+                when (status) {
+                    "1" -> true
+                    "2" -> throw Exception("Invalid meeting request (Status=2)")
+                    "3" -> throw Exception("Invalid request ID or collection ID (Status=3)")
+                    "4" -> throw Exception("Server error (Status=4)")
+                    else -> {
+                        if (responseXml.contains("CalendarId")) true
+                        else throw Exception("MeetingResponse Status=$status")
+                    }
+                }
+            }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Success(true)
+            EasResult.Error("MeetingResponse failed: ${e.message}")
+        }
+    }
+
+    private suspend fun executeDeclineItem(
+        ewsUrl: String,
+        itemId: String
+    ): EasResult<Boolean> {
+        val escapedId = deps.escapeXml(itemId)
+        val declineBody = """
+            <m:CreateItem MessageDisposition="SendAndSaveCopy">
+                <m:Items>
+                    <t:DeclineItem>
+                        <t:ReferenceItemId Id="$escapedId"/>
+                    </t:DeclineItem>
+                </m:Items>
+            </m:CreateItem>
+        """.trimIndent()
+        val request = EasXmlTemplates.ewsSoapRequest(declineBody)
+        val declineResult = ewsRequest(ewsUrl, request, "CreateItem")
+        if (declineResult is EasResult.Error) return declineResult
+        val response = (declineResult as EasResult.Success).data
+        val responseCode = CalendarXmlParser.EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)?.trim()
+        val hasSuccess = response.contains("ResponseClass=\"Success\"")
+        return when {
+            responseCode == "NoError" -> EasResult.Success(true)
+            responseCode == "ErrorItemNotFound" -> EasResult.Success(true)
+            hasSuccess && responseCode == null -> EasResult.Success(true)
+            else -> EasResult.Error("EWS DeclineItem: $responseCode")
         }
     }
 
@@ -1838,7 +1885,7 @@ $itemIdsXml
         return withContext(Dispatchers.IO) {
             try {
                 val ewsUrl = deps.getEwsUrl()
-                
+
                 // CalendarView с узким окном ±1 день от startTime (или широким если startTime=0)
                 val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
                 sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
@@ -1853,7 +1900,7 @@ $itemIdsXml
                     viewStart = sdf.format(java.util.Date(now - 365L * oneDayMs))
                     viewEnd = sdf.format(java.util.Date(now + 730L * oneDayMs))
                 }
-                
+
                 val findRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -1877,11 +1924,11 @@ $itemIdsXml
         </m:FindItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-                
+
                 val responseResult = ewsRequest(ewsUrl, findRequest, "FindItem")
                 if (responseResult is EasResult.Error) return@withContext responseResult
                 val response = (responseResult as EasResult.Success).data
-                
+
                 for (itemMatch in EWS_CALENDAR_ITEM.findAll(response)) {
                     val itemXml = itemMatch.groupValues[1]
                     val subjectMatch = EWS_SUBJECT.find(itemXml)?.groupValues?.get(1) ?: ""
@@ -1899,7 +1946,7 @@ $itemIdsXml
                         }
                     }
                 }
-                
+
                 // УБРАН опасный fallback: брать первый ItemId из ответа означало бы
                 // прикрепить вложение к СЛУЧАЙНОМУ событию в случае промаха.
                 EasResult.Error("ItemId not found for subject=$subject")

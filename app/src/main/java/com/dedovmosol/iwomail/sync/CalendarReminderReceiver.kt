@@ -24,12 +24,12 @@ import java.util.*
 
 /**
  * BroadcastReceiver для напоминаний о событиях календаря.
- * 
+ *
  * Использует AlarmManager для точного планирования уведомлений.
  * Каждое событие имеет уникальный requestCode на основе хэша id.
  */
 class CalendarReminderReceiver : BroadcastReceiver() {
-    
+
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         if (action != ACTION_CALENDAR_REMINDER &&
@@ -40,7 +40,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
         val eventId = intent.getStringExtra(EXTRA_EVENT_ID) ?: return
         val pendingResult = goAsync()
         val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        
+
         localScope.launch {
             try {
                 withTimeoutOrNull(8_000) {
@@ -79,10 +79,10 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             }
         }
     }
-    
+
     private fun showNotification(context: Context, event: CalendarEventEntity) {
         val notificationManager = context.getSystemService(NotificationManager::class.java)
-        
+
         // Intent для открытия приложения при клике - с переключением на нужный аккаунт
         val contentIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -118,18 +118,18 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             snoozeIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         // Форматируем время события
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         val dateFormat = SimpleDateFormat("d MMM", Locale.getDefault())
         val startDate = Date(event.startTime)
-        
+
         val timeText = if (event.allDayEvent) {
             context.getString(R.string.all_day)
         } else {
             timeFormat.format(startDate)
         }
-        
+
         val contentText = buildString {
             append(timeText)
             append(" • ")
@@ -139,7 +139,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
                 append(event.location)
             }
         }
-        
+
         val notification = NotificationCompat.Builder(context, MailApplication.CHANNEL_CALENDAR)
             .setSmallIcon(R.drawable.ic_calendar_month)
             .setContentTitle(event.subject.ifBlank { context.getString(R.string.calendar_event) })
@@ -153,12 +153,12 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             .addAction(R.drawable.ic_check, context.getString(R.string.notification_mark_read), markReadPendingIntent)
             .addAction(R.drawable.ic_schedule, context.getString(R.string.notification_remind_in_5_min), snoozePendingIntent)
             .build()
-        
+
         // Уникальный ID уведомления на основе события
         val notificationId = notificationIdForEvent(event.id)
         notificationManager.notify(notificationId, notification)
     }
-    
+
     companion object {
         const val ACTION_CALENDAR_REMINDER = "com.dedovmosol.iwomail.CALENDAR_REMINDER"
         const val ACTION_CALENDAR_MARK_READ = "com.dedovmosol.iwomail.CALENDAR_MARK_READ"
@@ -203,11 +203,11 @@ class CalendarReminderReceiver : BroadcastReceiver() {
                 )
             }
         }
-        
+
         /**
          * Планирует напоминание для события.
          * Напоминание сработает за [event.reminder] минут до начала события.
-         * 
+         *
          * @param context Context
          * @param event Событие календаря
          */
@@ -217,31 +217,31 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             if (reminderTime <= System.currentTimeMillis()) return
             scheduleReminderAt(context, event.id, reminderTime)
         }
-        
+
         /**
          * Отменяет напоминание для события.
-         * 
+         *
          * @param context Context
          * @param eventId ID события
          */
         fun cancelReminder(context: Context, eventId: String) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            
+
             val intent = Intent(context, CalendarReminderReceiver::class.java).apply {
                 action = ACTION_CALENDAR_REMINDER
                 putExtra(EXTRA_EVENT_ID, eventId)
             }
-            
+
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
                 safeHashForId(eventId),
                 intent,
                 PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
             )
-            
+
             pendingIntent?.let { alarmManager.cancel(it) }
         }
-        
+
         private const val MAX_SCHEDULED_REMINDERS = 150
 
         /**
@@ -251,6 +251,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
          */
         fun rescheduleAllReminders(context: Context, events: List<CalendarEventEntity>) {
             val now = System.currentTimeMillis()
+            events.forEach { cancelReminder(context, it.id) }
             val eligible = events
                 .filter { it.reminder > 0 && it.startTime > now }
                 .map { it to (it.startTime - it.reminder * 60_000L) }

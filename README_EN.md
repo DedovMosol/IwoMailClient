@@ -2,18 +2,18 @@
 
 🇷🇺 [Русская версия](README.md)
 
-Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP and POP3 support.
+Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Exchange ActiveSync and EWS. IMAP and POP3 are available as beta mail-only paths.
 
-**Version:** 1.6.2  
-**Developer:** DedovMosol  
-**Telegram:** [@i_wantout](https://t.me/i_wantout)  
+**Version:** 1.6.2
+**Developer:** DedovMosol
+**Telegram:** [@i_wantout](https://t.me/i_wantout)
 **Email:** andreyid@outlook.com
 
 ## 🌟 Features
 
 - 📧 **Exchange ActiveSync** — EAS 12.0-14.1 support (Exchange 2007+). Tested on Exchange 2007 SP1 (EAS 12.1)
-- 🔄 **EWS for Exchange 2007** — calendar, tasks, notes, drafts via EWS with NTLMv2 (fallback for EAS 12.x)
-- 📬 **IMAP/POP3** — works with any mail server (coming soon)
+- 🔄 **EWS for Exchange 2007** — calendar, tasks, notes, drafts, calendar attachments and meeting responses via EWS with NTLMv2 (fallback for EAS 12.x)
+- 📬 **IMAP/POP3** — beta mail-only support through JavaMail
 - 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
 - 🔒 **Exchange 2007 compatibility** — TLS 1.0-1.3 support via Conscrypt
 - 🔐 **Server certificates** — self-signed certificate support for corporate servers
@@ -26,7 +26,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 - ✅ **Mail** — sync, send with attachments, search, filters, favorites, folder management, drafts, scheduled send, send group users
 - ✅ **Contacts** — personal and GAL, groups, import/export (vCard, CSV)
-- ✅ **Calendar** — recurring events, attendee management, attachments, online meeting links
+- ✅ **Calendar** — recurring events, attendee management, attachments, online meeting links, local trash and server-confirmed permanent delete
 - ✅ **Notes** — create, edit, sync
 - ✅ **Tasks** — create, edit, assign, reminders, sync
 - ✅ **Notifications** — Push (Direct Push), background sync, night mode
@@ -70,6 +70,7 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 
 - Target SDK: 36 (Android 16)
 - Supported architectures: armeabi-v7a, arm64-v8a, x86, x86_64
+- Build JDK: JDK 17 recommended (JDK 11 minimum for Android Gradle Plugin 8.7.3)
 
 ## 🖥️ Supported Servers
 
@@ -79,6 +80,14 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 | Exchange 2010/2013+ | ⚠️ Needs testing |
 | Office 365 | ⚠️ Requires OAuth |
 | IMAP/POP3 servers | ⚠️ Beta |
+
+## 📅 Calendar and Attachments
+
+- **DRY recurring attachments** — calendar attachments are stored locally as JSON metadata (`fileReference`, name, size), not duplicated file bytes for every occurrence.
+- **Exchange 2007 SP1** — calendar attachment upload/fetch uses EWS `CreateAttachment`/`GetItem`; recurring series resolve the master ItemId.
+- **Permanent delete** — local DB deletion happens only after successful server-side deletion; calendar mutations are serialized with per-account sync locks.
+- **CRA resurrection prevention** — attendee meetings are declined through `MeetingResponse` or EWS `DeclineItem` before deletion; if the original meeting request cannot be found, local deletion is blocked.
+- **Preview cache** — attachment previews use `cacheDir/calendar_preview`, stable names derived from `fileReference`, and delayed cleanup designed to avoid races with external viewers.
 
 ## 💡 Known Limitations
 
@@ -110,6 +119,8 @@ Android mail client with Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP 
 - Certificate Pinning (Public Key Pinning)
 - SSL/TLS mutual authentication (mTLS)
 - Self-signed certificates support
+- XSS protection for email bodies: sanitizer blocks `<script>`, plugin containers (`iframe`/`object`/`embed`/`applet`), event handlers, `meta http-equiv="refresh"`, `javascript:` and `data:text/html` URIs in URL-context attributes. Combined with `loadDataWithBaseURL(null, ...)` for cross-origin isolation in WebView.
+- `EncryptedSharedPreferences` for passwords with obfuscated fallback when Android Keystore is unavailable
 
 **Other:**
 - WorkManager — background sync
@@ -172,7 +183,7 @@ Protocol Layer
     ↓
 Database Layer                    Network Layer
   Room — 11 DAOs, 10 Entities      HttpClientProvider, NetworkMonitor
-  MailDatabase (v39)                NtlmAuthenticator
+  MailDatabase (v40)                NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker

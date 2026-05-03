@@ -33,7 +33,7 @@ import kotlinx.coroutines.sync.withLock
 /**
  * Сервис для Exchange Direct Push
  * Держит соединение с сервером и получает мгновенные уведомления о новых письмах
- * 
+ *
  * Оптимизации:
  * - Без WakeLock (Foreground Service + сетевой стек Android достаточно)
  * - Переиспользование EasClient для каждого аккаунта
@@ -41,49 +41,49 @@ import kotlinx.coroutines.sync.withLock
  * - AlarmManager fallback для Xiaomi и других агрессивных OEM
  */
 class PushService : Service() {
-    
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pushJob: Job? = null
     private var heartbeatJob: Job? = null  // Job для периодического обновления статуса
-    
+
     // Кэшированные зависимости (создаются один раз)
     private lateinit var database: MailDatabase
     private lateinit var mailRepo: MailRepository
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var accountRepo: AccountRepository
-    
+
     //исправляем race condition при одновременном доступе из разных корутин
     private val easClientCache = java.util.Collections.synchronizedMap(mutableMapOf<Long, com.dedovmosol.iwomail.eas.EasClient>())
-    
+
     private val accountPingJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
-    
+
     // Сохранённые heartbeat для каждого аккаунта (восстанавливаются между перезапусками)
     private val accountHeartbeats = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
-    
+
     // MS-ASCMD: При Ping Status=6 сервер возвращает MaxFolders — адаптивный лимит
     private val maxPingFoldersPerAccount = java.util.Collections.synchronizedMap(mutableMapOf<Long, Int>())
-    
+
     @Volatile
     private var cachedMinSyncIntervalMinutes: Int = 5
-    
+
     // Per-account debounce: предотвращает блокировку sync аккаунта B из-за аккаунта A
     private val lastAccountSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
-        
+
     // NetworkCallback для отслеживания состояния сети
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile
     private var isNetworkAvailable = true
-    
+
     companion object {
         private const val TAG = "PushService"
-        
+
         // Адаптивный heartbeat: начинаем с большого значения, уменьшаем при ошибках
         private const val MIN_HEARTBEAT = 120      // Минимум 2 минуты
         private const val DEFAULT_HEARTBEAT = 480  // Начинаем с 8 минут (оптимизация батареи)
         private const val MAX_HEARTBEAT = 1800     // Максимум 30 минут (MS-ASCMD: 60-3540с)
         private const val HEARTBEAT_INCREASE_STEP = 60  // Увеличиваем на 1 минуту
         private const val SUCCESS_COUNT_TO_INCREASE = 3 // После 3 успехов увеличиваем
-        
+
         // Статусы Ping
         private const val STATUS_EXPIRED = 1
         private const val STATUS_CHANGES_FOUND = 2
@@ -91,15 +91,15 @@ class PushService : Service() {
         private const val STATUS_TOO_MANY_FOLDERS = 6
         private const val STATUS_FOLDER_REFRESH_NEEDED = 7
         private const val STATUS_SERVER_ERROR = 8
-        
+
         private const val NOTIFICATION_ID = 2001
         private const val RESTART_REQUEST_CODE = 2002
         private const val SYNC_ALARM_REQUEST_CODE = 2003
         private const val FOREGROUND_NOTIFICATION_REQUEST_CODE = 2004
         private const val NEW_MAIL_NOTIFICATION_REQUEST_CODE = 2005
-        
+
         const val ACTION_SYNC_ALARM = "com.dedovmosol.iwomail.SYNC_ALARM"
-        
+
         fun start(context: Context) {
             val intent = Intent(context, PushService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -108,20 +108,20 @@ class PushService : Service() {
                 context.startService(intent)
             }
         }
-        
+
         fun stop(context: Context) {
             context.getSharedPreferences("push_service", Context.MODE_PRIVATE)
                 .edit().putBoolean("explicit_stop", true).apply()
             cancelSyncAlarm(context)
             context.stopService(Intent(context, PushService::class.java))
         }
-        
+
         fun scheduleSyncAlarm(context: Context, intervalMinutes: Int) {
             if (intervalMinutes <= 0) {
                 cancelSyncAlarm(context)
                 return
             }
-            
+
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
             val intent = Intent(context, SyncAlarmReceiver::class.java).apply {
                 action = ACTION_SYNC_ALARM
@@ -130,9 +130,9 @@ class PushService : Service() {
                 context, SYNC_ALARM_REQUEST_CODE, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
-            
+
             val triggerTime = System.currentTimeMillis() + (intervalMinutes * 60 * 1000L)
-            
+
             try {
                 // Неточный alarm — Android может сдвинуть на несколько минут для батч-обработки
                 // Для fallback-синхронизации точность не критична
@@ -149,7 +149,7 @@ class PushService : Service() {
                 android.util.Log.w(TAG, "Failed to schedule sync alarm", e)
             }
         }
-        
+
         fun cancelSyncAlarm(context: Context) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
             val intent = Intent(context, SyncAlarmReceiver::class.java).apply {
@@ -161,7 +161,7 @@ class PushService : Service() {
             )
             pendingIntent?.let { alarmManager.cancel(it) }
         }
-        
+
         /**
          * Очищает кэш EasClient для указанного аккаунта
          * Вызывается при удалении аккаунта
@@ -171,7 +171,7 @@ class PushService : Service() {
                 .edit().remove("heartbeat_$accountId").apply()
         }
     }
-    
+
     /**
      * Загружает сохранённый heartbeat для аккаунта
      */
@@ -179,7 +179,7 @@ class PushService : Service() {
         return getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
             .getInt("heartbeat_$accountId", DEFAULT_HEARTBEAT)
     }
-    
+
     /**
      * Проверяет, закэширован ли pingNotSupported для аккаунта.
      * TTL 24ч — после этого повторная проверка (сервер мог быть обновлён).
@@ -191,12 +191,12 @@ class PushService : Service() {
         // TTL 24 часа
         return (System.currentTimeMillis() - timestamp) < 24 * 60 * 60 * 1000L
     }
-    
+
     private fun savePingNotSupported(accountId: Long) {
         getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
             .edit().putLong("ping_not_supported_$accountId", System.currentTimeMillis()).apply()
     }
-    
+
     /**
      * Сохраняет heartbeat для аккаунта
      */
@@ -205,7 +205,7 @@ class PushService : Service() {
         getSharedPreferences("push_heartbeats", Context.MODE_PRIVATE)
             .edit().putInt("heartbeat_$accountId", heartbeat).apply()
     }
-    
+
     /**
      * Очищает кэш для удалённого аккаунта
      */
@@ -216,31 +216,31 @@ class PushService : Service() {
         maxPingFoldersPerAccount.remove(accountId)
         lastAccountSyncTimes.remove(accountId)
     }
-    
+
     override fun onCreate() {
         super.onCreate()
         getSharedPreferences("push_service", Context.MODE_PRIVATE)
             .edit().putBoolean("explicit_stop", false).apply()
-        
+
         database = MailDatabase.getInstance(applicationContext)
         mailRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getMailRepository(applicationContext)
         settingsRepo = SettingsRepository.getInstance(applicationContext)
         accountRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(applicationContext)
-        
+
         // Подписываемся на изменение языка для обновления уведомления
         serviceScope.launch {
             settingsRepo.language.collect { _ ->
                 updateForegroundNotification()
             }
         }
-        
+
         // Регистрируем NetworkCallback для отслеживания состояния сети
         registerNetworkCallback()
-        
+
         // Запускаем heartbeat для мониторинга работы сервиса
         startHeartbeat()
     }
-    
+
     /**
      * Периодически обновляет статус сервиса для мониторинга
      * Позволяет ServiceWatchdogReceiver определить что сервис работает
@@ -260,10 +260,10 @@ class PushService : Service() {
             }
         }
     }
-    
+
     private fun registerNetworkCallback() {
         val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        
+
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 if (!isNetworkAvailable) {
@@ -274,7 +274,7 @@ class PushService : Service() {
                     }
                 }
             }
-            
+
             override fun onLost(network: Network) {
                 // Проверяем, есть ли ещё активная сеть
                 val activeNetwork = connectivityManager.activeNetwork
@@ -286,19 +286,19 @@ class PushService : Service() {
                 }
             }
         }
-        
+
         val networkRequest = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        
+
         networkCallback?.let { callback ->
             connectivityManager.registerNetworkCallback(networkRequest, callback)
         }
-        
+
         // Проверяем начальное состояние сети
         isNetworkAvailable = connectivityManager.activeNetwork != null
     }
-    
+
     private fun unregisterNetworkCallback() {
         networkCallback?.let {
             try {
@@ -310,7 +310,7 @@ class PushService : Service() {
         }
         networkCallback = null
     }
-    
+
     private fun updateForegroundNotification() {
         try {
             val notificationManager = getSystemService(NotificationManager::class.java)
@@ -319,7 +319,7 @@ class PushService : Service() {
             android.util.Log.w(TAG, "Failed to update foreground notification", e)
         }
     }
-    
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, createNotification(),
@@ -327,15 +327,15 @@ class PushService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, createNotification())
         }
-        
+
         // Проверяем наличие PUSH аккаунтов в фоне
         serviceScope.launch {
             val accounts = database.accountDao().getAllAccountsList()
-            val hasExchangePushAccounts = accounts.any { 
+            val hasExchangePushAccounts = accounts.any {
                 it.accountType == AccountType.EXCHANGE.name &&
                 it.syncMode == SyncMode.PUSH.name
             }
-            
+
             if (!hasExchangePushAccounts) {
                 // Нет PUSH аккаунтов — останавливаемся
                 withContext(Dispatchers.Main) {
@@ -344,9 +344,9 @@ class PushService : Service() {
                 }
                 return@launch
             }
-            
+
             startPushForAllAccounts()
-            
+
             try {
                 val minInterval = SyncWorker.getMinSyncInterval(applicationContext)
                 val intervalMinutes = if (minInterval > 0) minInterval else 5
@@ -357,16 +357,16 @@ class PushService : Service() {
                 scheduleSyncAlarm(applicationContext, cachedMinSyncIntervalMinutes)
             }
         }
-        
+
         return START_STICKY
     }
-    
+
     override fun onDestroy() {
         android.util.Log.i(TAG, "Service being destroyed")
-        
+
         val wasExplicitStop = getSharedPreferences("push_service", Context.MODE_PRIVATE)
             .getBoolean("explicit_stop", false)
-        
+
         unregisterNetworkCallback()
         heartbeatJob?.cancel()
         pushJob?.cancel()
@@ -374,7 +374,7 @@ class PushService : Service() {
         accountPingJobs.clear()
         easClientCache.clear()
         serviceScope.cancel()
-        
+
         // КРИТИЧНО: Перезапускаем сервис если это не явная остановка
         // Это защита от убийства процесса системой
         if (!wasExplicitStop) {
@@ -383,13 +383,13 @@ class PushService : Service() {
         } else {
             android.util.Log.i(TAG, "Service stopped explicitly - not restarting")
         }
-        
+
         super.onDestroy()
     }
-    
+
     private fun scheduleRestart() {
         android.util.Log.i(TAG, "Scheduling service restart")
-        
+
         // Стратегия 1: AlarmManager + PendingIntent.getForegroundService()
         // На Android 12+ (API 31) startForegroundService() из фона запрещён,
         // но exact alarm с getForegroundService() — разрешённое исключение
@@ -409,10 +409,10 @@ class PushService : Service() {
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
             }
-            
+
             // 60 секунд — перезапуск с разумной задержкой (экономия батареи)
             val triggerTime = System.currentTimeMillis() + 60_000
-            
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                 alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -428,7 +428,7 @@ class PushService : Service() {
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to schedule restart alarm", e)
         }
-        
+
         // Стратегия 2: WorkManager fallback (работает даже без SCHEDULE_EXACT_ALARM)
         // WorkManager запускает PushService при появлении подходящих условий
         try {
@@ -451,31 +451,31 @@ class PushService : Service() {
             android.util.Log.w(TAG, "Failed to schedule WorkManager restart", e)
         }
     }
-    
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        
+
         android.util.Log.i(TAG, "Task removed - ensuring service continues")
-        
+
         scheduleSyncAlarm(applicationContext, cachedMinSyncIntervalMinutes)
         scheduleRestart()
     }
-    
+
     override fun onBind(intent: Intent?): IBinder? = null
 
-    
+
     private fun createNotification(): android.app.Notification {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent = PendingIntent.getActivity(
-            this, FOREGROUND_NOTIFICATION_REQUEST_CODE, intent, 
+            this, FOREGROUND_NOTIFICATION_REQUEST_CODE, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        
+
         val languageCode = settingsRepo.getLanguageSync()
         val isRussian = languageCode == "ru"
-        
+
         return NotificationCompat.Builder(this, MailApplication.CHANNEL_SYNC)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle(NotificationStrings.getPushServiceTitle(isRussian))
@@ -487,7 +487,7 @@ class PushService : Service() {
             .setContentIntent(pendingIntent)
             .build()
     }
-    
+
     private val pushStartLock = Any()
 
     private fun startPushForAllAccounts() {
@@ -499,11 +499,11 @@ class PushService : Service() {
             pushJob = serviceScope.launch {
             val accounts = database.accountDao().getAllAccountsList()
             // Фильтруем только Exchange аккаунты с режимом PUSH
-            val exchangePushAccounts = accounts.filter { 
+            val exchangePushAccounts = accounts.filter {
                 it.accountType == AccountType.EXCHANGE.name &&
                 it.syncMode == SyncMode.PUSH.name
             }
-            
+
             // Очищаем кэш для удалённых аккаунтов
             val activeAccountIds = accounts.map { it.id }.toSet()
             easClientCache.keys.toList().forEach { cachedId ->
@@ -511,19 +511,19 @@ class PushService : Service() {
                     clearCacheForAccount(cachedId)
                 }
             }
-            
+
             if (exchangePushAccounts.isEmpty()) {
                 withContext(Dispatchers.Main) { stopSelf() }
                 return@launch
             }
-            
+
             for (account in exchangePushAccounts) {
                 startPingForAccount(account)
             }
         }
         }
     }
-    
+
     /**
      * Проверяет, является ли текущее время ночным (23:00-7:00)
      */
@@ -531,7 +531,7 @@ class PushService : Service() {
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
         return hour >= 23 || hour < 7
     }
-    
+
     /**
      * Проверяет, активен ли режим экономии батареи Android
      */
@@ -539,7 +539,7 @@ class PushService : Service() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         return powerManager?.isPowerSaveMode == true
     }
-    
+
     private fun startPingForAccount(account: AccountEntity) {
         val accountId = account.id
         val oldJob = accountPingJobs.remove(accountId)
@@ -551,16 +551,16 @@ class PushService : Service() {
             var consecutiveErrors = 0
             var consecutiveSuccesses = 0  // Для адаптивного увеличения heartbeat
             var pingNotSupported = isPingNotSupportedCached(accountId)
-            
+
             syncAccount(account)
-            
+
             var quickPingCount = 0
-            
+
             // Кэш аккаунта: обновляем из БД раз в 5 минут (а не каждую итерацию)
             var cachedAccount: AccountEntity? = account
             var lastAccountRefreshTime = System.currentTimeMillis()
             val accountCacheTtl = 300_000L // 5 минут
-            
+
             while (isActive) {
                 try {
                     // Если сети нет — выходим из цикла
@@ -568,7 +568,7 @@ class PushService : Service() {
                     if (!isNetworkAvailable) {
                         break
                     }
-                    
+
                     // Обновляем кэш аккаунта по TTL или при инвалидации (pinning toggle, settings change)
                     val now = System.currentTimeMillis()
                     val configChanged = accountRepo.getLastClientInvalidation(accountId) > lastAccountRefreshTime
@@ -581,32 +581,32 @@ class PushService : Service() {
                     if (currentAccount == null) {
                         break
                     }
-                    
+
                     // Per-account: проверяем нужно ли применять ограничения Battery Saver
                     val batterySaverActive = isBatterySaverActive()
                     val shouldApplyBatterySaver = batterySaverActive && !currentAccount.ignoreBatterySaver
-                    
+
                     // Per-account: проверяем нужно ли применять ночной режим
                     val shouldApplyNightMode = currentAccount.nightModeEnabled && isNightTime()
-                    
+
                     // Увеличиваем heartbeat при Battery Saver или ночном режиме (per-account)
                     val effectiveHeartbeat = if (shouldApplyBatterySaver || shouldApplyNightMode) {
                         MAX_HEARTBEAT
                     } else {
                         heartbeat
                     }
-                    
+
                     if (pingNotSupported) {
                         val minInterval = SyncWorker.getMinSyncIntervalIncludingPush(applicationContext)
                         val intervalMinutes = if (minInterval > 0) minInterval else 5
                         scheduleSyncAlarm(applicationContext, intervalMinutes)
                         break
                     }
-                    
+
                     val startTime = System.currentTimeMillis()
                     val result = doPing(currentAccount, effectiveHeartbeat)
                     val elapsed = System.currentTimeMillis() - startTime
-                    
+
                     if (elapsed < 10_000 && result == STATUS_EXPIRED) {
                         quickPingCount++
                         if (quickPingCount >= 3) {
@@ -618,15 +618,15 @@ class PushService : Service() {
                         delay(5_000L)
                         continue
                     }
-                    
+
                     if (elapsed >= 10_000) quickPingCount = 0
-                    
+
                     // Минимальная пауза 5 секунд между ping'ами для экономии батареи
                     // (если ping завершился быстро, например при потоке новых писем)
                     if (elapsed < 5_000) {
                         delay(5_000 - elapsed)
                     }
-                    
+
                     val hasAlt = !currentAccount.alternateServerUrl.isNullOrBlank()
                     when (result) {
                         STATUS_EXPIRED -> {
@@ -769,19 +769,19 @@ class PushService : Service() {
         // Начинаем с 25, при Status=6 снижаем до serverMaxFolders.
         val serverMax = maxPingFoldersPerAccount[account.id]
         val MAX_PING_FOLDERS = serverMax ?: 25
-        
+
         // Мониторим также пользовательские папки (type 1, USER_CREATED=12) для push-уведомлений.
         // Без этого перемещённые в пользовательские папки письма не обновляются push'ом.
         var folders = database.folderDao().getFoldersByAccountList(account.id)
             .filter { it.syncKey != "0" && it.type in FolderType.PUSH_TYPES }
-        
+
         if (folders.isEmpty()) {
             mailRepo.syncFolders(account.id)
             val allFolders = database.folderDao().getFoldersByAccountList(account.id)
                 .filter { it.type in FolderType.PUSH_TYPES }
-            
+
             if (allFolders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
-            
+
             // КРИТИЧНО: Не конкурируем с InitialSyncController
             if (com.dedovmosol.iwomail.sync.InitialSyncController.isSyncingAccount(account.id)) {
                 // Ждём завершения первичной синхронизации вместо конкуренции
@@ -799,7 +799,7 @@ class PushService : Service() {
                 kotlinx.coroutines.withTimeoutOrNull(300_000L) {
                     for (folder in allFolders.take(MAX_PING_FOLDERS)) {
                         try {
-                            mailRepo.syncEmails(account.id, folder.id, forceFullSync = true)
+                            mailRepo.syncEmails(account.id, folder.id)
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             // Продолжаем с другими папками
@@ -807,13 +807,13 @@ class PushService : Service() {
                     }
                 }
             }
-            
+
             folders = database.folderDao().getFoldersByAccountList(account.id)
                 .filter { it.syncKey != "0" && it.type in FolderType.PUSH_TYPES }
-            
+
             if (folders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
         }
-        
+
         // Лимит папок для Ping: системные + пользовательские по приоритету непрочитанных
         if (folders.size > MAX_PING_FOLDERS) {
             val system = folders.filter { FolderType.isSystemFolder(it.type) }
@@ -822,7 +822,7 @@ class PushService : Service() {
                 .take(maxOf(0, MAX_PING_FOLDERS - system.size))
             folders = system + user
         }
-        
+
         val folderIds = folders.map { it.serverId }
         val cached = synchronized(easClientCache) { easClientCache[account.id] }
         val client = cached ?: run {
@@ -831,13 +831,13 @@ class PushService : Service() {
                 easClientCache.getOrPut(account.id) { created }
             }
         }
-        
+
         return when (val result = client.ping(folderIds, heartbeat)) {
             is EasResult.Success -> result.data.status
             is EasResult.Error -> STATUS_SERVER_ERROR
         }
     }
-    
+
     private suspend fun syncAccount(account: AccountEntity) {
         // КРИТИЧНО: Не конкурируем с InitialSyncController — он управляет первичной синхронизацией.
         // Без этого PushService может сбросить syncKey (forceFullSync) пока InitialSyncController
@@ -845,19 +845,19 @@ class PushService : Service() {
         if (com.dedovmosol.iwomail.sync.InitialSyncController.isSyncingAccount(account.id)) {
             return
         }
-        
+
         // Per-account debounce: не блокируем аккаунт B из-за недавнего sync аккаунта A
         val lastSync = lastAccountSyncTimes[account.id] ?: 0L
         if (System.currentTimeMillis() - lastSync < 30_000) {
             return
         }
-        
+
         var lastNotificationCheck = settingsRepo.getLastNotificationCheckTime(account.id)
         // При первом запуске не показываем уведомления для старых писем
         if (lastNotificationCheck == 0L) {
             lastNotificationCheck = System.currentTimeMillis() - 60_000
         }
-        
+
         val allSyncFolders = database.folderDao().getFoldersByAccountList(account.id)
         val systemFolders = allSyncFolders.filter { it.type in FolderType.SYNC_MAIN_TYPES }
         val userFolders = allSyncFolders.filter { it.type in FolderType.SYNC_USER_TYPES }
@@ -865,26 +865,26 @@ class PushService : Service() {
         // Full resync (до 280с/папка) — только для первых N несинхронизированных user-папок.
         val folders = (systemFolders + userFolders)
             .sortedBy { if (it.type == FolderType.INBOX) 0 else 1 }
-        
+
         val unsyncedUserFolderIds = userFolders
             .filter { it.syncKey == "0" }
             .take(FolderType.MAX_FULL_RESYNC_USER_FOLDERS)
             .map { it.id }
             .toSet()
-        
+
         // Бюджет на sync одного аккаунта: 600с.
         // PushService — foreground, нет 10-мин лимита WorkManager, но 200 папок × 60с timeout = 3.3 часа worst case.
         // Без бюджета push-уведомления блокируются на часы.
         // INBOX и системные папки уже синхронизированы (первые в сортировке).
         val syncBudgetMs = 600_000L
         val syncStartTime = System.currentTimeMillis()
-        
+
         for (folder in folders) {
             if (System.currentTimeMillis() - syncStartTime > syncBudgetMs) {
                 android.util.Log.w("PushService", "Sync budget exhausted for account ${account.id}, remaining folders in next cycle")
                 break
             }
-            
+
             val allowFull = folder.type in FolderType.SYNC_MAIN_TYPES
                 || folder.syncKey != "0"
                 || folder.id in unsyncedUserFolderIds
@@ -894,10 +894,10 @@ class PushService : Service() {
                 accountRepo = accountRepo
             )
         }
-        
+
         lastAccountSyncTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
-        
+
         NotificationHelper.notificationMutex.withLock {
             lastNotificationCheck = settingsRepo.getLastNotificationCheckTime(account.id)
             if (lastNotificationCheck == 0L) {
@@ -960,7 +960,7 @@ class PushService : Service() {
             settingsRepo.setLastNotificationCheckTime(notificationCheckpointTime)
         }
     }
-    
+
     private suspend fun syncFolders(account: AccountEntity) {
         mailRepo.syncFolders(account.id)
     }

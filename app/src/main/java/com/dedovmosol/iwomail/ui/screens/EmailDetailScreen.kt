@@ -6,7 +6,7 @@ import android.net.Uri
 import android.view.View
 import com.dedovmosol.iwomail.BuildConfig
 import android.webkit.WebView
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.background
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -100,41 +100,42 @@ fun EmailDetailScreen(
     val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
     val actions = remember { com.dedovmosol.iwomail.ui.screens.emaildetail.EmailDetailActions(mailRepo, accountRepo, calendarRepo, taskRepo) }
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
+    val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
 
     suspend fun fetchAttachmentBytes(att: AttachmentEntity): ByteArray? {
         if (!NetworkMonitor.isNetworkAvailable(context) && !(att.downloaded && att.localPath != null)) {
-            Toast.makeText(context, if (isRussian) "Нет сети" else "No network", Toast.LENGTH_SHORT).show()
+            SafeToast.short(context, if (isRussian) "Нет сети" else "No network")
             return null
         }
         return when (val result = actions.fetchAttachmentBytes(att)) {
             is EasResult.Success -> result.data
             is EasResult.Error -> {
-                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                SafeToast.long(context, result.message)
                 null
             }
         }
     }
 
     val email by mailRepo.getEmail(emailId).collectAsState(initial = null)
-    
+
     // Вложения - используем Flow напрямую, сохраняем ID для восстановления после поворота
     var attachmentIds by rememberSaveable { mutableStateOf<List<Long>>(emptyList()) }
     val attachmentsFlow by mailRepo.getAttachments(emailId).collectAsState(initial = emptyList())
-    
+
     // Синхронизируем ID при получении данных из Flow
     LaunchedEffect(attachmentsFlow) {
         if (attachmentsFlow.isNotEmpty()) {
             attachmentIds = attachmentsFlow.map { it.id }
         }
     }
-    
+
     // Используем Flow напрямую - он автоматически обновится после поворота
     val attachments = attachmentsFlow
-    
+
     var downloadingId by rememberSaveable { mutableStateOf<Long?>(null) }
     var isLoadingBody by remember { mutableStateOf(false) } // НЕ saveable - сбрасывается при входе
     var bodyLoadError by remember { mutableStateOf<String?>(null) } // НЕ saveable
-    
+
     // Save As: запоминаем вложение для сохранения через системный файл-пикер
     var pendingSaveAsAttachment by remember { mutableStateOf<AttachmentEntity?>(null) }
     var pendingPreviewFile by remember { mutableStateOf<File?>(null) }
@@ -161,7 +162,7 @@ fun EmailDetailScreen(
                         }
                     }
                     val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
-                    Toast.makeText(context, savedMsg, Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, savedMsg)
                 } else if (uri != null) {
                     downloadingId = attachment.id
                     val tmpFile = withContext(Dispatchers.IO) {
@@ -176,9 +177,9 @@ fun EmailDetailScreen(
                                     }
                                 }
                                 val savedMsg = if (isRussian) "Файл сохранён" else "File saved"
-                                Toast.makeText(context, savedMsg, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, savedMsg)
                             }
-                            is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            is EasResult.Error -> SafeToast.long(context, result.message)
                         }
                     } finally {
                         tmpFile.delete()
@@ -187,18 +188,18 @@ fun EmailDetailScreen(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                SafeToast.long(context, e.message ?: "")
                 downloadingId = null
             }
         }
     }
-    
+
     // Диалог выбора папки для перемещения
     var showMoveDialog by rememberSaveable { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<com.dedovmosol.iwomail.data.database.FolderEntity>>(emptyList()) }
     var isMoving by remember { mutableStateOf(false) }
     var isRestoring by remember { mutableStateOf(false) }
-    
+
     // Загружаем папки для диалога перемещения
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     LaunchedEffect(activeAccount?.id) {
@@ -206,17 +207,17 @@ fun EmailDetailScreen(
             mailRepo.getFolders(account.id).collect { folders = it }
         }
     }
-    
+
     // Определяем, находится ли письмо в папке Удалённые (тип 4) или Отправленные (тип 5) или Черновики (тип 3)
     val currentFolder = folders.find { it.id == email?.folderId }
     val isInTrash = currentFolder?.type == FolderType.DELETED_ITEMS
     val isInSent = currentFolder?.type == FolderType.SENT_ITEMS
     val isInDrafts = currentFolder?.type == FolderType.DRAFTS
-    
+
     // Кэш inline изображений: contentId -> base64 data URL
     var inlineImages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var isLoadingInlineImages by remember { mutableStateOf(false) }
-    
+
     // Загружаем inline изображения ПАРАЛЛЕЛЬНО
     LaunchedEffect(email?.body, attachments, email?.folderId, email?.bodyType) {
         val body = email?.body ?: return@LaunchedEffect
@@ -227,12 +228,12 @@ fun EmailDetailScreen(
         // мог остаться = true от предыдущего выполнения → повторный LaunchedEffect навсегда
         // блокировался, inline-картинки не загружались при повторном входе в письмо.
         isLoadingInlineImages = false
-        
+
         if (BuildConfig.DEBUG) {
             android.util.Log.d("InlineImages", "=== START: emailId=${currentEmail.id}, subject='${currentEmail.subject.take(30)}', bodyType=${currentEmail.bodyType}")
             android.util.Log.d("InlineImages", "Attachments count: ${attachments.size}")
         }
-        
+
         isLoadingInlineImages = true
         val loaded = actions.loadInlineImages(
             emailBody = body,
@@ -248,30 +249,30 @@ fun EmailDetailScreen(
         inlineImages = loaded
         isLoadingInlineImages = false
     }
-    
+
     LaunchedEffect(emailId) {
         val currentEmail = withContext(Dispatchers.IO) {
             actions.getEmailSync(emailId)
         }
-        
+
         if (currentEmail == null) {
             bodyLoadError = if (isRussian) "Письмо не найдено. Попробуйте обновить входящие." else "Email not found. Try refreshing inbox."
             return@LaunchedEffect
         }
-        
+
         if (!currentEmail.read) {
             launch(Dispatchers.IO) {
                 when (val result = actions.markAsRead(emailId, true)) {
                     is EasResult.Success -> { }
                     is EasResult.Error -> {
                         withContext(Dispatchers.Main) {
-                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            SafeToast.long(context, result.message)
                         }
                     }
                 }
             }
         }
-        
+
         if (currentEmail.body.isEmpty() && !isLoadingBody) {
             isLoadingBody = true
             bodyLoadError = null
@@ -289,12 +290,16 @@ fun EmailDetailScreen(
                     }
                     is EasResult.Error -> {
                         if (result.message == "OBJECT_NOT_FOUND") {
-                            Toast.makeText(
-                                context,
-                                if (isRussian) "Письмо удалено на сервере" else "Email deleted on server",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            onBackClick()
+                            // Проверяем, было ли письмо действительно удалено из локальной БД.
+                            // Для Sent Items и Drafts loadEmailBody НЕ удаляет при OBJECT_NOT_FOUND.
+                            val stillExists = withContext(Dispatchers.IO) { actions.getEmailSync(emailId) } != null
+                            if (!stillExists) {
+                                SafeToast.short(context, if (isRussian) "Письмо удалено на сервере" else "Email deleted on server")
+                                onBackClick()
+                            } else {
+                                // Письмо не удалено — показываем preview если есть
+                                bodyLoadError = if (isRussian) "Не удалось загрузить тело письма" else "Failed to load email body"
+                            }
                         } else {
                             bodyLoadError = result.message
                         }
@@ -319,15 +324,16 @@ fun EmailDetailScreen(
             } finally { isLoadingBody = false }
         }
     }
-    
+
     // Диалог подтверждения удаления
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
-    
+    val deletingSingleEmailMessage = Strings.deletingEmails(1)
+
     // Диалог отчёта о прочтении (MDN)
     var showMdnDialog by rememberSaveable { mutableStateOf(false) }
     var isSendingMdn by remember { mutableStateOf(false) }
-    
+
     // Показываем диалог MDN если есть запрос и ещё не отправлен
     LaunchedEffect(email?.mdnRequestedBy, email?.mdnSent) {
         val e = email ?: return@LaunchedEffect
@@ -335,7 +341,7 @@ fun EmailDetailScreen(
             showMdnDialog = true
         }
     }
-    
+
     // Диалог MDN
     // КРИТИЧНО: используем локальную переменную вместо !! чтобы избежать NPE при race condition в recomposition
     val currentEmail = email
@@ -343,7 +349,7 @@ fun EmailDetailScreen(
         val mdnEmail = currentEmail
         val readReceiptSentText = Strings.readReceiptSent
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { 
+            onDismissRequest = {
                 showMdnDialog = false
                 // Помечаем что пользователь отказался (чтобы не показывать снова)
                 scope.launch { actions.markMdnSent(emailId) }
@@ -358,10 +364,10 @@ fun EmailDetailScreen(
                             isSendingMdn = true
                             when (val result = actions.sendMdn(emailId)) {
                                 is EasResult.Success -> {
-                                    Toast.makeText(context, readReceiptSentText, Toast.LENGTH_SHORT).show()
+                                    SafeToast.short(context, readReceiptSentText)
                                 }
                                 is EasResult.Error -> {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                             isSendingMdn = false
@@ -379,7 +385,7 @@ fun EmailDetailScreen(
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { 
+                    onClick = {
                         showMdnDialog = false
                         scope.launch { actions.markMdnSent(emailId) }
                     },
@@ -389,7 +395,7 @@ fun EmailDetailScreen(
             }
         )
     }
-    
+
     // Диалог подтверждения удаления
     if (showDeleteDialog) {
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -400,27 +406,43 @@ fun EmailDetailScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
-                        scope.launch {
-                            isDeleting = true
-                            com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                            val result = actions.deleteEmails(listOf(emailId), isInTrash)
-                            isDeleting = false
-                            showDeleteDialog = false
-                            when (result) {
-                                is EasResult.Success -> {
-                                    val message = if (isInTrash) {
-                                        NotificationStrings.getDeletedPermanently(isRussian)
-                                    } else if ((result.data as? Int ?: 0) > 0) {
-                                        NotificationStrings.getMovedToTrash(isRussian)
-                                    } else {
-                                        NotificationStrings.getDeletedPermanently(isRussian)
+                        showDeleteDialog = false
+                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                        if (isInTrash) {
+                            deletionController.startDeletion(
+                                emailIds = listOf(emailId),
+                                message = deletingSingleEmailMessage,
+                                scope = scope
+                            ) { ids, onProgress ->
+                                val result = withContext(Dispatchers.IO) {
+                                    mailRepo.deleteEmailsPermanentlyWithProgress(ids) { deleted, total ->
+                                        onProgress(deleted, total)
                                     }
-                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                    onBackClick()
                                 }
-                                is EasResult.Error -> {
-                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                    Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                when (result) {
+                                    is EasResult.Success -> SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
+                                    is EasResult.Error -> SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
+                                }
+                            }
+                        } else {
+                            scope.launch {
+                                isDeleting = true
+                                val result = actions.deleteEmails(listOf(emailId), false)
+                                isDeleting = false
+                                when (result) {
+                                    is EasResult.Success -> {
+                                        val message = if ((result.data as? Int ?: 0) > 0) {
+                                            NotificationStrings.getMovedToTrash(isRussian)
+                                        } else {
+                                            NotificationStrings.getDeletedPermanently(isRussian)
+                                        }
+                                        SafeToast.short(context, message)
+                                        onBackClick()
+                                    }
+                                    is EasResult.Error -> {
+                                        val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
+                                        SafeToast.long(context, localizedMsg)
+                                    }
                                 }
                             }
                         }
@@ -437,7 +459,7 @@ fun EmailDetailScreen(
             }
         )
     }
-    
+
     // Диалог выбора папки для перемещения
     if (showMoveDialog) {
         val currentFolderId = email?.folderId
@@ -451,7 +473,7 @@ fun EmailDetailScreen(
             folder.id != currentFolderId &&
             folder.type !in nonMailFolderTypes
         }
-        
+
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showMoveDialog = false },
             title = { Text(Strings.moveTo) },
@@ -472,8 +494,8 @@ fun EmailDetailScreen(
                             availableFolders.forEach { folder ->
                                 ListItem(
                                     headlineContent = { Text(folder.displayName) },
-                                    leadingContent = { 
-                                        Icon(AppIcons.Folder, null) 
+                                    leadingContent = {
+                                        Icon(AppIcons.Folder, null)
                                     },
                                     modifier = Modifier.clickable(enabled = !isMoving) {
                                         if (isMoving) return@clickable
@@ -482,13 +504,13 @@ fun EmailDetailScreen(
                                             val result = actions.moveEmails(listOf(emailId), folder.id)
                                             when (result) {
                                                 is EasResult.Success -> {
-                                                    Toast.makeText(context, NotificationStrings.getMoved(isRussian), Toast.LENGTH_SHORT).show()
+                                                    SafeToast.short(context, NotificationStrings.getMoved(isRussian))
                                                     showMoveDialog = false
                                                     onBackClick()
                                                 }
                                                 is EasResult.Error -> {
                                                     val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                    Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                    SafeToast.long(context, localizedMsg)
                                                 }
                                             }
                                             isMoving = false
@@ -510,7 +532,7 @@ fun EmailDetailScreen(
             }
         )
     }
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -532,15 +554,11 @@ fun EmailDetailScreen(
                                     val result = actions.syncAndReloadBody(emailId, currentEmail.accountId, currentEmail.folderId)
                                     when (result) {
                                         is EasResult.Success -> {
-                                            Toast.makeText(
-                                                context,
-                                                if (isRussian) "Письмо обновлено" else "Email refreshed",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            SafeToast.short(context, if (isRussian) "Письмо обновлено" else "Email refreshed")
                                         }
                                         is EasResult.Error -> {
                                             bodyLoadError = result.message
-                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            SafeToast.long(context, result.message)
                                         }
                                     }
                                 } catch (e: Exception) {
@@ -555,7 +573,7 @@ fun EmailDetailScreen(
                     ) {
                         Icon(AppIcons.Refresh, Strings.refresh, tint = Color.White)
                     }
-                    
+
                     // Overflow menu (троеточие)
                     var showOverflowMenu by remember { mutableStateOf(false) }
                     Box {
@@ -583,12 +601,12 @@ fun EmailDetailScreen(
                                             val result = actions.restoreFromTrash(listOf(emailId))
                                             when (result) {
                                                 is EasResult.Success -> {
-                                                    Toast.makeText(context, NotificationStrings.getRestored(isRussian), Toast.LENGTH_SHORT).show()
+                                                    SafeToast.short(context, NotificationStrings.getRestored(isRussian))
                                                     onBackClick()
                                                 }
                                                 is EasResult.Error -> {
                                                     val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                    Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                    SafeToast.long(context, localizedMsg)
                                                 }
                                             }
                                             isRestoring = false
@@ -613,7 +631,7 @@ fun EmailDetailScreen(
                                             when (val result = actions.markAsRead(emailId, false)) {
                                                 is EasResult.Success -> { /* OK */ }
                                                 is EasResult.Error -> {
-                                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                                    SafeToast.long(context, result.message)
                                                 }
                                             }
                                         }
@@ -647,8 +665,8 @@ fun EmailDetailScreen(
                 containerColor = LocalColorTheme.current.gradientStart
             ) {
                 Icon(
-                    if (isInSent) AppIcons.Email else AppIcons.Reply, 
-                    if (isInSent) Strings.writeMore else Strings.reply, 
+                    if (isInSent) AppIcons.Email else AppIcons.Reply,
+                    if (isInSent) Strings.writeMore else Strings.reply,
                     tint = Color.White
                 )
             }
@@ -672,7 +690,7 @@ fun EmailDetailScreen(
             ) {
                 // Баннер "Нет сети"
                 NetworkBanner()
-                
+
                 val detailScrollState = rememberScrollState()
                 Box(modifier = Modifier.fillMaxSize()) {
                 Column(
@@ -686,7 +704,7 @@ fun EmailDetailScreen(
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
-                
+
                 // Отправитель
                 Row(
                     modifier = Modifier
@@ -721,18 +739,18 @@ fun EmailDetailScreen(
                             color = Color.White
                         )
                     }
-                    
+
                     Spacer(modifier = Modifier.width(12.dp))
-                    
+
                     Column(modifier = Modifier.weight(1f)) {
                         val displayName = currentEmail.fromName.ifEmpty { extractDisplayName(currentEmail.from) }
                         val displayEmail = extractEmailAddress(currentEmail.from)
-                        
+
                         // Показываем имя только если оно отличается от email
-                        val showName = displayName.isNotEmpty() && 
+                        val showName = displayName.isNotEmpty() &&
                             !displayName.equals(displayEmail, ignoreCase = true) &&
                             !displayName.equals(displayEmail.substringBefore("@"), ignoreCase = true)
-                        
+
                         if (showName) {
                             Text(
                                 text = displayName,
@@ -751,13 +769,13 @@ fun EmailDetailScreen(
                             )
                         }
                     }
-                    
+
                     Text(
                         text = formatFullDate(currentEmail.dateReceived),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    
+
                     // Звёздочка избранного только если НЕ в корзине и НЕ черновик
                     if (!isInTrash && !isInDrafts) {
                         IconButton(onClick = {
@@ -766,13 +784,13 @@ fun EmailDetailScreen(
                             Icon(
                                 imageVector = if (currentEmail.flagged) AppIcons.Star else AppIcons.StarOutline,
                                 contentDescription = Strings.favorites,
-                                tint = if (currentEmail.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites 
+                                tint = if (currentEmail.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites
                                        else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
-                
+
                 // Получатели - кликабельные для написания письма
                 if (currentEmail.to.isNotEmpty() || currentEmail.cc.isNotEmpty()) {
                     Card(
@@ -876,13 +894,13 @@ fun EmailDetailScreen(
                         }
                     }
                 }
-                
+
                 val isTaskEmail = currentEmail.subject.startsWith("Задача:") || currentEmail.subject.startsWith("Task:")
                 if (isTaskEmail) {
                     var isAddingTask by rememberSaveable { mutableStateOf(false) }
                     var taskAdded by rememberSaveable { mutableStateOf(false) }
                     val taskAddedMsg = Strings.taskAddedToTasks
-                    
+
                     if (!taskAdded) {
                         Card(
                             modifier = Modifier
@@ -893,7 +911,7 @@ fun EmailDetailScreen(
                                         isAddingTask = true
                                         try {
                                             val accountId = activeAccount?.id ?: return@launch
-                                            
+
                                             val taskInfo = ICalParser.parseTaskFromEmailBody(currentEmail.subject, currentEmail.body)
                                             val taskTitle = taskInfo?.subject ?: currentEmail.subject
                                             val dueDate = taskInfo?.dueDate ?: (System.currentTimeMillis() + 86_400_000L)
@@ -903,7 +921,7 @@ fun EmailDetailScreen(
                                             val now = System.currentTimeMillis()
                                             val reminderTime = dueDate - 15 * 60 * 1000
                                             val shouldRemind = reminderTime > now
-                                            
+
                                             val result = actions.createTask(
                                                 accountId = accountId,
                                                 subject = taskTitle,
@@ -912,20 +930,20 @@ fun EmailDetailScreen(
                                                 reminderSet = shouldRemind,
                                                 reminderTime = reminderTime
                                             )
-                                            
+
                                             when (result) {
                                                 is EasResult.Success -> {
                                                     taskAdded = true
-                                                    Toast.makeText(context, taskAddedMsg, Toast.LENGTH_SHORT).show()
+                                                    SafeToast.short(context, taskAddedMsg)
                                                 }
                                                 is EasResult.Error -> {
                                                     val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                    Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                    SafeToast.long(context, localizedMsg)
                                                 }
                                             }
                                         } catch (e: Exception) {
                                             if (e is kotlinx.coroutines.CancellationException) throw e
-                                            Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
+                                            SafeToast.long(context, e.message ?: NotificationStrings.getUnknownError(isRussian))
                                         } finally {
                                             isAddingTask = false
                                         }
@@ -965,9 +983,9 @@ fun EmailDetailScreen(
                         }
                     }
                 }
-                
+
                 // Приглашение на встречу (iCalendar в теле письма или вложении)
-                val calendarAttachment = attachments.find { 
+                val calendarAttachment = attachments.find {
                     it.contentType.contains("text/calendar", ignoreCase = true) ||
                     it.contentType.contains("application/ics", ignoreCase = true) ||
                     it.displayName.endsWith(".ics", ignoreCase = true)
@@ -975,13 +993,13 @@ fun EmailDetailScreen(
                 val hasCalendarAttachment = calendarAttachment != null
                 val bodyHasVEvent = currentEmail.body.contains("BEGIN:VEVENT", ignoreCase = true) ||
                     currentEmail.body.contains("BEGIN:VCALENDAR", ignoreCase = true)
-                
+
                 // Проверяем признаки приглашения Exchange в теле (Когда: ... Где: ...)
-                val bodyHasMeetingInfo = (currentEmail.body.contains("Когда:", ignoreCase = true) || 
+                val bodyHasMeetingInfo = (currentEmail.body.contains("Когда:", ignoreCase = true) ||
                     currentEmail.body.contains("When:", ignoreCase = true)) &&
-                    (currentEmail.body.contains("Где:", ignoreCase = true) || 
+                    (currentEmail.body.contains("Где:", ignoreCase = true) ||
                     currentEmail.body.contains("Where:", ignoreCase = true))
-                
+
                 // Определяем тип письма: приглашение или ответ на приглашение
                 val isAcceptedResponse = currentEmail.subject.startsWith("Принято:", ignoreCase = true) ||
                     currentEmail.subject.startsWith("Accepted:", ignoreCase = true)
@@ -990,14 +1008,14 @@ fun EmailDetailScreen(
                 val isTentativeResponse = currentEmail.subject.startsWith("Под вопросом:", ignoreCase = true) ||
                     currentEmail.subject.startsWith("Tentative:", ignoreCase = true)
                 val isMeetingResponse = isAcceptedResponse || isDeclinedResponse || isTentativeResponse
-                
+
                 // Проверяем типичные признаки приглашения в теме
                 val subjectHasInvitation = currentEmail.subject.contains("Приглашение:", ignoreCase = true) ||
                     currentEmail.subject.contains("Invitation:", ignoreCase = true) ||
                     currentEmail.subject.contains("Meeting:", ignoreCase = true) ||
                     currentEmail.subject.contains("Встреча:", ignoreCase = true)
                 val isMeetingInvitation = (hasCalendarAttachment || bodyHasVEvent || subjectHasInvitation || bodyHasMeetingInfo) && !isMeetingResponse
-                
+
                 // UI для ответа на приглашение (организатор видит ответ участника)
                 if (isMeetingResponse && !isTaskEmail) {
                     val responseStatus = when {
@@ -1009,14 +1027,14 @@ fun EmailDetailScreen(
                     val senderName = currentEmail.fromName.ifEmpty { currentEmail.from.substringBefore("@") }
                     val senderEmail = currentEmail.from
                     var isUpdating by rememberSaveable { mutableStateOf(false) }
-                    
+
                     // Извлекаем название события из темы (после "Принято:", "Отклонено:" и т.д.)
                     val meetingSubject = currentEmail.subject
                         .removePrefix("Принято:").removePrefix("Accepted:")
                         .removePrefix("Отклонено:").removePrefix("Declined:")
                         .removePrefix("Под вопросом:").removePrefix("Tentative:")
                         .trim()
-                    
+
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1061,9 +1079,9 @@ fun EmailDetailScreen(
                                     }
                                 )
                             }
-                            
+
                             Spacer(modifier = Modifier.height(8.dp))
-                            
+
                             // Кнопка ОК для подтверждения и обновления статуса участника
                             Button(
                                 onClick = {
@@ -1071,7 +1089,7 @@ fun EmailDetailScreen(
                                         isUpdating = true
                                         try {
                                             val accountId = currentEmail.accountId
-                                            
+
                                             // Определяем статус участника
                                             val attendeeStatus = when {
                                                 isAcceptedResponse -> 3 // Accepted
@@ -1079,33 +1097,25 @@ fun EmailDetailScreen(
                                                 isTentativeResponse -> 2 // Tentative
                                                 else -> 0
                                             }
-                                            
+
                                             val result = actions.updateAttendeeStatus(
                                                 accountId = accountId,
                                                 meetingSubject = meetingSubject,
                                                 attendeeEmail = senderEmail,
                                                 status = attendeeStatus
                                             )
-                                            
+
                                             when (result) {
                                                 is EasResult.Success -> {
-                                                    Toast.makeText(
-                                                        context,
-                                                        if (isRussian) "Статус обновлён" else "Status updated",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
+                                                    SafeToast.short(context, if (isRussian) "Статус обновлён" else "Status updated")
                                                 }
                                                 is EasResult.Error -> {
-                                                    Toast.makeText(
-                                                        context,
-                                                        NotificationStrings.localizeError(result.message, isRussian),
-                                                        Toast.LENGTH_LONG
-                                                    ).show()
+                                                    SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
                                                 }
                                             }
                                         } catch (e: Exception) {
                                             if (e is kotlinx.coroutines.CancellationException) throw e
-                                            Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
+                                            SafeToast.long(context, e.message ?: NotificationStrings.getUnknownError(isRussian))
                                         } finally {
                                             isUpdating = false
                                         }
@@ -1126,18 +1136,18 @@ fun EmailDetailScreen(
                         }
                     }
                 }
-                
+
                 // UI для приглашения на встречу (участник получает приглашение)
-                
+
                 if (isMeetingInvitation && !isTaskEmail) {
                     var isAccepting by rememberSaveable { mutableStateOf(false) }
                     var eventAdded by rememberSaveable { mutableStateOf(false) }
                     val invitationAcceptedMsg = Strings.invitationAccepted
-                    
+
                     // Состояние для загруженных iCalendar данных из вложения
                     var loadedIcalData by remember { mutableStateOf<String?>(null) }
                     var isLoadingIcal by remember { mutableStateOf(false) }
-                    
+
                     // Загружаем iCalendar из вложения если нужно
                     LaunchedEffect(calendarAttachment?.id, bodyHasVEvent) {
                         if (!bodyHasVEvent && calendarAttachment != null && loadedIcalData == null && !isLoadingIcal) {
@@ -1155,7 +1165,7 @@ fun EmailDetailScreen(
                             isLoadingIcal = false
                         }
                     }
-                    
+
                     // Используем данные из тела или из загруженного вложения
                     // Обрабатываем iCalendar line folding (RFC 5545): строки могут быть разбиты
                     // с пробелом или табом в начале продолжения
@@ -1165,7 +1175,7 @@ fun EmailDetailScreen(
                         resolvedIcalData != null -> resolvedIcalData
                         else -> ""
                     }.replace(LINE_FOLDING_REGEX, "") // Убираем line folding
-                    
+
                     if (!eventAdded) {
                         Card(
                             modifier = Modifier
@@ -1195,7 +1205,7 @@ fun EmailDetailScreen(
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
                                 }
-                            
+
                                 // Индикатор загрузки iCalendar из вложения
                                 if (isLoadingIcal) {
                                     Spacer(modifier = Modifier.height(8.dp))
@@ -1216,11 +1226,11 @@ fun EmailDetailScreen(
                                     }
                                 } else {
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    
+
                                     // Получаем email организатора для отправки ответа
                                     val organizerEmail = ICAL_ORGANIZER_REGEX.find(icalData)?.groupValues?.get(1)
                                         ?: currentEmail.from
-                                    
+
                                     // Парсим данные встречи заранее
                                     val meetingSummary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
                                         ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
@@ -1238,7 +1248,7 @@ fun EmailDetailScreen(
                                         ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
                                     val meetingStartTime = ICalParser.parseICalDate(dtStart, dtStartTzid) ?: System.currentTimeMillis()
                                     val meetingEndTime = ICalParser.parseICalDate(dtEnd, dtEndTzid) ?: (meetingStartTime + 60 * 60 * 1000)
-                                    
+
                                     suspend fun buildResponseAndSend(responseType: String, statusText: String) {
                                         val account = withContext(Dispatchers.IO) {
                                             accountRepo.getAccount(currentEmail.accountId)
@@ -1252,7 +1262,7 @@ fun EmailDetailScreen(
                                         }
                                         actions.sendResponseToOrganizer(currentEmail.accountId, organizerEmail, subject, body)
                                     }
-                            
+
                                     // Первый ряд: Принять и Отклонить
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -1283,20 +1293,20 @@ fun EmailDetailScreen(
                                                             responseSubject = responseSubject,
                                                             responseBody = responseBody
                                                         )
-                                                
+
                                                         when (result) {
                                                             is EasResult.Success -> {
                                                                 eventAdded = true
-                                                                Toast.makeText(context, invitationAcceptedMsg, Toast.LENGTH_SHORT).show()
+                                                                SafeToast.short(context, invitationAcceptedMsg)
                                                             }
                                                             is EasResult.Error -> {
                                                                 val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                                Toast.makeText(context, localizedMsg, Toast.LENGTH_LONG).show()
+                                                                SafeToast.long(context, localizedMsg)
                                                             }
                                                         }
                                                     } catch (e: Exception) {
                                                         if (e is kotlinx.coroutines.CancellationException) throw e
-                                                        Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
+                                                        SafeToast.long(context, e.message ?: NotificationStrings.getUnknownError(isRussian))
                                                     } finally {
                                                         isAccepting = false
                                                     }
@@ -1318,7 +1328,7 @@ fun EmailDetailScreen(
                                                 Text(Strings.acceptInvitation)
                                             }
                                         }
-                                
+
                                         // Отклонить
                                         OutlinedButton(
                                             onClick = {
@@ -1330,14 +1340,10 @@ fun EmailDetailScreen(
                                                             if (isRussian) "Отклонено" else "Declined"
                                                         )
                                                         eventAdded = true
-                                                        Toast.makeText(
-                                                            context,
-                                                            if (isRussian) "Приглашение отклонено" else "Invitation declined",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
+                                                        SafeToast.short(context, if (isRussian) "Приглашение отклонено" else "Invitation declined")
                                                     } catch (e: Exception) {
                                                         if (e is kotlinx.coroutines.CancellationException) throw e
-                                                        Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
+                                                        SafeToast.long(context, e.message ?: NotificationStrings.getUnknownError(isRussian))
                                                     } finally {
                                                         isAccepting = false
                                                     }
@@ -1352,9 +1358,9 @@ fun EmailDetailScreen(
                                             Text(Strings.declineInvitation)
                                         }
                                     }
-                                    
+
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    
+
                                     // Второй ряд: Под вопросом (по центру, жёлтая)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -1384,17 +1390,17 @@ fun EmailDetailScreen(
                                                             responseSubject = responseSubject,
                                                             responseBody = responseBody
                                                         )
-                                                        
+
                                                         when (result) {
                                                             is EasResult.Success -> {
                                                                 eventAdded = true
-                                                                Toast.makeText(context, invitationAcceptedMsg, Toast.LENGTH_SHORT).show()
+                                                                SafeToast.short(context, invitationAcceptedMsg)
                                                             }
-                                                            is EasResult.Error -> Toast.makeText(context, NotificationStrings.localizeError(result.message, isRussian), Toast.LENGTH_LONG).show()
+                                                            is EasResult.Error -> SafeToast.long(context, NotificationStrings.localizeError(result.message, isRussian))
                                                         }
                                                     } catch (e: Exception) {
                                                         if (e is kotlinx.coroutines.CancellationException) throw e
-                                                        Toast.makeText(context, e.message ?: NotificationStrings.getUnknownError(isRussian), Toast.LENGTH_LONG).show()
+                                                        SafeToast.long(context, e.message ?: NotificationStrings.getUnknownError(isRussian))
                                                     } finally {
                                                         isAccepting = false
                                                     }
@@ -1414,7 +1420,7 @@ fun EmailDetailScreen(
                         }
                     }
                 }
-                
+
                 // Вложения (исключаем inline изображения)
                 val visibleAttachments = attachments.filter { !it.isInline }
                 if (visibleAttachments.isNotEmpty()) {
@@ -1465,12 +1471,12 @@ fun EmailDetailScreen(
                                             withContext(Dispatchers.IO) { tempFile.delete() }
                                             pendingPreviewFile = null
                                             val message = if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file"
-                                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, message)
                                         }
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Toast.makeText(context, NotificationStrings.getErrorWithMessage(isRussian, e.message), Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, NotificationStrings.getErrorWithMessage(isRussian, e.message))
                                 } finally {
                                     downloadingId = null
                                 }
@@ -1486,14 +1492,12 @@ fun EmailDetailScreen(
                                         val profilePath = withContext(Dispatchers.IO) {
                                             accountRepo.getResolvedProfileRelativePath(currentEmail.accountId)
                                         } ?: run {
-                                            Toast.makeText(
-                                                context,
+                                            SafeToast.long(context,
                                                 NotificationStrings.localizeError(
                                                     com.dedovmosol.iwomail.data.repository.RepositoryErrors.ACCOUNT_NOT_FOUND,
                                                     isRussian
-                                                ),
-                                                Toast.LENGTH_LONG
-                                            ).show()
+                                                )
+                                            )
                                             return@launch
                                         }
                                         withContext(Dispatchers.IO) {
@@ -1512,11 +1516,11 @@ fun EmailDetailScreen(
                                             }
                                         }
                                         val toastPath = "Downloads/${profilePath.removePrefix("Download/")}"
-                                        Toast.makeText(context, if (isRussian) "Сохранено в $toastPath/" else "Saved to $toastPath/", Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, if (isRussian) "Сохранено в $toastPath/" else "Saved to $toastPath/")
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, e.message ?: "")
                                 } finally {
                                     downloadingId = null
                                 }
@@ -1553,7 +1557,7 @@ fun EmailDetailScreen(
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, e.message ?: "")
                                 } finally {
                                     downloadingId = null
                                 }
@@ -1610,9 +1614,9 @@ fun EmailDetailScreen(
                         }
                     )
                 }
-                
+
                 Divider(modifier = Modifier.padding(vertical = 8.dp))
-                
+
                 // Индикатор загрузки тела
                 if (isLoadingBody) {
                     Box(
@@ -1650,7 +1654,7 @@ fun EmailDetailScreen(
                     } else {
                         currentEmail.body
                     }
-                    
+
                     // КРИТИЧНО: Расэкранируем XML entities, если body содержит закодированные HTML-теги.
                     // Проблема: WBXML-парсер при EAS Sync выводит тело как XML,
                     // где <div> становится &lt;div&gt;, <br> → &lt;br&gt; и т.д.
@@ -1667,7 +1671,7 @@ fun EmailDetailScreen(
                     } else {
                         rawBody
                     }
-                    
+
                     // Убираем разделители Exchange из тела (включая частичные остатки типа ~*)
                     val cleanedBody = unescapedBody
                         .replace(EXCHANGE_SEPARATOR_1_REGEX, "")
@@ -1677,15 +1681,24 @@ fun EmailDetailScreen(
                         .trim()
                     val bodyText = cleanedBody.ifEmpty { Strings.noText }
                     val isHtml = looksLikeHtmlEmailContent(bodyText)
-                    
+
                     if (isHtml) {
                         // HTML контент - используем WebView с белым фоном
                         // key нужен чтобы WebView не пересоздавался при рекомпозиции
-                        var webViewHeight by remember { mutableStateOf(0) }
-                        var webViewRef by remember { mutableStateOf<WebView?>(null) }
+                        var webViewHeight by remember(emailId) { mutableStateOf(0) }
+                        var webViewRef by remember(emailId) { mutableStateOf<WebView?>(null) }
                         // PERF: Отслеживаем последний загруженный HTML чтобы не перезагружать WebView при каждой рекомпозиции
-                        var lastLoadedHtml by remember { mutableStateOf("") }
-                        
+                        var lastLoadedHtml by remember(emailId) { mutableStateOf("") }
+                        val sanitizedBody = remember(bodyText, inlineImages) {
+                            var processedBody = bodyText
+                            for ((cid, dataUrl) in inlineImages) {
+                                processedBody = processedBody
+                                    .replace("cid:$cid", dataUrl)
+                                    .replace("cid:${cid.removePrefix("<").removeSuffix(">")}", dataUrl)
+                            }
+                            sanitizeEmailHtml(processedBody)
+                        }
+
                         DisposableEffect(emailId) {
                             onDispose {
                                 webViewRef?.let { webView ->
@@ -1701,7 +1714,7 @@ fun EmailDetailScreen(
                                 webViewRef = null
                             }
                         }
-                        
+
                         key(emailId) {
                             Card(
                                 modifier = Modifier
@@ -1740,7 +1753,7 @@ fun EmailDetailScreen(
                                             // Отключаем скролл внутри WebView - скроллит родитель
                                             isVerticalScrollBarEnabled = false
                                             isHorizontalScrollBarEnabled = false
-                                            
+
                                             // Умная обработка touch событий для горизонтального скролла
                                             var startX = 0f
                                             var startY = 0f
@@ -1755,7 +1768,7 @@ fun EmailDetailScreen(
                                                     android.view.MotionEvent.ACTION_MOVE -> {
                                                         val deltaX = kotlin.math.abs(event.x - startX)
                                                         val deltaY = kotlin.math.abs(event.y - startY)
-                                                        
+
                                                         // Если горизонтальное движение больше вертикального - блокируем родителя
                                                         if (deltaX > deltaY && deltaX > 10) {
                                                             v.parent?.requestDisallowInterceptTouchEvent(true)
@@ -1789,7 +1802,7 @@ fun EmailDetailScreen(
                                                                     val phone = uri.schemeSpecificPart
                                                                     val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                                                     cm.setPrimaryClip(android.content.ClipData.newPlainText("Phone", phone))
-                                                                    android.widget.Toast.makeText(context, if (isRussian) "Номер скопирован" else "Number copied", android.widget.Toast.LENGTH_SHORT).show()
+                                                                    SafeToast.short(context, if (isRussian) "Номер скопирован" else "Number copied")
                                                                 }
                                                             }
                                                             else -> {
@@ -1799,7 +1812,7 @@ fun EmailDetailScreen(
                                                                 } catch (_: Exception) {
                                                                     val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                                                     cm.setPrimaryClip(android.content.ClipData.newPlainText("Link", uri.toString()))
-                                                                    android.widget.Toast.makeText(context, if (isRussian) "Ссылка скопирована" else "Link copied", android.widget.Toast.LENGTH_SHORT).show()
+                                                                    SafeToast.short(context, if (isRussian) "Ссылка скопирована" else "Link copied")
                                                                 }
                                                             }
                                                         }
@@ -1807,7 +1820,7 @@ fun EmailDetailScreen(
                                                     }
                                                     return false
                                                 }
-                                                
+
                                                 override fun onPageFinished(view: WebView?, url: String?) {
                                                     super.onPageFinished(view, url)
                                                     val measureJs = "(function(){var b=document.body,d=document.documentElement;return Math.max(b.scrollHeight||0,b.offsetHeight||0,d.scrollHeight||0);})()"
@@ -1837,21 +1850,11 @@ fun EmailDetailScreen(
                                     },
                                     update = { webView ->
                                         webViewRef = webView
-                                        var processedBody = bodyText
-                                        for ((cid, dataUrl) in inlineImages) {
-                                            processedBody = processedBody
-                                                .replace("cid:$cid", dataUrl)
-                                                .replace("cid:${cid.removePrefix("<").removeSuffix(">")}", dataUrl)
-                                        }
-                                        
-                                        val sanitizedBody = sanitizeEmailHtml(processedBody)
-                                        
-                                        val contentKey = sanitizedBody.hashCode().toString() + "_" + inlineImages.size
-                                        if (contentKey == lastLoadedHtml) return@AndroidView
-                                        lastLoadedHtml = contentKey
-                                        
+                                        if (sanitizedBody == lastLoadedHtml) return@AndroidView
+                                        lastLoadedHtml = sanitizedBody
+
                                         val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
-                                        
+
                                         val styledHtml = """
                                             <html>
                                             <head>
@@ -1859,8 +1862,8 @@ fun EmailDetailScreen(
                                                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
                                                 <style>
                                                     html { margin: 0 !important; padding: 0 !important; }
-                                                    body { 
-                                                        background-color: white !important; 
+                                                    body {
+                                                        background-color: white !important;
                                                         color: black !important;
                                                         margin: 0 8px !important;
                                                         padding: 0 !important;
@@ -1870,8 +1873,8 @@ fun EmailDetailScreen(
                                                         overflow-wrap: break-word;
                                                     }
                                                     a { color: #1a73e8; word-break: break-all; }
-                                                    img { 
-                                                        max-width: 100% !important; 
+                                                    img {
+                                                        max-width: 100% !important;
                                                         height: auto !important;
                                                     }
                                                     /* Placeholder для сломанных/незагруженных картинок */
@@ -1892,13 +1895,13 @@ fun EmailDetailScreen(
                                                         font-size: 12px;
                                                         text-align: center;
                                                     }
-                                                    table { 
-                                                        max-width: 100% !important; 
+                                                    table {
+                                                        max-width: 100% !important;
                                                         table-layout: fixed;
                                                     }
                                                     td, th { word-wrap: break-word; }
-                                                    pre, code { 
-                                                        white-space: pre-wrap; 
+                                                    pre, code {
+                                                        white-space: pre-wrap;
                                                         word-wrap: break-word;
                                                         max-width: 100%;
                                                         overflow-x: auto;
@@ -2055,7 +2058,7 @@ fun EmailDetailScreen(
                                         } catch (_: Exception) {
                                             val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                             cm.setPrimaryClip(android.content.ClipData.newPlainText("Link", annotation.item))
-                                            android.widget.Toast.makeText(context, if (isRussian) "Ссылка скопирована" else "Link copied", android.widget.Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, if (isRussian) "Ссылка скопирована" else "Link copied")
                                         }
                                     }
                                 annotatedBody.getStringAnnotations("email", offset, offset)
@@ -2070,14 +2073,14 @@ fun EmailDetailScreen(
                                         } catch (_: Exception) {
                                             val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                             cm.setPrimaryClip(android.content.ClipData.newPlainText("Phone", annotation.item))
-                                            android.widget.Toast.makeText(context, if (isRussian) "Номер скопирован" else "Number copied", android.widget.Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, if (isRussian) "Номер скопирован" else "Number copied")
                                         }
                                     }
                             }
                         )
                     }
                 } // end else (body loaded)
-                
+
                 Spacer(modifier = Modifier.height(80.dp)) // Для FAB
                 }
                 ScrollColumnScrollbar(detailScrollState)

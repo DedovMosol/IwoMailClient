@@ -32,6 +32,14 @@ class CalendarAttachmentService(
     private val getEwsUrl: () -> String
 ) {
 
+    private data class EwsAttachmentCandidate(
+        val itemId: String,
+        val subject: String,
+        val startMs: Long,
+        val uid: String,
+        val hasAtt: Boolean
+    )
+
     suspend fun deleteCalendarAttachments(attachmentIds: List<String>): EasResult<Boolean> {
         if (attachmentIds.isEmpty()) return EasResult.Success(true)
 
@@ -191,19 +199,116 @@ class CalendarAttachmentService(
             getEwsUrl()
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            return events
+            throw e
         }
 
-        val minTime = events.minOf { it.startTime }
-        val maxTime = events.maxOf { it.endTime }
-        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-        cal.timeInMillis = minTime - 86400000L
-        val startStr = String.format("%04d-%02d-%02dT00:00:00Z", cal.get(java.util.Calendar.YEAR),
-            cal.get(java.util.Calendar.MONTH) + 1, cal.get(java.util.Calendar.DAY_OF_MONTH))
-        cal.timeInMillis = maxTime + 86400000L
-        val endStr = String.format("%04d-%02d-%02dT23:59:59Z", cal.get(java.util.Calendar.YEAR),
-            cal.get(java.util.Calendar.MONTH) + 1, cal.get(java.util.Calendar.DAY_OF_MONTH))
+        val ewsItems = mutableListOf<EwsAttachmentCandidate>()
+        val windows = buildAttachmentCalendarWindows(noAttach)
+        if (windows.isEmpty()) {
+            throw IllegalStateException("No valid calendar windows for attachment supplement")
+        }
+        if (windows.size > MAX_ATTACHMENT_SUPPLEMENT_WINDOWS) {
+            throw IllegalStateException("Attachment supplement range is too large: ${windows.size} windows")
+        }
+        for ((startStr, endStr) in windows) {
+            ewsItems.addAll(fetchAttachmentCandidatesViaCalendarView(ewsUrl, startStr, endStr))
+        }
 
+        var supplemented = 0
+        val withAtt = ewsItems.distinctBy { it.itemId }.filter { it.hasAtt }
+        val matchKey: (String, Long) -> String = { subj, start -> "${subj.trim().lowercase()}|$start" }
+        val uidMatchKey: (String, Long) -> String = { uid, start -> "${uid.trim()}|$start" }
+        val intermediateResult = if (withAtt.isEmpty()) {
+            Log.d(TAG, "supplementAttachmentsViaEws: no EWS occurrences have attachments")
+            events
+        } else {
+            Log.d(TAG, "supplementAttachmentsViaEws: ${withAtt.size} EWS events have attachments, fetching via GetItem")
+
+            val attMap = fetchCalendarAttachmentsEws(ewsUrl, withAtt.map { it.itemId })
+            if (attMap.isEmpty()) {
+                throw IllegalStateException("GetItem returned no attachment metadata")
+            }
+            if (attMap.size < withAtt.size) {
+                throw IllegalStateException("GetItem returned partial attachment metadata")
+            }
+
+            val keyCandidates = mutableMapOf<String, MutableList<String>>()
+            val uidKeyCandidates = mutableMapOf<String, MutableList<String>>()
+            for (item in withAtt) {
+                val att = attMap[item.itemId] ?: continue
+                keyCandidates.getOrPut(matchKey(item.subject, item.startMs)) { mutableListOf() }.add(att)
+                if (item.uid.isNotBlank()) {
+                    uidKeyCandidates.getOrPut(uidMatchKey(item.uid, item.startMs)) { mutableListOf() }.add(att)
+                }
+            }
+            val keyToAtt = keyCandidates.mapNotNull { (key, values) ->
+                values.singleOrNull()?.let { key to it }
+            }.toMap()
+            val uidKeyToAtt = uidKeyCandidates.mapNotNull { (key, values) ->
+                values.singleOrNull()?.let { key to it }
+            }.toMap()
+
+            events.map { event ->
+                if (event.attachments.isNotBlank()) return@map event
+                val key = matchKey(event.subject, event.startTime)
+                val uidKey = if (event.uid.isNotBlank()) uidMatchKey(event.uid, event.startTime) else ""
+                val att = if (event.uid.isNotBlank()) {
+                    uidKeyToAtt[uidKey]
+                } else {
+                    keyToAtt[key]
+                }
+                if (att != null) { supplemented++; event.copy(attachments = att) } else event
+            }
+        }
+
+        val recurringNoAtt = intermediateResult.filter { it.isRecurring && it.attachments.isBlank() }
+        if (recurringNoAtt.isNotEmpty()) {
+            if (recurringNoAtt.any { it.uid.isBlank() }) {
+                throw IllegalStateException("Recurring event UID missing; attachment metadata is not reliable")
+            }
+            val masterAtt = supplementRecurringMasterAttachments(ewsUrl, recurringNoAtt)
+            if (masterAtt.isNotEmpty()) {
+                val finalResult = intermediateResult.map { event ->
+                    if (event.isRecurring && event.attachments.isBlank()) {
+                        val att = masterAtt[event.uid]
+                        if (att != null) { supplemented++; event.copy(attachments = att) } else event
+                    } else event
+                }
+                Log.d(TAG, "supplementAttachmentsViaEws: supplemented $supplemented/${noAttach.size} events (incl. recurring masters)")
+                return finalResult
+            }
+        }
+
+        Log.d(TAG, "supplementAttachmentsViaEws: supplemented $supplemented/${noAttach.size} events with attachments")
+        return intermediateResult
+    }
+
+    private fun buildAttachmentCalendarWindows(events: List<EasCalendarEvent>): List<Pair<String, String>> {
+        val utc = java.util.TimeZone.getTimeZone("UTC")
+        val cal = java.util.Calendar.getInstance(utc)
+        val monthKeys = sortedSetOf<Int>()
+        for (event in events) {
+            if (event.startTime <= 0L) continue
+            cal.timeInMillis = event.startTime
+            monthKeys.add(cal.get(java.util.Calendar.YEAR) * 12 + cal.get(java.util.Calendar.MONTH))
+        }
+        return monthKeys.map { key ->
+            val year = key / 12
+            val month = key % 12
+            cal.clear()
+            cal.set(year, month, 1, 0, 0, 0)
+            val startMs = cal.timeInMillis
+            cal.add(java.util.Calendar.MONTH, 1)
+            val endMs = cal.timeInMillis
+            CalendarDateUtils.formatEwsDate(startMs) to CalendarDateUtils.formatEwsDate(endMs)
+        }
+    }
+
+    private suspend fun fetchAttachmentCandidatesViaCalendarView(
+        ewsUrl: String,
+        startStr: String,
+        endStr: String
+    ): List<EwsAttachmentCandidate> {
         val findRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -219,9 +324,10 @@ class CalendarAttachmentService(
                     <t:FieldURI FieldURI="item:Subject"/>
                     <t:FieldURI FieldURI="item:HasAttachments"/>
                     <t:FieldURI FieldURI="calendar:Start"/>
+                    <t:FieldURI FieldURI="calendar:UID"/>
                 </t:AdditionalProperties>
             </m:ItemShape>
-            <m:CalendarView StartDate="$startStr" EndDate="$endStr" MaxEntriesReturned="500"/>
+            <m:CalendarView StartDate="$startStr" EndDate="$endStr" MaxEntriesReturned="1000"/>
             <m:ParentFolderIds>
                 <t:DistinguishedFolderId Id="calendar"/>
             </m:ParentFolderIds>
@@ -232,12 +338,19 @@ class CalendarAttachmentService(
         val findResult = ewsRequest(ewsUrl, findRequest, "FindItem")
         if (findResult is EasResult.Error) {
             Log.w(TAG, "supplementAttachmentsViaEws: FindItem failed: ${findResult.message}")
-            return events
+            throw IllegalStateException(findResult.message)
         }
         val findXml = (findResult as EasResult.Success).data
+        if (findXml.contains("ResponseClass=\"Error\"")) {
+            val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(findXml)?.groupValues?.get(1)
+            val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(findXml)?.groupValues?.get(1)
+            throw IllegalStateException(messageText ?: responseCode ?: "FindItem returned error")
+        }
+        if (!findXml.contains("IncludesLastItemInRange=\"true\"")) {
+            throw IllegalStateException("FindItem returned partial calendar range")
+        }
 
-        data class EwsItem(val itemId: String, val subject: String, val startMs: Long, val hasAtt: Boolean)
-        val ewsItems = mutableListOf<EwsItem>()
+        val result = mutableListOf<EwsAttachmentCandidate>()
         val ciPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
             .toRegex(setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
         for (m in ciPattern.findAll(findXml)) {
@@ -245,63 +358,12 @@ class CalendarAttachmentService(
             val id = XmlValueExtractor.extractAttribute(xml, "ItemId", "Id") ?: continue
             val subj = XmlValueExtractor.extractEws(xml, "Subject") ?: ""
             val startVal = XmlValueExtractor.extractEws(xml, "Start") ?: ""
-            val startMs = parseEasDate(startVal) ?: 0L
-            val hasAtt = xml.contains("<t:HasAttachments>true</t:HasAttachments>")
-                || xml.contains("<HasAttachments>true</HasAttachments>")
-            ewsItems.add(EwsItem(id, subj, startMs, hasAtt))
+            val startMs = CalendarDateUtils.parseEwsDateTime(startVal) ?: parseEasDate(startVal) ?: continue
+            val uid = XmlValueExtractor.extractEws(xml, "UID") ?: ""
+            val hasAtt = XmlValueExtractor.extractEws(xml, "HasAttachments")?.equals("true", ignoreCase = true) ?: false
+            result.add(EwsAttachmentCandidate(id, subj, startMs, uid, hasAtt))
         }
-
-        val withAtt = ewsItems.filter { it.hasAtt }
-        if (withAtt.isEmpty()) {
-            Log.d(TAG, "supplementAttachmentsViaEws: no EWS events have attachments")
-            return events
-        }
-
-        Log.d(TAG, "supplementAttachmentsViaEws: ${withAtt.size} EWS events have attachments, fetching via GetItem")
-
-        val attMap = fetchCalendarAttachmentsEws(ewsUrl, withAtt.map { it.itemId })
-
-        val matchKey: (String, Long) -> String = { subj, start -> "${subj.trim().lowercase()}|$start" }
-        val keyToAtt = mutableMapOf<String, String>()
-        val subjToAtt = mutableMapOf<String, String>()
-        for (item in withAtt) {
-            val att = attMap[item.itemId] ?: continue
-            keyToAtt[matchKey(item.subject, item.startMs)] = att
-            val subjKey = item.subject.trim().lowercase()
-            if (subjKey !in subjToAtt) subjToAtt[subjKey] = att
-        }
-
-        var supplemented = 0
-        val intermediateResult = events.map { event ->
-            if (event.attachments.isNotBlank()) return@map event
-            val key = matchKey(event.subject, event.startTime)
-            val att = keyToAtt[key] ?: subjToAtt[event.subject.trim().lowercase()]
-            if (att != null) { supplemented++; event.copy(attachments = att) } else event
-        }
-
-        val recurringNoAtt = intermediateResult.filter { it.isRecurring && it.attachments.isBlank() }
-        if (recurringNoAtt.isNotEmpty()) {
-            val masterAtt = try {
-                supplementRecurringMasterAttachments(ewsUrl, recurringNoAtt)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "supplementRecurringMasterAttachments failed: ${e.message}")
-                emptyMap()
-            }
-            if (masterAtt.isNotEmpty()) {
-                val finalResult = intermediateResult.map { event ->
-                    if (event.isRecurring && event.attachments.isBlank()) {
-                        val att = masterAtt[event.subject.trim().lowercase()]
-                        if (att != null) { supplemented++; event.copy(attachments = att) } else event
-                    } else event
-                }
-                Log.d(TAG, "supplementAttachmentsViaEws: supplemented $supplemented/${noAttach.size} events (incl. recurring masters)")
-                return finalResult
-            }
-        }
-
-        Log.d(TAG, "supplementAttachmentsViaEws: supplemented $supplemented/${noAttach.size} events with attachments")
-        return intermediateResult
+        return result
     }
 
     suspend fun supplementRecurringMasterAttachments(
@@ -323,6 +385,7 @@ class CalendarAttachmentService(
                     <t:FieldURI FieldURI="item:Subject"/>
                     <t:FieldURI FieldURI="item:HasAttachments"/>
                     <t:FieldURI FieldURI="calendar:CalendarItemType"/>
+                    <t:FieldURI FieldURI="calendar:UID"/>
                 </t:AdditionalProperties>
             </m:ItemShape>
             <m:IndexedPageItemView MaxEntriesReturned="200" Offset="0" BasePoint="Beginning"/>
@@ -342,25 +405,35 @@ class CalendarAttachmentService(
 </soap:Envelope>""".trimIndent()
 
         val findResult = ewsRequest(ewsUrl, findRequest, "FindItem")
-        if (findResult is EasResult.Error) return emptyMap()
+        if (findResult is EasResult.Error) {
+            throw IllegalStateException(findResult.message)
+        }
         val findXml = (findResult as EasResult.Success).data
+        if (findXml.contains("ResponseClass=\"Error\"")) {
+            val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(findXml)?.groupValues?.get(1)
+            val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(findXml)?.groupValues?.get(1)
+            throw IllegalStateException(messageText ?: responseCode ?: "Recurring master FindItem returned error")
+        }
+        if (!findXml.contains("IncludesLastItemInRange=\"true\"")) {
+            throw IllegalStateException("Recurring master FindItem returned partial range")
+        }
 
         val ciPattern = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
             .toRegex(setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
 
-        val recurringSubjects = recurringEvents.map { it.subject.trim().lowercase() }.toSet()
+        val recurringUids = recurringEvents.map { it.uid }.filter { it.isNotBlank() }.toSet()
         val masterItemIds = mutableListOf<String>()
-        val masterIdToSubject = mutableMapOf<String, String>()
+        val masterIdToUid = mutableMapOf<String, String>()
 
         for (m in ciPattern.findAll(findXml)) {
             val xml = m.groupValues[1]
             val calType = XmlValueExtractor.extractEws(xml, "CalendarItemType") ?: ""
             if (calType != "RecurringMaster") continue
-            val subj = (XmlValueExtractor.extractEws(xml, "Subject") ?: "").trim().lowercase()
-            if (subj !in recurringSubjects) continue
+            val uid = XmlValueExtractor.extractEws(xml, "UID") ?: ""
+            if (uid.isBlank() || uid !in recurringUids) continue
             val id = XmlValueExtractor.extractAttribute(xml, "ItemId", "Id") ?: continue
             masterItemIds.add(id)
-            masterIdToSubject[id] = subj
+            masterIdToUid[id] = uid
         }
 
         if (masterItemIds.isEmpty()) return emptyMap()
@@ -368,10 +441,17 @@ class CalendarAttachmentService(
         Log.d(TAG, "supplementRecurringMasterAttachments: found ${masterItemIds.size} recurring masters with attachments")
 
         val attMap = fetchCalendarAttachmentsEws(ewsUrl, masterItemIds)
+        if (attMap.isEmpty()) {
+            throw IllegalStateException("Recurring master GetItem returned no attachment metadata")
+        }
+        if (attMap.size < masterItemIds.size) {
+            throw IllegalStateException("Recurring master GetItem returned partial attachment metadata")
+        }
+
         val result = mutableMapOf<String, String>()
         for ((itemId, attJson) in attMap) {
-            val subj = masterIdToSubject[itemId] ?: continue
-            result[subj] = attJson
+            val uid = masterIdToUid[itemId] ?: continue
+            result[uid] = attJson
         }
         return result
     }
@@ -433,5 +513,6 @@ class CalendarAttachmentService(
 
     companion object {
         private const val TAG = "CalendarAttachmentSvc"
+        private const val MAX_ATTACHMENT_SUPPLEMENT_WINDOWS = 36
     }
 }

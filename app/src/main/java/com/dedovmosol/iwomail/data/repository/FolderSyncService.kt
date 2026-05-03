@@ -6,7 +6,6 @@ import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
-import com.dedovmosol.iwomail.eas.mapResult
 import com.dedovmosol.iwomail.eas.flatMapResult
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -41,7 +40,7 @@ class FolderSyncService(
         folderDao.insert(folder)
         folderDao.updateCounts(folder.id, folder.unreadCount, folder.totalCount)
     }
-    
+
     /**
      * Безопасное обновление списка папок без удаления связанных писем
      * Использует batch операцию в DAO с @Transaction
@@ -50,7 +49,7 @@ class FolderSyncService(
         if (folders.isEmpty()) return
         folderDao.upsertFolders(folders)
     }
-    
+
     /**
      * Синхронизация папок для аккаунта (с per-account lock).
      * Безопасно вызывать из любого контекста — конкурентные вызовы сериализуются.
@@ -59,16 +58,16 @@ class FolderSyncService(
         getFolderMutex(accountId).withLock { syncFoldersUnlocked(accountId) }
 
     private suspend fun syncFoldersUnlocked(accountId: Long): EasResult<Unit> {
-        val account = accountRepo.getAccount(accountId) 
+        val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error("Аккаунт не найден")
-        
+
         return when (AccountType.valueOf(account.accountType)) {
             AccountType.EXCHANGE -> syncFoldersEas(accountId, account)
             AccountType.IMAP -> syncFoldersImap(accountId)
             AccountType.POP3 -> syncFoldersPop3(accountId)
         }
     }
-    
+
     /**
      * Создание новой папки (сериализовано per-account — защита SyncKey)
      */
@@ -81,7 +80,10 @@ class FolderSyncService(
                 return EasResult.Error("Создание папок поддерживается только для Exchange")
             }
 
-            syncFoldersUnlocked(accountId)
+            when (val syncResult = syncFoldersUnlocked(accountId)) {
+                is EasResult.Success -> Unit
+                is EasResult.Error -> return syncResult
+            }
 
             val freshAccount = accountRepo.getAccount(accountId)
                 ?: return EasResult.Error("Аккаунт не найден")
@@ -103,9 +105,12 @@ class FolderSyncService(
                     )
                     upsertFolder(newFolder)
                 }
-                .mapResult { Unit }
+                // MS-ASCMD 2.2.1.3 / Exchange 2007 SP1: после FolderCreate
+                // SyncKey нужно «подтвердить» FolderSync'ом, иначе следующая мутация
+                // (FolderDelete/FolderUpdate) со свежесозданной папкой возвращает Status 9.
+                .flatMapResult { syncFoldersUnlocked(accountId) }
         }
-    
+
     /**
      * Удаление папки с сервера (сериализовано per-account — защита SyncKey)
      */
@@ -139,7 +144,7 @@ class FolderSyncService(
                 }
                 .flatMapResult { syncFoldersUnlocked(accountId) }
         }
-    
+
     /**
      * Переименование папки на сервере (сериализовано per-account — защита SyncKey)
      */
@@ -170,7 +175,7 @@ class FolderSyncService(
                 }
                 .flatMapResult { syncFoldersUnlocked(accountId) }
         }
-    
+
     /**
      * Синхронизация папок через EAS (вызывается из locked-контекста)
      */
@@ -178,31 +183,31 @@ class FolderSyncService(
         if (retryCount > 1) {
             return EasResult.Error("Ошибка синхронизации папок: слишком много попыток")
         }
-        
-        val client = accountRepo.createEasClient(accountId) 
+
+        val client = accountRepo.createEasClient(accountId)
             ?: return EasResult.Error("Не удалось создать клиент")
-        
+
         val freshAccount = accountRepo.getAccount(accountId) ?: account
-        
+
         val savedSyncKey = freshAccount.folderSyncKey
         val syncKey = if (savedSyncKey.isNullOrEmpty() || savedSyncKey == "0") "0" else savedSyncKey
-        
+
         val result = client.folderSync(syncKey)
-        
+
         if (client.policyKey != null && client.policyKey != account.policyKey) {
             accountRepo.savePolicyKey(accountId, client.policyKey)
         }
-        
+
         return when (result) {
             is EasResult.Success -> {
                 if (result.data.syncKey == "0" || result.data.syncKey.isEmpty()) {
                     accountDao.updateFolderSyncKey(accountId, "0")
                     return syncFoldersEas(accountId, account, retryCount + 1)
                 }
-                
+
                 database.withTransaction {
                     accountDao.updateFolderSyncKey(accountId, result.data.syncKey)
-                    
+
                     if (result.data.deletedFolderIds.isNotEmpty()) {
                         for (serverId in result.data.deletedFolderIds) {
                             val folderId = "${accountId}_${serverId}"
@@ -210,7 +215,7 @@ class FolderSyncService(
                             folderDao.delete(folderId)
                         }
                     }
-                    
+
                     if (result.data.folders.isNotEmpty()) {
                         val entities = result.data.folders.map { folder ->
                             val folderId = "${accountId}_${folder.serverId}"
@@ -237,7 +242,7 @@ class FolderSyncService(
                         upsertFolders(entities)
                     }
                 }
-                
+
                 val existingFolders = folderDao.getFoldersByAccountList(accountId)
                 // ИСПРАВЛЕНО: Проверяем наличие ОБЯЗАТЕЛЬНЫХ системных папок.
                 // Если папок нет совсем, или отсутствуют ключевые (Inbox/Sent/Drafts/Deleted),
@@ -247,21 +252,21 @@ class FolderSyncService(
                 val hasDrafts = existingFolders.any { it.type == FolderType.DRAFTS }
                 val hasDeleted = existingFolders.any { it.type == FolderType.DELETED_ITEMS }
                 val missingSystemFolders = !hasInbox || !hasSent || !hasDrafts || !hasDeleted
-                
+
                 if ((existingFolders.isEmpty() || missingSystemFolders) && result.data.syncKey != "0" && retryCount == 0) {
-                    android.util.Log.w("FolderSyncService", 
+                    android.util.Log.w("FolderSyncService",
                         "Missing system folders after sync (inbox=$hasInbox, sent=$hasSent, drafts=$hasDrafts, deleted=$hasDeleted). Resetting folderSyncKey.")
                     accountDao.updateFolderSyncKey(accountId, "0")
                     return syncFoldersEas(accountId, account, retryCount + 1)
                 }
-                
+
                 val folderCounts = emailDao.getCountsByAccount(accountId)
                 val countsMap = folderCounts.associateBy { it.folderId }
                 existingFolders.forEach { folder ->
                     val counts = countsMap[folder.id]
                     folderDao.updateCounts(folder.id, counts?.unreadCount ?: 0, counts?.totalCount ?: 0)
                 }
-                
+
                 EasResult.Success(Unit)
             }
             is EasResult.Error -> {
@@ -273,7 +278,7 @@ class FolderSyncService(
             }
         }
     }
-    
+
     /**
      * Синхронизация папок через EWS (fallback на EAS, с per-account lock)
      */
@@ -283,14 +288,14 @@ class FolderSyncService(
                 ?: return EasResult.Error("Аккаунт не найден")
             syncFoldersEas(accountId, account)
         }
-    
+
     /**
      * Синхронизация папок через IMAP
      */
     suspend fun syncFoldersImap(accountId: Long): EasResult<Unit> {
-        val client = accountRepo.createImapClient(accountId) 
+        val client = accountRepo.createImapClient(accountId)
             ?: return EasResult.Error("Не удалось создать IMAP клиент")
-        
+
         return try {
             client.connect().getOrThrow()
             val result = try {
@@ -298,7 +303,7 @@ class FolderSyncService(
             } finally {
                 try { client.disconnect() } catch (_: Exception) { }
             }
-            
+
             result.fold(
                 onSuccess = { folders ->
                     val updatedFolders = folders.map { folder ->
@@ -312,8 +317,8 @@ class FolderSyncService(
                     upsertFolders(updatedFolders)
                     EasResult.Success(Unit)
                 },
-                onFailure = { 
-                    EasResult.Error(it.message ?: "Ошибка получения папок") 
+                onFailure = {
+                    EasResult.Error(it.message ?: "Ошибка получения папок")
                 }
             )
         } catch (e: Exception) {
@@ -321,14 +326,14 @@ class FolderSyncService(
             EasResult.Error(e.message ?: "Ошибка IMAP")
         }
     }
-    
+
     /**
      * Синхронизация папок через POP3
      */
     suspend fun syncFoldersPop3(accountId: Long): EasResult<Unit> {
-        val client = accountRepo.createPop3Client(accountId) 
+        val client = accountRepo.createPop3Client(accountId)
             ?: return EasResult.Error("Не удалось создать POP3 клиент")
-        
+
         return try {
             val result = client.getFolders()
             result.fold(

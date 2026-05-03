@@ -1,7 +1,7 @@
 package com.dedovmosol.iwomail.ui
 
 import android.content.Context
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -29,10 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -53,7 +50,6 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.ui.components.NetworkBanner
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
-import com.dedovmosol.iwomail.ui.utils.rememberWobble
 import com.dedovmosol.iwomail.data.repository.FoldersCache
 import com.dedovmosol.iwomail.sync.InitialSyncController
 import kotlinx.coroutines.*
@@ -96,7 +92,7 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    
+
     // Получаем репозитории из RepositoryProvider (ленивые singletons)
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
@@ -105,10 +101,10 @@ fun MainScreen(
     val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
     val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
-    
+
     val accounts by accountRepo.accounts.collectAsState(initial = emptyList())
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-    
+
     // Если все аккаунты удалены — переходим на экран авторизации
     var accountsInitialized by remember { mutableStateOf(false) }
     LaunchedEffect(accounts) {
@@ -122,7 +118,7 @@ fun MainScreen(
             onNavigateToSetup()
         }
     }
-    
+
     // Состояния для отображения папок и счетчиков
     var folders by remember { mutableStateOf(FoldersCache.get(activeAccount?.id ?: 0L)) }
     var flaggedCount by remember { mutableStateOf(0) }
@@ -131,35 +127,35 @@ fun MainScreen(
     var accountsLoaded by remember { mutableStateOf(false) }
     // Флаг: есть ли локальные данные
     var dataLoaded by remember { mutableStateOf(folders.isNotEmpty()) }
-    
+
     // Состояние синхронизации из контроллера
     val isSyncing = InitialSyncController.isSyncing
     val initialSyncDone = InitialSyncController.syncDone
-    
+
     // Время последней синхронизации (для обновления статистики)
     val lastSyncTime by settingsRepo.lastSyncTime.collectAsState(initial = 0L)
-    
+
     // Диалог создания папки
     var showCreateFolderDialog by rememberSaveable { mutableStateOf(false) }
     var newFolderName by rememberSaveable { mutableStateOf("") }
     var isCreatingFolder by remember { mutableStateOf(false) }
-    
+
     // Диалог удаления папки — ID сохраняется при повороте
     var folderToDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToDelete = folderToDeleteId?.let { id -> folders.find { it.id == id } }
-    
-    
+
+
     // Диалог переименования папки — ID сохраняется при повороте
     var folderToRenameId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToRename = folderToRenameId?.let { id -> folders.find { it.id == id } }
     var renameNewName by rememberSaveable { mutableStateOf("") }
-    
+
     // Папка для контекстного меню (долгое нажатие)
     var folderForMenu by remember { mutableStateOf<FolderEntity?>(null) }
-    
+
     // Флаг активации первого аккаунта (один раз)
     var firstAccountActivated by rememberSaveable { mutableStateOf(false) }
-    
+
     // Подстраховка: активируем первый аккаунт, если активный не выбран
     // и пока данные ещё не пришли по Flow
     LaunchedEffect(Unit) {
@@ -170,23 +166,23 @@ fun MainScreen(
             if (!hasActive) {
                 // Если активного нет — берём первый из Flow
                 val accountsList = accountRepo.accounts.first()
-                accountsList.firstOrNull()?.let { 
-                    accountRepo.setActiveAccount(it.id) 
+                accountsList.firstOrNull()?.let {
+                    accountRepo.setActiveAccount(it.id)
                 }
             }
         }
     }
-    
+
     // Загружаем папки и счётчики после смены аккаунта
     var notesCount by rememberSaveable { mutableStateOf(0) }
     var eventsCount by rememberSaveable { mutableStateOf(0) }
     var tasksCount by rememberSaveable { mutableStateOf(0) }
-    
+
     // Статистика за сегодня
     var todayEmailsCount by rememberSaveable { mutableStateOf(0) }
     var todayEventsCount by rememberSaveable { mutableStateOf(0) }
     var todayTasksCount by rememberSaveable { mutableStateOf(0) }
-    
+
     // Загрузка папок — отдельный эффект без зависимости от initialSyncDone
     LaunchedEffect(activeAccount?.id) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
@@ -197,13 +193,13 @@ fun MainScreen(
             dataLoaded = true
         }
         // Подписываемся на Flow — он автоматически обновится когда данные в БД изменятся
-        mailRepo.getFolders(accountId).collect { 
+        mailRepo.getFolders(accountId).collect {
             folders = it
             FoldersCache.set(accountId, it)
-            dataLoaded = true 
+            dataLoaded = true
         }
     }
-    
+
     // КРИТИЧНО: Обновляем счетчики после каждой синхронизации
     // Это гарантирует что UI покажет актуальные данные даже после поворота экрана
     LaunchedEffect(activeAccount?.id, lastSyncTime) {
@@ -214,28 +210,28 @@ fun MainScreen(
             }
         }
     }
-    
+
     // Проверка версии приложения при запуске
     // Синхронизируем папки при КАЖДОМ запуске если есть аккаунты (обновляет SyncKey)
     LaunchedEffect(Unit) {
         try {
             val currentVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionCode
             val lastVersion = withContext(Dispatchers.IO) { settingsRepo.getLastAppVersion() }
-            
+
             // Синхронизируем папки ТОЛЬКО если:
             // 1. Это НЕ первый запуск (lastVersion != 0)
             // 2. И версия ИЗМЕНИЛАСЬ (lastVersion != currentVersion)
             val shouldSync = lastVersion != 0 && lastVersion != currentVersion
-            
+
             if (shouldSync) {
                 android.util.Log.d("MainScreen", "App reinstalled or updated (v$lastVersion → v$currentVersion), syncing folders...")
-                
+
                 // Синхронизируем папки для всех аккаунтов
-                val allAccounts = withContext(Dispatchers.IO) { 
+                val allAccounts = withContext(Dispatchers.IO) {
                     com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
                         .accountDao().getAllAccountsList()
                 }
-                
+
                 allAccounts.forEach { account ->
                     withContext(Dispatchers.IO) {
                         try {
@@ -247,14 +243,14 @@ fun MainScreen(
                     }
                 }
             }
-            
+
             // Сохраняем текущую версию
             withContext(Dispatchers.IO) { settingsRepo.setLastAppVersion(currentVersion) }
         } catch (e: Exception) {
             android.util.Log.e("MainScreen", "Version check failed: ${e.message}")
         }
     }
-    
+
     // Загрузка счётчиков — отдельные эффекты
     // Room Flows автоматически обновляются при изменениях в БД — НЕ зависят от lastSyncTime.
     // КРИТИЧНО: Во время первичной синхронизации счётчики могут только расти
@@ -298,7 +294,7 @@ fun MainScreen(
             }
         }
     }
-    
+
     // Загрузка статистики за сегодня (при смене аккаунта и после синхронизации)
     LaunchedEffect(activeAccount?.id, lastSyncTime) {
         val accountId = activeAccount?.id ?: return@LaunchedEffect
@@ -313,7 +309,7 @@ fun MainScreen(
         todayEventsCount = events
         todayTasksCount = tasks
     }
-    
+
     LaunchedEffect(activeAccount?.id) {
         val account = activeAccount ?: return@LaunchedEffect
         launch {
@@ -326,13 +322,13 @@ fun MainScreen(
         }
         InitialSyncController.startSyncIfNeeded(context, account.id, mailRepo, settingsRepo)
     }
-    
+
     // Первичная проверка аккаунтов (выполняем один раз)
     var initialCheckDone by rememberSaveable { mutableStateOf(false) }
-    
+
     LaunchedEffect(Unit) {
         if (initialCheckDone) return@LaunchedEffect
-        
+
         val count = accountRepo.getAccountCount()
         if (count == 0) {
             onNavigateToSetup()
@@ -340,24 +336,24 @@ fun MainScreen(
         accountsLoaded = true
         initialCheckDone = true
     }
-    
+
     // Автопроверка обновлений
     var showAutoUpdateDialog by rememberSaveable { mutableStateOf(false) }
     var autoUpdateInfo by remember { mutableStateOf<com.dedovmosol.iwomail.update.UpdateInfo?>(null) }
-    
+
     LaunchedEffect(initialCheckDone) {
         if (!initialCheckDone) return@LaunchedEffect
-        
+
         // Проверяем настройку интервала
         val interval = settingsRepo.getUpdateCheckIntervalSync()
         if (interval == com.dedovmosol.iwomail.data.repository.SettingsRepository.UpdateCheckInterval.NEVER) return@LaunchedEffect
-        
+
         val lastCheck = settingsRepo.getLastUpdateCheckTimeSync()
         val intervalMs = interval.days * 24 * 60 * 60 * 1000L
-        
+
         // Проверяем прошёл ли интервал
         if (System.currentTimeMillis() - lastCheck < intervalMs) return@LaunchedEffect
-        
+
         // Проверяем обновления
         kotlinx.coroutines.delay(2000) // Даём приложению загрузиться
         try {
@@ -373,7 +369,7 @@ fun MainScreen(
                         autoUpdateInfo = result.info
                         showAutoUpdateDialog = true
                         settingsRepo.setLastUpdateCheckTime(System.currentTimeMillis())
-                        
+
                         // Push-уведомление о доступном обновлении
                         try {
                             showUpdateNotification(context, result.info.versionName, isRussian)
@@ -388,31 +384,31 @@ fun MainScreen(
             if (e is kotlinx.coroutines.CancellationException) throw e
         }
     }
-    
+
     // Отслеживание удаления аккаунтов (только после загрузки из Flow)
     LaunchedEffect(accounts) {
         // Ждём пока Flow загрузит аккаунты (не используем начальный emptyList)
         if (!accountsLoaded || !initialCheckDone) return@LaunchedEffect
-        
+
         // Даём время Flow обновить состояние
         kotlinx.coroutines.delay(500)
-        
+
         // Перепроверяем число аккаунтов в БД
         val actualCount = accountRepo.getAccountCount()
         if (actualCount == 0) {
             onNavigateToSetup()
         }
     }
-    
+
     fun syncFolders() {
         // Проверяем сеть перед синхронизацией
         if (!NetworkMonitor.isNetworkAvailable(context)) {
             val isRussian = settingsRepo.getLanguageSync() == "ru"
             val message = if (isRussian) "Нет сети" else "No network"
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            SafeToast.short(context, message)
             return
         }
-        
+
         activeAccount?.let { account ->
             isLoading = true
             InitialSyncController.manualSync(
@@ -424,12 +420,12 @@ fun MainScreen(
             )
         }
     }
-    
+
     // Диалог создания папки
     if (showCreateFolderDialog) {
         val folderCreatedMsg = Strings.folderCreated
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { 
+            onDismissRequest = {
                 showCreateFolderDialog = false
                 newFolderName = ""
             },
@@ -456,19 +452,11 @@ fun MainScreen(
                                 isCreatingFolder = false
                                 when (result) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
-                                        android.widget.Toast.makeText(
-                                            context, 
-                                            folderCreatedMsg, 
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
+                                        SafeToast.short(context, folderCreatedMsg)
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
                                         val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                        android.widget.Toast.makeText(
-                                            context, 
-                                            localizedMsg, 
-                                            android.widget.Toast.LENGTH_LONG
-                                        ).show()
+                                        SafeToast.long(context, localizedMsg)
                                     }
                                 }
                                 showCreateFolderDialog = false
@@ -483,7 +471,7 @@ fun MainScreen(
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { 
+                    onClick = {
                         showCreateFolderDialog = false
                         newFolderName = ""
                     },
@@ -492,7 +480,7 @@ fun MainScreen(
             }
         )
     }
-    
+
     // Диалог удаления папки
     folderToDelete?.let { folder ->
         val folderDeletedMsg = Strings.folderDeleted
@@ -501,8 +489,8 @@ fun MainScreen(
             onDismissRequest = { folderToDeleteId = null },
             icon = { Icon(AppIcons.Delete, null) },
             title = { Text(Strings.deleteFolder) },
-            text = { 
-                Text(Strings.deleteFolderConfirm) 
+            text = {
+                Text(Strings.deleteFolderConfirm)
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
@@ -517,20 +505,12 @@ fun MainScreen(
                                 }
                                 when (result) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
-                                        android.widget.Toast.makeText(
-                                            context, 
-                                            folderDeletedMsg, 
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
+                                        SafeToast.short(context, folderDeletedMsg)
                                         withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
                                         val localizedMsg = NotificationStrings.localizeError(result.message, isRussianLang)
-                                        android.widget.Toast.makeText(
-                                            context, 
-                                            localizedMsg, 
-                                            android.widget.Toast.LENGTH_LONG
-                                        ).show()
+                                        SafeToast.long(context, localizedMsg)
                                     }
                                 }
                             }
@@ -547,7 +527,7 @@ fun MainScreen(
             }
         )
     }
-    
+
     // Контекстное меню папки (переименовать/удалить)
     folderForMenu?.let { folder ->
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -599,13 +579,13 @@ fun MainScreen(
             }
         )
     }
-    
+
     // Диалог переименования папки
     folderToRename?.let { folder ->
         val folderRenamedMsg = Strings.folderRenamed
         val isRussianRename = LocalLanguage.current == AppLanguage.RUSSIAN
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { 
+            onDismissRequest = {
                 folderToRenameId = null
                 renameNewName = ""
             },
@@ -633,20 +613,12 @@ fun MainScreen(
                                 }
                                 when (result) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
-                                        android.widget.Toast.makeText(
-                                            context, 
-                                            folderRenamedMsg, 
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
+                                        SafeToast.short(context, folderRenamedMsg)
                                         withContext(Dispatchers.IO) { mailRepo.syncFolders(account.id) }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
                                         val localizedMsg = NotificationStrings.localizeError(result.message, isRussianRename)
-                                        android.widget.Toast.makeText(
-                                            context, 
-                                            localizedMsg, 
-                                            android.widget.Toast.LENGTH_LONG
-                                        ).show()
+                                        SafeToast.long(context, localizedMsg)
                                     }
                                 }
                             }
@@ -658,7 +630,7 @@ fun MainScreen(
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { 
+                    onClick = {
                         folderToRenameId = null
                         renameNewName = ""
                     },
@@ -667,7 +639,7 @@ fun MainScreen(
             }
         )
     }
-    
+
     // Диалог автообновления
     // КРИТИЧНО: используем let{} вместо !! чтобы избежать NPE при race condition в recomposition
     val currentUpdateInfo = autoUpdateInfo
@@ -676,8 +648,8 @@ fun MainScreen(
             updateInfo = currentUpdateInfo,
             context = context,
             settingsRepo = settingsRepo,
-            onDismiss = { 
-                showAutoUpdateDialog = false 
+            onDismiss = {
+                showAutoUpdateDialog = false
             },
             onLater = {
                 // Запоминаем что пользователь отложил эту версию
@@ -689,7 +661,7 @@ fun MainScreen(
             }
         )
     }
-    
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -783,7 +755,7 @@ fun MainScreen(
             }
             return@ModalNavigationDrawer
         }
-        
+
         Scaffold(
             topBar = {
                 SearchTopBar(
@@ -795,27 +767,13 @@ fun MainScreen(
             },
             floatingActionButton = {
                 val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
-                val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
-                
-                // Анимация покачивания карандашика и пульсации
-                val pencilRotation = rememberWobble(animationsEnabled, amplitude = 8f, durationMs = 600)
-                val fabScale = rememberPulseScale(animationsEnabled, from = 1f, to = 1.08f, durationMs = 800)
-                
-                FloatingActionButton(
+                com.dedovmosol.iwomail.ui.theme.AnimatedFab(
                     onClick = onNavigateToCompose,
-                    containerColor = colorTheme.gradientStart,
-                    contentColor = Color.White,
-                    modifier = Modifier.graphicsLayer {
-                        scaleX = fabScale
-                        scaleY = fabScale
-                    }
+                    containerColor = colorTheme.gradientStart
                 ) {
                     Icon(
-                        AppIcons.Edit, 
-                        Strings.compose,
-                        modifier = Modifier.graphicsLayer {
-                            rotationZ = pencilRotation
-                        }
+                        AppIcons.Edit,
+                        Strings.compose
                     )
                 }
             }
@@ -886,23 +844,23 @@ private fun HomeContent(
 ) {
     val context = LocalContext.current
     var showDonateDialog by rememberSaveable { mutableStateOf(false) }
-    
+
     // Pull-to-refresh state
     val isRefreshing = isSyncing || isLoading
     val pullRefreshState = rememberPullRefreshState(isRefreshing, onSyncFolders)
-    
+
     // Подписка на время последней синхронизации
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val lastSyncTime by settingsRepo.lastSyncTime.collectAsState(initial = 0L)
-    
+
     // Отслеживаем Battery Saver через настройки (BroadcastReceiver)
     val isBatterySaverActive by settingsRepo.batterySaverState.collectAsState(initial = settingsRepo.isBatterySaverActive())
     // Per-account: показываем предупреждение если активный аккаунт не игнорирует Battery Saver
     val showBatterySaverWarning = isBatterySaverActive && (activeAccount?.ignoreBatterySaver != true)
-    
+
     // Флаг для карточки-рекомендации по очистке
     var isRecommendationDismissed by rememberSaveable { mutableStateOf(false) }
-    
+
     // Локализованные строки для списка
     val inboxName = Strings.inbox
     val draftsName = Strings.drafts
@@ -918,16 +876,16 @@ private fun HomeContent(
     val emptyText = Strings.empty
     val contactsName = Strings.contacts
     val userFoldersName = Strings.userFolders
-    
+
     // Переменные для диалога доната (вынесены для использования вне LazyColumn)
     val accountCopiedText = Strings.accountCopied
-    
+
     // PERF: remember orderedFolders — избегаем filter/find/sumOf на каждую рекомпозицию LazyColumn
     // Вынесено из LazyListScope (не Composable) в Composable scope
     val chunkedFolders = remember(folders, flaggedCount, notesCount, eventsCount, tasksCount, inboxName) {
         val mainFolders = folders.filter { it.type in listOf(2, 3, 4, 5) }
         val orderedFolders = mutableListOf<FolderDisplayData>()
-        
+
         mainFolders.find { it.type == 2 }?.let { folder ->
             orderedFolders.add(FolderDisplayData(folder.id, inboxName, folder.totalCount, folder.unreadCount, folder.type))
         }
@@ -954,10 +912,10 @@ private fun HomeContent(
         orderedFolders.add(FolderDisplayData("tasks", tasksName, tasksCount, 0, -5))
         orderedFolders.add(FolderDisplayData("contacts", contactsName, 0, 0, -2))
         orderedFolders.add(FolderDisplayData("notes", notesName, notesCount, 0, -3))
-        
+
         orderedFolders.toList().chunked(2)
     }
-    
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -983,7 +941,7 @@ private fun HomeContent(
                 modifier = Modifier.padding(bottom = 4.dp)
             )
         }
-        
+
         // Индикатор синхронизации (карточка)
         if ((isSyncing || isLoading) && !noNetwork) {
             item {
@@ -1016,7 +974,7 @@ private fun HomeContent(
                 }
             }
         }
-        
+
         // Предупреждение о Battery Saver
         if (showBatterySaverWarning) {
             item {
@@ -1051,13 +1009,13 @@ private fun HomeContent(
                 }
             }
         }
-        
+
         // Приветственная карточка с анимацией
         item {
             val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
             var welcomeVisible by remember { mutableStateOf(!animationsEnabled) }
             LaunchedEffect(animationsEnabled) { welcomeVisible = true }
-            
+
             val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
             // PERF: Кэшируем Brush чтобы не создавать новый объект при каждой рекомпозиции
             val welcomeGradient = remember(colorTheme.gradientStart, colorTheme.gradientEnd) {
@@ -1086,7 +1044,7 @@ private fun HomeContent(
                                     Color(0xFF1976D2)
                                 }
                             }
-                            
+
                             Row(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -1114,15 +1072,9 @@ private fun HomeContent(
                                             color = Color.White
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        // Анимированная рука 👋
-                                        val handRotation = rememberWobble(animationsEnabled, amplitude = 15f, durationMs = 400)
                                         Text(
                                             text = Strings.waveEmoji,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            modifier = Modifier.graphicsLayer {
-                                                rotationZ = handRotation
-                                                transformOrigin = TransformOrigin(0.7f, 0.9f) // Вращение от запястья
-                                            }
+                                            style = MaterialTheme.typography.titleMedium
                                         )
                                     }
                                     Text(
@@ -1132,16 +1084,16 @@ private fun HomeContent(
                                     )
                                 }
                             }
-                            
+
                             // Время последней синхронизации — показываем после первой синхронизации
                             if (!isSyncing && !isLoading && lastSyncTime > 0) {
                                 Spacer(modifier = Modifier.height(8.dp))
-                                
+
                                 val formatter = remember { java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()) }
                                 val lastSyncLabel = Strings.lastSync
                                 // PERF: Кэшируем форматированное время — Date аллокация только при изменении lastSyncTime
                                 val syncTimeText = remember(lastSyncTime, lastSyncLabel) { "$lastSyncLabel ${formatter.format(java.util.Date(lastSyncTime))}" }
-                                
+
                                 Text(
                                     text = syncTimeText,
                                     style = MaterialTheme.typography.bodySmall,
@@ -1153,11 +1105,11 @@ private fun HomeContent(
                     }
                 }
             }
-            
+
             if (animationsEnabled) {
                 AnimatedVisibility(
                     visible = welcomeVisible,
-                    enter = fadeIn(animationSpec = tween(400)) + 
+                    enter = fadeIn(animationSpec = tween(400)) +
                             scaleIn(
                                 initialScale = 0.92f,
                                 animationSpec = tween(400, easing = FastOutSlowInEasing)
@@ -1169,7 +1121,7 @@ private fun HomeContent(
                 cardContent()
             }
         }
-        
+
         // Карточка "Сегодня" — статистика за день (кликабельная)
         val hasTodayStats = todayEmailsCount > 0 || todayEventsCount > 0 || todayTasksCount > 0
         if (hasTodayStats) {
@@ -1187,10 +1139,10 @@ private fun HomeContent(
                 )
             }
         }
-        
+
         // Рекомендация по очистке при > 1000 писем
-        val foldersOver1000 = folders.filter { 
-            it.type in listOf(2, 3, 4, 5) && it.totalCount > 1000 
+        val foldersOver1000 = folders.filter {
+            it.type in listOf(2, 3, 4, 5) && it.totalCount > 1000
         }
         if (foldersOver1000.isNotEmpty() && !isRecommendationDismissed) {
             item {
@@ -1208,7 +1160,7 @@ private fun HomeContent(
                 } else {
                     Strings.cleanupFoldersRecommendation(folderNames.joinToString(", "))
                 }
-                
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -1246,7 +1198,7 @@ private fun HomeContent(
                 }
             }
         }
-        
+
         // Список папок и кнопка обновления
         if (folders.isNotEmpty()) {
             item {
@@ -1267,7 +1219,7 @@ private fun HomeContent(
                     }
                 }
             }
-            
+
             itemsIndexed(chunkedFolders, key = { _, row -> row.firstOrNull()?.id ?: "" }) { index: Int, rowFolders: List<FolderDisplayData> ->
                 val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
                 // Анимация только для первых 4 рядов при первом показе
@@ -1279,14 +1231,14 @@ private fun HomeContent(
                         visible = true
                     }
                 }
-                
+
                 if (shouldAnimate && !visible) {
                     // Placeholder пока анимация не началась
                     Spacer(modifier = Modifier.height(80.dp))
                 } else if (shouldAnimate) {
                     AnimatedVisibility(
                         visible = visible,
-                        enter = fadeIn(animationSpec = tween(300)) + 
+                        enter = fadeIn(animationSpec = tween(300)) +
                                 slideInVertically(
                                     initialOffsetY = { it / 2 },
                                     animationSpec = tween(300, easing = FastOutSlowInEasing)
@@ -1359,35 +1311,27 @@ private fun HomeContent(
                 }
             }
         }
-        
+
         // Кнопка "Посмотреть историю изменений" в changelog
         item {
             val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
             val isRu = LocalLanguage.current == AppLanguage.RUSSIAN
-            val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
-            val changelogUrl = if (isRu) 
+            val changelogUrl = if (isRu)
                 "https://github.com/DedovMosol/IwoMailClient/blob/main/docs/CHANGELOG_RU.md"
-            else 
+            else
                 "https://github.com/DedovMosol/IwoMailClient/blob/main/docs/CHANGELOG_EN.md"
-            
-            // Пульсация масштаба кнопки
-            val pulseScale = rememberPulseScale(animationsEnabled, from = 1f, to = 1.02f, durationMs = 1500)
-            
-            // Анимация прозрачности рамки
-            val borderAlpha = rememberPulseScale(animationsEnabled, from = 0.6f, to = 1f, durationMs = 1200)
-            
+
             OutlinedButton(
                 onClick = { uriHandler.openUri(changelogUrl) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .scale(pulseScale),
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current.gradientStart
                 ),
                 border = BorderStroke(
-                    1.5.dp, 
-                    com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current.gradientStart.copy(alpha = borderAlpha)
+                    1.5.dp,
+                    com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current.gradientStart.copy(alpha = 0.85f)
                 )
             ) {
                 Icon(
@@ -1399,7 +1343,7 @@ private fun HomeContent(
                 Text(Strings.viewChangelog)
             }
         }
-        
+
         // Кнопка "Помощь проекту" — открывает диалог с деталями
         item {
             Button(
@@ -1422,28 +1366,28 @@ private fun HomeContent(
                 )
             }
         }
-        
+
         // Отступ снизу для FAB
         item {
             Spacer(modifier = Modifier.height(80.dp))
         }
     }
-    
+
     // Диалог связи с разработчиком
     // Состояние вложенного диалога вынесено наружу чтобы сохранялось при повороте
     var showFinancialSupport by rememberSaveable { mutableStateOf(false) }
-    
+
     if (showDonateDialog) {
         val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
         val configuration = androidx.compose.ui.platform.LocalConfiguration.current
         val useRowButtons = configuration.screenWidthDp >= 360
         val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
-        
+
         // Пульсирующая анимация для кнопок диалога
         val tgPulse = rememberPulseScale(animationsEnabled, from = 1f, to = 1.04f, durationMs = 1200)
         val emailPulse = rememberPulseScale(animationsEnabled, from = 1f, to = 1.04f, durationMs = 1400)
         val supportPulse = rememberPulseScale(animationsEnabled, from = 1f, to = 1.03f, durationMs = 1000)
-        
+
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showDonateDialog = false },
             modifier = Modifier.widthIn(max = 420.dp),
@@ -1481,7 +1425,7 @@ private fun HomeContent(
                         color = MaterialTheme.colorScheme.onSurface,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
-                    
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1501,7 +1445,7 @@ private fun HomeContent(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("TG", style = MaterialTheme.typography.labelLarge, color = Color.White)
                         }
-                        
+
                         Button(
                             onClick = {
                                 showDonateDialog = false
@@ -1521,7 +1465,7 @@ private fun HomeContent(
                             Text("Email", style = MaterialTheme.typography.labelLarge, color = Color.White)
                         }
                     }
-                    
+
                     Box(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center
@@ -1554,7 +1498,7 @@ private fun HomeContent(
                 )
             }
         )
-        
+
         // Вложенный диалог с реквизитами — современный дизайн
         if (showFinancialSupport) {
             val accountNumberDisplay = "4081 7810 3544 0529 6071"
@@ -1567,9 +1511,9 @@ private fun HomeContent(
                 val clip = android.content.ClipData.newPlainText("Account", accountNumberRaw)
                 clipboard.setPrimaryClip(clip)
                 isCopied = true
-                android.widget.Toast.makeText(context, accountCopiedText, android.widget.Toast.LENGTH_SHORT).show()
+                SafeToast.short(context, accountCopiedText)
             }
-            
+
             com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
                 onDismissRequest = { showFinancialSupport = false; isCopied = false },
                 modifier = Modifier.widthIn(max = 420.dp),
@@ -1587,7 +1531,7 @@ private fun HomeContent(
                         }
                     }
                 },
-                title = { 
+                title = {
                     Text(
                         Strings.supportDeveloper,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1629,9 +1573,9 @@ private fun HomeContent(
                                     )
                                 }
                             }
-                            
+
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                            
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1657,7 +1601,7 @@ private fun HomeContent(
                                 }
                             }
                         }
-                        
+
                         // --- Номер счёта — главный CTA-блок ---
                         Surface(
                             shape = RoundedCornerShape(16.dp),
@@ -1686,16 +1630,16 @@ private fun HomeContent(
                                 )
                             }
                         }
-                        
+
                         // --- Кнопка «Скопировать номер» — полноширокая FilledTonalButton ---
                         FilledTonalButton(
                             onClick = copyAccountNumber,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = if (isCopied) 
-                                    MaterialTheme.colorScheme.primaryContainer 
-                                else 
+                                containerColor = if (isCopied)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else
                                     MaterialTheme.colorScheme.secondaryContainer
                             )
                         ) {
@@ -1724,9 +1668,9 @@ private fun HomeContent(
             )
         }
     }
-        
+
         LazyColumnScrollbar(mainListState)
-        
+
         // PullRefreshIndicator убран — используется карточка "Синхронизация..."
     } // Box with pullRefresh
 }
@@ -1747,11 +1691,11 @@ private fun TodayStatsCard(
     val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
     val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
-    
+
     // Анимация появления
     var visible by remember { mutableStateOf(!animationsEnabled) }
     LaunchedEffect(animationsEnabled) { visible = true }
-    
+
     val cardContent = @Composable {
         Card(
             modifier = Modifier
@@ -1806,7 +1750,7 @@ private fun TodayStatsCard(
                         color = colorTheme.gradientStart
                     )
                 }
-                
+
                 // Статистика в ряд (адаптивно)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1820,7 +1764,7 @@ private fun TodayStatsCard(
                         color = Color(0xFF3949AB), // Indigo — как Inbox
                         onClick = onEmailsClick
                     )
-                    
+
                     // Разделитель
                     Box(
                         modifier = Modifier
@@ -1828,7 +1772,7 @@ private fun TodayStatsCard(
                             .height(40.dp)
                             .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                     )
-                    
+
                     // События — цвет как у Календаря
                     TodayStatItem(
                         icon = AppIcons.CalendarMonth,
@@ -1837,7 +1781,7 @@ private fun TodayStatsCard(
                         color = Color(0xFF1E88E5), // Blue — как Календарь
                         onClick = onEventsClick
                     )
-                    
+
                     // Разделитель
                     Box(
                         modifier = Modifier
@@ -1845,7 +1789,7 @@ private fun TodayStatsCard(
                             .height(40.dp)
                             .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                     )
-                    
+
                     // Задачи — цвет как у Задач
                     TodayStatItem(
                         icon = AppIcons.Task,
@@ -1858,11 +1802,11 @@ private fun TodayStatsCard(
             }
         }
     }
-    
+
     if (animationsEnabled) {
         AnimatedVisibility(
             visible = visible,
-            enter = fadeIn(animationSpec = tween(300)) + 
+            enter = fadeIn(animationSpec = tween(300)) +
                     slideInVertically(
                         initialOffsetY = { -it / 4 },
                         animationSpec = tween(300, easing = FastOutSlowInEasing)
@@ -1957,7 +1901,7 @@ private fun FolderRow(
                 count = folder.count,
                 unreadCount = folder.unreadCount,
                 type = folder.type,
-                onClick = { 
+                onClick = {
                     when (folder.id) {
                         "contacts" -> onContactsClick()
                         "notes" -> onNotesClick()
@@ -1988,7 +1932,7 @@ private fun FolderCardDisplay(
     val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    
+
     // Анимация масштаба при нажатии
     val scale by animateFloatAsState(
         targetValue = if (animationsEnabled && isPressed) 0.96f else 1f,
@@ -2002,13 +1946,12 @@ private fun FolderCardDisplay(
         },
         label = "scale"
     )
-    
+
     // PERF: Убраны per-card InfiniteTransition для иконок (было 12 карточек × 2 анимации = 24 InfiniteTransition,
     // каждая тикает каждый кадр и вызывает рекомпозицию — главная причина просадки FPS на главном экране)
     // Badge анимация вынесена из conditional if блока (Compose slot table corruption при изменении unreadCount)
     val showBadge = unreadCount > 0 && type != 3 && type != 4 && type != 5
-    val badgeScale = rememberPulseScale(animationsEnabled && showBadge, from = 1f, to = 1.15f, durationMs = 600)
-    
+
     // Icon + gradient colors per folder type (AppIcons.* are @Composable — can't use inside remember)
     val folderColors = when (type) {
         2 -> FolderColorsData(AppIcons.Email, listOf(Color(0xFF3949AB), Color(0xFF3444A0)))
@@ -2062,15 +2005,15 @@ private fun FolderCardDisplay(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        folderColors.icon, 
-                        null, 
+                        folderColors.icon,
+                        null,
                         tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.width(8.dp))
-                
+
                 Column(
                     modifier = Modifier
                         .weight(1f),
@@ -2102,12 +2045,11 @@ private fun FolderCardDisplay(
                         )
                     }
                 }
-                
+
                 // Badge с непрочитанными или с избранными
                 // Для черновиков (type 3), удалённых (type 4) и отправленных (type 5) badge не показываем
                 if (showBadge) {
                     Badge(
-                        modifier = Modifier.scale(badgeScale),
                         containerColor = folderColors.gradientColors.first(),
                         contentColor = Color.White
                     ) {
@@ -2164,14 +2106,14 @@ private fun SearchTopBar(
                 IconButton(onClick = onMenuClick) {
                     Icon(AppIcons.Menu, Strings.menu, tint = colorTheme.primaryLight)
                 }
-                
+
                 Text(
                     text = Strings.searchInMail,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
                 )
-                
+
                 Box(
                     modifier = Modifier
                         .size(32.dp)
@@ -2185,7 +2127,7 @@ private fun SearchTopBar(
                         fontWeight = FontWeight.Bold
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.width(8.dp))
             }
         }
@@ -2204,19 +2146,19 @@ private fun showUpdateNotification(context: android.content.Context, versionName
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (!hasPermission) return
     }
-    
+
     val intent = android.content.Intent(context, com.dedovmosol.iwomail.MainActivity::class.java).apply {
         flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
         putExtra(com.dedovmosol.iwomail.MainActivity.EXTRA_OPEN_UPDATES, true)
     }
-    
+
     val pendingIntent = android.app.PendingIntent.getActivity(
         context, 5000, intent,
         android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
     )
-    
+
     val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
-    
+
     val builder = androidx.core.app.NotificationCompat.Builder(context, com.dedovmosol.iwomail.MailApplication.CHANNEL_UPDATE)
         .setSmallIcon(android.R.drawable.stat_sys_download_done)
         .setContentTitle(com.dedovmosol.iwomail.ui.NotificationStrings.getUpdateAvailableTitle(isRussian))
@@ -2225,7 +2167,7 @@ private fun showUpdateNotification(context: android.content.Context, versionName
         .setContentIntent(pendingIntent)
         .setAutoCancel(true)
         .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
-    
+
     // Уникальный ID для уведомления об обновлении (один на всё приложение)
     notificationManager.notify(5000, builder.build())
 }
@@ -2244,13 +2186,13 @@ private fun AutoUpdateDialog(
     val scope = rememberCoroutineScope()
     val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
-    
+
     var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
     var downloadProgress by remember { mutableIntStateOf(0) }
     var downloadedFile by remember { mutableStateOf<java.io.File?>(null) }
-    
+
     val updateChecker = remember { com.dedovmosol.iwomail.update.UpdateChecker(context) }
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = { if (downloadState !is DownloadState.Downloading) onDismiss() },
         title = {
@@ -2271,7 +2213,7 @@ private fun AutoUpdateDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
-                
+
                 if (updateInfo.changelog.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -2280,7 +2222,7 @@ private fun AutoUpdateDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
                 // Прогресс скачивания
                 if (downloadState is DownloadState.Downloading) {
                     Spacer(modifier = Modifier.height(16.dp))
@@ -2295,7 +2237,7 @@ private fun AutoUpdateDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
                 if (downloadState is DownloadState.Error) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(

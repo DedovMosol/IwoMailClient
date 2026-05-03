@@ -1,7 +1,7 @@
-package com.dedovmosol.iwomail.ui.screens.contacts
+﻿package com.dedovmosol.iwomail.ui.screens.contacts
 
 import android.content.Intent
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.core.content.FileProvider
 import java.io.File
 
@@ -37,6 +37,6 @@ internal fun shareFile(context: android.content.Context, content: String, fileNa
         }
         context.startActivity(Intent.createChooser(intent, null))
     } catch (e: Exception) {
-        Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+        SafeToast.long(context, e.message ?: "Error")
     }
 }

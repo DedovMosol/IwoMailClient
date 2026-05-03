@@ -23,17 +23,16 @@ fun rememberPulseScale(
     to: Float = 1.1f,
     durationMs: Int = 1000
 ): Float {
+    if (!enabled) return from
+
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val animated by infiniteTransition.animateFloat(
         initialValue = from,
-        targetValue = if (enabled) to else from,
-        animationSpec = if (enabled) AnimationSpecs.pulse(durationMs) else infiniteRepeatable(
-            animation = tween(1),
-            repeatMode = RepeatMode.Restart
-        ),
+        targetValue = to,
+        animationSpec = AnimationSpecs.pulse(durationMs),
         label = "scale"
     )
-    return if (enabled) animated else from
+    return animated
 }
 
 /**
@@ -47,17 +46,16 @@ fun rememberRotation(
     enabled: Boolean,
     durationMs: Int = 1000
 ): Float {
+    if (!enabled) return 0f
+
     val infiniteTransition = rememberInfiniteTransition(label = "rotation")
     val animated by infiniteTransition.animateFloat(
         initialValue = 0f,
-        targetValue = if (enabled) 360f else 0f,
-        animationSpec = if (enabled) AnimationSpecs.rotation(durationMs) else infiniteRepeatable(
-            animation = tween(1),
-            repeatMode = RepeatMode.Restart
-        ),
+        targetValue = 360f,
+        animationSpec = AnimationSpecs.rotation(durationMs),
         label = "rotation"
     )
-    return if (enabled) animated else 0f
+    return animated
 }
 
 /**
@@ -73,17 +71,16 @@ fun rememberShake(
     amplitude: Float = 10f,
     durationMs: Int = 300
 ): Float {
+    if (!enabled) return 0f
+
     val infiniteTransition = rememberInfiniteTransition(label = "shake")
     val animated by infiniteTransition.animateFloat(
-        initialValue = if (enabled) -amplitude else 0f,
-        targetValue = if (enabled) amplitude else 0f,
-        animationSpec = if (enabled) AnimationSpecs.shake(durationMs) else infiniteRepeatable(
-            animation = tween(1),
-            repeatMode = RepeatMode.Restart
-        ),
+        initialValue = -amplitude,
+        targetValue = amplitude,
+        animationSpec = AnimationSpecs.shake(durationMs),
         label = "shake"
     )
-    return if (enabled) animated else 0f
+    return animated
 }
 
 /**
@@ -100,18 +97,17 @@ fun rememberWobble(
     amplitude: Float = 8f,
     durationMs: Int = 600
 ): Float {
+    if (!enabled) return 0f
+
     val infiniteTransition = rememberInfiniteTransition(label = "wobble")
     val animated by infiniteTransition.animateFloat(
-        initialValue = if (enabled) -amplitude else 0f,
-        targetValue = if (enabled) amplitude else 0f,
-        animationSpec = if (enabled) infiniteRepeatable(
+        initialValue = -amplitude,
+        targetValue = amplitude,
+        animationSpec = infiniteRepeatable(
             animation = tween(durationMs, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
-        ) else infiniteRepeatable(
-            animation = tween(1),
-            repeatMode = RepeatMode.Restart
         ),
         label = "wobble"
     )
-    return if (enabled) animated else 0f
+    return animated
 }

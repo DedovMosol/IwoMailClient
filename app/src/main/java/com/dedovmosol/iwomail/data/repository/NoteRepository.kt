@@ -13,48 +13,80 @@ import kotlinx.coroutines.withContext
  * Репозиторий для работы с заметками Exchange
  */
 class NoteRepository(private val context: Context) {
-    
+
     private val database = MailDatabase.getInstance(context)
     private val noteDao = database.noteDao()
     private val accountRepo = RepositoryProvider.getAccountRepository(context)
-    
+
     companion object {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
         private fun getSyncMutex(accountId: Long) = syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
     }
-    
+
+    private data class NoteContentKey(
+        val subject: String,
+        val body: String,
+        val categories: String
+    )
+
+    private fun normalizedNotePart(value: String): String {
+        return value.trim()
+    }
+
+    private fun noteContentMatches(
+        subject: String,
+        body: String,
+        otherSubject: String,
+        otherBody: String
+    ): Boolean {
+        return normalizedNotePart(subject) == normalizedNotePart(otherSubject) &&
+            normalizedNotePart(body) == normalizedNotePart(otherBody)
+    }
+
+    private fun noteContentKey(subject: String, body: String, categories: String): NoteContentKey {
+        return NoteContentKey(
+            subject = normalizedNotePart(subject),
+            body = normalizedNotePart(body),
+            categories = normalizedNotePart(categories)
+        )
+    }
+
+    private suspend fun markNoteAsDeleted(id: String) {
+        noteDao.markAsDeleted(id, System.currentTimeMillis())
+    }
+
     // === Получение заметок ===
-    
+
     fun getNotes(accountId: Long): Flow<List<NoteEntity>> {
         return noteDao.getNotesByAccount(accountId)
     }
-    
+
     suspend fun getNotesList(accountId: Long): List<NoteEntity> {
         return noteDao.getNotesByAccountList(accountId)
     }
-    
+
     fun getNote(id: String): Flow<NoteEntity?> {
         return noteDao.getNoteFlow(id)
     }
-    
+
     suspend fun getNoteById(id: String): NoteEntity? {
         return noteDao.getNote(id)
     }
-    
+
     fun getNotesCount(accountId: Long): Flow<Int> {
         return noteDao.getNotesCount(accountId)
     }
-    
+
     // === Удалённые заметки (корзина) ===
-    
+
     fun getDeletedNotes(accountId: Long): Flow<List<NoteEntity>> {
         return noteDao.getDeletedNotesByAccount(accountId)
     }
-    
+
     fun getDeletedNotesCount(accountId: Long): Flow<Int> {
         return noteDao.getDeletedNotesCount(accountId)
     }
-    
+
     suspend fun restoreNote(note: NoteEntity): EasResult<Boolean> {
         return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
@@ -62,17 +94,17 @@ class NoteRepository(private val context: Context) {
                 android.util.Log.d("NotesDebug", "Calling easClient.restoreNote...")
                 // Восстанавливаем на сервере (перемещаем из Deleted Items в Notes)
                 val result = withEasRetry { easClient.restoreNote(note.serverId) }
-                
+
                 when (result) {
                     is EasResult.Success -> {
                         val newServerId = result.data
                         android.util.Log.d("NotesDebug", "Server returned newServerId: $newServerId (old was ${note.serverId})")
-                        
+
                         // КРИТИЧНО: Удаляем старую запись ВСЕГДА
                         // При восстановлении сервер ВСЕГДА даёт новый serverId
                         android.util.Log.d("NotesDebug", "Deleting old note from DB: id=${note.id}")
                         noteDao.delete(note.id)
-                        
+
                         // Обновляем локальную БД
                         if (newServerId != note.serverId && newServerId.isNotBlank()) {
                             android.util.Log.d("NotesDebug", "Creating new note in DB with newServerId")
@@ -118,7 +150,7 @@ class NoteRepository(private val context: Context) {
             }
         }
     }
-    
+
     suspend fun emptyNotesTrash(accountId: Long): EasResult<Int> {
         return withContext(Dispatchers.IO) {
             val deletedNotes = noteDao.getDeletedNotesByAccountList(accountId)
@@ -160,17 +192,17 @@ class NoteRepository(private val context: Context) {
             }
         }
     }
-    
+
     // === Поиск ===
-    
+
     suspend fun searchNotes(accountId: Long, query: String): List<NoteEntity> {
         if (query.isBlank()) return getNotesList(accountId)
         val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         return noteDao.searchNotes(accountId, escaped)
     }
-    
+
     // === Создание/Редактирование/Удаление ===
-    
+
     /**
      * Создание заметки на сервере и в локальной БД
      */
@@ -183,33 +215,32 @@ class NoteRepository(private val context: Context) {
             try {
                 val existingNotes = noteDao.getNotesByAccountList(accountId)
                 val duplicate = existingNotes.find { existing ->
-                    existing.subject == subject &&
-                    existing.body == body
+                    noteContentMatches(existing.subject, existing.body, subject, body)
                 }
                 if (duplicate != null) {
-                    android.util.Log.w("NoteRepository", 
+                    android.util.Log.w("NoteRepository",
                         "createNote: Duplicate detected (subject=$subject), returning existing")
                     return@withEasClient EasResult.Success(duplicate)
                 }
-                
+
                 val result = withEasRetry { easClient.createNote(subject, body) }
-                
+
                 when (result) {
                     is EasResult.Success -> {
                         val serverId = result.data
-                        
-                        // Если serverId похож на clientId (UUID без дефисов), 
+
+                        // Если serverId похож на clientId (UUID без дефисов),
                         // значит сервер не вернул реальный ID — нужна синхронизация
                         val isClientId = serverId.length == 32 && !serverId.contains(":")
-                        
+
                         if (isClientId) {
                             // Сервер не вернул реальный ID — синхронизируем
                             syncNotes(accountId)
-                            
+
                             // Ищем созданную заметку
                             val createdNote = noteDao.getNotesByAccountList(accountId)
                                 .find { it.subject == subject }
-                            
+
                             if (createdNote != null) {
                                 EasResult.Success(createdNote)
                             } else {
@@ -249,7 +280,7 @@ class NoteRepository(private val context: Context) {
             }
         }
     }
-    
+
     /**
      * Обновление заметки
      */
@@ -261,7 +292,7 @@ class NoteRepository(private val context: Context) {
         return accountRepo.withEasClient(note.accountId, RepositoryErrors.NOTES_EXCHANGE_ONLY) { easClient ->
             try {
                 val result = withEasRetry { easClient.updateNote(note.serverId, subject, body) }
-                
+
                 when (result) {
                     is EasResult.Success -> {
                         val newLastModified = System.currentTimeMillis()
@@ -270,15 +301,15 @@ class NoteRepository(private val context: Context) {
                             body = body,
                             lastModified = newLastModified
                         )
-                        
+
                         noteDao.update(updatedNote)
-                        
+
                         // КРИТИЧНО: Синхронизируем заметки для получения актуального serverId с сервера
                         // Это необходимо для последующего удаления (EWS DeleteItem требует ПОЛНЫЙ ItemId)
                         // Exchange 2007 SP1 требует 2 секунды для обработки UpdateItem
                         kotlinx.coroutines.delay(2000)
                         syncNotes(note.accountId, skipRecentDeleteCheck = true)
-                        
+
                         EasResult.Success(updatedNote)
                     }
                     is EasResult.Error -> result
@@ -290,7 +321,7 @@ class NoteRepository(private val context: Context) {
             }
         }
     }
-    
+
     /**
      * Удаление заметки на сервере
      * Заметка удаляется с сервера, при следующей синхронизации попадёт в Deleted Items
@@ -300,15 +331,15 @@ class NoteRepository(private val context: Context) {
             try {
                 var updatedNote = note
                 var result = easClient.deleteNote(note.serverId)
-                
+
                 if (result is EasResult.Error) {
                     val syncResult = syncNotes(note.accountId, skipRecentDeleteCheck = true)
                     if (syncResult is EasResult.Success) {
                         val allNotes = noteDao.getAllNotesByAccountList(note.accountId)
-                        val found = allNotes.find { 
-                            !it.isDeleted && it.subject == note.subject && it.body == note.body 
-                        } ?: allNotes.find { 
-                            it.subject == note.subject && it.body == note.body && it.serverId != note.serverId
+                        val found = allNotes.find {
+                            !it.isDeleted && noteContentMatches(it.subject, it.body, note.subject, note.body)
+                        } ?: allNotes.find {
+                            noteContentMatches(it.subject, it.body, note.subject, note.body) && it.serverId != note.serverId
                         }
                         if (found != null && found.serverId != note.serverId) {
                             updatedNote = found
@@ -316,25 +347,25 @@ class NoteRepository(private val context: Context) {
                         }
                     }
                 }
-                
+
                 when (result) {
                     is EasResult.Success -> {
                         if (result.data != true) {
                             return@withEasClient EasResult.Error(RepositoryErrors.NOTE_DELETE_ERROR)
                         }
-                        
-                        noteDao.markAsDeleted(updatedNote.id)
-                        
+
+                        markNoteAsDeleted(updatedNote.id)
+
                         kotlinx.coroutines.delay(2000)
                         syncNotes(note.accountId, skipRecentDeleteCheck = true)
-                        
+
                         EasResult.Success(true)
                     }
                     is EasResult.Error -> {
-                        if (result.message.contains("NOTE_NOT_FOUND") || 
+                        if (result.message.contains("NOTE_NOT_FOUND") ||
                             result.message.contains("не найдена", ignoreCase = true) ||
                             result.message.contains("not found", ignoreCase = true)) {
-                            noteDao.markAsDeleted(updatedNote.id)
+                            markNoteAsDeleted(updatedNote.id)
                             EasResult.Success(true)
                         } else {
                             result
@@ -411,12 +442,12 @@ class NoteRepository(private val context: Context) {
     ): EasResult<Int> {
         return withContext(Dispatchers.IO) {
             if (notes.isEmpty()) return@withContext EasResult.Success(0)
-            
+
             val byAccount = notes.groupBy { it.accountId }
             var totalDeleted = 0
             var totalFailed = 0
             val total = notes.size
-            
+
             for ((accountId, accountNotes) in byAccount) {
                 val account = accountRepo.getAccount(accountId)
                 if (account == null || AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
@@ -424,20 +455,20 @@ class NoteRepository(private val context: Context) {
                     onProgress(totalDeleted, total)
                     continue
                 }
-                
+
                 val easClient = accountRepo.createEasClient(accountId)
                 if (easClient == null) {
                     totalFailed += accountNotes.size
                     onProgress(totalDeleted, total)
                     continue
                 }
-                
+
                 val batchResult = easClient.deleteNotesBatch(accountNotes.map { it.serverId })
                 val batchOk = batchResult is EasResult.Success && batchResult.data > 0
 
                 if (batchOk) {
                     for (note in accountNotes) {
-                        noteDao.markAsDeleted(note.id)
+                        markNoteAsDeleted(note.id)
                     }
                     totalDeleted += (batchResult as EasResult.Success).data
                     onProgress(totalDeleted, total)
@@ -449,7 +480,7 @@ class NoteRepository(private val context: Context) {
                         val result = easClient.deleteNote(note.serverId)
                         when (result) {
                             is EasResult.Success -> {
-                                noteDao.markAsDeleted(note.id)
+                                markNoteAsDeleted(note.id)
                                 totalDeleted++
                             }
                             is EasResult.Error -> totalFailed++
@@ -457,7 +488,7 @@ class NoteRepository(private val context: Context) {
                         onProgress(totalDeleted, total)
                     }
                 }
-                
+
                 android.util.Log.d("NotesDebug", "Syncing after batch delete to update trash...")
                 kotlinx.coroutines.delay(2000)
                 val syncAfterDeleteResult = syncNotes(accountId, skipRecentDeleteCheck = true)
@@ -485,13 +516,13 @@ class NoteRepository(private val context: Context) {
     ): EasResult<Int> {
         return withContext(Dispatchers.IO) {
             if (notes.isEmpty()) return@withContext EasResult.Success(0)
-            
+
             val byAccount = notes.groupBy { it.accountId }
             var totalRestored = 0
             var totalFailed = 0
             val total = notes.size
             val accountsToSync = mutableSetOf<Long>()
-            
+
             for ((accountId, accountNotes) in byAccount) {
                 val account = accountRepo.getAccount(accountId)
                 if (account == null || AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
@@ -499,14 +530,14 @@ class NoteRepository(private val context: Context) {
                     onProgress(totalRestored, total)
                     continue
                 }
-                
+
                 val easClient = accountRepo.createEasClient(accountId)
                 if (easClient == null) {
                     totalFailed += accountNotes.size
                     onProgress(totalRestored, total)
                     continue
                 }
-                
+
                 for (note in accountNotes) {
                     android.util.Log.d("NotesDebug", "=== RESTORE (batch): subject='${note.subject.take(30)}', serverId=${note.serverId}, isDeleted=${note.isDeleted}")
                     val result = easClient.restoreNote(note.serverId)
@@ -519,7 +550,7 @@ class NoteRepository(private val context: Context) {
                                 // КРИТИЧНО: Сервер создал новую копию, нужно удалить старую из корзины на сервере
                                 android.util.Log.d("NotesDebug", "Hard-deleting old serverId from server trash: ${note.serverId}")
                                 easClient.deleteNotePermanently(note.serverId) // Не проверяем результат
-                                
+
                                 noteDao.delete(note.id)
                                 val restoredNote = note.copy(
                                     id = "${note.accountId}_$newServerId",
@@ -568,12 +599,12 @@ class NoteRepository(private val context: Context) {
     ): EasResult<Int> {
         return withContext(Dispatchers.IO) {
             if (notes.isEmpty()) return@withContext EasResult.Success(0)
-            
+
             val byAccount = notes.groupBy { it.accountId }
             var totalDeleted = 0
             var totalFailed = 0
             val total = notes.size
-            
+
             for ((accountId, accountNotes) in byAccount) {
                 val account = accountRepo.getAccount(accountId)
                 if (account == null || AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
@@ -581,14 +612,14 @@ class NoteRepository(private val context: Context) {
                     onProgress(totalDeleted, total)
                     continue
                 }
-                
+
                 val easClient = accountRepo.createEasClient(accountId)
                 if (easClient == null) {
                     totalFailed += accountNotes.size
                     onProgress(totalDeleted, total)
                     continue
                 }
-                
+
                 val batchResult = easClient.deleteNotesPermanentlyBatch(accountNotes.map { it.serverId })
                 val batchOk = batchResult is EasResult.Success && batchResult.data > 0
 
@@ -623,9 +654,9 @@ class NoteRepository(private val context: Context) {
             }
         }
     }
-    
+
     // === Синхронизация ===
-    
+
     /**
      * Синхронизация заметок с Exchange сервера
      */
@@ -635,17 +666,17 @@ class NoteRepository(private val context: Context) {
             try {
                 val account = accountRepo.getAccount(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
-                
+
                 // Только для Exchange аккаунтов
                 if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
                     return@withContext EasResult.Error(RepositoryErrors.NOTES_EXCHANGE_ONLY)
                 }
-                
+
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
-                
+
                 val result = easClient.syncNotes()
-                
+
                 when (result) {
                     is EasResult.Success -> {
                         val serverNotes = result.data
@@ -655,40 +686,39 @@ class NoteRepository(private val context: Context) {
                                 noteDao.getAllNotesByAccountList(accountId).size
                             )
                         }
-                        
+
                         // Получаем ВСЕ существующие заметки
                         val existingNotes = noteDao.getAllNotesByAccountList(accountId)
                         val existingActiveNotes = existingNotes.filter { !it.isDeleted }
                         val existingDeletedNotes = existingNotes.filter { it.isDeleted }
                         val existingActiveServerIds = existingActiveNotes.map { it.serverId }.toSet()
                         val existingDeletedServerIds = existingDeletedNotes.map { it.serverId }.toSet()
-                        
+
                         // Заметки с сервера, которые НЕ помечены как удалённые
                         val activeServerNotes = serverNotes.filter { !it.isDeleted }
                         val activeServerIds = activeServerNotes.map { it.serverId }.toSet()
-                        
+
                         // Заметки, которые были активными локально, но исчезли с сервера (удалены в Outlook)
                         val missingServerIds = existingActiveServerIds - activeServerIds
-                        
+
                         // Помечаем их как удалённые локально (не полностью удаляем)
                         for (serverId in missingServerIds) {
                             val noteId = "${accountId}_${serverId}"
-                            noteDao.markAsDeleted(noteId)
+                            markNoteAsDeleted(noteId)
                         }
-                        
+
                         // Добавляем/обновляем АКТИВНЫЕ заметки с сервера
                         // КРИТИЧНО: НЕ перезаписываем записи, изменённые локально менее 10 сек назад
                         // Это защита от race condition когда sync получает устаревшие данные после update
                         val syncTime = System.currentTimeMillis()
                         val RECENT_EDIT_THRESHOLD = 10_000L // 10 секунд
-                        
+
                         // Phase 1: Collect duplicate IDs to delete
                         val activeDuplicateIdsToDelete = mutableSetOf<String>()
                         for (note in activeServerNotes) {
                             val duplicate = existingNotes.find {
                                 it.serverId != note.serverId &&
-                                it.subject == note.subject &&
-                                it.body == note.body
+                                    noteContentMatches(it.subject, it.body, note.subject, note.body)
                             }
                             if (duplicate != null) {
                                 if (duplicate.isDeleted && !skipRecentDeleteCheck) {
@@ -708,31 +738,30 @@ class NoteRepository(private val context: Context) {
                         val activeNoteEntities = activeServerNotes.mapNotNull { note ->
                             val noteId = "${accountId}_${note.serverId}"
                             val existingNote = freshExistingNotes.find { it.id == noteId }
-                            
+
                             if (existingNote != null) {
                                 val timeSinceLocalEdit = syncTime - existingNote.lastModified
-                                
+
                                 if (!skipRecentDeleteCheck && timeSinceLocalEdit < RECENT_EDIT_THRESHOLD) {
-                                    if (existingNote.subject == note.subject && existingNote.body == note.body) {
+                                    if (noteContentMatches(existingNote.subject, existingNote.body, note.subject, note.body)) {
                                         return@mapNotNull null
                                     }
                                     return@mapNotNull null
                                 }
-                                
+
                                 if (skipRecentDeleteCheck && timeSinceLocalEdit < RECENT_EDIT_THRESHOLD) {
-                                    val dataChanged = existingNote.subject != note.subject || existingNote.body != note.body
+                                    val dataChanged = !noteContentMatches(existingNote.subject, existingNote.body, note.subject, note.body)
                                     val serverIdChanged = existingNote.serverId != note.serverId
-                                    
+
                                     if (!dataChanged && !serverIdChanged) {
                                         return@mapNotNull null
                                     }
                                 }
                             }
-                            
+
                             val duplicate = freshExistingNotes.find {
                                 it.serverId != note.serverId &&
-                                it.subject == note.subject &&
-                                it.body == note.body
+                                    noteContentMatches(it.subject, it.body, note.subject, note.body)
                             }
                             if (duplicate != null && duplicate.isDeleted && !skipRecentDeleteCheck) {
                                 val timeSinceDelete = syncTime - duplicate.lastModified
@@ -740,7 +769,7 @@ class NoteRepository(private val context: Context) {
                                     return@mapNotNull null
                                 }
                             }
-                            
+
                             NoteEntity(
                                 id = noteId,
                                 accountId = accountId,
@@ -752,11 +781,11 @@ class NoteRepository(private val context: Context) {
                                 isDeleted = false
                             )
                         }
-                        
+
                         // Добавляем/обновляем удалённые заметки с сервера (из Deleted Items)
-                        val deletedServerNotes = serverNotes.filter { it.isDeleted }
+                        val deletedServerNotes = serverNotes.filter { it.isDeleted }.distinctBy { it.serverId }
                         val deletedServerIds = deletedServerNotes.map { it.serverId }.toSet()
-                        
+
                         // Удалённые локально, которых уже нет НИ в активных НИ в Deleted Items на сервере
                         // (заметка была окончательно удалена на сервере, либо удалена другим клиентом)
                         // НЕ удаляем заметки, которые всё ещё есть в активных на сервере (ожидают перемещения в корзину)
@@ -766,24 +795,30 @@ class NoteRepository(private val context: Context) {
                         for (serverId in missingDeletedServerIds) {
                             val noteId = "${accountId}_${serverId}"
                             val note = existingDeletedNotes.find { it.serverId == serverId }
-                            
+
                             // Проверяем: прошло ли достаточно времени с момента последнего изменения
                             val timeSinceModified = currentTime - (note?.lastModified ?: 0)
                             if (timeSinceModified < 30_000) {
                                 // Заметка изменена менее 30 секунд назад - даём серверу время
                                 continue
                             }
-                            
+
                             noteDao.delete(noteId)
                         }
-                        
+
                         val freshNotesForDeletedPhase = noteDao.getAllNotesByAccountList(accountId)
                         val deletedDuplicateIdsToDelete = mutableSetOf<String>()
                         for (note in deletedServerNotes) {
+                            val serverNoteKey = noteContentKey(
+                                subject = note.subject,
+                                body = note.body,
+                                categories = note.categories.joinToString(",")
+                            )
                             val duplicate = freshNotesForDeletedPhase.find {
-                                it.serverId != note.serverId &&
-                                it.subject == note.subject &&
-                                it.body == note.body
+                                it.isDeleted &&
+                                    it.serverId != note.serverId &&
+                                    it.serverId !in deletedServerIds &&
+                                    noteContentKey(it.subject, it.body, it.categories) == serverNoteKey
                             }
                             if (duplicate != null) {
                                 android.util.Log.d("NOT", "syncNotes: Found duplicate note (isDeleted=${duplicate.isDeleted}) serverId=${duplicate.serverId}, replacing with new serverId=${note.serverId}")
@@ -799,7 +834,7 @@ class NoteRepository(private val context: Context) {
                         val deletedNoteEntities = deletedServerNotes.map { note ->
                             val noteId = "${accountId}_${note.serverId}"
                             val existingNote = freshDeletedExisting.find { it.id == noteId }
-                            
+
                             NoteEntity(
                                 id = noteId,
                                 accountId = accountId,
@@ -811,15 +846,15 @@ class NoteRepository(private val context: Context) {
                                 isDeleted = true
                             )
                         }
-                        
+
                         val allNoteEntities = activeNoteEntities + deletedNoteEntities
-                        
+
                         if (allNoteEntities.isNotEmpty()) {
                             for (chunk in allNoteEntities.chunked(500)) {
                                 noteDao.insertAll(chunk)
                             }
                         }
-                        
+
                         EasResult.Success(serverNotes.size)
                     }
                     is EasResult.Error -> result

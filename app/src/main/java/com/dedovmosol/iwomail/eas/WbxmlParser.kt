@@ -11,13 +11,13 @@ import java.io.InputStream
  * Поддерживает EAS 2.5, 12.0, 12.1 (Exchange 2007)
  */
 class WbxmlParser {
-    
+
     companion object {
         // WBXML константы
         private const val WBXML_VERSION = 0x03
         private const val WBXML_UNKNOWN_PI = 0x01
         private const val WBXML_CHARSET_UTF8 = 0x6A
-        
+
         // Токены (WAP-192 WBXML Spec)
         private const val TOKEN_SWITCH_PAGE = 0x00
         private const val TOKEN_END = 0x01
@@ -28,21 +28,21 @@ class WbxmlParser {
         private const val TOKEN_LITERAL_A = 0x84     // Tag from string table, with attrs
         private const val TOKEN_LITERAL_AC = 0xC4    // Tag from string table, content + attrs
         private const val TOKEN_OPAQUE = 0xC3
-        
+
         // Флаги тегов
         private const val TAG_HAS_CONTENT = 0x40
         private const val TAG_HAS_ATTRS = 0x80
-        
+
         private const val MAX_OPAQUE_SIZE = 16 * 1024 * 1024 // 16MB
         private const val MAX_STRING_SIZE = 16 * 1024 * 1024 // 16MB
-        
+
         private val BINARY_OPAQUE_TAGS = setOf(
             "Timezone", "CompressedRTF", "MIMEData",
             "StartTimeZone", "EndTimeZone",
             "ConversationId", "ConversationIndex"
         )
     }
-    
+
     /**
      * Парсит WBXML в XML строку.
      * Thread-safe: всё состояние локально внутри метода.
@@ -50,31 +50,31 @@ class WbxmlParser {
     fun parse(data: ByteArray): String {
         val input = ByteArrayInputStream(data)
         val result = StringBuilder()
-        
+
         val version = input.read()
         val publicId = readMultiByteInt(input)
         val charset = readMultiByteInt(input)
         val stringTableLength = readMultiByteInt(input)
-        
+
         if (stringTableLength > 0) {
             input.skip(stringTableLength.toLong())
         }
-        
+
         result.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-        
+
         parseBody(input, result)
-        
+
         return result.toString()
     }
-    
+
     private fun parseBody(input: InputStream, result: StringBuilder) {
         val tagStack = mutableListOf<String>()
         var codePage = 0
-        
+
         while (true) {
             val token = input.read()
             if (token == -1) break
-            
+
             when (token) {
                 TOKEN_SWITCH_PAGE -> {
                     codePage = input.read()
@@ -128,10 +128,10 @@ class WbxmlParser {
                     val tagId = token and 0x3F
                     val hasContent = (token and TAG_HAS_CONTENT) != 0
                     val hasAttrs = (token and TAG_HAS_ATTRS) != 0
-                    
+
                     val tagName = getTagName(codePage, tagId)
                     result.append("<$tagName")
-                    
+
                     if (hasAttrs) {
                         while (true) {
                             val attrToken = input.read()
@@ -139,7 +139,7 @@ class WbxmlParser {
                             if (attrToken == TOKEN_END) break
                         }
                     }
-                    
+
                     if (hasContent) {
                         result.append(">")
                         tagStack.add(tagName)
@@ -151,7 +151,7 @@ class WbxmlParser {
         }
     }
 
-    
+
     private fun isBinaryOpaqueTag(tag: String): Boolean = tag in BINARY_OPAQUE_TAGS
 
     private fun escapeXmlContent(text: String): String {
@@ -169,7 +169,7 @@ class WbxmlParser {
         }
         return buffer.toString(Charsets.UTF_8.name())
     }
-    
+
     private fun readMultiByteInt(input: InputStream): Int {
         var result = 0
         var bytesRead = 0
@@ -184,56 +184,56 @@ class WbxmlParser {
         if (result < 0) throw IOException("WBXML multi-byte int overflow")
         return result
     }
-    
+
     /**
      * Генерирует WBXML из XML строки.
      * Thread-safe: всё состояние локально внутри метода.
      */
     fun generate(xml: String): ByteArray {
         val output = ByteArrayOutputStream()
-        
+
         output.write(WBXML_VERSION)
         output.write(WBXML_UNKNOWN_PI)
         output.write(WBXML_CHARSET_UTF8)
         output.write(0x00)
-        
+
         generateBody(xml, output)
-        
+
         return output.toByteArray()
     }
-    
+
     private fun generateBody(xml: String, output: ByteArrayOutputStream) {
         val parser = SimpleXmlParser(xml)
         val events = parser.parse()
-        
+
         val namespaceStack = mutableListOf<String?>()
         var currentNamespace: String? = null
         var codePage = -1
-        
+
         for (event in events) {
             when (event) {
                 is XmlEvent.StartTag -> {
                     val effectiveNamespace = event.namespace ?: currentNamespace
-                    
+
                     namespaceStack.add(event.namespace)
                     if (event.namespace != null) {
                         currentNamespace = event.namespace
                     }
-                    
+
                     val (targetPage, tagId) = getTagIdWithContext(event.name, effectiveNamespace, codePage)
-                    
+
                     if (targetPage != codePage) {
                         output.write(TOKEN_SWITCH_PAGE)
                         output.write(targetPage)
                         codePage = targetPage
                     }
-                    
+
                     val token = tagId or (if (event.hasContent) TAG_HAS_CONTENT else 0)
                     output.write(token)
                 }
                 is XmlEvent.EndTag -> {
                     output.write(TOKEN_END)
-                    
+
                     if (namespaceStack.isNotEmpty()) {
                         val poppedNs = namespaceStack.removeAt(namespaceStack.lastIndex)
                         if (poppedNs != null && namespaceStack.isNotEmpty()) {
@@ -249,7 +249,7 @@ class WbxmlParser {
             }
         }
     }
-    
+
     /**
      * Получает tagId с учётом контекста namespace
      * Это важно для тегов с одинаковыми именами на разных code pages (например Status)
@@ -278,18 +278,18 @@ class WbxmlParser {
         "Email2" to 22,
         "Notes" to 23
     )
-    
+
     private fun getTagIdWithContext(tagName: String, namespace: String?, currentPage: Int): Pair<Int, Int> {
         val preferredPage = namespace?.let { namespaceToPage[it] }
-        
+
         if (preferredPage != null) {
             val result = EasCodePages.getTagIdOnPage(tagName, preferredPage)
             if (result != null) return result
         }
-        
+
         return EasCodePages.getTagId(tagName, currentPage)
     }
-    
+
     /**
      * Генерирует WBXML для SendMail с opaque MIME данными
      * ComposeMail namespace (code page 21)
@@ -303,62 +303,135 @@ class WbxmlParser {
      */
     fun generateSendMail(clientId: String, mimeData: ByteArray): ByteArray {
         val output = ByteArrayOutputStream()
-        
+
         // Заголовок WBXML
         output.write(WBXML_VERSION)  // 0x03
         output.write(WBXML_UNKNOWN_PI)  // 0x01
         output.write(WBXML_CHARSET_UTF8)  // 0x6A
         output.write(0x00) // String table length
-        
+
         // ComposeMail code page = 21 (0x15)
         output.write(TOKEN_SWITCH_PAGE)
         output.write(21)
-        
+
         // <SendMail> tag = 0x05 with content
         output.write(0x05 or TAG_HAS_CONTENT)
-        
+
         // <ClientId> tag = 0x11 with content
         output.write(0x11 or TAG_HAS_CONTENT)
         output.write(TOKEN_STR_I)
         output.write(clientId.toByteArray(Charsets.UTF_8))
         output.write(0x00)
         output.write(TOKEN_END) // </ClientId>
-        
+
         // <SaveInSentItems/> tag = 0x08 without content
         output.write(0x08)
-        
+
         // <Mime> tag = 0x10 with opaque content
         output.write(0x10 or TAG_HAS_CONTENT)
         output.write(TOKEN_OPAQUE)
         writeMultiByteInt(output, mimeData.size)
         output.write(mimeData)
         output.write(TOKEN_END) // </Mime>
-        
+
         output.write(TOKEN_END) // </SendMail>
-        
+
         val result = output.toByteArray()
         return result
     }
-    
+
+    /**
+     * Генерация WBXML для SmartForward (EAS 14.0+)
+     * MS-ASWBXML: ComposeMail code page = 21
+     * - SmartForward = 0x06
+     * - ClientId = 0x11
+     * - SaveInSentItems = 0x08
+     * - Source = 0x0B
+     * - FolderId = 0x0C
+     * - ItemId = 0x0D
+     * - Mime = 0x10
+     */
+    fun generateSmartForward(
+        clientId: String,
+        folderId: String,
+        itemId: String,
+        mimeData: ByteArray
+    ): ByteArray {
+        val output = ByteArrayOutputStream()
+
+        // Заголовок WBXML
+        output.write(WBXML_VERSION)  // 0x03
+        output.write(WBXML_UNKNOWN_PI)  // 0x01
+        output.write(WBXML_CHARSET_UTF8)  // 0x6A
+        output.write(0x00) // String table length
+
+        // ComposeMail code page = 21 (0x15)
+        output.write(TOKEN_SWITCH_PAGE)
+        output.write(21)
+
+        // <SmartForward> tag = 0x06 with content
+        output.write(0x06 or TAG_HAS_CONTENT)
+
+        // <ClientId> tag = 0x11 with content
+        output.write(0x11 or TAG_HAS_CONTENT)
+        output.write(TOKEN_STR_I)
+        output.write(clientId.toByteArray(Charsets.UTF_8))
+        output.write(0x00)
+        output.write(TOKEN_END) // </ClientId>
+
+        // <SaveInSentItems/> tag = 0x08 without content
+        output.write(0x08)
+
+        // <Source> tag = 0x0B with content
+        output.write(0x0B or TAG_HAS_CONTENT)
+
+        // <FolderId> tag = 0x0C with content
+        output.write(0x0C or TAG_HAS_CONTENT)
+        output.write(TOKEN_STR_I)
+        output.write(folderId.toByteArray(Charsets.UTF_8))
+        output.write(0x00)
+        output.write(TOKEN_END) // </FolderId>
+
+        // <ItemId> tag = 0x0D with content
+        output.write(0x0D or TAG_HAS_CONTENT)
+        output.write(TOKEN_STR_I)
+        output.write(itemId.toByteArray(Charsets.UTF_8))
+        output.write(0x00)
+        output.write(TOKEN_END) // </ItemId>
+
+        output.write(TOKEN_END) // </Source>
+
+        // <Mime> tag = 0x10 with opaque content
+        output.write(0x10 or TAG_HAS_CONTENT)
+        output.write(TOKEN_OPAQUE)
+        writeMultiByteInt(output, mimeData.size)
+        output.write(mimeData)
+        output.write(TOKEN_END) // </Mime>
+
+        output.write(TOKEN_END) // </SmartForward>
+
+        return output.toByteArray()
+    }
+
     private fun writeMultiByteInt(output: ByteArrayOutputStream, value: Int) {
         if (value == 0) {
             output.write(0)
             return
         }
-        
+
         val bytes = mutableListOf<Int>()
         var v = value
         while (v > 0) {
             bytes.add(0, v and 0x7F)
             v = v shr 7
         }
-        
+
         for (i in 0 until bytes.size - 1) {
             output.write(bytes[i] or 0x80)
         }
         output.write(bytes.last())
     }
-    
+
     // EAS Code Pages и теги
     private fun getTagName(codePage: Int, tagId: Int): String {
         return EasCodePages.getTagName(codePage, tagId)
@@ -375,16 +448,16 @@ class SimpleXmlParser(private val xml: String) {
     fun parse(): List<XmlEvent> {
         val events = mutableListOf<XmlEvent>()
         var pos = 0
-        
+
         // Пропускаем XML declaration
         if (xml.startsWith("<?xml")) {
             pos = xml.indexOf("?>") + 2
         }
-        
+
         while (pos < xml.length) {
             val nextTag = xml.indexOf('<', pos)
             if (nextTag == -1) break
-            
+
             // Текст перед тегом
             if (nextTag > pos) {
                 val text = xml.substring(pos, nextTag).trim()
@@ -392,7 +465,7 @@ class SimpleXmlParser(private val xml: String) {
                     events.add(XmlEvent.Text(XmlUtils.unescape(text)))
                 }
             }
-            
+
             // CDATA: <![CDATA[...]]>
             if (xml.startsWith("<![CDATA[", nextTag)) {
                 val cdataEnd = xml.indexOf("]]>", nextTag + 9)
@@ -414,12 +487,12 @@ class SimpleXmlParser(private val xml: String) {
                 pos = if (piEnd == -1) xml.length else piEnd + 2
                 continue
             }
-            
+
             val tagEnd = findTagEnd(xml, nextTag + 1)
             if (tagEnd == -1) break
-            
+
             val tagContent = xml.substring(nextTag + 1, tagEnd)
-            
+
             when {
                 tagContent.startsWith("/") -> {
                     val fullName = tagContent.substring(1).trim()
@@ -441,10 +514,10 @@ class SimpleXmlParser(private val xml: String) {
                     events.add(XmlEvent.StartTag(tagName, true, ns))
                 }
             }
-            
+
             pos = tagEnd + 1
         }
-        
+
         return events
     }
 
@@ -469,7 +542,7 @@ class SimpleXmlParser(private val xml: String) {
         "documentlibrary" to "DocumentLibrary",
         "ping" to "Ping"
     )
-    
+
     private fun splitPrefix(nameWithPrefix: String): Pair<String?, String> {
         val colonIdx = nameWithPrefix.indexOf(':')
         return if (colonIdx >= 0) {
@@ -478,7 +551,7 @@ class SimpleXmlParser(private val xml: String) {
             null to nameWithPrefix
         }
     }
-    
+
     private fun extractNamespace(parts: List<String>, prefix: String?): String? {
         for (part in parts) {
             if (part.startsWith("xmlns=")) {
@@ -487,7 +560,7 @@ class SimpleXmlParser(private val xml: String) {
         }
         return prefix?.let { prefixToNamespace[it.lowercase()] }
     }
-    
+
     private fun findTagEnd(xml: String, start: Int): Int {
         var inQuote = false
         var quoteChar = ' '

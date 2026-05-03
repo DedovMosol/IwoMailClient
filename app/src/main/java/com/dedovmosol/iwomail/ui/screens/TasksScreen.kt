@@ -1,6 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -21,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -80,30 +79,30 @@ fun TasksScreen(
     val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-    
+
     // Отдельный scope для синхронизации, чтобы не отменялась при навигации
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
-    
+
     val haptic = LocalHapticFeedback.current
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
-    
+
     val allTasks by remember(accountId) { taskRepo.getTasks(accountId) }.collectAsState(initial = emptyList())
     val deletedTasks by remember(accountId) { taskRepo.getDeletedTasks(accountId) }.collectAsState(initial = emptyList())
-    
+
     // Флаг: данные из Room загружены (Flow эмитнул хотя бы раз)
     // КРИТИЧНО: rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
     var dataLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(allTasks) {
         if (allTasks.isNotEmpty()) dataLoaded = true
     }
-    
+
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedSearchQuery by rememberDebouncedState(searchQuery)
-    
+
     // Сохранение фокуса поиска при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
-    var isSearchFocused by rememberSaveable { mutableStateOf(false) }
+    var isSearchFocused by remember { mutableStateOf(false) }
     LaunchedEffect(isSearchFocused) {
         if (isSearchFocused) {
             kotlinx.coroutines.delay(100)
@@ -111,9 +110,9 @@ fun TasksScreen(
         }
     }
     var isSyncing by remember { mutableStateOf(false) }
-    
+
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
-    
+
     var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedTask = remember(selectedTaskId, allTasks, deletedTasks) {
         selectedTaskId?.let { id -> allTasks.find { it.id == id } ?: deletedTasks.find { it.id == id } }
@@ -126,7 +125,7 @@ fun TasksScreen(
     var isCreating by remember { mutableStateOf(false) }
     var currentFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
-    
+
     // Множественный выбор для активных задач
     var selectedTaskIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
@@ -138,7 +137,7 @@ fun TasksScreen(
     val isSelectionMode = selectedTaskIds.isNotEmpty() || selectedDeletedIds.isNotEmpty()
     val hasDeletedSelected = selectedDeletedIds.isNotEmpty()
     val hasActiveSelected = selectedTaskIds.isNotEmpty()
-    
+
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
@@ -146,7 +145,7 @@ fun TasksScreen(
     var deleteConfirmTargetIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
-    
+
     // Автоматическая синхронизация при первом открытии если нет данных
     // Ждём загрузку из Room (небольшая задержка) перед тем как решить что данных нет
     // КРИТИЧНО: проверяем !dataLoaded чтобы при повороте экрана НЕ запускать повторную синхронизацию
@@ -168,7 +167,7 @@ fun TasksScreen(
             }
         }
     }
-    
+
     var lastDeletedSyncMs by remember { mutableStateOf(0L) }
     LaunchedEffect(currentFilter) {
         val now = System.currentTimeMillis()
@@ -189,9 +188,9 @@ fun TasksScreen(
         selectedTaskIds = emptySet()
         selectedDeletedIds = emptySet()
     }
-    
+
     val listState = rememberLazyListState()
-    
+
     // Состояние сортировки (true = новые сверху, false = старые сверху)
     var sortDescending by rememberSaveable { mutableStateOf(true) }
 
@@ -203,7 +202,7 @@ fun TasksScreen(
             TaskFilter.DELETED -> deletedTasks
             else -> allTasks
         }
-        
+
         // Применяем поиск
         val searchFiltered = if (debouncedSearchQuery.isBlank()) {
             baseTasks
@@ -213,7 +212,7 @@ fun TasksScreen(
                 task.body.contains(debouncedSearchQuery, ignoreCase = true)
             }
         }
-        
+
         // Применяем фильтр
         val filtered = when (currentFilter) {
             TaskFilter.ALL, TaskFilter.DELETED -> searchFiltered
@@ -233,11 +232,11 @@ fun TasksScreen(
             TaskFilter.ACTIVE -> searchFiltered.filter { !it.complete }
             TaskFilter.COMPLETED -> searchFiltered.filter { it.complete }
             TaskFilter.HIGH_PRIORITY -> searchFiltered.filter { it.importance == TaskImportance.HIGH.value && !it.complete }
-            TaskFilter.OVERDUE -> searchFiltered.filter { 
-                it.dueDate > 0 && it.dueDate < System.currentTimeMillis() && !it.complete 
+            TaskFilter.OVERDUE -> searchFiltered.filter {
+                it.dueDate > 0 && it.dueDate < System.currentTimeMillis() && !it.complete
             }
         }
-        
+
         // Сортировка
         if (sortDescending) {
             filtered.sortedByDescending { if (it.dueDate > 0) it.dueDate else it.startDate }
@@ -245,7 +244,7 @@ fun TasksScreen(
             filtered.sortedBy { if (it.dueDate > 0) it.dueDate else it.startDate }
         }
     }
-    
+
     // Строки для диалогов (вынесены из @Composable контекста)
     val taskDeletedText = Strings.taskDeleted
     val taskRestoredText = Strings.taskRestored
@@ -254,10 +253,10 @@ fun TasksScreen(
     val taskCompletedText = Strings.taskCompleted
     val taskNotCompletedText = Strings.taskNotCompleted
     val deletingOneTaskText = Strings.deletingTasks(1)
-    
+
     // Диалог просмотра/редактирования задачи
     selectedTask?.let { task ->
-        
+
         if (task.isDeleted) {
             // Диалог для удалённой задачи — восстановить или удалить навсегда
             DeletedTaskDetailDialog(
@@ -265,7 +264,7 @@ fun TasksScreen(
                 onDismiss = { selectedTaskId = null },
                 onRestoreClick = {
                     selectedTaskId = null
-                    
+
                     deletionController.startDeletion(
                         emailIds = listOf(task.id),
                         message = restoringOneTaskText,
@@ -279,7 +278,7 @@ fun TasksScreen(
                         when (result) {
                             is EasResult.Error -> {
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                             else -> {}
@@ -289,7 +288,7 @@ fun TasksScreen(
                 onDeletePermanentlyClick = {
                     selectedTaskId = null  // Закрываем диалог СРАЗУ
                     com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                    
+
                     deletionController.startDeletion(
                         emailIds = listOf(task.id),
                         message = deletingOneTaskText,
@@ -303,7 +302,7 @@ fun TasksScreen(
                         when (result) {
                             is EasResult.Error -> {
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                             else -> {}
@@ -324,41 +323,41 @@ fun TasksScreen(
                 },
                 onDeleteClick = {
                     scope.launch {
+                        selectedTaskId = null
                         val result = withContext(Dispatchers.IO) {
                             taskRepo.deleteTask(task)
                         }
                         when (result) {
                             is EasResult.Success -> {
-                                Toast.makeText(context, taskDeletedText, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, taskDeletedText)
                             }
                             is EasResult.Error -> {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, result.message)
                             }
                         }
-                        selectedTaskId = null
                     }
                 },
                 onToggleComplete = {
                     scope.launch {
+                        selectedTaskId = null
                         val result = withContext(Dispatchers.IO) {
                             taskRepo.toggleTaskComplete(task)
                         }
                         when (result) {
                             is EasResult.Success -> {
                                 val msg = if (result.data.complete) taskCompletedText else taskNotCompletedText
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, msg)
                             }
                             is EasResult.Error -> {
-                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                SafeToast.long(context, result.message)
                             }
                         }
-                        selectedTaskId = null
                     }
                 }
             )
         }
     }
-    
+
     // Диалог создания/редактирования
     if (showCreateDialog) {
         val taskUpdatedText = Strings.taskUpdated
@@ -415,28 +414,24 @@ fun TasksScreen(
                     isCreating = false
                     when (result) {
                         is EasResult.Success -> {
-                            Toast.makeText(
-                                context,
-                                if (isEditing) taskUpdatedText else taskCreatedText,
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            SafeToast.short(context, if (isEditing) taskUpdatedText else taskCreatedText)
                             showCreateDialog = false
                             editingTaskId = null
                         }
                         is EasResult.Error -> {
-                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            SafeToast.long(context, result.message)
                         }
                     }
                 }
             }
         )
     }
-    
+
     // Диалог очистки корзины задач
     if (showEmptyTrashDialog) {
         val deletingMessage = Strings.deletingTasks(deletedTasks.size)
         val tasksTrashEmptiedText = Strings.tasksTrashEmptied
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showEmptyTrashDialog = false },
             icon = { Icon(AppIcons.DeleteForever, null) },
@@ -447,7 +442,7 @@ fun TasksScreen(
                     onClick = {
                         showEmptyTrashDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                        
+
                         val taskIds = deletedTasks.map { it.id }
                         if (taskIds.isNotEmpty()) {
                             deletionController.startDeletion(
@@ -463,16 +458,12 @@ fun TasksScreen(
                                 when (result) {
                                     is EasResult.Success -> {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(
-                                                context,
-                                                "$tasksTrashEmptiedText: ${result.data}",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            SafeToast.short(context, "$tasksTrashEmptiedText: ${result.data}")
                                         }
                                     }
                                     is EasResult.Error -> {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            SafeToast.long(context, result.message)
                                         }
                                     }
                                 }
@@ -490,7 +481,7 @@ fun TasksScreen(
             }
         )
     }
-    
+
     // Диалог подтверждения удаления задач
     if (showDeleteConfirmDialog) {
         val taskDeletedText = Strings.taskDeleted
@@ -507,25 +498,25 @@ fun TasksScreen(
         } else {
             deletingTasksText
         }
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
             icon = { Icon(if (deleteConfirmIsPermanent) AppIcons.DeleteForever else AppIcons.Delete, null) },
-            title = { 
+            title = {
                 Text(
-                    if (deleteConfirmIsPermanent) 
-                        Strings.deleteTasksPermanently 
-                    else 
+                    if (deleteConfirmIsPermanent)
+                        Strings.deleteTasksPermanently
+                    else
                         Strings.deleteTasks
-                ) 
+                )
             },
-            text = { 
+            text = {
                 Text(
                     if (deleteConfirmCount == 1)
                         if (deleteConfirmIsPermanent) Strings.deleteTaskPermanentlyConfirm else Strings.deleteTaskConfirm
                     else
                         if (deleteConfirmIsPermanent) Strings.deleteTasksPermanentlyConfirm(deleteConfirmCount) else Strings.deleteTasksConfirm(deleteConfirmCount)
-                ) 
+                )
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
@@ -536,7 +527,7 @@ fun TasksScreen(
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                             val taskIds = tasksToDeleteList.map { it.id }
                             selectedDeletedIds = selectedDeletedIds - taskIds.toSet()
-                            
+
                             if (taskIds.isNotEmpty()) {
                                 deletionController.startDeletion(
                                     emailIds = taskIds,
@@ -567,7 +558,7 @@ fun TasksScreen(
                                     if (result is EasResult.Success) deleted++
                                 }
                                 if (deleted > 0) {
-                                    Toast.makeText(context, "$taskDeletedText: $deleted", Toast.LENGTH_SHORT).show()
+                                    SafeToast.short(context, "$taskDeletedText: $deleted")
                                 }
                             }
                         }
@@ -583,7 +574,7 @@ fun TasksScreen(
             }
         )
     }
-    
+
     // Строки локализации для множественного удаления
     Scaffold(
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
@@ -607,7 +598,7 @@ fun TasksScreen(
                             val tasksToRestore = deletedTasks.filter { it.id in selectedDeletedIds }
                             val taskIds = tasksToRestore.map { it.id }
                             selectedDeletedIds = selectedDeletedIds - taskIds.toSet()
-                            
+
                             if (taskIds.isNotEmpty()) {
                                 deletionController.startDeletion(
                                     emailIds = taskIds,
@@ -658,14 +649,10 @@ fun TasksScreen(
                                         }
                                         when (result) {
                                             is EasResult.Success -> {
-                                                Toast.makeText(
-                                                    context,
-                                                    "$tasksSyncedText: ${result.data}",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                                SafeToast.short(context, "$tasksSyncedText: ${result.data}")
                                             }
                                             is EasResult.Error -> {
-                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                                SafeToast.long(context, result.message)
                                             }
                                         }
                                     } catch (e: Exception) {
@@ -738,7 +725,7 @@ fun TasksScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp)
             )
-            
+
             // Фильтры
             TaskFilterChips(
                 currentFilter = currentFilter,
@@ -746,7 +733,7 @@ fun TasksScreen(
                 deletedCount = deletedTasks.size,
                 onEmptyTrash = { showEmptyTrashDialog = true }
             )
-            
+
             // Счётчик
             Text(
                 text = "${Strings.total}: ${filteredTasks.size}",
@@ -754,7 +741,7 @@ fun TasksScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
-            
+
             if (filteredTasks.isEmpty()) {
                 val emptyScrollState = rememberScrollState()
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -789,7 +776,7 @@ fun TasksScreen(
                 val taskCompletedTextList = Strings.taskCompleted
                 val taskNotCompletedTextList = Strings.taskNotCompleted
                 val isDeletedFilter = currentFilter == TaskFilter.DELETED
-                
+
                 // Drag selection
                 val taskKeys = remember(filteredTasks) { filteredTasks.map { it.id } }
                 // Набор ID удалённых задач для разделения при drag-select в ALL фильтре
@@ -810,7 +797,7 @@ fun TasksScreen(
                         }
                     }
                 )
-                
+
                 Box(modifier = Modifier
                     .fillMaxSize()
                     .then(
@@ -885,10 +872,10 @@ fun TasksScreen(
                                         when (result) {
                                             is EasResult.Success -> {
                                                 val msg = if (result.data.complete) taskCompletedTextList else taskNotCompletedTextList
-                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                SafeToast.short(context, msg)
                                             }
                                             is EasResult.Error -> {
-                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                                SafeToast.long(context, result.message)
                                             }
                                         }
                                     }
@@ -962,7 +949,7 @@ private fun DeletedTaskCard(
     val formattedDueDate = remember(task.dueDate) {
         if (task.dueDate > 0) dateFormat.format(Date(task.dueDate)) else null
     }
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -991,7 +978,7 @@ private fun DeletedTaskCard(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
             }
-            
+
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Иконка корзины для удалённых задач
@@ -1002,7 +989,7 @@ private fun DeletedTaskCard(
                         tint = MaterialTheme.colorScheme.error
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    
+
                     if (task.importance == TaskImportance.HIGH.value) {
                         Icon(
                             AppIcons.Star,
@@ -1012,7 +999,7 @@ private fun DeletedTaskCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                     }
-                    
+
                     Text(
                         text = task.subject.ifBlank { Strings.noTitle },
                         style = MaterialTheme.typography.titleMedium,
@@ -1022,7 +1009,7 @@ private fun DeletedTaskCard(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                
+
                 if (formattedDueDate != null) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
@@ -1093,17 +1080,17 @@ private fun TaskFilterChips(
         FilterChip(
             selected = currentFilter == TaskFilter.DELETED,
             onClick = { onFilterChange(TaskFilter.DELETED) },
-            label = { 
+            label = {
                 Text(
-                    if (deletedCount > 0) "${Strings.deletedTasks} ($deletedCount)" 
+                    if (deletedCount > 0) "${Strings.deletedTasks} ($deletedCount)"
                     else Strings.deletedTasks
-                ) 
+                )
             },
             leadingIcon = if (currentFilter == TaskFilter.DELETED) {
                 { Icon(AppIcons.Delete, null, Modifier.size(16.dp)) }
             } else null
         )
-        
+
         // Кнопка очистки корзины (показываем только когда выбран фильтр DELETED и есть задачи)
         if (currentFilter == TaskFilter.DELETED && deletedCount > 0 && onEmptyTrash != null) {
             Spacer(modifier = Modifier.width(8.dp))
@@ -1135,12 +1122,12 @@ private fun TaskCard(
         if (task.dueDate > 0) dateFormat.format(Date(task.dueDate)) else null
     }
     val isOverdue = task.dueDate > 0 && task.dueDate < System.currentTimeMillis() && !task.complete
-    val backgroundColor by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        label = "taskBg"
-    )
-    
+    val backgroundColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1172,7 +1159,7 @@ private fun TaskCard(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
             }
-            
+
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Индикатор приоритета
@@ -1185,7 +1172,7 @@ private fun TaskCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                     }
-                    
+
                     Text(
                         text = task.subject.ifBlank { Strings.noTitle },
                         style = MaterialTheme.typography.titleMedium,
@@ -1201,7 +1188,7 @@ private fun TaskCard(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                
+
                 val previewBody = remember(task.body) { com.dedovmosol.iwomail.util.stripHtmlIfNeeded(task.body) }
                 if (previewBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
@@ -1213,7 +1200,7 @@ private fun TaskCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                
+
                 val assignee = task.assignTo.ifBlank { task.owner }
                 if (assignee.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
@@ -1253,7 +1240,7 @@ private fun TaskCard(
                     }
                 }
             }
-            
+
             // Справа: чекбокс выполнения (всегда видим)
             Spacer(modifier = Modifier.width(8.dp))
             Checkbox(
@@ -1278,7 +1265,7 @@ private fun TaskDetailDialog(
     onToggleComplete: () -> Unit
 ) {
     val dateTimeFormat = remember { SimpleDateFormat("d MMMM yyyy, HH:mm", Locale.getDefault()) }
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1326,9 +1313,9 @@ private fun TaskDetailDialog(
                         color = if (task.complete) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurface
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 // Приоритет
                 Text(
                     text = "${Strings.priority}: ${
@@ -1340,7 +1327,7 @@ private fun TaskDetailDialog(
                     }",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                
+
                 // Даты
                 if (task.startDate > 0) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -1349,7 +1336,7 @@ private fun TaskDetailDialog(
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
-                
+
                 if (task.dueDate > 0) {
                     Spacer(modifier = Modifier.height(4.dp))
                     val isOverdue = task.dueDate < System.currentTimeMillis() && !task.complete
@@ -1359,7 +1346,7 @@ private fun TaskDetailDialog(
                         color = if (isOverdue) com.dedovmosol.iwomail.ui.theme.AppColors.delete else MaterialTheme.colorScheme.onSurface
                     )
                 }
-                
+
                 val cleanBody = remember(task.body) {
                     val stripped = com.dedovmosol.iwomail.util.stripHtmlIfNeeded(task.body)
                     val normalized = stripped
@@ -1367,7 +1354,7 @@ private fun TaskDetailDialog(
                         .replace(TASK_P_CLOSE_OPEN_REGEX, "\n")
                         .replace(TASK_P_TAG_REGEX, "\n")
                         .replace(TASK_DIV_TAG_REGEX, "\n")
-                    
+
                     val seen = mutableSetOf<String>()
                     normalized.lines()
                         .filter { line ->
@@ -1440,7 +1427,7 @@ private fun DeletedTaskDetailDialog(
     onDeletePermanentlyClick: () -> Unit
 ) {
     val dateTimeFormat = remember { SimpleDateFormat("d MMMM yyyy, HH:mm", Locale.getDefault()) }
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1466,9 +1453,9 @@ private fun DeletedTaskDetailDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error
                 )
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 // Приоритет
                 Text(
                     text = "${Strings.priority}: ${
@@ -1480,7 +1467,7 @@ private fun DeletedTaskDetailDialog(
                     }",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                
+
                 // Даты
                 if (task.startDate > 0) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -1510,7 +1497,7 @@ private fun DeletedTaskDetailDialog(
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                
+
                 // Категории
                 if (task.categories.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -1520,7 +1507,7 @@ private fun DeletedTaskDetailDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
                 val trashBody = remember(task.body) { com.dedovmosol.iwomail.util.stripHtmlIfNeeded(task.body) }
                 if (trashBody.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -1534,9 +1521,9 @@ private fun DeletedTaskDetailDialog(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
+
                 // КРИТИЧНО: Кнопки разнесены по сторонам
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1556,7 +1543,7 @@ private fun DeletedTaskDetailDialog(
                             modifier = Modifier.size(20.dp)
                         )
                     }
-                    
+
                     // Справа: Удалить окончательно (только красная корзина)
                     OutlinedButton(
                         onClick = onDeletePermanentlyClick,
@@ -1601,7 +1588,7 @@ private fun CreateTaskDialog(
     var reminderTime by rememberSaveable { mutableStateOf(task?.reminderTime ?: 0L) }
     var assignTo by rememberSaveable { mutableStateOf(task?.assignTo ?: "") }
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
-    
+
     // Текстовые поля для дат и времени
     var startDateText by rememberSaveable { mutableStateOf("") }
     var startTimeText by rememberSaveable { mutableStateOf("") }
@@ -1609,10 +1596,10 @@ private fun CreateTaskDialog(
     var dueTimeText by rememberSaveable { mutableStateOf("") }
     var reminderDateText by rememberSaveable { mutableStateOf("") }
     var reminderTimeText by rememberSaveable { mutableStateOf("") }
-    
+
     // Флаг: даты уже инициализированы (защита от перезаписи при повороте экрана)
     var datesInitialized by rememberSaveable { mutableStateOf(false) }
-    
+
     // Состояния для DatePicker / TimePicker диалогов
     var showStartDatePicker by rememberSaveable { mutableStateOf(false) }
     var showStartTimePicker by rememberSaveable { mutableStateOf(false) }
@@ -1620,13 +1607,13 @@ private fun CreateTaskDialog(
     var showDueTimePicker by rememberSaveable { mutableStateOf(false) }
     var showReminderDatePicker by rememberSaveable { mutableStateOf(false) }
     var showReminderTimePicker by rememberSaveable { mutableStateOf(false) }
-    
+
     // Инициализация текстовых полей из существующих дат или умолчания для новых задач
     // datesInitialized защищает от перезаписи при повороте экрана
     LaunchedEffect(task) {
         if (datesInitialized) return@LaunchedEffect
         datesInitialized = true
-        
+
         if (task != null) {
             if (task.startDate > 0) {
                 startDateText = TASK_PARSE_DATE_FORMAT.get().format(Date(task.startDate))
@@ -1663,11 +1650,11 @@ private fun CreateTaskDialog(
             reminderTimeText = TASK_PARSE_TIME_FORMAT.get().format(reminderObj)
         }
     }
-    
+
     val dateTimeFormat = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
-    
+
     val lazyListState = rememberLazyListState()
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         scrollable = false, // Отключаем автоскролл диалога
@@ -1704,7 +1691,7 @@ private fun CreateTaskDialog(
                         singleLine = true
                     )
                 }
-                
+
                 item {
                     // Описание
                     OutlinedTextField(
@@ -1716,7 +1703,7 @@ private fun CreateTaskDialog(
                         maxLines = 4
                     )
                 }
-                
+
                 // Назначить задачу (доступно при создании и редактировании)
                 item {
                     OutlinedTextField(
@@ -1736,7 +1723,7 @@ private fun CreateTaskDialog(
                         }
                     )
                 }
-                
+
                 item {
                     // Приоритет
                     Text(
@@ -1744,7 +1731,7 @@ private fun CreateTaskDialog(
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
-                
+
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1776,7 +1763,7 @@ private fun CreateTaskDialog(
                         )
                     }
                 }
-                
+
                 item {
                     // Дата начала
                     Text(
@@ -1784,7 +1771,7 @@ private fun CreateTaskDialog(
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
-                
+
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1792,7 +1779,7 @@ private fun CreateTaskDialog(
                     ) {
                         OutlinedTextField(
                             value = startDateText,
-                            onValueChange = { 
+                            onValueChange = {
                                 val filtered = it.filter { c -> c.isDigit() || c == '.' }
                                 if (filtered.length <= 10) {
                                     startDateText = filtered
@@ -1831,7 +1818,7 @@ private fun CreateTaskDialog(
                         )
                         if (startDateText.isNotEmpty() || startTimeText.isNotEmpty()) {
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     startDateText = ""
                                     startTimeText = ""
                                     startDate = 0L
@@ -1842,7 +1829,7 @@ private fun CreateTaskDialog(
                         }
                     }
                 }
-                
+
                 item {
                     // Срок выполнения
                     Text(
@@ -1850,7 +1837,7 @@ private fun CreateTaskDialog(
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
-                
+
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1858,7 +1845,7 @@ private fun CreateTaskDialog(
                     ) {
                         OutlinedTextField(
                             value = dueDateText,
-                            onValueChange = { 
+                            onValueChange = {
                                 val filtered = it.filter { c -> c.isDigit() || c == '.' }
                                 if (filtered.length <= 10) {
                                     dueDateText = filtered
@@ -1897,7 +1884,7 @@ private fun CreateTaskDialog(
                         )
                         if (dueDateText.isNotEmpty() || dueTimeText.isNotEmpty()) {
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     dueDateText = ""
                                     dueTimeText = ""
                                     dueDate = 0L
@@ -1908,7 +1895,7 @@ private fun CreateTaskDialog(
                         }
                     }
                 }
-                
+
                 item {
                     // Напоминание
                     Text(
@@ -1916,7 +1903,7 @@ private fun CreateTaskDialog(
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
-                
+
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1924,7 +1911,7 @@ private fun CreateTaskDialog(
                     ) {
                         OutlinedTextField(
                             value = reminderDateText,
-                            onValueChange = { 
+                            onValueChange = {
                                 val filtered = it.filter { c -> c.isDigit() || c == '.' }
                                 if (filtered.length <= 10) {
                                     reminderDateText = filtered
@@ -1963,7 +1950,7 @@ private fun CreateTaskDialog(
                         )
                         if (reminderDateText.isNotEmpty() || reminderTimeText.isNotEmpty()) {
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     reminderDateText = ""
                                     reminderTimeText = ""
                                     reminderTime = 0L
@@ -1976,7 +1963,7 @@ private fun CreateTaskDialog(
                     }
                 }
             }
-            
+
             LazyColumnScrollbar(lazyListState)
             }
         },
@@ -1987,18 +1974,18 @@ private fun CreateTaskDialog(
                         // Парсинг даты начала
                         val parsedStartDate = parseDateTime(startDateText, startTimeText)
                         if (parsedStartDate > 0) startDate = parsedStartDate
-                        
+
                         // Парсинг срока выполнения
                         val parsedDueDate = parseDateTime(dueDateText, dueTimeText)
                         if (parsedDueDate > 0) dueDate = parsedDueDate
-                        
+
                         // Парсинг напоминания
                         val parsedReminderTime = parseDateTime(reminderDateText, reminderTimeText)
                         if (parsedReminderTime > 0) {
                             reminderTime = parsedReminderTime
                             reminderSet = true
                         }
-                        
+
                         onSave(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo.trim().ifBlank { null })
                     }
                 },
@@ -2014,7 +2001,7 @@ private fun CreateTaskDialog(
             )
         }
     )
-    
+
     // Диалог выбора контакта (СНАРУЖИ основного диалога)
     if (showContactPicker) {
         ContactPickerDialog(
@@ -2030,10 +2017,10 @@ private fun CreateTaskDialog(
             }
         )
     }
-    
+
     // DatePicker и TimePicker диалоги
     val pickerDateFormat = remember { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
-    
+
     if (showStartDatePicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = try { pickerDateFormat.parse(startDateText)?.time } catch (_: Exception) { null }
@@ -2049,7 +2036,7 @@ private fun CreateTaskDialog(
             dismissButton = { TextButton(onClick = { showStartDatePicker = false }) { Text(Strings.cancel) } }
         ) { DatePicker(state = datePickerState) }
     }
-    
+
     if (showDueDatePicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = try { pickerDateFormat.parse(dueDateText)?.time } catch (_: Exception) { null }
@@ -2065,7 +2052,7 @@ private fun CreateTaskDialog(
             dismissButton = { TextButton(onClick = { showDueDatePicker = false }) { Text(Strings.cancel) } }
         ) { DatePicker(state = datePickerState) }
     }
-    
+
     if (showReminderDatePicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = try { pickerDateFormat.parse(reminderDateText)?.time } catch (_: Exception) { null }
@@ -2081,7 +2068,7 @@ private fun CreateTaskDialog(
             dismissButton = { TextButton(onClick = { showReminderDatePicker = false }) { Text(Strings.cancel) } }
         ) { DatePicker(state = datePickerState) }
     }
-    
+
     if (showStartTimePicker) {
         val h = try { startTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
         val m = try { startTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
@@ -2101,7 +2088,7 @@ private fun CreateTaskDialog(
             }
         }
     }
-    
+
     if (showDueTimePicker) {
         val h = try { dueTimeText.split(":")[0].toInt() } catch (_: Exception) { 18 }
         val m = try { dueTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
@@ -2121,7 +2108,7 @@ private fun CreateTaskDialog(
             }
         }
     }
-    
+
     if (showReminderTimePicker) {
         val h = try { reminderTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
         val m = try { reminderTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
@@ -2150,23 +2137,23 @@ private fun CreateTaskDialog(
  */
 private fun parseDateTime(dateText: String, timeText: String): Long {
     if (dateText.isBlank()) return 0L
-    
+
     try {
         val parsedDate = TASK_PARSE_DATE_FORMAT.get().parse(dateText) ?: return 0L
-        
+
         val calendar = Calendar.getInstance().apply {
             time = parsedDate
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        
+
         // Парсинг времени если указано
         if (timeText.isNotBlank()) {
             val timeParts = timeText.split(":")
             if (timeParts.size == 2) {
                 val hour = timeParts[0].toIntOrNull() ?: 0
                 val minute = timeParts[1].toIntOrNull() ?: 0
-                
+
                 // Валидация времени (00-23:00-59)
                 if (hour in 0..23 && minute in 0..59) {
                     calendar.set(Calendar.HOUR_OF_DAY, hour)
@@ -2178,7 +2165,7 @@ private fun parseDateTime(dateText: String, timeText: String): Long {
             calendar.set(Calendar.HOUR_OF_DAY, 0)
             calendar.set(Calendar.MINUTE, 0)
         }
-        
+
         return calendar.timeInMillis
     } catch (e: Exception) {
         return 0L

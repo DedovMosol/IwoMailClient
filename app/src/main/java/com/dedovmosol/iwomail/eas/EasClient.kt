@@ -37,7 +37,7 @@ class EasClient(
 ) {
     private val wbxmlParser = WbxmlParser()
     private val ntlmAuth = NtlmAuthenticator(domain, username, password)
-    
+
     private val client: OkHttpClient by lazy {
         com.dedovmosol.iwomail.network.HttpClientProvider.getClient(
             acceptAllCerts = acceptAllCerts,
@@ -49,7 +49,7 @@ class EasClient(
             serverUrl = normalizedServerUrl
         )
     }
-    
+
     private data class PingClientSnapshot(val client: OkHttpClient, val heartbeat: Int)
     @Volatile private var pingClientSnapshot: PingClientSnapshot? = null
     private val pingClientLock = Any()
@@ -69,9 +69,9 @@ class EasClient(
             return newClient
         }
     }
-    
+
     private val normalizedServerUrl: String = normalizeUrl(serverUrl, port, useHttps)
-    
+
     val ewsClient: EwsClient by lazy {
         EwsClient(
             ewsUrl = ewsUrl,
@@ -82,14 +82,14 @@ class EasClient(
             ntlmAuth = ntlmAuth
         )
     }
-    
+
     private val ewsUrl: String by lazy {
         normalizedServerUrl
             .replace("/Microsoft-Server-ActiveSync", "")
             .replace("/default.eas", "")
             .trimEnd('/') + "/EWS/Exchange.asmx"
     }
-    
+
     /** Centralized transport layer (SRP: HTTP/WBXML/Provision) */
     val transport: EasTransport by lazy {
         EasTransport(
@@ -107,21 +107,21 @@ class EasClient(
             initialPolicyKey = initialPolicyKey
         )
     }
-    
+
     val versionDetector: EasVersionDetector by lazy {
         EasVersionDetector(transport)
     }
-    
+
     private var easVersion: String
         get() = transport.easVersion
         set(value) { transport.easVersion = value }
-    
+
     private val versionDetected: Boolean
         get() = versionDetector.versionDetected
-    
+
     private val serverSupportedVersions: List<String>
         get() = versionDetector.serverSupportedVersions
-    
+
     fun isExchange2007(): Boolean = versionDetector.isExchange2007()
 
     val folderSyncService: EasFolderSyncService by lazy {
@@ -132,12 +132,12 @@ class EasClient(
     private val deviceId = generateStableDeviceId(username, deviceIdSuffix)
     // DeviceType - как у Huawei
     private val deviceType = "Android"
-    
+
     // === Сервисы (SOLID: Single Responsibility) ===
-    
+
     val contactsService: EasContactsService by lazy {
         EasContactsService(
-            executeCommand = { cmd, xml, parser -> 
+            executeCommand = { cmd, xml, parser ->
                 transport.executeEasCommand(cmd, xml, parser = parser)
             },
             folderSync = { syncKey -> folderSync(syncKey) },
@@ -145,7 +145,7 @@ class EasClient(
             getEasVersion = { transport.easVersion }
         )
     }
-    
+
     val tasksService: EasTasksService by lazy {
         EasTasksService(EasTasksService.TasksServiceDependencies(
             executeEasCommand = object : EasTasksService.EasCommandExecutor {
@@ -167,12 +167,12 @@ class EasClient(
             executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
             tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
             getEwsUrl = { transport.ewsUrl },
-            sendMail = { to, subject, body, cc, bcc, importance -> 
-                sendMail(to, subject, body, cc, bcc, importance) 
+            sendMail = { to, subject, body, cc, bcc, importance ->
+                sendMail(to, subject, body, cc, bcc, importance)
             }
         ))
     }
-    
+
     val notesService: EasNotesService by lazy {
         EasNotesService(EasNotesService.NotesServiceDependencies(
             executeEasCommand = object : EasNotesService.EasCommandExecutor {
@@ -198,7 +198,7 @@ class EasClient(
             findEwsNoteItemId = { ewsUrl, serverId, subject, searchInDeletedItems -> findEwsNoteItemId(ewsUrl, serverId, subject, searchInDeletedItems) }
         ))
     }
-    
+
     val calendarService: EasCalendarService by lazy {
         EasCalendarService(EasCalendarService.CalendarServiceDependencies(
             executeEasCommand = object : EasCalendarService.EasCommandExecutor {
@@ -222,7 +222,7 @@ class EasClient(
             parseEasDate = { dateStr -> parseCalendarDate(dateStr) }
         ))
     }
-    
+
     val draftsService: EasDraftsService by lazy {
         EasDraftsService(EasDraftsService.DraftsServiceDependencies(
             executeEasCommand = object : EasDraftsService.EasCommandExecutor {
@@ -246,7 +246,7 @@ class EasClient(
             getDraftsFolderId = { getDraftsFolderId() }
         ))
     }
-    
+
     val emailService: EasEmailService by lazy {
         EasEmailService(EasEmailService.EmailServiceDependencies(
             executeEasCommand = object : EasEmailService.EasCommandExecutor {
@@ -267,7 +267,7 @@ class EasClient(
             extractValue = { xml, tag -> extractValue(xml, tag) },
             escapeXml = { text -> escapeXml(text) },
             wbxmlParser = wbxmlParser,
-            getFromEmail = { 
+            getFromEmail = {
                 if (deviceIdSuffix.contains("@")) deviceIdSuffix
                 else if (domain.isNotEmpty() && !username.contains("@")) "$username@$domain"
                 else username
@@ -282,11 +282,11 @@ class EasClient(
             extractEwsError = { xml -> transport.extractEwsError(xml) }
         ))
     }
-    
+
     val attachmentService: EasAttachmentService by lazy {
         EasAttachmentService(EasAttachmentService.AttachmentServiceDependencies(
             executeRequest = { request -> transport.executeRequest(request) },
-            executeEasCommand = { command, xml, parser -> 
+            executeEasCommand = { command, xml, parser ->
                 transport.executeEasCommand(command, xml) { responseXml -> parser(responseXml) }
             },
             buildUrl = { command -> transport.buildUrl(command) },
@@ -295,7 +295,8 @@ class EasClient(
             getEasVersion = { transport.easVersion },
             provision = { transport.provision() },
             wbxmlGenerateSendMail = { clientId, mimeBytes -> wbxmlParser.generateSendMail(clientId, mimeBytes) },
-            getFromEmail = { 
+            wbxmlGenerateSmartForward = { clientId, folderId, itemIdParam, mimeBytes -> wbxmlParser.generateSmartForward(clientId, folderId, itemIdParam, mimeBytes) },
+            getFromEmail = {
                 if (deviceIdSuffix.contains("@")) deviceIdSuffix
                 else if (domain.isNotEmpty() && !username.contains("@")) "$username@$domain"
                 else username
@@ -306,17 +307,17 @@ class EasClient(
             getNormalizedServerUrl = { normalizedServerUrl }
         ))
     }
-    
+
     var policyKey: String?
         get() = transport.policyKey
         set(value) { transport.policyKey = value }
 
     data class FolderCreateResult(val serverId: String, val newSyncKey: String)
-    
+
     suspend fun detectEasVersion(): EasResult<String> = versionDetector.detect()
-    
+
     fun getServerInfo(): Map<String, Any> = versionDetector.getServerInfo()
-    
+
     init {
         // Валидация клиентского сертификата
         if (clientCertificatePath != null && clientCertificatePassword.isNullOrBlank()) {
@@ -324,12 +325,12 @@ class EasClient(
             throw IllegalArgumentException("CLIENT_CERT_PASSWORD_REQUIRED")
         }
     }
-    
+
     companion object {
         // Content-Type константы
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         private const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
-        
+
         // Regex паттерны вынесены в EasPatterns.kt (DRY)
         // Алиасы для обратной совместимости
         private val EMAIL_BRACKET_REGEX get() = EasPatterns.EMAIL_BRACKET
@@ -347,7 +348,7 @@ class EasClient(
         private val ITEM_OPS_DATA_REGEX get() = EasPatterns.ITEM_OPS_DATA
         private val ITEM_OPS_PROPS_DATA_REGEX get() = EasPatterns.ITEM_OPS_PROPS_DATA
         private val FOLDER_REGEX get() = EasPatterns.FOLDER
-        
+
         private const val FALLBACK_PROBE_TIMEOUT_MS = 3000
 
         /**
@@ -390,36 +391,36 @@ class EasClient(
                 .substringBefore("/")  // убираем путь
                 .substringBefore(":")  // убираем порт если есть
                 .trim()
-            
+
             // Если хост пустой - возвращаем fallback (для обратной совместимости)
             if (hostOnly.isEmpty()) {
                 android.util.Log.w("EasClient", "Empty server URL provided: $url")
                 val scheme = if (useHttps) "https" else "http"
                 return "$scheme://exchange.local:$port"
             }
-            
+
             val scheme = if (useHttps) "https" else "http"
             return "$scheme://$hostOnly:$port"
         }
     }
-    
+
     private fun generateStableDeviceId(username: String, suffix: String): String {
         // Генерируем СТАБИЛЬНЫЙ DeviceId на основе username
         // Это важно чтобы сервер не требовал Provision при каждом запросе
         val hash = (username + suffix).hashCode().toLong() and 0xFFFFFFFFL
         return "androidc${String.format("%010d", hash % 10000000000L)}"
     }
-    
+
     private fun getAuthHeader(): String = transport.getAuthHeader()
-    
+
     private fun buildUrl(command: String): String = transport.buildUrl(command)
-    
+
     /**
      * Проверка подключения к серверу и определение версии EAS
      */
     suspend fun testConnection(): EasResult<String> {
         val versionResult = detectEasVersion()
-        
+
         return when (versionResult) {
             is EasResult.Success -> {
                 val info = buildString {
@@ -437,7 +438,7 @@ class EasClient(
     }
 
     suspend fun provision(): EasResult<String> = transport.provision()
-    
+
     /**
      * Получает одно письмо из папки для верификации email (без сохранения в БД)
      * @param folderId ID папки (Отправленные или Входящие)
@@ -447,7 +448,7 @@ class EasClient(
         if (!versionDetected) {
             detectEasVersion()
         }
-        
+
         // Шаг 1: Получаем начальный SyncKey
         val initialXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
@@ -458,21 +459,21 @@ class EasClient(
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         var syncKey = "0"
         val initialResult = executeEasCommand("Sync", initialXml) { responseXml ->
             extractValue(responseXml, "SyncKey") ?: "0"
         }
-        
+
         when (initialResult) {
             is EasResult.Success -> syncKey = initialResult.data
             is EasResult.Error -> return EasResult.Error(initialResult.message)
         }
-        
+
         if (syncKey == "0") {
             return EasResult.Success(null) // Не удалось получить SyncKey
         }
-        
+
         // Шаг 2: Запрашиваем 1 письмо
         val syncXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
@@ -493,13 +494,13 @@ class EasClient(
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         return executeEasCommand("Sync", syncXml) { responseXml ->
             XmlUtils.extractTopLevelBlocks(responseXml, "Add")
                 .firstNotNullOfOrNull { parseEmail(it) }
         }
     }
-    
+
     /**
      * Синхронизация папок (FolderSync)
      * Для Exchange 2007 сначала делаем Provision если нет PolicyKey.
@@ -508,20 +509,20 @@ class EasClient(
      */
     suspend fun folderSync(syncKey: String = "0"): EasResult<FolderSyncResponse> =
         folderSyncService.folderSync(syncKey)
-    
+
     suspend fun createFolder(
         displayName: String,
         parentId: String = "0",
         folderType: Int = 12,
         syncKey: String
     ): EasResult<FolderCreateResult> = folderSyncService.createFolder(displayName, parentId, folderType, syncKey)
-    
+
     suspend fun deleteFolder(serverId: String, syncKey: String): EasResult<String> =
         folderSyncService.deleteFolder(serverId, syncKey)
-    
+
     suspend fun renameFolder(serverId: String, newDisplayName: String, syncKey: String): EasResult<String> =
         folderSyncService.renameFolder(serverId, newDisplayName, syncKey)
-    
+
     /**
      * Перемещение писем между папками (MoveItems)
      */
@@ -532,12 +533,12 @@ class EasClient(
         val movesXml = items.joinToString("") { (srcMsgId, srcFldId) ->
             "<Move><SrcMsgId>${escapeXml(srcMsgId)}</SrcMsgId><SrcFldId>${escapeXml(srcFldId)}</SrcFldId><DstFldId>${escapeXml(dstFolderId)}</DstFldId></Move>"
         }
-        
+
         val xml = """<?xml version="1.0" encoding="UTF-8"?>
 <MoveItems xmlns="Move">
     $movesXml
 </MoveItems>""".trimIndent()
-        
+
         return executeEasCommand("MoveItems", xml) { responseXml ->
             val results = mutableMapOf<String, String>()
             var failedCount = 0
@@ -548,7 +549,7 @@ class EasClient(
                 val srcMsgId = extractValue(responseContent, "SrcMsgId") ?: ""
                 val status = extractValue(responseContent, "Status")?.toIntOrNull() ?: 0
                 val dstMsgId = extractValue(responseContent, "DstMsgId") ?: ""
-                
+
                 // MS-ASCMD §2.2.3.177.10 — MoveItems status codes:
                 // 1 = Invalid source collection ID or item ID (устаревший serverId / уже перемещён)
                 // 2 = Invalid destination collection ID
@@ -576,18 +577,18 @@ class EasClient(
                     }
                 }
             }
-            
+
             // Если ВСЕ элементы отклонены — бросаем исключение.
             // Статус 1 (Invalid source) → устаревшие serverId → нужен ресинк.
             // Статус 7 (Locked) → transient → retry на уровне выше.
             if (results.isEmpty() && failedCount > 0) {
                 throw Exception("MOVEITEMS_ALL_FAILED:status=$lastErrorStatus,failed=$failedCount,locked=$lockedCount")
             }
-            
+
             results
         }
     }
-    
+
     /**
      * Получить актуальный syncKey для папки без загрузки данных.
      * Используется перед операциями удаления чтобы избежать "воскрешения" писем.
@@ -607,7 +608,7 @@ class EasClient(
                 is EasResult.Error -> initResult
             }
         }
-        
+
         // Делаем легкий sync чтобы получить актуальный syncKey
         // GetChanges=1 нужен чтобы сервер обновил состояние
         // WindowSize=1 минимизирует трафик
@@ -622,11 +623,11 @@ class EasClient(
         </Collection>
     </Collections>
 </Sync>""".trimIndent()
-        
+
         return executeEasCommand("Sync", xml) { responseXml ->
             val status = extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
             val newSyncKey = extractValue(responseXml, "SyncKey") ?: syncKey
-            
+
             when (status) {
                 1 -> newSyncKey // Success
                 3 -> throw Exception("INVALID_SYNCKEY") // Invalid SyncKey - нужен полный resync
@@ -634,7 +635,7 @@ class EasClient(
             }
         }
     }
-    
+
     /**
      * Безопасное выполнение операции с SyncKey и автоматическим retry при INVALID_SYNCKEY
      * @param folderId ID папки для синхронизации
@@ -648,7 +649,7 @@ class EasClient(
         operation: suspend (syncKey: String) -> EasResult<T>
     ): EasResult<T> {
         var result = operation(currentSyncKey)
-        
+
         // Если INVALID_SYNCKEY - получаем новый и повторяем
         if (result is EasResult.Error && result.message.contains("INVALID_SYNCKEY")) {
             try {
@@ -661,10 +662,10 @@ class EasClient(
                 return EasResult.Error("SyncKey retry failed: ${e.message}")
             }
         }
-        
+
         return result
     }
-    
+
     /**
      * Синхронизация писем (Sync)
      * @see EasEmailService.sync
@@ -675,7 +676,7 @@ class EasClient(
         windowSize: Int = 100,
         includeMime: Boolean = false
     ): EasResult<SyncResponse> = emailService.sync(collectionId, syncKey, windowSize, includeMime)
-    
+
     /**
      * Отправка письма (SendMail)
      * @see EasEmailService.sendMail
@@ -690,22 +691,67 @@ class EasClient(
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false
     ): EasResult<Boolean> = emailService.sendMail(to, subject, body, cc, bcc, importance, requestReadReceipt, requestDeliveryReceipt)
-    
+
     // buildMimeWithAttachments перенесён в EasAttachmentService
-    
+
+    /**
+     * Пересылка письма через SmartForward (MS-ASCMD §2.2.1.19)
+     * Сервер автоматически включает оригинальные вложения.
+     * @see EasEmailService.smartForward
+     */
+    suspend fun smartForward(
+        to: String,
+        subject: String,
+        body: String,
+        cc: String = "",
+        bcc: String = "",
+        collectionId: String,
+        itemId: String,
+        importance: Int = 1,
+        requestReadReceipt: Boolean = false,
+        requestDeliveryReceipt: Boolean = false
+    ): EasResult<Boolean> = emailService.smartForward(
+        to = to, subject = subject, body = body, cc = cc, bcc = bcc,
+        collectionId = collectionId, itemId = itemId, importance = importance,
+        requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt
+    )
+
+    /**
+     * Пересылка письма с вложениями через SmartForward (MS-ASCMD §2.2.1.19)
+     * @see EasAttachmentService.smartForwardWithAttachments
+     */
+    suspend fun smartForwardWithAttachments(
+        to: String,
+        subject: String,
+        body: String,
+        cc: String = "",
+        bcc: String = "",
+        attachments: List<Triple<String, String, ByteArray>>,
+        collectionId: String,
+        itemId: String,
+        requestReadReceipt: Boolean = false,
+        requestDeliveryReceipt: Boolean = false,
+        importance: Int = 1
+    ): EasResult<Boolean> = attachmentService.smartForwardWithAttachments(
+        to = to, subject = subject, body = body, cc = cc, bcc = bcc,
+        attachments = attachments, requestReadReceipt = requestReadReceipt,
+        requestDeliveryReceipt = requestDeliveryReceipt, importance = importance,
+        collectionId = collectionId, itemId = itemId
+    )
+
     /**
      * Загрузка тела письма с MDN информацией
      * @see EasEmailService.fetchEmailBodyWithMdn
      */
     suspend fun fetchEmailBodyWithMdn(collectionId: String, serverId: String): EasResult<EmailBodyResult> =
         emailService.fetchEmailBodyWithMdn(collectionId, serverId)
-    
+
     /**
      * Получает свежие метаданные вложений конкретного письма через ItemOperations
      */
     suspend fun fetchAttachmentMetadata(collectionId: String, serverId: String): EasResult<List<EasAttachment>> =
         emailService.fetchAttachmentMetadata(collectionId, serverId)
-    
+
     /**
      * Загрузка тела письма через EWS (fallback для Exchange 2007 SP1)
      *
@@ -742,7 +788,7 @@ class EasClient(
                     android.util.Log.w("EasClient", "fetchEmailBodyViaEws: unsupported folderType='$folderType', skipping fallback")
                     return@withContext EasResult.Success(EmailBodyResult(""))
                 }
-                
+
                 // Экранируем subject для XML
                 val escapedSubject = escapeXml(subject)
 
@@ -854,7 +900,7 @@ class EasClient(
 
                 val ewsItemId = candidateIds.singleOrNull()
                     ?: return@withContext EasResult.Success(EmailBodyResult(""))
-                
+
                 // Шаг 2: GetItem для получения тела
                 val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -879,10 +925,10 @@ class EasClient(
         </m:GetItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-                
+
                 val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
                     ?: return@withContext EasResult.Error("GetItem request failed")
-                
+
                 // Извлекаем Body
                 val bodyPattern = "<t:Body[^>]*>([\\s\\S]*?)</t:Body>".toRegex()
                 val bodyMatch = bodyPattern.find(getItemResponse)
@@ -913,7 +959,7 @@ class EasClient(
                         )
                     )
                 }
-                
+
                 EasResult.Success(EmailBodyResult(""))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -921,21 +967,21 @@ class EasClient(
             }
         }
     }
-    
+
     /**
      * Извлекает inline изображения из MIME данных
      * @see EasEmailService.extractInlineImagesFromMime
      */
     fun extractInlineImagesFromMime(mimeData: String): Map<String, String> =
         emailService.extractInlineImagesFromMime(mimeData)
-    
+
     /**
      * Загружает полный MIME письма и извлекает inline изображения
      * @see EasEmailService.fetchInlineImages
      */
     suspend fun fetchInlineImages(collectionId: String, serverId: String): EasResult<Map<String, String>> =
         emailService.fetchInlineImages(collectionId, serverId)
-    
+
     /**
      * Извлекает inline-картинки из EWS-based черновика (длинный ItemId, не EAS формат).
      * Загружает MIME через EWS GetItem (IncludeMimeContent=true) и парсит inline-части.
@@ -956,7 +1002,7 @@ class EasClient(
             is EasResult.Error -> mimeResult
         }
     }
-    
+
     /**
      * Отправка письма с вложениями
      * @see EasAttachmentService.sendMailWithAttachments
@@ -974,22 +1020,22 @@ class EasClient(
     ): EasResult<Boolean> = attachmentService.sendMailWithAttachments(
         to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance
     )
-    
+
     /**
      * Сохранение черновика в папку Drafts через Sync Add
      * Использует формат Email namespace для Exchange 2007+
-     * 
+     *
      * ВАЖНО: EAS официально НЕ поддерживает Sync Add для Email!
      * Эта функция оставлена для экспериментов - некоторые серверы могут принять.
      * В текущей версии приложения черновики сохраняются только локально.
      * @see EasDraftsService.saveDraft
      */
-    
+
     /**
      * Экранирует XML спецсимволы
      */
     private fun escapeXml(text: String): String = XmlUtils.escape(text)
-    
+
     /**
      * Расэкранирует XML entities обратно в символы.
      * КРИТИЧНО: WBXML-парсер выводит XML, где контент <Data> содержит
@@ -999,7 +1045,7 @@ class EasClient(
      * ложные entities (например, &amp;lt; → &lt; → <).
      */
     private fun unescapeXml(text: String): String = XmlUtils.unescape(text)
-    
+
     /**
      * Отправка отчёта о прочтении (MDN - Message Disposition Notification)
      * @param to email получателя отчёта (из заголовка Disposition-Notification-To)
@@ -1015,19 +1061,19 @@ class EasClient(
         originalSubject: String,
         originalMessageId: String? = null
     ): EasResult<Boolean> = attachmentService.sendMdn(to, originalSubject, originalMessageId)
-    
+
     // buildMdnMessage перенесён в EasAttachmentService
-    
+
     /**
      * Скачивание вложения в память (ByteArray).
      * @see EasAttachmentService.downloadAttachment
      */
     suspend fun downloadAttachment(
-        fileReference: String, 
-        collectionId: String? = null, 
+        fileReference: String,
+        collectionId: String? = null,
         serverId: String? = null
     ): EasResult<ByteArray> = attachmentService.downloadAttachment(fileReference, collectionId, serverId)
-    
+
     /**
      * Скачивание вложения в файл (streaming, без OOM для больших файлов).
      * @see EasAttachmentService.downloadAttachmentToFile
@@ -1046,11 +1092,11 @@ class EasClient(
             draftsService.downloadAttachmentEws(fileReference)
         }
     }
-    
-    // Методы загрузки вложений (downloadViaItemOperations, tryItemOperations, 
-    // doItemOperationsFetch, parseItemOperationsResponse, downloadViaGetAttachment, 
+
+    // Методы загрузки вложений (downloadViaItemOperations, tryItemOperations,
+    // doItemOperationsFetch, parseItemOperationsResponse, downloadViaGetAttachment,
     // tryGetAttachment) перенесены в EasAttachmentService
-    
+
     // Методы загрузки вложений (~250 строк) перенесены в EasAttachmentService:
     // - downloadViaItemOperationsFetchEmail
     // - downloadViaItemOperations
@@ -1059,15 +1105,15 @@ class EasClient(
     // - parseItemOperationsResponse
     // - downloadViaGetAttachment
     // - tryGetAttachment
-    
+
     /**
      * Direct Push - Ping запрос для получения уведомлений о новых письмах
      * Сервер держит соединение открытым до таймаута или до появления изменений
-     * 
+     *
      * @param folderIds список ServerId папок для мониторинга
      * @param heartbeatInterval интервал в секундах (60-3540, рекомендуется 900)
      * @return PingResult со статусом и списком изменённых папок
-     * 
+     *
      * Статусы:
      * 1 - Таймаут, изменений нет
      * 2 - Есть изменения в папках (нужно синхронизировать)
@@ -1085,14 +1131,14 @@ class EasClient(
         if (folderIds.isEmpty()) {
             return EasResult.Error("Нет папок для мониторинга")
         }
-        
+
         val foldersXml = folderIds.joinToString("\n") { folderId ->
             """                <Folder>
                     <Id>${escapeXml(folderId)}</Id>
                     <Class>Email</Class>
                 </Folder>"""
         }
-        
+
         val xml = """<?xml version="1.0" encoding="UTF-8"?>
 <Ping xmlns="Ping">
     <HeartbeatInterval>$heartbeatInterval</HeartbeatInterval>
@@ -1100,14 +1146,14 @@ class EasClient(
 $foldersXml
     </Folders>
 </Ping>""".trimIndent()
-        
+
         return withContext(Dispatchers.IO) {
             try {
                 val url = transport.buildUrl("Ping")
                 val wbxmlBody = wbxmlParser.generate(xml)
-                
+
                 val pingClient = getPingClient(heartbeatInterval)
-                
+
                 val requestBuilder = Request.Builder()
                     .url(url)
                     .post(wbxmlBody.toRequestBody(EasTransport.CONTENT_TYPE_WBXML.toMediaType()))
@@ -1115,11 +1161,11 @@ $foldersXml
                     .header("MS-ASProtocolVersion", transport.easVersion)
                     .header("Content-Type", EasTransport.CONTENT_TYPE_WBXML)
                     .header("User-Agent", "Android/12-EAS-2.0")
-                
+
                 transport.policyKey?.let { key ->
                     requestBuilder.header("X-MS-PolicyKey", key)
                 }
-                
+
                 val call = pingClient.newCall(requestBuilder.build())
                 val response = suspendCancellableCoroutine { cont ->
                     cont.invokeOnCancellation { call.cancel() }
@@ -1133,36 +1179,36 @@ $foldersXml
                         }
                     })
                 }
-                
+
                 response.use { resp ->
                     if (resp.code == 449) {
                         return@withContext EasResult.Error("Требуется Provision (449)")
                     }
-                    
+
                     if (!resp.isSuccessful) {
                         return@withContext EasResult.Error("HTTP ${resp.code}: ${resp.message}")
                     }
-                    
+
                     val responseBody = resp.body?.bytes()
-                    
+
                     if (responseBody == null || responseBody.isEmpty()) {
                         return@withContext EasResult.Success(PingResult(1, emptyList()))
                     }
-                    
+
                     val responseXml = wbxmlParser.parse(responseBody)
                     val status = extractValue(responseXml, "Status")?.toIntOrNull() ?: 1
                     val changedFolders = mutableListOf<String>()
-                    
+
                     FOLDER_REGEX.findAll(responseXml).forEach { match ->
                         val folderId = extractValue(match.groupValues[1], "Id")
                         if (folderId != null) {
                             changedFolders.add(folderId)
                         }
                     }
-                    
+
                     EasResult.Success(PingResult(status, changedFolders))
                 }
-                
+
             } catch (e: java.net.SocketTimeoutException) {
                 EasResult.Success(PingResult(1, emptyList()))
             } catch (e: Exception) {
@@ -1171,7 +1217,7 @@ $foldersXml
             }
         }
     }
-    
+
     /**
      * Пометить письмо как прочитанное
      * @see EasEmailService.markAsRead
@@ -1183,7 +1229,7 @@ $foldersXml
         read: Boolean = true,
         subject: String? = null
     ): EasResult<String> = emailService.markAsRead(collectionId, serverId, syncKey, read, subject)
-    
+
     /**
      * Батч-пометка нескольких писем как прочитанных одним Sync-запросом
      * @see EasEmailService.markAsReadBatch
@@ -1194,7 +1240,7 @@ $foldersXml
         syncKey: String,
         read: Boolean = true
     ): EasResult<String> = emailService.markAsReadBatch(collectionId, serverIds, syncKey, read)
-    
+
     /**
      * Переключить флаг письма (избранное)
      * @see EasEmailService.toggleFlag
@@ -1205,7 +1251,7 @@ $foldersXml
         syncKey: String,
         flagged: Boolean
     ): EasResult<String> = emailService.toggleFlag(collectionId, serverId, syncKey, flagged)
-    
+
     /**
      * Удалить письмо (перемещает в корзину)
      * @see EasEmailService.deleteEmail
@@ -1215,7 +1261,7 @@ $foldersXml
         serverId: String,
         syncKey: String
     ): EasResult<String> = emailService.deleteEmail(collectionId, serverId, syncKey)
-    
+
     /**
      * Окончательно удалить письмо через EWS (без перемещения в корзину)
      * @see EasEmailService.deleteEmailPermanentlyViaEWS
@@ -1224,7 +1270,7 @@ $foldersXml
         serverId: String,
         subject: String = ""
     ): EasResult<Unit> = emailService.deleteEmailPermanentlyViaEWS(serverId, subject)
-    
+
     /**
      * Окончательно удалить письмо через EAS Sync Delete
      * @see EasEmailService.deleteEmailPermanently
@@ -1234,7 +1280,7 @@ $foldersXml
         serverId: String,
         syncKey: String
     ): EasResult<String> = emailService.deleteEmailPermanently(collectionId, serverId, syncKey)
-    
+
     /**
      * Batch удаление писем
      * @see EasEmailService.deleteEmailsPermanentlyBatch
@@ -1244,20 +1290,20 @@ $foldersXml
         serverIds: List<String>,
         syncKey: String
     ): EasResult<String> = emailService.deleteEmailsPermanentlyBatch(collectionId, serverIds, syncKey)
-    
+
     private suspend fun <T> executeEasCommand(
         command: String,
         xml: String,
         skipPolicyKey: Boolean = false,
         parser: (String) -> T
     ): EasResult<T> = transport.executeEasCommand(command, xml, skipPolicyKey, parser)
-    
+
     private suspend fun executeRequest(request: Request): Response = transport.executeRequest(request)
-    
-    
+
+
     private fun parseEmail(xml: String): EasEmail? {
         val serverId = extractValue(xml, "ServerId") ?: return null
-        
+
         val attachments = mutableListOf<EasAttachment>()
         for (attXml in XmlUtils.extractTopLevelBlocks(xml, "Attachment")) {
             val fileRef = extractValue(attXml, "FileReference") ?: ""
@@ -1277,32 +1323,32 @@ $foldersXml
                 ))
             }
         }
-        
+
         val bodyType = extractValue(xml, "Type")?.toIntOrNull() ?: 1
-        val rawBody = extractValue(xml, "Data") 
+        val rawBody = extractValue(xml, "Data")
             ?: run {
                 // Пробуем с namespace
                 val pattern = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
                 pattern.find(xml)?.groupValues?.get(1)
             }
             ?: ""
-        
+
         // КРИТИЧНО: Расэкранируем XML entities из <Data>.
         // WBXML-парсер выводит XML, где HTML-теги внутри <Data> закодированы:
         // &lt;div&gt; вместо <div>, &lt;br&gt; вместо <br> и т.д.
         // Без этого тело письма отображается как сырой текст с &lt; &gt;
         val decodedBody = if (rawBody.isNotEmpty()) unescapeXml(rawBody) else rawBody
-        
+
         // КРИТИЧНО: Если Type=4 (MIME), извлекаем HTML из MIME
         val body = if (bodyType == 4 && decodedBody.isNotBlank()) {
             extractBodyFromMime(decodedBody)
         } else {
             decodedBody
         }
-        
+
         val flagXml = XmlUtils.extractTagValue(xml, "Flag")
         val flagged = flagXml?.let { extractValue(it, "FlagStatus") == "2" } ?: false
-        
+
         // MS-ASEMAIL 2.2.2.58: Read — optional. "1" = read, "0" = unread.
         // Exchange 2007 SP1 may omit <Read> for some emails (old system entries).
         // Default to true (read) when absent: server sends <Read>0</Read> explicitly for unread.
@@ -1328,20 +1374,20 @@ $foldersXml
             flagged = flagged
         )
     }
-    
+
     private fun extractValue(xml: String, tag: String): String? {
         return XmlUtils.extractTagValue(xml, tag)
     }
-    
+
     /**
      * Строит EWS SOAP запрос с Exchange2007_SP1 header
      */
     private fun buildEwsSoapRequest(bodyContent: String): String = transport.buildEwsSoapRequest(bodyContent)
-    
+
     /**
      * Синхронизация контактов из папки Contacts на сервере Exchange
      * Возвращает список контактов
-     * 
+     *
      * @see EasContactsService.syncContacts
      */
     suspend fun syncContacts(): EasResult<List<GalContact>> {
@@ -1356,7 +1402,7 @@ $foldersXml
 
     val contactsSyncWasAuthoritative: Boolean
         get() = contactsService.lastSyncWasAuthoritative
-    
+
     /**
      * Создание заметки на сервере Exchange
      * @see EasNotesService.createNote
@@ -1364,7 +1410,7 @@ $foldersXml
     suspend fun createNote(subject: String, body: String): EasResult<String> {
         return notesService.createNote(subject, body)
     }
-    
+
     /**
      * Удаление заметки на сервере Exchange
      * @see EasNotesService.deleteNote
@@ -1394,7 +1440,7 @@ $foldersXml
         notesService.deleteNotesPermanentlyBatch(serverIds)
 
     private suspend fun getDeletedItemsFolderId(): String? = folderSyncService.getDeletedItemsFolderId()
-    
+
     /**
      * Обновление заметки на сервере Exchange
      * @see EasNotesService.updateNote
@@ -1402,7 +1448,7 @@ $foldersXml
     suspend fun updateNote(serverId: String, subject: String, body: String): EasResult<Boolean> {
         return notesService.updateNote(serverId, subject, body)
     }
-    
+
     /**
      * Восстановление заметки из корзины (Deleted Items) обратно в Notes
      * @see EasNotesService.restoreNote
@@ -1410,7 +1456,7 @@ $foldersXml
     suspend fun restoreNote(serverId: String): EasResult<String> {
         return notesService.restoreNote(serverId)
     }
-    
+
     /**
      * Синхронизация заметок из папки Notes на сервере Exchange
      * @see EasNotesService.syncNotes
@@ -1421,19 +1467,19 @@ $foldersXml
 
     val notesIncrementalNoChanges: Boolean
         get() = notesService.lastSyncWasIncrementalNoChanges
-    
+
     private suspend fun performNtlmHandshake(ewsUrl: String, soapRequest: String, action: String): String? =
         transport.performNtlmHandshake(ewsUrl, soapRequest, action)
-    
+
     private suspend fun executeNtlmRequest(ewsUrl: String, soapRequest: String, authHeader: String, action: String): String? =
         transport.executeNtlmRequest(ewsUrl, soapRequest, authHeader, action)
-    
+
     private suspend fun tryBasicAuthEws(ewsUrl: String, soapRequest: String, action: String): String? =
         transport.tryBasicAuthEws(ewsUrl, soapRequest, action)
 
     private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? =
         transport.executeEwsWithAuth(ewsUrl, soapRequest, operation)
-    
+
     /**
      * Создание события календаря на сервере Exchange
      * Делегирует в CalendarService
@@ -1454,7 +1500,7 @@ $foldersXml
     ): EasResult<String> = calendarService.createCalendarEvent(
         subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType, attachments
     )
-    
+
     /**
      * Удаление события календаря на сервере Exchange
      * Делегирует в CalendarService
@@ -1466,9 +1512,9 @@ $foldersXml
         isMeeting: Boolean = false,
         isOrganizer: Boolean = false,
         isRecurringSeries: Boolean = false
-    ): EasResult<Boolean> = 
+    ): EasResult<Boolean> =
         calendarService.deleteCalendarEvent(serverId, isMeeting, isOrganizer, isRecurringSeries)
-    
+
     /**
      * Batch-удаление событий календаря (один EWS DeleteItem на группу).
      * @param requests список DeleteRequest (serverId, isMeeting, isOrganizer, isRecurringSeries)
@@ -1486,7 +1532,7 @@ $foldersXml
         isOrganizer: Boolean = false
     ): EasResult<Boolean> =
         calendarService.deleteSingleOccurrenceEws(searchSubject, occurrenceStartTime, isMeeting, isOrganizer)
-    
+
     /**
      * Обновление события календаря на сервере Exchange
      * Делегирует в CalendarService
@@ -1506,11 +1552,12 @@ $foldersXml
         oldSubject: String? = null,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        newAttendeesToAppend: List<String> = emptyList()
+        newAttendeesToAppend: List<String> = emptyList(),
+        oldSensitivity: Int? = null
     ): EasResult<String> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, oldSubject, recurrenceType, attachments, newAttendeesToAppend
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, oldSubject, recurrenceType, attachments, newAttendeesToAppend, oldSensitivity
     )
-    
+
     /**
      * Обновление одного вхождения повторяющегося события (MS-ASCAL Exception).
      */
@@ -1543,7 +1590,7 @@ $foldersXml
     suspend fun deleteCalendarAttachments(
         attachmentIds: List<String>
     ): EasResult<Boolean> = calendarService.deleteCalendarAttachments(attachmentIds)
-    
+
     /**
      * Ответ на приглашение на встречу.
      * MS-ASCMD §2.2.1.11: EAS 12.1 MeetingResponse использует RequestId (ServerId письма)
@@ -1623,7 +1670,7 @@ $foldersXml
             EasResult.Error(e.message ?: "MeetingResponse failed")
         }
     }
-    
+
     /**
      * Находит EWS ItemId события календаря с ChangeKey
      * Возвращает пару (ItemId, ChangeKey)
@@ -1648,7 +1695,7 @@ $foldersXml
         </m:GetItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-            
+
             val ntlmAuth = performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
             if (ntlmAuth != null) {
                 val responseXml = executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem")
@@ -1663,7 +1710,7 @@ $foldersXml
             // Для meeting response нужен реальный item identity с актуальным ChangeKey.
             return null
         }
-        
+
         if (subject.isBlank()) {
             android.util.Log.w("EasClient", "findEwsCalendarItemIdWithChangeKey: empty subject — cannot safely identify calendar item")
             return null
@@ -1695,18 +1742,18 @@ $foldersXml
         </m:FindItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-        
+
         val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
             ?: return null
-        
+
         val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
             ?: return null
-        
+
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
         val match = itemIdPattern.find(responseXml)
         return match?.let { Pair(it.groupValues[1], it.groupValues[2]) }
     }
-    
+
     /**
      * Ответ на приглашение через EWS (fallback для EAS)
      */
@@ -1722,17 +1769,17 @@ $foldersXml
                     return@withContext EasResult.Error("EWS fallback requires the original meeting request EWS ItemId")
                 }
                 val ewsUrl = this@EasClient.ewsUrl
-                
+
                 val itemInfo = findEwsCalendarItemIdWithChangeKey(ewsUrl, serverId, subject)
-                
+
                 if (itemInfo == null) {
                     return@withContext EasResult.Error("Не удалось найти исходное письмо-приглашение на сервере")
                 }
-                
+
                 val (ewsItemId, changeKey) = itemInfo
                 val escapedItemId = escapeXml(ewsItemId)
                 val escapedChangeKey = escapeXml(changeKey)
-                
+
                 // Определяем тип ответа для EWS
                 val responseType = when (response.lowercase()) {
                     "accept" -> "AcceptItem"
@@ -1740,9 +1787,9 @@ $foldersXml
                     "decline" -> "DeclineItem"
                     else -> "AcceptItem"
                 }
-                
+
                 val messageDisposition = if (sendResponse) "SendAndSaveCopy" else "SaveOnly"
-                
+
                 val soapRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -1760,21 +1807,21 @@ $foldersXml
         </m:CreateItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-                
+
                 val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
                 if (ntlmAuth == null) {
                     return@withContext EasResult.Error("NTLM аутентификация не удалась")
                 }
-                
+
                 val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
                 if (responseXml == null) {
                     return@withContext EasResult.Error("Не удалось выполнить запрос")
                 }
-                
+
                 if (EwsClient.isEwsSuccess(responseXml)) {
                     return@withContext EasResult.Success(true)
                 }
-                
+
                 // Извлекаем сообщение об ошибке
                 val errorMsg = EWS_MESSAGE_TEXT_REGEX.find(responseXml)?.groupValues?.get(1) ?: "Неизвестная ошибка"
                 EasResult.Error(errorMsg)
@@ -1784,7 +1831,7 @@ $foldersXml
             }
         }
     }
-    
+
     /**
      * Синхронизация календаря из папки Calendar на сервере Exchange
      * Делегирует в CalendarService
@@ -1802,12 +1849,12 @@ $foldersXml
 
     private fun parseCalendarDate(dateStr: String?): Long {
         if (dateStr.isNullOrBlank()) return 0L
-        
+
         // Очищаем строку от Z и миллисекунд
         val cleanDate = dateStr.trim()
             .replace("Z", "")
             .substringBefore(".")
-        
+
         // Список форматов даты, которые может отправлять Exchange
         val formats = listOf(
             "yyyy-MM-dd'T'HH:mm:ss",      // 2020-12-25T14:00:00
@@ -1816,7 +1863,7 @@ $foldersXml
             "yyyy-MM-dd",                  // 2020-12-25
             "yyyyMMdd"                     // 20201225
         )
-        
+
         for (format in formats) {
             try {
                 val sdf = java.text.SimpleDateFormat(format, java.util.Locale.US)
@@ -1829,27 +1876,27 @@ $foldersXml
                 // Пробуем следующий формат
             }
         }
-        
+
         // Если ничего не подошло, логируем и возвращаем 0
         android.util.Log.w("EasClient", "Failed to parse calendar date: $dateStr")
         return 0L
     }
 
     // ==================== ЗАДАЧИ (TASKS) ====================
-    
+
     /**
      * Получает ID папки задач с кэшированием и автоматической инвалидацией при ошибке
      * @param forceRefresh принудительно обновить кэш
      */
     private suspend fun getTasksFolderId(forceRefresh: Boolean = false): String? =
         folderSyncService.getTasksFolderId(forceRefresh)
-    
+
     /**
      * Получение ID папки Notes с кэшированием
      */
     private suspend fun getNotesFolderId(forceRefresh: Boolean = false): String? =
         folderSyncService.getNotesFolderId(forceRefresh)
-    
+
     /**
      * Получение ID папки черновиков
      */
@@ -1860,7 +1907,7 @@ $foldersXml
     private fun extractBodyFromMime(mimeData: String): String {
         return MimeHtmlProcessor.extractHtmlFromMime(mimeData)
     }
-    
+
     /**
      * Находит EWS ItemId для заметки по Subject через EWS FindItem с Restriction.
      * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
@@ -1912,9 +1959,9 @@ $foldersXml
         }
         return null
     }
-    
+
     private suspend fun getDraftsFolderId(): String? = folderSyncService.getDraftsFolderId()
-    
+
     /**
      * Синхронизация задач из папки Tasks на сервере Exchange
      * @see EasTasksService.syncTasks
@@ -1922,7 +1969,7 @@ $foldersXml
     suspend fun syncTasks(): EasResult<List<EasTask>> {
         return tasksService.syncTasks()
     }
-    
+
     /**
      * Создание задачи на сервере Exchange
      * @see EasTasksService.createTask
@@ -1939,7 +1986,7 @@ $foldersXml
     ): EasResult<String> {
         return tasksService.createTask(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo)
     }
-    
+
     /**
      * Экранирование текста для iCalendar
      */
@@ -1951,7 +1998,7 @@ $foldersXml
             .replace("\n", "\\n")
             .replace("\r", "")
     }
-    
+
     /**
      * Отправка приглашений на событие календаря
      */
@@ -1966,17 +2013,17 @@ $foldersXml
         val attendeeList = attendees.split(",", ";")
             .map { it.trim() }
             .filter { it.contains("@") }
-        
+
         if (attendeeList.isEmpty()) {
             return EasResult.Success(true)
         }
-        
+
         val dateFormat = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", java.util.Locale.US)
         dateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
-        
+
         val now = System.currentTimeMillis()
         val uid = java.util.UUID.randomUUID().toString()
-        
+
         // Получаем email отправителя
         val fromEmail = if (deviceIdSuffix.contains("@")) {
             deviceIdSuffix
@@ -1985,7 +2032,7 @@ $foldersXml
         } else {
             username
         }
-        
+
         // Формируем iCalendar VEVENT
         val vevent = buildString {
             append("BEGIN:VCALENDAR\r\n")
@@ -2013,7 +2060,7 @@ $foldersXml
             append("END:VEVENT\r\n")
             append("END:VCALENDAR\r\n")
         }
-        
+
         // Формируем тело письма
         val dateFormatDisplay = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
         val emailBodyText = buildString {
@@ -2026,7 +2073,7 @@ $foldersXml
                 append("\r\nОписание:\r\n$body\r\n")
             }
         }
-        
+
         // Отправляем каждому участнику с iCalendar вложением
         var lastError: String? = null
         for (attendee in attendeeList) {
@@ -2040,14 +2087,14 @@ $foldersXml
                 lastError = result.message
             }
         }
-        
+
         return if (lastError != null) {
             EasResult.Error(lastError)
         } else {
             EasResult.Success(true)
         }
     }
-    
+
     /**
      * Отправка письма с iCalendar вложением (для приглашений на встречи)
      */
@@ -2061,11 +2108,11 @@ $foldersXml
         if (to.isBlank() || !to.contains("@")) {
             return EasResult.Error("Неверный адрес получателя: $to")
         }
-        
+
         if (!versionDetected) {
             detectEasVersion()
         }
-        
+
         return withContext(Dispatchers.IO) {
         try {
             val fromEmail = if (deviceIdSuffix.contains("@")) {
@@ -2075,15 +2122,15 @@ $foldersXml
             } else {
                 username
             }
-            
+
             val messageId = "<${System.currentTimeMillis()}.${System.nanoTime()}@$deviceId>"
             val boundary = "----=_Part_${System.currentTimeMillis()}"
-            
+
             val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
             val date = dateFormat.format(java.util.Date())
-            
+
             val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
-            
+
             // Формируем MIME multipart сообщение с text/calendar
             val mimeMessage = buildString {
                 append("Date: $date\r\n")
@@ -2094,7 +2141,7 @@ $foldersXml
                 append("MIME-Version: 1.0\r\n")
                 append("Content-Type: multipart/alternative; boundary=\"$boundary\"\r\n")
                 append("\r\n")
-                
+
                 // Текстовая часть
                 append("--$boundary\r\n")
                 append("Content-Type: text/plain; charset=UTF-8\r\n")
@@ -2102,7 +2149,7 @@ $foldersXml
                 append("\r\n")
                 append(body)
                 append("\r\n")
-                
+
                 // iCalendar часть (METHOD:REQUEST для приглашения)
                 append("--$boundary\r\n")
                 append("Content-Type: text/calendar; charset=UTF-8; method=REQUEST\r\n")
@@ -2110,15 +2157,15 @@ $foldersXml
                 append("\r\n")
                 append(icalendar)
                 append("\r\n")
-                
+
                 append("--$boundary--\r\n")
             }
-            
+
             val mimeBytes = mimeMessage.toByteArray(Charsets.UTF_8)
             val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
             val url = buildUrl("SendMail") +
                 if (majorVersion < 14) "&SaveInSent=T" else ""
-            
+
             val (requestBody, contentType) = if (majorVersion >= 14) {
                 val clientId = System.currentTimeMillis().toString()
                 val wbxml = wbxmlParser.generateSendMail(clientId, mimeBytes)
@@ -2126,7 +2173,7 @@ $foldersXml
             } else {
                 Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
             }
-            
+
             val requestBuilder = Request.Builder()
                 .url(url)
                 .post(requestBody)
@@ -2134,14 +2181,14 @@ $foldersXml
                 .header("MS-ASProtocolVersion", easVersion)
                 .header("Content-Type", contentType)
                 .header("User-Agent", "Android/12-EAS-2.0")
-            
+
             policyKey?.let { key ->
                 requestBuilder.header("X-MS-PolicyKey", key)
             }
-            
+
             val request = requestBuilder.build()
             val response = executeRequest(request)
-            
+
             val firstResult = response.use { resp ->
                 if (resp.isSuccessful || resp.code == 200) {
                     val responseBody = resp.body?.bytes()
@@ -2161,7 +2208,7 @@ $foldersXml
                     EasResult.Error("Ошибка отправки: HTTP ${resp.code}")
                 }
             }
-            
+
             if (firstResult != null) {
                 firstResult
             } else {
@@ -2176,7 +2223,7 @@ $foldersXml
                             .header("User-Agent", "Android/12-EAS-2.0")
                             .apply { policyKey?.let { header("X-MS-PolicyKey", it) } }
                             .build()
-                        
+
                         executeRequest(retryRequest).use { retryResp ->
                             if (retryResp.isSuccessful) {
                                 EasResult.Success(true)
@@ -2194,7 +2241,7 @@ $foldersXml
         }
         }
     }
-    
+
     /**
      * Обновление задачи на сервере Exchange
      * @see EasTasksService.updateTask
@@ -2213,7 +2260,7 @@ $foldersXml
     ): EasResult<Boolean> {
         return tasksService.updateTask(serverId, subject, body, startDate, dueDate, complete, importance, reminderSet, reminderTime, oldSubject)
     }
-    
+
     /**
      * Удаление задачи на сервере Exchange (перемещение в корзину)
      * @see EasTasksService.deleteTask
@@ -2221,7 +2268,7 @@ $foldersXml
     suspend fun deleteTask(serverId: String): EasResult<Boolean> {
         return tasksService.deleteTask(serverId)
     }
-    
+
     /**
      * Окончательное удаление задачи (без перемещения в корзину)
      * @see EasTasksService.deleteTaskPermanently
@@ -2241,7 +2288,7 @@ $foldersXml
      */
     suspend fun deleteTasksPermanentlyBatch(serverIds: List<String>): EasResult<Int> =
         tasksService.deleteTasksPermanentlyBatch(serverIds)
-    
+
     /**
      * Восстановление задачи из корзины
      * Перемещает задачу из Deleted Items обратно в Tasks
@@ -2250,7 +2297,7 @@ $foldersXml
     suspend fun restoreTask(serverId: String, subject: String? = null): EasResult<String> {
         return tasksService.restoreTask(serverId, subject)
     }
-    
+
     /**
      * Отправить уведомление о назначении задачи
      * @see EasTasksService.sendTaskNotification
@@ -2264,7 +2311,7 @@ $foldersXml
     ) {
         tasksService.sendTaskNotification(assignTo, subject, body, dueDate, importance)
     }
-    
+
     /**
      * Поиск в глобальной адресной книге (GAL)
      * @see EasContactsService.searchGAL
@@ -2272,9 +2319,9 @@ $foldersXml
     suspend fun searchGAL(query: String, maxResults: Int = 100): EasResult<List<GalContact>> {
         return contactsService.searchGAL(query, maxResults)
     }
-    
+
     // ==================== ЧЕРНОВИКИ (DRAFTS) ====================
-    
+
     /**
      * Создание черновика на сервере Exchange
      * Делегирует в DraftsService
@@ -2288,14 +2335,14 @@ $foldersXml
     draftsFolderId: String? = null,
     attachments: List<DraftAttachmentData> = emptyList()
 ): EasResult<String> = draftsService.createDraft(to, cc, bcc, subject, body, draftsFolderId, attachments)
-    
+
     /**
      * Получить ВСЕ ItemId черновиков с данным subject.
      * Делегирует в DraftsService.findAllDraftItemIdsBySubject
      */
     suspend fun getAllItemIdsBySubject(subject: String): EasResult<List<String>> =
         draftsService.findAllDraftItemIdsBySubject(subject)
-    
+
     /**
      * Обновление черновика на сервере Exchange
      * Делегирует в DraftsService
@@ -2308,7 +2355,7 @@ $foldersXml
     subject: String,
     body: String
 ): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body)
-    
+
     /**
      * Полноценная синхронизация черновиков через EWS: FindItem + GetItem batch.
      * Возвращает полные черновики (body, recipients, attachments).
@@ -2321,11 +2368,11 @@ $foldersXml
      * Делегирует в DraftsService
      */
     suspend fun getDraftBody(serverId: String): EasResult<String> = draftsService.getDraftBody(serverId)
-    
+
     /**
      * Получение ПОЛНОГО EWS ItemId из папки Drafts по Subject
      * КРИТИЧНО для UpdateItem - EWS требует ПОЛНЫЙ ItemId, а ActiveSync возвращает КОРОТКИЙ
-     * 
+     *
      * @param subject Subject черновика для поиска
      * @return ПОЛНЫЙ EWS ItemId (например "AAMkADNi...")
      */
@@ -2333,7 +2380,7 @@ $foldersXml
         return withContext(Dispatchers.IO) {
             try {
                 val escapedSubject = escapeXml(subject)
-                
+
                 val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -2360,14 +2407,14 @@ $foldersXml
         </m:FindItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-                
+
                 val responseXml = executeEwsWithAuth(ewsUrl, getItemRequest, "FindItem")
                     ?: return@withContext EasResult.Error("Failed to execute FindItem")
-                
+
                 // Извлекаем ItemId из ответа
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
                 val fullItemId = itemIdPattern.find(responseXml)?.groupValues?.get(1)
-                
+
                 if (fullItemId != null) {
                     EasResult.Success(fullItemId)
                 } else {
@@ -2379,7 +2426,7 @@ $foldersXml
             }
         }
     }
-    
+
     /**
      * Находит EWS ItemId черновика в папке Drafts по Subject (EWS FindItem с Restriction).
      * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
@@ -2406,10 +2453,10 @@ $foldersXml
     </m:ParentFolderIds>
 </m:FindItem>""".trimIndent()
                 val findRequest = buildEwsSoapRequest(findBody)
-                
+
                 val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
                     ?: return@withContext null
-                
+
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
                 itemIdPattern.find(responseXml)?.groupValues?.get(1)
             } catch (e: Exception) {
@@ -2418,15 +2465,15 @@ $foldersXml
             }
         }
     }
-    
+
     /**
      * Удаление черновика с сервера Exchange
      * Делегирует в DraftsService
      */
     suspend fun deleteDraft(serverId: String): EasResult<Boolean> = draftsService.deleteDraft(serverId)
-    
+
     private fun extractEwsError(xml: String): String = transport.extractEwsError(xml)
-    
+
     /**
      * Unescape XML entities
      */

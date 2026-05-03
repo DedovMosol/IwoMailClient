@@ -48,7 +48,8 @@ class EasCalendarService internal constructor(
     data class CalendarSyncResult(
         val events: List<EasCalendarEvent>,
         val deletedServerIds: Set<String> = emptySet(),
-        val isAuthoritativeSnapshot: Boolean = true
+        val isAuthoritativeSnapshot: Boolean = true,
+        val attachmentMetadataReliable: Boolean = true
     )
 
     data class DeleteRequest(
@@ -159,11 +160,12 @@ class EasCalendarService internal constructor(
         oldSubject: String? = null,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        newAttendeesToAppend: List<String> = emptyList()
+        newAttendeesToAppend: List<String> = emptyList(),
+        oldSensitivity: Int? = null
     ): EasResult<String> = crudService.updateCalendarEvent(
         serverId, subject, startTime, endTime, location, body, allDayEvent,
         reminder, busyStatus, sensitivity, attendees, oldSubject,
-        recurrenceType, attachments, newAttendeesToAppend
+        recurrenceType, attachments, newAttendeesToAppend, oldSensitivity
     )
 
     suspend fun updateSingleOccurrence(

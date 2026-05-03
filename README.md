@@ -2,188 +2,167 @@
 
 🇬🇧 [English version](README_EN.md)
 
-Почтовый клиент для Android с поддержкой Microsoft Exchange Server 2007+ (ActiveSync/EWS), IMAP и POP3.
+Почтовый клиент для Android с основным фокусом на Microsoft Exchange Server 2007 SP1+ через Exchange ActiveSync и EWS. IMAP/POP3 присутствуют как beta-направление с ограниченной функциональностью.
 
-**Версия:** 1.6.2  
-**Разработчик:** DedovMosol  
-**Telegram:** [@i_wantout](https://t.me/i_wantout)  
+**Версия:** 1.6.2
+**Пакет:** `com.dedovmosol.iwomail`
+**Разработчик:** DedovMosol
+**Telegram:** [@i_wantout](https://t.me/i_wantout)
 **Email:** andreyid@outlook.com
 
-## 🌟 Особенности
+## Текущее состояние проекта
 
-- 📧 **Exchange ActiveSync** — поддержка EAS 12.0-14.1 (Exchange 2007+). Протестировано на Exchange 2007 SP1 (EAS 12.1)
-- 🔄 **EWS для Exchange 2007** — календарь, задачи, заметки, черновики через EWS с NTLMv2 (fallback для EAS 12.x)
-- 📬 **IMAP/POP3** — работа с любыми почтовыми серверами (скоро ожидается)
-- 📱 **Android 8.0 - 16** — работает на данных версиях Android
-- 🔒 **Совместимость с Exchange 2007** — поддержка TLS 1.0/1.1 через Conscrypt
-- 🔐 **Сертификаты сервера** — поддержка самоподписанных сертификатов для корпоративных серверов
-- 🔑 **Клиентские сертификаты** — mTLS аутентификация через PKCS#12 (.p12/.pfx) для корпоративных сред с двусторонней проверкой
-- 🌍 **Два языка** — 🇷🇺 Русский / 🇬🇧 English
-- 🎨 **Material Design 3** — современный интерфейс с цветовыми темами
-- 🔔 **Push-уведомления** — мгновенные уведомления о новых письмах (Direct Push)
+- **Production-фокус:** Exchange 2007 SP1/SP2 и совместимые on-premise Exchange-серверы.
+- **Основной протокол:** EAS 12.0/12.1/14.0/14.1 для почты, папок, контактов, Direct Push и части операций.
+- **EWS-дополнение:** календарь, задачи, заметки, черновики, вложения календаря, ответы на встречи и fallback-сценарии для Exchange 2007.
+- **Auth:** Basic Auth и NTLMv2; OAuth 2.0 / Modern Auth пока не реализованы.
+- **Локальная модель:** offline-first через Room DB, UI читает данные через Flow, фоновые сервисы обновляют базу.
 
-## 📱 Возможности
+## Возможности
 
-- ✅ **Почта** — синхронизация, отправка с вложениями, поиск, фильтры, избранное, управление папками, черновики, отложенная отправка, отправка группе пользователей
-- ✅ **Контакты** — личные и GAL, группы, импорт/экспорт (vCard, CSV)
-- ✅ **Календарь** — повторяющиеся события, назначение участников, вложения, ссылки на онлайн-встречи
-- ✅ **Заметки** — создание, редактирование, синхронизация
-- ✅ **Задачи** — создание, редактирование, назначение, напоминания, синхронизация
-- ✅ **Уведомления** — Push (Direct Push), фоновая синхронизация, ночной режим
-- ✅ **Автоочистка** — настраиваемая очистка Trash/Drafts/Spam для каждого аккаунта (по интервалу или отключение через «Никогда»)
-- ✅ **Виджет** — виджет на домашнем экране с быстрым доступом к письмам, поиску, календарю, задачам и написанию
-- ✅ **Интерфейс** — тёмная/светлая тема, 4 цветовые схемы, персонализация
-- ✅ **Несколько аккаунтов** — с индивидуальными подписями и настройками
-- ✅ **MDN/DSN** — запрос отчёта о прочтении и доставке
+- **Почта:** синхронизация системных и пользовательских папок, отправка HTML-писем, вложения, inline-изображения, CC/BCC, важность, поиск, фильтры, избранное, мультивыбор, batch-операции.
+- **Черновики:** серверный режим через Exchange/EWS и локальный beta-режим, выбор режима в онбординге и настройках аккаунта.
+- **Отправка:** отложенная отправка, очередь исходящих для offline-сценариев, undo-send, MDN/DSN-запросы.
+- **Контакты:** локальные и Exchange-контакты, GAL, группы, избранное, импорт/экспорт vCard/CSV, автодополнение адресов.
+- **Календарь:** события, встречи, участники, ответы на приглашения, повторения, исключения, напоминания, вложения, онлайн-ссылки, локальная корзина, окончательное удаление только после подтверждения сервера.
+- **Задачи:** активные/выполненные/важные/просроченные задачи, сроки, приоритеты, назначение, напоминания, корзина и восстановление.
+- **Заметки:** синхронизация Exchange Notes, создание/редактирование, корзина и восстановление.
+- **Уведомления:** Direct Push через EAS Ping, WorkManager-синхронизация, AlarmManager fallback, уведомления писем, календаря, задач, обновлений и исходящих.
+- **Интерфейс:** Jetpack Compose, Material 3, RU/EN локализация, тёмная/светлая тема, цветовые схемы, ежедневные темы, кастомные иконки файлов, drag selection.
+- **Виджет и shortcuts:** домашний виджет Glance, быстрый доступ к письмам, поиску, календарю, задачам и созданию письма.
+- **Обновления:** проверка `update.json` на GitHub, выбор APK по ABI, скачивание, установка и подготовка отката.
 
-📋 История изменений: [CHANGELOG_RU.md](docs/CHANGELOG_RU.md)
-
----
-
-## ⚠️ Важно: Переименование пакета
-
-**Версия 1.6.1 изменила имя пакета** с `com.iwo.iwomail` на `com.dedovmosol.iwomail`.
-
-**Это означает:**
-- ❌ Обновление старых версий через APK **невозможно** — Android воспринимает это как другое приложение
-- ⚠️ Требуется **полная переустановка** — удалить старую версию, установить новую
-- 💾 Данные будут утеряны — экспортируйте контакты/настройки перед обновлением
-- ✅ В будущих версиях обновления будут работать штатно
-
-**Как обновиться:**
-1. Экспортировать контакты (vCard/CSV) в приложении
-2. Удалить старую версию `com.iwo.iwomail`
-3. Установить новую версию `com.dedovmosol.iwomail`
-4. Настроить аккаунты заново
-5. Импортировать контакты
-
----
-
-## 📋 Требования
+## Требования
 
 | Параметр | Минимум | Рекомендуется |
 |----------|---------|---------------|
 | Android | 8.0+ (API 26) | — |
-| Оперативная память | 2 ГБ | 4+ ГБ |
+| RAM | 2 ГБ | 4+ ГБ |
 | Свободное место | 50 МБ | 100+ МБ |
-| Процессор | ARMv7 / x86 | ARM64 / x86_64 |
+| CPU/ABI | armeabi-v7a / x86 | arm64-v8a / x86_64 |
 
-- Target SDK: 36 (Android 16)
-- Поддерживаемые архитектуры: armeabi-v7a, arm64-v8a, x86, x86_64
+- **Compile SDK:** 36
+- **Target SDK:** 36
+- **Java/Kotlin target:** JVM 17
+- **APK:** universal + ABI splits для `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`
+- **Сборка:** требуется JDK 17 (минимум JDK 11 для Android Gradle Plugin 8.7.3)
 
-## 🖥️ Поддерживаемые серверы
+## Поддерживаемые серверы
 
 | Сервер | Статус |
 |--------|--------|
-| Exchange 2007 SP1/SP2 | ✅ Стабильно работает |
-| Exchange 2010/2013+ | ⚠️ Требует тестирования |
-| Office 365 | ⚠️ Требует OAuth |
-| IMAP/POP3 серверы | ⚠️ Beta |
+| Exchange 2007 SP1/SP2 | Стабильный основной сценарий |
+| Exchange 2010/2013/2016 on-premise | Архитектурно поддерживается через EAS/EWS, требует проверки на конкретной инфраструктуре |
+| Office 365 / Exchange Online | Ограничено: требуется OAuth/Modern Auth, который пока не реализован |
+| IMAP/POP3 | Beta: чтение/синхронизация через JavaMail, без полного parity с Exchange |
 
-## 💡 Известные ограничения
+## Календарь и вложения
 
-- **Office 365 / Modern Auth** — OAuth 2.0 пока не поддерживается (только Basic Auth)
-- **IMAP/POP3** — в beta-версии, может работать нестабильно
-- **EAS 16.0+** (Exchange 2016+) — не протестировано, возможны проблемы
-- **S/MIME подписи** — не поддерживается
+- **DRY для повторяющихся событий:** вложения календаря хранятся как JSON-метаданные (`fileReference`, имя, размер), а не как копии файлов для каждого occurrence.
+- **Exchange 2007 SP1:** загрузка/получение вложений календаря идёт через EWS `CreateAttachment`/`GetItem`; для recurring-серий используется master ItemId.
+- **Окончательное удаление:** локальное удаление из БД выполняется только после успешного удаления на сервере; операции сериализованы с календарной синхронизацией per-account mutex.
+- **Защита от CRA resurrection:** attendee-встречи перед удалением отклоняются через `MeetingResponse`/EWS `DeclineItem`; если исходный meeting request не найден, локальное удаление не выполняется.
+- **Preview cache:** предпросмотр вложений использует временный каталог `cacheDir/calendar_preview`, стабильные имена по `fileReference` и отложенную очистку без гонок с внешними просмотрщиками.
 
-## 📊 Технологический стек
+## Безопасность и совместимость
 
-**Язык и фреймворки:**
-- Kotlin 1.9.22
-- Jetpack Compose — UI
-- Coroutines + Flow — асинхронность
-- Material Design 3 — дизайн
+- **Conscrypt:** добавлен для TLS 1.0/1.1 и совместимости со старыми Exchange 2007-инсталляциями.
+- **Сертификаты сервера:** поддержка системных, пользовательских и самоподписанных сертификатов.
+- **mTLS:** клиентские сертификаты PKCS#12 (`.p12`/`.pfx`) с кэшированием KeyManager.
+- **Certificate Pinning:** хранение SHA-256, CN/O и дат сертификата в аккаунте.
+- **Пароли:** `EncryptedSharedPreferences`, fallback на обфусцированное хранилище при недоступности Keystore.
+- **Alternate URL:** основной и резервный URL Exchange с fallback при сетевых ошибках и последующим auto-switchback.
+- **XSS-защита тел писем:** `sanitizeEmailHtml` блокирует `<script>`, plugin-контейнеры (`iframe`/`object`/`embed`/`applet`), event-handlers, `meta http-equiv="refresh"`, `javascript:` и `data:text/html` URI во всех атрибутах с URL-контекстом. Комбинируется с `loadDataWithBaseURL(null, ...)` в WebView для изоляции от cross-origin контекста.
 
-**Хранилище:**
-- Room Database — локальная БД
-- DataStore — настройки и чекпоинты синхронизации/уведомлений по аккаунтам
+## Известные ограничения
 
-**Сеть и протоколы:**
-- OkHttp 4.12.0 — HTTP клиент
-- Conscrypt — TLS 1.0-1.3 (Exchange 2007 support)
-- EAS 12.0-14.1 — ActiveSync
-- EWS (NTLM) — Exchange Web Services
-- JavaMail (com.sun.mail) — IMAP/POP3
+- **OAuth 2.0 / Modern Auth:** не поддерживается.
+- **Office 365:** без Basic Auth обычно не работает.
+- **IMAP/POP3:** beta-реализация, не покрывает календарь, контакты, задачи, заметки, Direct Push и EWS-функции.
+- **S/MIME:** подписи и шифрование не реализованы.
+- **EAS 16.x:** явно не является целевой версией проекта; основной диапазон в коде — EAS 12.x-14.1.
 
-**Безопасность:**
-- Certificate Pinning (Public Key Pinning)
-- SSL/TLS mutual authentication (mTLS)
-- Self-signed certificates support
+## Технологический стек
 
-**Другое:**
-- WorkManager — фоновая синхронизация
-- Manual DI (RepositoryProvider) — dependency injection
-- Coil — загрузка изображений
+| Категория | Технологии |
+|-----------|------------|
+| Язык | Kotlin 1.9.22, Java 17 |
+| Android | AGP 8.7.3, minSdk 26, targetSdk 36 |
+| UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3 |
+| Асинхронность | Coroutines 1.7.3, Flow |
+| Хранилище | Room 2.6.1 (`MailDatabase` v40), DataStore Preferences |
+| Сеть | OkHttp 4.12.0, Conscrypt 2.5.2 |
+| Протоколы | EAS, EWS, JavaMail IMAP/POP3 |
+| Фоновые задачи | WorkManager 2.9.0, Foreground Service, AlarmManager |
+| Безопасность | AndroidX Security Crypto, TLS/mTLS, Certificate Pinning |
+| UI extras | Coil, Glance AppWidget |
+| DI | Manual DI через `RepositoryProvider` |
 
-## 🔧 Сборка
+## Архитектура кратко
 
-```bash
-./gradlew assembleDebug    # Debug
-./gradlew assembleRelease  # Release
-```
-
-## 📖 Документация
-
-- [История изменений](docs/CHANGELOG_RU.md)
-- [Архитектура проекта](docs/ARCHITECTURE.md)
-- [План миграции на XmlPullParser](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
-- [Политика конфиденциальности](docs/PRIVACY_POLICY.md)
-
-## 🤝 Вклад в проект
-
-Этот проект открыт для улучшений! Вот как вы можете помочь:
-
-**🐛 Сообщить о баге:**
-- Telegram: [@i_wantout](https://t.me/i_wantout)
-- Email: andreyid@outlook.com
-- [GitHub Issues](https://github.com/DedovMosol/IwoMailClient/issues)
-
-**💡 Предложить улучшение:**
-- Напишите в Telegram с описанием идеи
-- Или создайте Issue на GitHub
-
-**❓ Задать вопрос:**
-- По настройке Exchange 2007/2010/2013
-- По проблемам синхронизации
-- По любым техническим вопросам
-
-**🔧 Pull Requests:**
-- Приветствуются исправления багов
-- Приветствуются новые возможности
-- Следуйте существующему code style
-- Пишите понятные commit messages
-
-## 🏗️ Архитектура
-
-```
+```text
 UI Layer
-  Jetpack Compose — 22 экрана, 8 компонентов
-  Navigation, Theme, Localization
+  Jetpack Compose, Navigation, Theme, Localization
+  MainScreen, Setup/Verification, Mail, Compose, Contacts, Calendar, Notes, Tasks, Updates
     ↓
 Repository Layer
-  AccountRepository, MailRepository, CalendarRepository,
-  ContactRepository, NoteRepository, TaskRepository, SettingsRepository
-  + EmailSyncService, EmailOperationsService, FolderSyncService
+  AccountRepository, MailRepository, CalendarRepository, ContactRepository,
+  NoteRepository, TaskRepository, SettingsRepository, AccountServerHealthRepository
+  EmailSyncService, EmailOperationsService, FolderSyncService, AppFileCleanupService
     ↓
 Protocol Layer
-  EAS/EWS — EasClient (Email, Calendar, Tasks, Notes, Drafts, Contacts, Attachment)
-  IMAP — ImapClient  |  POP3 — Pop3Client
+  EasClient facade
+  EasTransport + EAS services + EWS client + IMAP/POP3 beta clients
     ↓
-Database Layer                    Network Layer
-  Room — 11 DAO, 10 Entity         HttpClientProvider, NetworkMonitor
-  MailDatabase (v39)                NtlmAuthenticator
+Persistence / Network
+  Room MailDatabase v40, DataStore
+  HttpClientProvider, NetworkMonitor, NtlmAuthenticator
     ↓
-Background Services
-  PushService, SyncWorker, OutboxWorker
-  BootReceiver, SyncAlarmReceiver, PushRestartWorker
-  ServiceWatchdogReceiver, ScheduledEmailWorker
-  NotificationHelper, MailNotificationActionReceiver
-  CalendarReminderReceiver, TaskReminderReceiver
-  MarkEmailReadWorker, MarkTaskCompleteWorker
+Background
+  PushService, SyncWorker, OutboxWorker, reminders, notifications, watchdogs
 ```
 
-## 📄 Лицензия
+Подробно: [Архитектура проекта](docs/ARCHITECTURE.md)
+
+## Сборка
+
+```bash
+./gradlew assembleDebug
+./gradlew assembleRelease
+```
+
+На Windows можно использовать:
+
+```powershell
+.\gradlew.bat assembleDebug
+.\gradlew.bat assembleRelease
+```
+
+## Документация
+
+- [История изменений RU](docs/CHANGELOG_RU.md)
+- [История изменений EN](docs/CHANGELOG_EN.md)
+- [Архитектура проекта](docs/ARCHITECTURE.md)
+- [Политика конфиденциальности](docs/PRIVACY_POLICY.md)
+- [План миграции XML-парсинга](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
+- [Оптимизация удаления Exchange](docs/EXCHANGE_DELETE_OPTIMIZATION.md)
+- [Аудит производительности](docs/PERFORMANCE_AUDIT.md)
+
+## Важно: переименование пакета
+
+Версия 1.6.1 изменила пакет с `com.iwo.iwomail` на `com.dedovmosol.iwomail`.
+
+- Обновление старых APK как обычный апдейт невозможно: Android считает это другим приложением.
+- Нужна переустановка: удалить старую версию, установить новую и заново добавить аккаунты.
+- Перед переходом со старого пакета рекомендуется экспортировать локальные контакты/данные.
+
+## Обратная связь
+
+- **Telegram:** [@i_wantout](https://t.me/i_wantout)
+- **Email:** andreyid@outlook.com
+- **Issues:** [GitHub Issues](https://github.com/DedovMosol/IwoMailClient/issues)
+
+## Лицензия
 
 MIT License
 

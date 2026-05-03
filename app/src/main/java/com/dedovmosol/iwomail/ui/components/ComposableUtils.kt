@@ -55,12 +55,12 @@ fun rememberDebouncedSearch(
 ): Triple<String, String, (String) -> Unit> {
     var value by remember { mutableStateOf(initialValue) }
     var debouncedValue by remember { mutableStateOf(initialValue) }
-    
+
     LaunchedEffect(value) {
         delay(delayMs)
         debouncedValue = value
     }
-    
+
     return Triple(value, debouncedValue) { newValue -> value = newValue }
 }
 
@@ -73,12 +73,12 @@ fun <T> rememberDebouncedState(
     delayMs: Long = 300L
 ): State<T> {
     val debouncedState = remember { mutableStateOf(value) }
-    
+
     LaunchedEffect(value) {
         delay(delayMs)
         debouncedState.value = value
     }
-    
+
     return debouncedState
 }
 
@@ -120,7 +120,7 @@ object ScrollbarDefaults {
     /** Отступ от правого края (dp) */
     const val PADDING_END = 2f
     /** Прозрачность при полной видимости */
-    const val ALPHA = 0.425f
+    const val ALPHA = 1f
     /** Время появления (мс) */
     const val FADE_IN_MS = 150
     /** Время исчезновения (мс) */
@@ -148,9 +148,9 @@ fun BoxScope.LazyColumnScrollbar(
 ) {
     val canScroll = listState.canScrollForward || listState.canScrollBackward
     val isScrolling = listState.isScrollInProgress
-    
+
     var showScrollbar by remember { mutableStateOf(false) }
-    
+
     // Показываем скроллбар при первом отображении если контент прокручиваем
     LaunchedEffect(canScroll) {
         if (canScroll) {
@@ -161,7 +161,7 @@ fun BoxScope.LazyColumnScrollbar(
             }
         }
     }
-    
+
     LaunchedEffect(isScrolling) {
         if (isScrolling) {
             showScrollbar = true
@@ -170,7 +170,7 @@ fun BoxScope.LazyColumnScrollbar(
             showScrollbar = false
         }
     }
-    
+
     val alpha by animateFloatAsState(
         targetValue = if ((alwaysVisible || showScrollbar) && canScroll) ScrollbarDefaults.ALPHA else 0f,
         animationSpec = tween(
@@ -178,12 +178,12 @@ fun BoxScope.LazyColumnScrollbar(
         ),
         label = "scrollbar_alpha"
     )
-    
+
     if (alpha > 0.01f) {
         val scrollbarColor = LocalScrollbarColor.current.color
         val thumbWidth = ScrollbarDefaults.THUMB_WIDTH
         val thumbMinHeight = ScrollbarDefaults.THUMB_MIN_HEIGHT
-        
+
         Canvas(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -197,7 +197,7 @@ fun BoxScope.LazyColumnScrollbar(
         ) {
             val totalItems = listState.layoutInfo.totalItemsCount.toFloat()
             val visibleItems = listState.layoutInfo.visibleItemsInfo.size.toFloat()
-            
+
             if (totalItems > 0 && visibleItems < totalItems) {
                 val firstVisible = listState.firstVisibleItemIndex.toFloat()
                 val thumbHeight = ((visibleItems / totalItems) * size.height)
@@ -206,7 +206,7 @@ fun BoxScope.LazyColumnScrollbar(
                 val thumbY = if (totalItems - visibleItems > 0)
                     (firstVisible / (totalItems - visibleItems)) * scrollRange
                 else 0f
-                
+
                 drawRoundRect(
                     color = scrollbarColor.copy(alpha = alpha),
                     topLeft = Offset(0f, thumbY.coerceIn(0f, scrollRange)),
@@ -235,7 +235,7 @@ fun BoxScope.ScrollColumnScrollbar(scrollState: ScrollState) {
     if (scrollState.maxValue > 0) {
         val scrollbarColor = LocalScrollbarColor.current.color
         val thumbWidth = ScrollbarDefaults.THUMB_WIDTH
-        
+
         Canvas(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -253,7 +253,7 @@ fun BoxScope.ScrollColumnScrollbar(scrollState: ScrollState) {
                 .coerceAtLeast(ScrollbarDefaults.THUMB_MIN_HEIGHT.dp.toPx())
             val scrollRange = size.height - thumbHeight
             val thumbY = scrollFraction * scrollRange
-            
+
             drawRoundRect(
                 color = scrollbarColor.copy(alpha = ScrollbarDefaults.ALPHA),
                 topLeft = Offset(0f, thumbY.coerceIn(0f, scrollRange)),
@@ -293,11 +293,11 @@ fun rememberDragSelectModifier(
     var lastPointerY by remember { mutableStateOf(Float.NaN) }
     var autoScrollDelta by remember { mutableStateOf(0f) }
     var autoScrollJob by remember { mutableStateOf<Job?>(null) }
-    
+
     // rememberUpdatedState — closure всегда видит актуальные значения
     val currentSelectedIds by rememberUpdatedState(selectedIds)
     val currentOnChange by rememberUpdatedState(onSelectionChange)
-    
+
     val indexMap = remember(itemKeys) {
         itemKeys.withIndex().associate { (index, key) -> key to index }
     }
@@ -346,7 +346,7 @@ fun rememberDragSelectModifier(
             autoScrollJob?.cancel()
         }
     }
-    
+
     return Modifier.pointerInput(itemKeys) {
         detectDragGesturesAfterLongPress(
             onDragStart = { offset ->

@@ -224,6 +224,26 @@ class CalendarExceptionService(
         }
         val findXml = (findResult as EasResult.Success).data
 
+        // Защита от data loss: если ответ содержит embedded ошибку или CalendarView
+        // вернул неполный набор (>2000 occurrences), отказываемся от cleanup —
+        // существующие local exceptions останутся нетронутыми. Иначе buildExceptionsJsonFromEws
+        // удалит non-deleted exceptions внутри окна, не возвращённые EWS.
+        if (findXml.contains("ResponseClass=\"Error\"")) {
+            val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(findXml)?.groupValues?.get(1)
+            android.util.Log.w(
+                "CalendarExceptionService",
+                "supplementRecurringExceptionsViaEws: FindItem returned ResponseClass=Error: ${messageText ?: "<no message>"} — skipping cleanup"
+            )
+            return emptyMap()
+        }
+        if (!findXml.contains("IncludesLastItemInRange=\"true\"")) {
+            android.util.Log.w(
+                "CalendarExceptionService",
+                "supplementRecurringExceptionsViaEws: CalendarView truncated (MaxEntriesReturned=2000 reached) — skipping cleanup to prevent data loss"
+            )
+            return emptyMap()
+        }
+
         val localUids = localRecurringEvents.map { it.uid }.toSet()
 
         val exceptions = mutableListOf<EwsExceptionOccurrence>()

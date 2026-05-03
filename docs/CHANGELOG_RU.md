@@ -14,6 +14,28 @@
 - Существенное повышение производительности
 - Багфиксы, снижение утечек памяти и энергопотребления, повышение стабильности, уровня безопасности
 
+### Безопасность — расширенная XSS-защита тела писем
+- `sanitizeEmailHtml` теперь блокирует plugin-контейнеры: `<iframe>`, `<object>`, `<embed>`, `<applet>` (открывающие/закрывающие теги и внутренний контент)
+- Блокировка `<meta http-equiv="refresh">` — защита от JS-редиректов через meta
+- Блокировка `data:text/html` в `href/src/action/formaction/xlink:href` — защита от inline HTML-execution
+- Добавлен `xlink:href` в список JS-URI атрибутов — защита от SVG-based XSS
+- Реализация без сторонних зависимостей (regex-based, idempotent, без ReDoS)
+- Дополнительная защита к существующему `loadDataWithBaseURL(null, ...)` в `EmailDetailScreen` (null-baseURL блокирует cross-origin requests и exfiltration cookies/localStorage)
+
+### Производительность — оптимизация памяти при синхронизации крупных папок
+- `EmailSyncService.syncSentFull` — orphan detection использует lightweight-проекцию `EmailDedupInfo` (6 полей вместо ~30) вместо полного `EmailEntity`
+- `EmailSyncService.reconcileSentAfterFullResync` — переведён на id-only проекцию `getEmailIdsByFolder`, унифицирован с `reconcileGenericFolderAfterFullResync` (DRY)
+- `EmailOperationsService.resolveEmailIds` — content-matching при миграции ServerId после SyncKey=0 reset теперь через lightweight-проекцию
+- Ожидаемый эффект: для Sent с 10k+ писем — снижение пикового потребления памяти при orphan detection в 4-5 раз
+
+### Календарь — повторения, вложения и безопасное удаление
+- Вложения повторяющихся событий соблюдают DRY: в локальной БД хранятся JSON-метаданные, вхождения не дублируют байты файлов.
+- Для Exchange 2007 SP1 повторяющиеся серии используют EWS master ItemId при загрузке/получении вложений календаря.
+- `deleteEventPermanently` и `emptyCalendarTrash` удаляют локально только после подтверждённого серверного удаления; ошибки сервера больше не приводят к локальному удалению.
+- Операции удаления/восстановления календаря сериализованы с per-account sync mutex, чтобы синхронизация не перетирала `isDeleted` и не воскрешала старые записи.
+- Для встреч, где пользователь является участником, перед удалением отправляется `MeetingResponse`/EWS `DeclineItem`; если исходный запрос встречи не найден, операция возвращает ошибку без локального удаления.
+- Кэш предпросмотра вложений календаря использует стабильные имена по `fileReference`, очистку по возрасту файла и отложенную очистку по `path + lastModified`, чтобы избежать гонок с внешними просмотрщиками.
+
 ## v1.6.1 (09.02.2026) — Переименование пакета → "com.dedovmosol.iwomail", требуется переустановка
 
 ### Новое
@@ -529,7 +551,7 @@
 - **Градиенты TopAppBar и FAB** — теперь используют цвета из выбранной темы
 
 ### Безопасность
-- **Отключён ADB бэкап** — `allowBackup="false"` предотвращает извлечение данных приложения через ADB 
+- **Отключён ADB бэкап** — `allowBackup="false"` предотвращает извлечение данных приложения через ADB
 
 ---
 

@@ -14,6 +14,28 @@
 - Significant performance improvements
 - Bug fixes, reduced memory leaks and battery usage, improved stability, security level
 
+### Security — extended XSS protection for email bodies
+- `sanitizeEmailHtml` now blocks plugin containers: `<iframe>`, `<object>`, `<embed>`, `<applet>` (opening/closing tags and inner content)
+- Blocked `<meta http-equiv="refresh">` — protection against JS-based meta redirects
+- Blocked `data:text/html` in `href/src/action/formaction/xlink:href` — protection against inline HTML execution
+- Added `xlink:href` to JS-URI attribute list — protection against SVG-based XSS
+- Implementation without third-party dependencies (regex-based, idempotent, no ReDoS)
+- Complements the existing `loadDataWithBaseURL(null, ...)` in `EmailDetailScreen` (null-baseURL blocks cross-origin requests and cookie/localStorage exfiltration)
+
+### Performance — memory optimization for large-folder sync
+- `EmailSyncService.syncSentFull` — orphan detection uses lightweight `EmailDedupInfo` projection (6 fields instead of ~30) instead of full `EmailEntity`
+- `EmailSyncService.reconcileSentAfterFullResync` — switched to id-only projection `getEmailIdsByFolder`, unified with `reconcileGenericFolderAfterFullResync` (DRY)
+- `EmailOperationsService.resolveEmailIds` — content-matching during ServerId migration after SyncKey=0 reset now uses lightweight projection
+- Expected impact: for Sent folders with 10k+ emails — peak memory during orphan detection reduced ~4-5x
+
+### Calendar — recurring attachments and safe deletion
+- Recurring event attachments follow DRY: the local DB stores JSON metadata and occurrences do not duplicate file bytes.
+- Exchange 2007 SP1 recurring series use the EWS master ItemId for calendar attachment upload/fetch.
+- `deleteEventPermanently` and `emptyCalendarTrash` delete locally only after confirmed server-side delete; server errors no longer cause local-only permanent deletion.
+- Calendar delete/restore operations are serialized with the per-account sync mutex so sync cannot overwrite `isDeleted` or resurrect stale records.
+- Attendee meetings send `MeetingResponse`/EWS `DeclineItem` before deletion; if the original meeting request cannot be found, the operation returns an error without local deletion.
+- Calendar attachment preview cache uses stable `fileReference`-based names, age-based cleanup and delayed `path + lastModified` cleanup to avoid races with external viewers.
+
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 
 ### New

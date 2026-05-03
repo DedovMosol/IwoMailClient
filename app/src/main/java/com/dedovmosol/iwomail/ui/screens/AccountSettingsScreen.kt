@@ -1,4 +1,4 @@
-package com.dedovmosol.iwomail.ui.screens
+﻿package com.dedovmosol.iwomail.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 
+import com.dedovmosol.iwomail.util.SafeToast
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import androidx.compose.material3.*
@@ -54,40 +55,40 @@ fun AccountSettingsScreen(
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
     val isRu = isRussian()
-    
+
     var account by remember { mutableStateOf<AccountEntity?>(null) }
     var signatures by remember { mutableStateOf<List<com.dedovmosol.iwomail.data.database.SignatureEntity>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
-    
+
     LaunchedEffect(accountId) {
         isLoading = true
         account = accountRepo.getAccount(accountId)
         signatures = database.signatureDao().getSignaturesByAccountList(accountId)
         isLoading = false
     }
-    
+
     if (isLoading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
         return
     }
-    
+
     val currentAccount = account ?: return
-    
+
     val accountType = try {
         AccountType.valueOf(currentAccount.accountType)
     } catch (_: Exception) {
         AccountType.EXCHANGE
     }
-    
+
     val syncMode = try {
         SyncMode.valueOf(currentAccount.syncMode)
     } catch (_: Exception) {
         SyncMode.PUSH
     }
 
-    
+
     // Диалоги
     var showSignaturesDialog by rememberSaveable { mutableStateOf(false) }
     var showCertificateDialog by rememberSaveable { mutableStateOf(false) }
@@ -98,10 +99,10 @@ fun AccountSettingsScreen(
     var pendingOldClientCertPath by rememberSaveable { mutableStateOf<String?>(null) }
     var clientCertPasswordInput by rememberSaveable { mutableStateOf("") }
     var clientCertPasswordVisible by rememberSaveable { mutableStateOf(false) }
-    
+
     // Пикеры для серверного сертификата
     val certFileName = currentAccount.certificatePath?.let { java.io.File(it).name } ?: "certificate.cer"
-    
+
     val exportCertificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
@@ -118,24 +119,16 @@ fun AccountSettingsScreen(
                                     }
                                 }
                             }
-                            android.widget.Toast.makeText(
-                                context,
-                                com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateExported(isRu),
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            SafeToast.short(context, com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateExported(isRu))
                         }
                     }
                 } catch (e: Exception) {
-                    android.widget.Toast.makeText(
-                        context,
-                        com.dedovmosol.iwomail.ui.NotificationStrings.getExportError(isRu),
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
+                    SafeToast.short(context, com.dedovmosol.iwomail.ui.NotificationStrings.getExportError(isRu))
                 }
             }
         }
     }
-    
+
     val certificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -155,24 +148,20 @@ fun AccountSettingsScreen(
                             }
                         }
                     }
-                    
+
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
                     if (extension !in validExtensions) {
-                        android.widget.Toast.makeText(
-                            context,
-                            com.dedovmosol.iwomail.ui.NotificationStrings.getInvalidFileFormat(isRu),
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        SafeToast.short(context, com.dedovmosol.iwomail.ui.NotificationStrings.getInvalidFileFormat(isRu))
                         return@launch
                     }
-                    
+
                     currentAccount.certificatePath?.let { oldPath ->
                         try { java.io.File(oldPath).delete() } catch (_: Exception) {}
                     }
-                    
+
                     val fileName = "cert_${currentAccount.id}_${System.currentTimeMillis()}.$extension"
                     val certFile = java.io.File(context.filesDir, fileName)
-                    
+
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         context.contentResolver.openInputStream(selectedUri)?.use { input ->
                             certFile.outputStream().use { output ->
@@ -180,51 +169,33 @@ fun AccountSettingsScreen(
                             }
                         }
                     }
-                    
+
                     accountRepo.updateCertificatePath(accountId, certFile.absolutePath)
                     account = accountRepo.getAccount(accountId)
-                    
+
                     // Автоматически включаем Certificate Pinning после загрузки сертификата
                     val pinResult = accountRepo.pinCertificate(accountId)
                     when (pinResult) {
                         is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                             account = accountRepo.getAccount(accountId)
-                            android.widget.Toast.makeText(
-                                context,
-                                if (isRu) 
-                                    "✅ Сертификат загружен, защита включена" 
-                                else 
-                                    "✅ Certificate loaded, protection enabled",
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
+                            SafeToast.long(context, if (isRu) "✅ Сертификат загружен, защита включена" else "✅ Certificate loaded, protection enabled")
                         }
                         is com.dedovmosol.iwomail.eas.EasResult.Error -> {
                             android.util.Log.w("AccountSettings", "Failed to auto-enable certificate pinning: ${pinResult.message}")
-                            android.widget.Toast.makeText(
-                                context,
-                                if (isRu)
-                                    "⚠️ Сертификат загружен, но защита не включена: ${pinResult.message}"
-                                else
-                                    "⚠️ Certificate loaded, but protection not enabled: ${pinResult.message}",
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
+                            SafeToast.long(context, if (isRu) "⚠️ Сертификат загружен, но защита не включена: ${pinResult.message}" else "⚠️ Certificate loaded, but protection not enabled: ${pinResult.message}")
                         }
                     }
                 } catch (e: Exception) {
-                    android.widget.Toast.makeText(
-                        context,
-                        com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateLoadingError(isRu),
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
+                    SafeToast.short(context, com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateLoadingError(isRu))
                 }
             }
         }
     }
 
-    
+
     // Пикеры для клиентского сертификата
     val clientCertFileName = currentAccount.clientCertificatePath?.let { java.io.File(it).name } ?: "client_certificate.p12"
-    
+
     val exportClientCertificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
@@ -241,24 +212,16 @@ fun AccountSettingsScreen(
                                     }
                                 }
                             }
-                            android.widget.Toast.makeText(
-                                context,
-                                if (isRu) "Клиентский сертификат экспортирован" else "Client certificate exported",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            SafeToast.short(context, if (isRu) "Клиентский сертификат экспортирован" else "Client certificate exported")
                         }
                     }
                 } catch (e: Exception) {
-                    android.widget.Toast.makeText(
-                        context,
-                        com.dedovmosol.iwomail.ui.NotificationStrings.getExportError(isRu),
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
+                    SafeToast.short(context, com.dedovmosol.iwomail.ui.NotificationStrings.getExportError(isRu))
                 }
             }
         }
     }
-    
+
     val clientCertificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -278,24 +241,20 @@ fun AccountSettingsScreen(
                             }
                         }
                     }
-                    
+
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
                     if (extension !in validExtensions) {
-                        android.widget.Toast.makeText(
-                            context,
-                            if (isRu) "Неверный формат файла. Выберите .p12 или .pfx" else "Invalid file format. Select .p12 or .pfx",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        SafeToast.short(context, if (isRu) "Неверный формат файла. Выберите .p12 или .pfx" else "Invalid file format. Select .p12 or .pfx")
                         return@launch
                     }
-                    
+
                     // Копируем новый файл сертификата
                     val fileName = "client_cert_${currentAccount.id}_${System.currentTimeMillis()}.$extension"
                     val certFile = java.io.File(context.filesDir, fileName)
-                    
+
                     // Сохраняем старый путь для удаления ПОСЛЕ успешного копирования
                     val oldCertPath = currentAccount.clientCertificatePath
-                    
+
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         context.contentResolver.openInputStream(selectedUri)?.use { input ->
                             certFile.outputStream().use { output ->
@@ -303,7 +262,7 @@ fun AccountSettingsScreen(
                             }
                         }
                     }
-                    
+
                     // Запоминаем новый файл и просим пароль
                     pendingOldClientCertPath = oldCertPath
                     pendingClientCertPath = certFile.absolutePath
@@ -313,17 +272,13 @@ fun AccountSettingsScreen(
                     showClientCertPasswordDialog = true
                 } catch (e: Exception) {
                     android.util.Log.e("AccountSettings", "Client certificate loading error: ${e.message}", e)
-                    android.widget.Toast.makeText(
-                        context,
-                        NotificationStrings.getCertificateLoadingError(isRu),
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
+                    SafeToast.short(context, NotificationStrings.getCertificateLoadingError(isRu))
                 }
             }
         }
     }
 
-    
+
     // Диалог подписей
     if (showSignaturesDialog) {
         SignaturesManagementDialog(
@@ -337,14 +292,14 @@ fun AccountSettingsScreen(
         )
     }
 
-    
+
     // Диалог сертификата
     val safeCertPath = currentAccount.certificatePath
     if (showCertificateDialog && !safeCertPath.isNullOrBlank()) {
         val certFile = java.io.File(safeCertPath)
         val certFileSize = if (certFile.exists()) "${certFile.length() / 1024} KB" else "—"
         var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
-        
+
         if (showDeleteConfirm) {
             com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
@@ -366,11 +321,7 @@ fun AccountSettingsScreen(
                                 accountRepo.updateCertificatePath(accountId, null)
                                 account = accountRepo.getAccount(accountId)
                             }
-                            android.widget.Toast.makeText(
-                                context,
-                                com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateRemoved(isRu),
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            SafeToast.short(context, com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateRemoved(isRu))
                         },
                         text = com.dedovmosol.iwomail.ui.NotificationStrings.getRemove(isRu)
                     )
@@ -383,7 +334,7 @@ fun AccountSettingsScreen(
                 }
             )
         }
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showCertificateDialog = false },
             icon = { Icon(AppIcons.Lock, null) },
@@ -396,7 +347,7 @@ fun AccountSettingsScreen(
                     Text(com.dedovmosol.iwomail.ui.NotificationStrings.getSizeLabel(isRu), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(certFileSize, style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = {
@@ -441,14 +392,14 @@ fun AccountSettingsScreen(
         )
     }
 
-    
+
     // Диалог клиентского сертификата
     val safeClientCertPath = currentAccount.clientCertificatePath
     if (showClientCertificateDialog && !safeClientCertPath.isNullOrBlank()) {
         val certFile = java.io.File(safeClientCertPath)
         val certFileSize = if (certFile.exists()) "${certFile.length() / 1024} KB" else "—"
         var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
-        
+
         if (showDeleteConfirm) {
             com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
@@ -471,11 +422,7 @@ fun AccountSettingsScreen(
                                 com.dedovmosol.iwomail.network.HttpClientProvider.clearAllCertificateCache()
                                 account = accountRepo.getAccount(accountId)
                             }
-                            android.widget.Toast.makeText(
-                                context,
-                                if (isRu) "Клиентский сертификат удалён" else "Client certificate removed",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            SafeToast.short(context, if (isRu) "Клиентский сертификат удалён" else "Client certificate removed")
                         },
                         text = com.dedovmosol.iwomail.ui.NotificationStrings.getRemove(isRu)
                     )
@@ -488,7 +435,7 @@ fun AccountSettingsScreen(
                 }
             )
         }
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showClientCertificateDialog = false },
             icon = { Icon(AppIcons.Lock, null) },
@@ -501,7 +448,7 @@ fun AccountSettingsScreen(
                     Text(com.dedovmosol.iwomail.ui.NotificationStrings.getSizeLabel(isRu), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(certFileSize, style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = {
@@ -595,22 +542,14 @@ fun AccountSettingsScreen(
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         if (clientCertPasswordInput.isBlank()) {
-                            android.widget.Toast.makeText(
-                                context,
-                                if (isRu) "Введите пароль сертификата" else "Enter certificate password",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            SafeToast.short(context, if (isRu) "Введите пароль сертификата" else "Enter certificate password")
                         } else {
                             val newPath = pendingClientCertPath
                             if (newPath != null) {
                                 val isValid = com.dedovmosol.iwomail.network.HttpClientProvider
                                     .validateClientCertificate(newPath, clientCertPasswordInput)
                                 if (!isValid) {
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        if (isRu) "Неверный пароль или повреждённый сертификат" else "Invalid password or corrupted certificate",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
+                                    SafeToast.short(context, if (isRu) "Неверный пароль или повреждённый сертификат" else "Invalid password or corrupted certificate")
                                 } else {
                                     val oldPath = pendingOldClientCertPath
                                     scope.launch {
@@ -619,11 +558,7 @@ fun AccountSettingsScreen(
                                         oldPath?.let { path -> try { java.io.File(path).delete() } catch (_: Exception) {} }
                                         com.dedovmosol.iwomail.network.HttpClientProvider.clearAllCertificateCache()
                                         account = accountRepo.getAccount(accountId)
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            if (isRu) "Клиентский сертификат обновлён" else "Client certificate updated",
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
+                                        SafeToast.short(context, if (isRu) "Клиентский сертификат обновлён" else "Client certificate updated")
                                         showClientCertPasswordDialog = false
                                         pendingClientCertPath = null
                                         pendingClientCertFileName = null
@@ -655,7 +590,7 @@ fun AccountSettingsScreen(
         )
     }
 
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -694,12 +629,12 @@ fun AccountSettingsScreen(
                 } catch (_: Exception) {
                     MaterialTheme.colorScheme.primary
                 }
-                
+
                 ListItem(
-                    headlineContent = { 
+                    headlineContent = {
                         Text(currentAccount.displayName, fontWeight = FontWeight.Bold)
                     },
-                    supportingContent = { 
+                    supportingContent = {
                         Column {
                             Text(currentAccount.email)
                             Text(accountType.displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
@@ -723,7 +658,7 @@ fun AccountSettingsScreen(
                     }
                 )
             }
-            
+
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
             item {
@@ -736,7 +671,7 @@ fun AccountSettingsScreen(
             }
 
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
-            
+
             // Изменить учётные данные
             item {
                 ListItem(
@@ -746,7 +681,7 @@ fun AccountSettingsScreen(
                     modifier = Modifier.clickable { onEditCredentials(accountId) }
                 )
             }
-            
+
             // Сертификат сервера (если есть)
             if (!currentAccount.certificatePath.isNullOrBlank()) {
                 item {
@@ -758,7 +693,7 @@ fun AccountSettingsScreen(
                         modifier = Modifier.clickable { showCertificateDialog = true }
                     )
                 }
-                
+
                 // Certificate Pinning UI (защита от MITM)
                 item {
                     CertificatePinningCard(
@@ -771,7 +706,7 @@ fun AccountSettingsScreen(
                     )
                 }
             }
-            
+
             // Клиентский сертификат (если есть)
             if (!currentAccount.clientCertificatePath.isNullOrBlank()) {
                 item {
@@ -784,25 +719,25 @@ fun AccountSettingsScreen(
                     )
                 }
             }
-            
+
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
-            
+
             // Подписи
             item {
                 ListItem(
                     headlineContent = { Text(Strings.signature) },
-                    supportingContent = { 
+                    supportingContent = {
                         Text(
-                            if (signatures.isEmpty()) Strings.noSignature 
+                            if (signatures.isEmpty()) Strings.noSignature
                             else Strings.signaturesCount(signatures.size)
-                        ) 
+                        )
                     },
                     leadingContent = { Icon(AppIcons.Draw, null) },
                     trailingContent = { Icon(AppIcons.ChevronRight, null) },
                     modifier = Modifier.clickable { showSignaturesDialog = true }
                 )
             }
-            
+
             // Режим черновиков (только для Exchange)
             if (accountType == AccountType.EXCHANGE) {
                 item {
@@ -895,7 +830,7 @@ fun AccountSettingsScreen(
                     }
                 }
             }
-            
+
             // Синхронизация и очистка - открывает отдельный экран
             item {
                 ListItem(
@@ -930,7 +865,7 @@ fun SyncIntervalDialog(
         14 to (NotificationStrings.getEveryTwoWeeks(isRu)),
         30 to (NotificationStrings.getMonthly(isRu))
     )
-    
+
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -978,13 +913,13 @@ fun CertificatePinningCard(
 ) {
     val scope = rememberCoroutineScope()
     var isLoading by remember { mutableStateOf(false) }
-    
+
     // Проверяем наличие изменения сертификата (ключ pinnedCertificateHash гарантирует
     // перевычисление после принятия/отключения/обновления пина)
     val certificateChange = remember(account.id, account.pinnedCertificateHash) {
         com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.getChange(account.id)
     }
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1016,9 +951,9 @@ fun CertificatePinningCard(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             Spacer(Modifier.height(12.dp))
-            
+
             // Проверяем наличие сертификата
             if (account.certificatePath == null) {
                 // Сертификат не загружен - Certificate Pinning недоступен
@@ -1069,9 +1004,9 @@ private fun CertificateNotAvailable(isRu: Boolean) {
         fontWeight = FontWeight.Bold,
         color = Color.Gray
     )
-    
+
     Spacer(Modifier.height(4.dp))
-    
+
     Text(
         text = if (isRu)
             "Certificate Pinning недоступен без пользовательского сертификата"
@@ -1079,9 +1014,9 @@ private fun CertificateNotAvailable(isRu: Boolean) {
             "Certificate Pinning unavailable without custom certificate",
         style = MaterialTheme.typography.bodySmall
     )
-    
+
     Spacer(Modifier.height(8.dp))
-    
+
     Text(
         text = if (isRu)
             "ℹ️ Загрузите сертификат сервера в разделе выше, после чего защита включится автоматически"
@@ -1105,24 +1040,24 @@ private fun CertificateChangeWarning(
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    
+
     Text(
         text = if (isRu) "⚠️ Обнаружен новый сертификат!" else "⚠️ New certificate detected!",
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.Bold,
         color = Color.Red
     )
-    
+
     Spacer(Modifier.height(8.dp))
-    
+
     Text(
         text = "${if (isRu) "Сервер" else "Server"}: ${certificateChange.hostname}",
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Bold
     )
-    
+
     Spacer(Modifier.height(8.dp))
-    
+
     // Старый сертификат
     Text(
         text = if (isRu) "СТАРЫЙ СЕРТИФИКАТ:" else "OLD CERTIFICATE:",
@@ -1130,9 +1065,9 @@ private fun CertificateChangeWarning(
         fontWeight = FontWeight.Bold
     )
     CertificateDetails(certificateChange.oldCert, isRu, isOld = true)
-    
+
     Spacer(Modifier.height(8.dp))
-    
+
     // Новый сертификат
     Text(
         text = if (isRu) "НОВЫЙ СЕРТИФИКАТ:" else "NEW CERTIFICATE:",
@@ -1141,9 +1076,9 @@ private fun CertificateChangeWarning(
         color = Color.Red
     )
     CertificateDetails(certificateChange.newCert, isRu, isOld = false)
-    
+
     Spacer(Modifier.height(8.dp))
-    
+
     Text(
         text = if (isRu)
             "⚠️ Это может быть плановое обновление или MITM-атака. Проверьте с администратором сервера."
@@ -1164,9 +1099,9 @@ private fun CertificateChangeWarning(
             color = Color(0xFF2196F3)
         )
     }
-    
+
     Spacer(Modifier.height(12.dp))
-    
+
     // Кнопки действий
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1198,7 +1133,7 @@ private fun CertificateChangeWarning(
         ) {
             Text(if (isRu) "✅ Принять" else "✅ Accept", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
-        
+
         Button(
             onClick = {
                 scope.launch {
@@ -1230,20 +1165,20 @@ private fun CertificatePinnedInfo(
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    
+
     Text(
         text = if (isRu) "✅ Защита включена" else "✅ Protection enabled",
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.Bold,
         color = Color.Green
     )
-    
+
     Spacer(Modifier.height(8.dp))
-    
+
     // Детали сертификата
     Text("• CN: ${account.pinnedCertificateCN ?: "Unknown"}", style = MaterialTheme.typography.bodySmall)
     Text("• ${if (isRu) "Организация" else "Organization"}: ${account.pinnedCertificateOrg ?: "Unknown"}", style = MaterialTheme.typography.bodySmall)
-    
+
     if (account.pinnedCertificateValidFrom != null) {
         Text(
             "• ${if (isRu) "Выдан" else "Issued"}: ${formatDate(account.pinnedCertificateValidFrom)}",
@@ -1256,13 +1191,13 @@ private fun CertificatePinnedInfo(
             style = MaterialTheme.typography.bodySmall
         )
     }
-    
+
     Text(
         "• Hash: ${account.pinnedCertificateHash?.take(16)}...",
         style = MaterialTheme.typography.bodySmall,
         fontFamily = FontFamily.Monospace
     )
-    
+
     val pinChange = remember(account.id, account.pinnedCertificateHash) {
         com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.getChange(account.id)
     }
@@ -1275,9 +1210,9 @@ private fun CertificatePinnedInfo(
             fontWeight = FontWeight.Bold
         )
     }
-    
+
     Spacer(Modifier.height(12.dp))
-    
+
     // Кнопки управления
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1314,7 +1249,7 @@ private fun CertificatePinnedInfo(
                 Text(if (isRu) "Обновить" else "Update", color = Color.White, style = MaterialTheme.typography.labelLarge)
             }
         }
-        
+
         Button(
             onClick = {
                 scope.launch {
@@ -1334,7 +1269,7 @@ private fun CertificatePinnedInfo(
             Text(if (isRu) "Отключить" else "Disable", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
     }
-    
+
     if (pinChange != null) {
         Spacer(Modifier.height(8.dp))
         Text(
@@ -1361,25 +1296,25 @@ private fun CertificatePinningDisabled(
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    
+
     Text(
         text = if (isRu) "⚠️ Защита отключена" else "⚠️ Protection disabled",
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.Bold,
         color = Color(0xFFFF9800) // Orange
     )
-    
+
     Spacer(Modifier.height(4.dp))
-    
+
     Text(
         text = if (isRu) "Соединение уязвимо к MITM-атакам" else "Vulnerable to MITM attacks",
         style = MaterialTheme.typography.bodySmall
     )
-    
+
     Spacer(Modifier.height(12.dp))
-    
+
     val context = androidx.compose.ui.platform.LocalContext.current
-    
+
     val isActive = !isLoading
     Button(
         onClick = {
@@ -1390,21 +1325,10 @@ private fun CertificatePinningDisabled(
                 when (result) {
                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                         accountRepo.getAccount(accountId)?.let { onAccountUpdated(it) }
-                        android.widget.Toast.makeText(
-                            context,
-                            if (isRu) "✅ Защита включена" else "✅ Protection enabled",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        SafeToast.short(context, if (isRu) "✅ Защита включена" else "✅ Protection enabled")
                     }
                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
-                        android.widget.Toast.makeText(
-                            context,
-                            if (isRu) 
-                                "❌ Ошибка: ${result.message}" 
-                            else 
-                                "❌ Error: ${result.message}",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
+                        SafeToast.long(context, if (isRu) "❌ Ошибка: ${result.message}" else "❌ Error: ${result.message}")
                     }
                 }
             }
@@ -1445,9 +1369,9 @@ private fun CertificatePinningDisabled(
             }
         }
     }
-    
+
     Spacer(Modifier.height(8.dp))
-    
+
     Text(
         text = if (isRu)
             "ℹ️ Certificate Pinning защищает от MITM-атак, привязывая соединение к конкретному сертификату сервера."
@@ -1456,9 +1380,9 @@ private fun CertificatePinningDisabled(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    
+
     Spacer(Modifier.height(12.dp))
-    
+
     // Подробное объяснение
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1472,9 +1396,9 @@ private fun CertificatePinningDisabled(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold
             )
-            
+
             Spacer(Modifier.height(8.dp))
-            
+
             Text(
                 text = if (isRu) "✅ Что защищено:" else "✅ What's Protected:",
                 style = MaterialTheme.typography.bodySmall,
@@ -1488,9 +1412,9 @@ private fun CertificatePinningDisabled(
                     "• Traffic encryption (HTTPS/TLS)\n• Certificate verification from trusted CA\n• Protection from most MITM attacks",
                 style = MaterialTheme.typography.bodySmall
             )
-            
+
             Spacer(Modifier.height(8.dp))
-            
+
             Text(
                 text = if (isRu) "🔒 Certificate Pinning добавляет:" else "🔒 Certificate Pinning Adds:",
                 style = MaterialTheme.typography.bodySmall,
@@ -1504,9 +1428,9 @@ private fun CertificatePinningDisabled(
                     "• Protection from compromised CAs\n• Verification of server's public key\n• Detection of certificate substitution",
                 style = MaterialTheme.typography.bodySmall
             )
-            
+
             Spacer(Modifier.height(8.dp))
-            
+
             Text(
                 text = if (isRu) "⚠️ Не работает, если:" else "⚠️ Won't Work If:",
                 style = MaterialTheme.typography.bodySmall,
@@ -1520,9 +1444,9 @@ private fun CertificatePinningDisabled(
                     "• Certificate's public key changed (key pair rotation)\n• Error retrieving certificate",
                 style = MaterialTheme.typography.bodySmall
             )
-            
+
             Spacer(Modifier.height(8.dp))
-            
+
             Text(
                 text = if (isRu) "✅ Работает при:" else "✅ Works When:",
                 style = MaterialTheme.typography.bodySmall,
@@ -1536,9 +1460,9 @@ private fun CertificatePinningDisabled(
                     "• Certificate renewal with same key (expiration extension)\n• Domain change (internal ↔ external) with same key\n• Using different CNs in certificate\n• Works with different domains (internal/external)",
                 style = MaterialTheme.typography.bodySmall
             )
-            
+
             Spacer(Modifier.height(8.dp))
-            
+
             Text(
                 text = if (isRu) "💡 Рекомендация:" else "💡 Recommendation:",
                 style = MaterialTheme.typography.bodySmall,
@@ -1565,7 +1489,7 @@ private fun CertificateDetails(
     isOld: Boolean
 ) {
     val textColor = if (isOld) Color.Unspecified else Color.Red
-    
+
     Text("• CN: ${cert.cn}", style = MaterialTheme.typography.bodySmall, color = textColor)
     Text("• ${if (isRu) "Организация" else "Organization"}: ${cert.organization}", style = MaterialTheme.typography.bodySmall, color = textColor)
     Text("• ${if (isRu) "Выдан" else "Issued"}: ${formatDate(cert.validFrom)}", style = MaterialTheme.typography.bodySmall, color = textColor)

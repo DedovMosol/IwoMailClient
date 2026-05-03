@@ -87,7 +87,7 @@ fun SetupScreen(
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val currentLanguage = LocalLanguage.current
     val isRussianLang = currentLanguage == AppLanguage.RUSSIAN
-    
+
     var displayName by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
     var serverUrl by rememberSaveable { mutableStateOf("") }
@@ -101,12 +101,12 @@ fun SetupScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var successMessage by rememberSaveable { mutableStateOf<String?>(null) }
-    
+
     // Поля для IMAP/POP3
     var accountType by rememberSaveable { mutableStateOf(AccountType.EXCHANGE) }
-    
+
     val keyboardController = LocalSoftwareKeyboardController.current
-    
+
     // Сохранение фокуса при повороте экрана
     var focusedFieldIndex by rememberSaveable { mutableIntStateOf(-1) }
     val displayNameFocus = remember { FocusRequester() }
@@ -115,7 +115,7 @@ fun SetupScreen(
     val usernameFocus = remember { FocusRequester() }
     val passwordFocus = remember { FocusRequester() }
     val domainFocus = remember { FocusRequester() }
-    
+
     // Восстановление фокуса после поворота
     LaunchedEffect(focusedFieldIndex) {
         if (focusedFieldIndex >= 0) {
@@ -135,25 +135,25 @@ fun SetupScreen(
     var outgoingServer by rememberSaveable { mutableStateOf("") }
     var outgoingPort by rememberSaveable { mutableStateOf("587") }
     var useSSL by rememberSaveable { mutableStateOf(true) }
-    
+
     // Режим синхронизации (только для Exchange)
     var syncMode by rememberSaveable { mutableStateOf(SyncMode.SCHEDULED) }
-    
+
     // Путь к файлу сертификата сервера
     var certificatePath by rememberSaveable { mutableStateOf<String?>(null) }
     var certificateFileName by rememberSaveable { mutableStateOf<String?>(null) }
-    
+
     // Клиентский сертификат (.p12/.pfx)
     var clientCertificatePath by rememberSaveable { mutableStateOf<String?>(null) }
     var clientCertificateFileName by rememberSaveable { mutableStateOf<String?>(null) }
     // Пароль клиентского сертификата тоже не сохраняем в Bundle.
     var clientCertificatePassword by remember { mutableStateOf("") }
     var clientCertPasswordVisible by rememberSaveable { mutableStateOf(false) }
-    
+
     // Трекер cert-файлов, созданных во время сессии (для очистки при выходе без сохранения)
     var createdCertFiles by rememberSaveable { mutableStateOf(listOf<String>()) }
     var accountSaved by rememberSaveable { mutableStateOf(false) }
-    
+
     // Очистка сиротских cert-файлов при выходе из SetupScreen без сохранения
     DisposableEffect(Unit) {
         onDispose {
@@ -164,10 +164,10 @@ fun SetupScreen(
             }
         }
     }
-    
+
     // Допустимые расширения сертификатов
     val validCertExtensions = listOf("cer", "crt", "pem", "der", "p12", "pfx", "p7b", "p7c")
-    
+
     // Файловый пикер для выбора серверного сертификата
     val certificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -187,20 +187,20 @@ fun SetupScreen(
                             }
                         }
                     }
-                    
+
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
                     if (extension !in validCertExtensions) {
-                        errorMessage = if (isRussianLang) 
-                            "Неверный формат файла. Допустимые: ${validCertExtensions.joinToString(", ") { ".$it" }}" 
-                        else 
+                        errorMessage = if (isRussianLang)
+                            "Неверный формат файла. Допустимые: ${validCertExtensions.joinToString(", ") { ".$it" }}"
+                        else
                             "Invalid file format. Allowed: ${validCertExtensions.joinToString(", ") { ".$it" }}"
                         return@launch
                     }
-                    
+
                     // Копируем файл в приватное хранилище приложения
                     val fileName = "cert_${System.currentTimeMillis()}.$extension"
                     val certFile = File(context.filesDir, fileName)
-                    
+
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(selectedUri)?.use { input ->
                             certFile.outputStream().use { output ->
@@ -208,13 +208,13 @@ fun SetupScreen(
                             }
                         }
                     }
-                    
+
                     // Удаляем старый файл ТОЛЬКО после успешного копирования нового
                     certificatePath?.let { oldPath ->
                         try { File(oldPath).delete() } catch (_: Exception) {}
                         createdCertFiles = createdCertFiles.filterNot { it == oldPath }
                     }
-                    
+
                     certificatePath = certFile.absolutePath
                     certificateFileName = originalFileName ?: fileName
                     if (!createdCertFiles.contains(certFile.absolutePath)) {
@@ -226,7 +226,7 @@ fun SetupScreen(
             }
         }
     }
-    
+
     // Файловый пикер для выбора клиентского сертификата (.p12/.pfx)
     val clientCertificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -246,23 +246,23 @@ fun SetupScreen(
                             }
                         }
                     }
-                    
+
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
                     if (extension !in listOf("p12", "pfx")) {
-                        errorMessage = if (isRussianLang) 
-                            "Неверный формат файла. Допустимые: .p12, .pfx" 
-                        else 
+                        errorMessage = if (isRussianLang)
+                            "Неверный формат файла. Допустимые: .p12, .pfx"
+                        else
                             "Invalid file format. Allowed: .p12, .pfx"
                         return@launch
                     }
-                    
+
                     // Копируем файл в приватное хранилище приложения
                     val fileName = "client_cert_${System.currentTimeMillis()}.$extension"
                     val certFile = File(context.filesDir, fileName)
-                    
+
                     // Сохраняем старый путь для удаления ПОСЛЕ успешного копирования
                     val oldCertPath = clientCertificatePath
-                    
+
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(selectedUri)?.use { input ->
                             certFile.outputStream().use { output ->
@@ -270,10 +270,10 @@ fun SetupScreen(
                             }
                         }
                     }
-                    
+
                     // Удаляем старый файл ТОЛЬКО после успешного копирования нового
                     oldCertPath?.let { oldPath ->
-                        try { 
+                        try {
                             File(oldPath).delete()
                             android.util.Log.d("SetupScreen", "Old client certificate deleted: $oldPath")
                             createdCertFiles = createdCertFiles.filterNot { it == oldPath }
@@ -281,7 +281,7 @@ fun SetupScreen(
                             android.util.Log.e("SetupScreen", "Failed to delete old client certificate: ${e.message}")
                         }
                     }
-                    
+
                     clientCertificatePath = certFile.absolutePath
                     clientCertificateFileName = originalFileName ?: fileName
                     if (!createdCertFiles.contains(certFile.absolutePath)) {
@@ -294,10 +294,10 @@ fun SetupScreen(
             }
         }
     }
-    
+
     // Получаем строки локализации в Composable контексте
     val emailMismatchText = Strings.emailMismatch
-    
+
     // Обработка ошибки верификации
     LaunchedEffect(initialError, savedData) {
         if (initialError == "CLEAR_EMAIL" && savedData != null) {
@@ -339,7 +339,7 @@ fun SetupScreen(
             if (parts.size >= 3) {
                 val entered = parts[1]
                 val actual = parts[2]
-                errorMessage = if (isRussianLang) 
+                errorMessage = if (isRussianLang)
                     "Введённый email: $entered\nРеальный email: $actual\n\nПожалуйста, введите правильный email."
                 else "Entered email: $entered\nActual email: $actual\n\nPlease enter the correct email."
             } else {
@@ -349,7 +349,7 @@ fun SetupScreen(
             errorMessage = initialError
         }
     }
-    
+
     // Восстановление данных из savedData (при возврате с ошибкой верификации)
     // Формат: email|displayName|serverUrl|acceptAllCerts|color|incomingPort|outgoingServer|outgoingPort|useSSL|syncMode|certificatePath|clientCertificatePath|domain|username
     // При CLEAR_EMAIL данные уже восстановлены выше, поэтому пропускаем
@@ -390,13 +390,13 @@ fun SetupScreen(
             }
         }
     }
-    
+
     // Диалог выбора языка
     var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
     var showHelpScreen by rememberSaveable { mutableStateOf(false) }
-    
+
     val isEditing = editAccountId != null
-    
+
     // Диалог выбора языка
     if (showLanguageDialog) {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -435,7 +435,7 @@ fun SetupScreen(
             }
         )
     }
-    
+
     // Загружаем данные аккаунта при редактировании
     LaunchedEffect(editAccountId) {
         editAccountId?.let { id ->
@@ -467,7 +467,7 @@ fun SetupScreen(
             }
         }
     }
-    
+
     Scaffold(
         topBar = {
             val colorTheme = LocalColorTheme.current
@@ -485,7 +485,7 @@ fun SetupScreen(
                     )
             ) {
                 TopAppBar(
-                    title = { 
+                    title = {
                         Text(
                             if (isEditing) {
                                 if (isRussian()) "Редактировать аккаунт" else "Edit account"
@@ -493,7 +493,7 @@ fun SetupScreen(
                                 Strings.addAccount
                             },
                             color = Color.White
-                        ) 
+                        )
                     },
                     navigationIcon = {
                         onBackClick?.let {
@@ -530,10 +530,10 @@ fun SetupScreen(
             if (!isEditing) {
                 val colorTheme = LocalColorTheme.current
                 val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
-                
+
                 // Анимация пульсации для иконки
                 val iconScale = rememberPulseScale(animationsEnabled, from = 1f, to = 1.1f, durationMs = 1000)
-                
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -588,13 +588,13 @@ fun SetupScreen(
                     }
                 }
             }
-            
+
             // Основной контент
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-            
+
             OutlinedTextField(
                 value = displayName,
                 onValueChange = { displayName = it },
@@ -606,7 +606,7 @@ fun SetupScreen(
                     .onFocusChanged { if (it.isFocused) focusedFieldIndex = 0 },
                 singleLine = true
             )
-            
+
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
@@ -619,10 +619,10 @@ fun SetupScreen(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
             )
-            
+
             HorizontalDivider()
             Text(Strings.accountType, style = MaterialTheme.typography.titleMedium)
-            
+
             // Выбор типа аккаунта с бейджем beta для IMAP/POP3
             val accountTypeTheme = LocalColorTheme.current
             Row(
@@ -631,7 +631,7 @@ fun SetupScreen(
             ) {
                 AccountType.entries.forEach { type ->
                     val isBeta = type == AccountType.IMAP || type == AccountType.POP3
-                    
+
                     if (accountType == type) {
                         Button(
                             onClick = { },
@@ -653,7 +653,7 @@ fun SetupScreen(
                         }
                     } else {
                         OutlinedButton(
-                            onClick = { 
+                            onClick = {
                                 accountType = type
                                 // Устанавливаем порты по умолчанию
                                 when (type) {
@@ -687,12 +687,12 @@ fun SetupScreen(
                     }
                 }
             }
-            
+
             // Выбор режима синхронизации (только для Exchange)
             if (accountType == AccountType.EXCHANGE) {
                 HorizontalDivider()
                 Text(Strings.syncMode, style = MaterialTheme.typography.titleMedium)
-                
+
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Push
                     Card(
@@ -700,8 +700,8 @@ fun SetupScreen(
                             .fillMaxWidth()
                             .clickable { syncMode = SyncMode.PUSH },
                         colors = CardDefaults.cardColors(
-                            containerColor = if (syncMode == SyncMode.PUSH) 
-                                MaterialTheme.colorScheme.primaryContainer 
+                            containerColor = if (syncMode == SyncMode.PUSH)
+                                MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                         ),
                         shape = RoundedCornerShape(12.dp)
@@ -729,21 +729,21 @@ fun SetupScreen(
                             Icon(
                                 AppIcons.Bolt,
                                 null,
-                                tint = if (syncMode == SyncMode.PUSH) 
-                                    MaterialTheme.colorScheme.primary 
+                                tint = if (syncMode == SyncMode.PUSH)
+                                    MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.outline
                             )
                         }
                     }
-                    
+
                     // Scheduled
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { syncMode = SyncMode.SCHEDULED },
                         colors = CardDefaults.cardColors(
-                            containerColor = if (syncMode == SyncMode.SCHEDULED) 
-                                MaterialTheme.colorScheme.primaryContainer 
+                            containerColor = if (syncMode == SyncMode.SCHEDULED)
+                                MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                         ),
                         shape = RoundedCornerShape(12.dp)
@@ -771,25 +771,25 @@ fun SetupScreen(
                             Icon(
                                 AppIcons.BatteryChargingFull,
                                 null,
-                                tint = if (syncMode == SyncMode.SCHEDULED) 
-                                    MaterialTheme.colorScheme.primary 
+                                tint = if (syncMode == SyncMode.SCHEDULED)
+                                    MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.outline
                             )
                         }
                     }
                 }
             }
-            
+
             HorizontalDivider()
             Text(
-                if (isRussian()) "Настройки сервера" else "Server settings", 
+                if (isRussian()) "Настройки сервера" else "Server settings",
                 style = MaterialTheme.typography.titleMedium
             )
-            
+
             OutlinedTextField(
                 value = serverUrl,
                 onValueChange = { serverUrl = it },
-                label = { 
+                label = {
                     Text(
                         when (accountType) {
                             AccountType.EXCHANGE -> Strings.server
@@ -798,7 +798,7 @@ fun SetupScreen(
                         }
                     )
                 },
-                placeholder = { 
+                placeholder = {
                     Text(
                         when (accountType) {
                             AccountType.EXCHANGE -> "mail.company.com"
@@ -822,10 +822,10 @@ fun SetupScreen(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
             )
-            
+
             // Резервный сервер (опционально, только для Exchange)
             if (accountType == AccountType.EXCHANGE) {
-                val altUrlError = if (alternateServerUrl.isNotBlank() && 
+                val altUrlError = if (alternateServerUrl.isNotBlank() &&
                     alternateServerUrl.trim().equals(serverUrl.trim(), ignoreCase = true)) {
                     if (isRussian()) "Совпадает с основным сервером" else "Same as primary server"
                 } else null
@@ -865,10 +865,10 @@ fun SetupScreen(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
-                
+
                 // Выбор HTTP/HTTPS
                 Text(
-                    if (isRussian()) "Протокол" else "Protocol", 
+                    if (isRussian()) "Протокол" else "Protocol",
                     style = MaterialTheme.typography.labelLarge
                 )
                 val protocolTheme = LocalColorTheme.current
@@ -920,12 +920,12 @@ fun SetupScreen(
                     }
                 }
             }
-            
+
             // Порт и SSL для IMAP/POP3
             if (accountType != AccountType.EXCHANGE) {
                 // Тип безопасности
                 Text(
-                    if (isRussian()) "Тип безопасности" else "Security type", 
+                    if (isRussian()) "Тип безопасности" else "Security type",
                     style = MaterialTheme.typography.labelLarge
                 )
                 Row(
@@ -946,7 +946,7 @@ fun SetupScreen(
                         }
                     } else {
                         OutlinedButton(
-                            onClick = { 
+                            onClick = {
                                 useSSL = true
                                 when (accountType) {
                                     AccountType.IMAP -> incomingPort = "993"
@@ -961,7 +961,7 @@ fun SetupScreen(
                             Text("SSL/TLS")
                         }
                     }
-                    
+
                     if (!useSSL) {
                         Button(
                             onClick = { },
@@ -975,7 +975,7 @@ fun SetupScreen(
                         }
                     } else {
                         OutlinedButton(
-                            onClick = { 
+                            onClick = {
                                 useSSL = false
                                 when (accountType) {
                                     AccountType.IMAP -> incomingPort = "143"
@@ -991,7 +991,7 @@ fun SetupScreen(
                         }
                     }
                 }
-                
+
                 OutlinedTextField(
                     value = incomingPort,
                     onValueChange = { incomingPort = it.filter { c -> c.isDigit() } },
@@ -1000,13 +1000,13 @@ fun SetupScreen(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
-                
+
                 HorizontalDivider()
                 Text(
-                    if (isRussian()) "Исходящая почта (SMTP)" else "Outgoing mail (SMTP)", 
+                    if (isRussian()) "Исходящая почта (SMTP)" else "Outgoing mail (SMTP)",
                     style = MaterialTheme.typography.labelLarge
                 )
-                
+
                 // SMTP сервер для отправки
                 OutlinedTextField(
                     value = outgoingServer,
@@ -1016,7 +1016,7 @@ fun SetupScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
-                
+
                 OutlinedTextField(
                     value = outgoingPort,
                     onValueChange = { outgoingPort = it.filter { c -> c.isDigit() } },
@@ -1027,7 +1027,7 @@ fun SetupScreen(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
             }
-            
+
             // Домен для Exchange
             if (accountType == AccountType.EXCHANGE) {
                 OutlinedTextField(
@@ -1042,7 +1042,7 @@ fun SetupScreen(
                     singleLine = true
                 )
             }
-            
+
             OutlinedTextField(
                 value = username,
                 onValueChange = { username = it },
@@ -1054,7 +1054,7 @@ fun SetupScreen(
                     .onFocusChanged { if (it.isFocused) focusedFieldIndex = 3 },
                 singleLine = true
             )
-            
+
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
@@ -1064,27 +1064,27 @@ fun SetupScreen(
                     .focusRequester(passwordFocus)
                     .onFocusChanged { if (it.isFocused) focusedFieldIndex = 4 },
                 singleLine = true,
-                visualTransformation = if (passwordVisible) 
+                visualTransformation = if (passwordVisible)
                     VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 trailingIcon = {
                     IconButton(onClick = { passwordVisible = !passwordVisible }) {
                         Icon(
-                            imageVector = if (passwordVisible) 
+                            imageVector = if (passwordVisible)
                                 AppIcons.VisibilityOff else AppIcons.Visibility,
                             contentDescription = null
                         )
                     }
                 }
             )
-            
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Checkbox(
                     checked = acceptAllCerts,
-                    onCheckedChange = { 
+                    onCheckedChange = {
                         acceptAllCerts = it
                         // КРИТИЧНО: Если включаем "принимать все" - обнуляем выбранный сертификат
                         if (it) {
@@ -1098,10 +1098,10 @@ fun SetupScreen(
                     }
                 )
                 Text(
-                    text = if (isRussian()) "Принимать все сертификаты (опаснее)" 
+                    text = if (isRussian()) "Принимать все сертификаты (опаснее)"
                            else "Accept all certificates (less secure)",
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.clickable { 
+                    modifier = Modifier.clickable {
                         acceptAllCerts = !acceptAllCerts
                         // КРИТИЧНО: Если включаем "принимать все" - обнуляем выбранный сертификат
                         if (acceptAllCerts) {
@@ -1115,7 +1115,7 @@ fun SetupScreen(
                     }
                 )
             }
-            
+
             // Выбор сертификата сервера (только если не включено "Принимать все")
             if (!acceptAllCerts) {
                 Card(
@@ -1143,24 +1143,24 @@ fun SetupScreen(
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    text = certificateFileName 
+                                    text = certificateFileName
                                         ?: if (isRussian()) "Не выбран (опционально)" else "Not selected (optional)",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (certificateFileName != null) 
-                                        MaterialTheme.colorScheme.primary 
+                                    color = if (certificateFileName != null)
+                                        MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             OutlinedButton(
-                                onClick = { 
+                                onClick = {
                                     // MIME-типы для сертификатов + общий для файлов без типа
                                     certificatePicker.launch(arrayOf(
                                         "application/x-x509-ca-cert",      // .cer, .crt
@@ -1179,7 +1179,7 @@ fun SetupScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(if (isRussian()) "Выбрать" else "Select")
                             }
-                            
+
                             if (certificatePath != null) {
                                 OutlinedButton(
                                     onClick = {
@@ -1201,10 +1201,10 @@ fun SetupScreen(
                                 }
                             }
                         }
-                        
+
                         Text(
-                            text = if (isRussian()) 
-                                "Для корпоративных серверов с самоподписанным сертификатом" 
+                            text = if (isRussian())
+                                "Для корпоративных серверов с самоподписанным сертификатом"
                             else "For corporate servers with self-signed certificate",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1213,11 +1213,11 @@ fun SetupScreen(
                     }
                 }
             }
-            
+
             // Клиентский сертификат (опционально, только для Exchange)
             if (accountType == AccountType.EXCHANGE) {
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -1243,21 +1243,21 @@ fun SetupScreen(
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    text = clientCertificateFileName 
+                                    text = clientCertificateFileName
                                         ?: if (isRussian()) "Не выбран (опционально)" else "Not selected (optional)",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (clientCertificateFileName != null) 
-                                        MaterialTheme.colorScheme.secondary 
+                                    color = if (clientCertificateFileName != null)
+                                        MaterialTheme.colorScheme.secondary
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        
+
                         // Кнопка выбора сертификата
                         OutlinedButton(
-                            onClick = { 
+                            onClick = {
                                 clientCertificatePicker.launch(arrayOf(
                                     "application/x-pkcs12",    // .p12, .pfx
                                     "application/pkcs12",      // .p12, .pfx
@@ -1271,24 +1271,24 @@ fun SetupScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(if (isRussian()) "Выбрать .p12/.pfx" else "Select .p12/.pfx")
                         }
-                        
+
                         // Поле пароля (показываем только если сертификат выбран)
                         if (clientCertificatePath != null) {
                             Spacer(modifier = Modifier.height(12.dp))
-                            
+
                             OutlinedTextField(
                                 value = clientCertificatePassword,
                                 onValueChange = { clientCertificatePassword = it },
-                                label = { 
-                                    Text(if (isRussian()) "Пароль сертификата" else "Certificate password") 
+                                label = {
+                                    Text(if (isRussian()) "Пароль сертификата" else "Certificate password")
                                 },
-                                visualTransformation = if (clientCertPasswordVisible) 
-                                    VisualTransformation.None 
+                                visualTransformation = if (clientCertPasswordVisible)
+                                    VisualTransformation.None
                                     else PasswordVisualTransformation(),
                                 trailingIcon = {
                                     IconButton(onClick = { clientCertPasswordVisible = !clientCertPasswordVisible }) {
                                         Icon(
-                                            if (clientCertPasswordVisible) AppIcons.VisibilityOff 
+                                            if (clientCertPasswordVisible) AppIcons.VisibilityOff
                                             else AppIcons.Visibility,
                                             contentDescription = null
                                         )
@@ -1298,9 +1298,9 @@ fun SetupScreen(
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
                             )
-                            
+
                             Spacer(modifier = Modifier.height(8.dp))
-                            
+
                             // Кнопка удалить
                             OutlinedButton(
                                 onClick = {
@@ -1322,10 +1322,10 @@ fun SetupScreen(
                                 Text(if (isRussian()) "Удалить сертификат" else "Remove certificate")
                             }
                         }
-                        
+
                         Text(
-                            text = if (isRussian()) 
-                                "Для двусторонней TLS аутентификации (mTLS)" 
+                            text = if (isRussian())
+                                "Для двусторонней TLS аутентификации (mTLS)"
                             else "For mutual TLS authentication (mTLS)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1334,7 +1334,7 @@ fun SetupScreen(
                     }
                 }
             }
-            
+
             // Сообщения
             errorMessage?.let {
                 Card(
@@ -1349,7 +1349,7 @@ fun SetupScreen(
                     )
                 }
             }
-            
+
             successMessage?.let {
                 Card(
                     colors = CardDefaults.cardColors(
@@ -1363,17 +1363,17 @@ fun SetupScreen(
                     )
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // Кнопки
             val canSave by remember { derivedStateOf {
-                displayName.isNotBlank() && email.isNotBlank() && 
-                serverUrl.isNotBlank() && username.isNotBlank() && 
+                displayName.isNotBlank() && email.isNotBlank() &&
+                serverUrl.isNotBlank() && username.isNotBlank() &&
                 password.isNotBlank() &&
                 (clientCertificatePath == null || clientCertificatePassword.isNotBlank())
             } }
-            
+
             Button(
                 onClick = {
                     if (isLoading) return@Button
@@ -1381,7 +1381,7 @@ fun SetupScreen(
                     scope.launch {
                         errorMessage = null
                         successMessage = null
-                        
+
                         try {
                             val certPath = clientCertificatePath
                             if (certPath != null) {
@@ -1486,11 +1486,11 @@ fun SetupScreen(
                                     certificatePath = certificatePath
                                 )
                             }
-                            
+
                             when (result) {
                                 is EasResult.Success -> {
                                     val accountId = result.data
-                                    
+
                                     // Автоматически включаем Certificate Pinning если был загружен сертификат
                                     if (certificatePath != null) {
                                         try {
@@ -1504,7 +1504,7 @@ fun SetupScreen(
                                             android.util.Log.w("SetupScreen", "Exception during auto-enable Certificate Pinning", e)
                                         }
                                     }
-                                    
+
                                     accountSaved = true
                                     onSetupComplete()
                                 }
@@ -1539,14 +1539,14 @@ fun SetupScreen(
                     )
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(16.dp))
             } // Закрываем внутренний Column
         } // Закрываем внешний Column (scrollable)
         ScrollColumnScrollbar(scrollState)
         } // Закрываем Box
     }
-    
+
     // Полноэкранный экран справки
     if (showHelpScreen) {
         SetupHelpScreen(
@@ -1564,10 +1564,10 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
     val isRu = isRussian()
     val interactionSource = remember { MutableInteractionSource() }
     val contentInteractionSource = remember { MutableInteractionSource() }
-    
+
     // Перехватываем системную кнопку/жест "назад"
     androidx.activity.compose.BackHandler(onBack = onClose)
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1620,14 +1620,14 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                     description = "Ваш полный адрес электронной почты",
                     example = "Пример: user@company.com"
                 )
-                
+
                 HelpSection(
                     icon = "🖥️",
                     title = "Сервер",
                     description = "Адрес Exchange сервера без протокола (http:// или https://)",
                     example = "Пример: mail.company.com"
                 )
-                
+
                 HelpSection(
                     icon = "🔄",
                     title = "Резервный сервер (опционально)",
@@ -1637,49 +1637,49 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                         "✓ Автоматическое переключение при недоступности основного",
                         "✓ Credentials не передаются при проверке (TCP-проба)",
                         "✓ Совместимо с Exchange 2007 SP1+",
-                        "⚠️ Не расходует батарею — проверка только при ошибке соединения"
+                        "⚠️ Не расходует заряд аккумулятора — проверка только при ошибке соединения"
                     )
                 )
-                
+
                 HelpSection(
                     icon = "🔢",
                     title = "Порт",
                     description = "Порт для подключения к серверу",
                     example = "443 для HTTPS (рекомендуется)\n80 для HTTP"
                 )
-                
+
                 HelpSection(
                     icon = "🏢",
                     title = "Домен (опционально)",
                     description = "Домен Active Directory вашей организации",
                     example = "Пример: COMPANY\nОбычно не требуется для Exchange Online"
                 )
-                
+
                 HelpSection(
                     icon = "👤",
                     title = "Имя пользователя",
                     description = "Логин для входа в систему",
                     example = "Может совпадать с email или быть в формате domain\\username"
                 )
-                
+
                 HelpSection(
                     icon = "🔒",
                     title = "Пароль",
                     description = "Пароль от учётной записи Exchange",
                     example = "Хранится в зашифрованном виде (AES-256-GCM)"
                 )
-                
+
                 Spacer(modifier = Modifier.height(24.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(24.dp))
-                
+
                 Text(
                     "🔐 Сертификаты (опционально)",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                
+
                 HelpSection(
                     icon = "📜",
                     title = "Сертификат сервера",
@@ -1690,7 +1690,7 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                         "✓ Защищает от атак \"человек посередине\" (перехват данных)"
                     )
                 )
-                
+
                 HelpSection(
                     icon = "🔑",
                     title = "Клиентский сертификат",
@@ -1710,14 +1710,14 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                     description = "Your full email address",
                     example = "Example: user@company.com"
                 )
-                
+
                 HelpSection(
                     icon = "🖥️",
                     title = "Server",
                     description = "Exchange server address without protocol (http:// or https://)",
                     example = "Example: mail.company.com"
                 )
-                
+
                 HelpSection(
                     icon = "🔄",
                     title = "Backup server (optional)",
@@ -1730,46 +1730,46 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                         "⚠️ Battery-friendly — probe only on connection failure"
                     )
                 )
-                
+
                 HelpSection(
                     icon = "🔢",
                     title = "Port",
                     description = "Port for server connection",
                     example = "443 for HTTPS (recommended)\n80 for HTTP"
                 )
-                
+
                 HelpSection(
                     icon = "🏢",
                     title = "Domain (optional)",
                     description = "Your organization's Active Directory domain",
                     example = "Example: COMPANY\nUsually not required for Exchange Online"
                 )
-                
+
                 HelpSection(
                     icon = "👤",
                     title = "Username",
                     description = "Login username for the system",
                     example = "May match email or be in domain\\username format"
                 )
-                
+
                 HelpSection(
                     icon = "🔒",
                     title = "Password",
                     description = "Exchange account password",
                     example = "Stored encrypted (AES-256-GCM)"
                 )
-                
+
                 Spacer(modifier = Modifier.height(24.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(24.dp))
-                
+
                 Text(
                     "🔐 Certificates (optional)",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                
+
                 HelpSection(
                     icon = "📜",
                     title = "Server certificate",
@@ -1780,7 +1780,7 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                         "✓ Protects against man-in-the-middle attacks (data interception)"
                     )
                 )
-                
+
                 HelpSection(
                     icon = "🔑",
                     title = "Client certificate",
@@ -1793,7 +1793,7 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                     )
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(32.dp))
         }
         ScrollColumnScrollbar(helpScrollState)
@@ -1828,40 +1828,40 @@ private fun HelpSection(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             Text(
                 description,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             Text(
                 example,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
             )
-            
+
             benefits?.let {
                 Spacer(modifier = Modifier.height(8.dp))
                 it.forEach { benefit ->
                     Text(
                         benefit,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (benefit.startsWith("⚠️")) 
-                            MaterialTheme.colorScheme.error 
-                        else 
+                        color = if (benefit.startsWith("⚠️"))
+                            MaterialTheme.colorScheme.error
+                        else
                             MaterialTheme.colorScheme.primary
                     )
                 }
             }
         }
     }
-    
+
     Spacer(modifier = Modifier.height(12.dp))
 }
 

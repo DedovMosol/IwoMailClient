@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.ui.screens
 
 import android.app.Activity
 import android.content.ContextWrapper
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -88,11 +89,11 @@ fun SearchScreen(
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
-    
+
     var query by rememberSaveable { mutableStateOf("") }
     var dateFilter by rememberSaveable { mutableStateOf(DateFilter.ALL) }
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
-    
+
     // Сохранение фокуса при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
     var isSearchFocused by rememberSaveable { mutableStateOf(false) }
@@ -102,26 +103,26 @@ fun SearchScreen(
             try { searchFocusRequester.requestFocus() } catch (_: Exception) {}
         }
     }
-    
+
     var searchResultIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var allResults by remember { mutableStateOf<List<EmailEntity>>(emptyList()) }
     var isSearching by rememberSaveable { mutableStateOf(false) }
-    
+
     // Режим выбора
     var selectedIds by rememberSaveable(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
-    
+
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-    
+
     LaunchedEffect(searchResultIds, activeAccount) {
         if (searchResultIds.isNotEmpty() && allResults.isEmpty() && activeAccount != null) {
             allResults = mailRepo.getEmailsByIds(searchResultIds)
         }
     }
-    
+
     val filteredResults = remember(allResults, dateFilter) {
         allResults.filter { email ->
             dateFilter.days?.let { days ->
@@ -130,9 +131,9 @@ fun SearchScreen(
             } ?: true
         }
     }
-    
+
     var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
+
     fun search() {
         if (query.length < 2) return
         if (query.trim().equals("I Want Out", ignoreCase = true)) {
@@ -160,7 +161,7 @@ fun SearchScreen(
             }
         }
     }
-    
+
     LaunchedEffect(query) {
         if (query.length >= 2) {
             kotlinx.coroutines.delay(300)
@@ -181,19 +182,19 @@ fun SearchScreen(
                     } else {
                         NotificationStrings.getDeletedPermanently(isRussian)
                     }
-                    android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, message)
                     // Убираем удалённые из результатов
                     allResults = allResults.filter { it.id !in selectedIds }
                     searchResultIds = allResults.map { it.id }
                 }
                 is EasResult.Error -> {
-                    android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_LONG).show()
+                    SafeToast.long(context, result.message)
                 }
             }
             selectedIds = emptySet()
         }
     }
-    
+
     fun markSelectedAsRead(read: Boolean) {
         scope.launch {
             val ids = selectedIds.toList()
@@ -205,12 +206,12 @@ fun SearchScreen(
                     }
                 }
                 is EasResult.Error -> {
-                    android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, result.message)
                 }
             }
         }
     }
-    
+
     fun starSelected() {
         scope.launch {
             selectedIds.forEach { id -> mailRepo.toggleFlag(id) }
@@ -220,7 +221,7 @@ fun SearchScreen(
             selectedIds = emptySet()
         }
     }
-    
+
     // Диалог удаления
     if (showDeleteDialog) {
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -293,7 +294,7 @@ fun SearchScreen(
                             keyboardActions = KeyboardActions(onSearch = { search() }),
                             trailingIcon = {
                                 if (query.isNotEmpty()) {
-                                    IconButton(onClick = { 
+                                    IconButton(onClick = {
                                         query = ""
                                         allResults = emptyList()
                                         searchResultIds = emptyList()
@@ -346,7 +347,7 @@ fun SearchScreen(
                 onDateFilterChange = { dateFilter = it },
                 hasResults = allResults.isNotEmpty()
             )
-            
+
             // Плавные переходы между состояниями контента при смене фильтров
             val contentState = when {
                 isSearching -> 0
@@ -355,9 +356,9 @@ fun SearchScreen(
                 allResults.isEmpty() -> 3
                 else -> 4
             }
-            
+
             val listState = rememberLazyListState()
-            
+
             AnimatedContent(
                 targetState = contentState,
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -389,7 +390,7 @@ fun SearchScreen(
                             }
                         }
                         else -> {
-                            
+
                             Box(modifier = Modifier.fillMaxSize()) {
                             LazyColumn(state = listState) {
                                 // Выбрать всё (только в режиме выбора)
@@ -399,13 +400,12 @@ fun SearchScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    selectedIds = if (selectedIds.size == filteredResults.size) 
-                                                        emptySet() 
-                                                    else 
+                                                    selectedIds = if (selectedIds.size == filteredResults.size)
+                                                        emptySet()
+                                                    else
                                                         filteredResults.map { it.id }.toSet()
                                                 }
-                                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                                                .animateItemPlacement(),
+                                                .padding(horizontal = 16.dp, vertical = 12.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Checkbox(
@@ -420,7 +420,7 @@ fun SearchScreen(
                                         HorizontalDivider()
                                     }
                                 }
-                                
+
                                 // Количество результатов
                                 item(key = "results_count") {
                                     Text(
@@ -429,10 +429,9 @@ fun SearchScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier
                                             .padding(horizontal = 16.dp, vertical = 8.dp)
-                                            .animateItemPlacement()
                                     )
                                 }
-                                
+
                                 items(filteredResults, key = { it.id }) { email ->
                                     SearchResultItem(
                                         email = email,
@@ -441,16 +440,16 @@ fun SearchScreen(
                                         isSelectionMode = isSelectionMode,
                                         onClick = {
                                             if (isSelectionMode) {
-                                                selectedIds = if (email.id in selectedIds) 
-                                                    selectedIds - email.id 
-                                                else 
+                                                selectedIds = if (email.id in selectedIds)
+                                                    selectedIds - email.id
+                                                else
                                                     selectedIds + email.id
                                             } else {
                                                 onEmailClick(email.id)
                                             }
                                         },
                                         onLongClick = { selectedIds = selectedIds + email.id },
-                                        modifier = Modifier.animateItemPlacement()
+                                        modifier = Modifier
                                     )
                                 }
                             }
@@ -510,7 +509,7 @@ private fun FilterBar(
             }
             FilterChip(
                 selected = dateFilter == filter,
-                onClick = { 
+                onClick = {
                     if (hasResults) {
                         onDateFilterChange(if (dateFilter == filter) DateFilter.ALL else filter)
                     }
@@ -536,7 +535,7 @@ private fun SearchResultItem(
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
-    
+
     val cachedSenderName = remember(email.from) {
         if (email.fromName.isBlank() || email.fromName.contains("@")) {
             mailRepo.getCachedName(email.from)
@@ -545,23 +544,23 @@ private fun SearchResultItem(
             null
         }
     }
-    
+
     val senderName = cachedSenderName ?: email.fromName.ifEmpty { email.from }
     val avatarColor = getAvatarColor(senderName)
     // Используем цвет аватара для подсветки найденного текста
     val highlightColor = avatarColor
-    
+
     val backgroundColor = when {
         isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
         !email.read -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
         else -> MaterialTheme.colorScheme.surface
     }
-    
+
     // Функция для подсветки найденного текста
     @Composable
     fun highlightText(
-        text: String, 
-        query: String, 
+        text: String,
+        query: String,
         style: androidx.compose.ui.text.TextStyle,
         fontWeight: FontWeight?,
         color: Color = MaterialTheme.colorScheme.onSurface
@@ -581,7 +580,7 @@ private fun SearchResultItem(
                     var currentIndex = 0
                     val lowerText = text.lowercase()
                     val lowerQuery = query.lowercase()
-                    
+
                     while (currentIndex < text.length) {
                         val matchIndex = lowerText.indexOf(lowerQuery, currentIndex)
                         if (matchIndex == -1) {
@@ -608,12 +607,12 @@ private fun SearchResultItem(
             )
         }
     }
-    
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
-                onClick = onClick, 
+                onClick = onClick,
                 onLongClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     onLongClick()
@@ -632,7 +631,7 @@ private fun SearchResultItem(
                     .clip(CircleShape)
                     .background(if (isSelected) MaterialTheme.colorScheme.primary else avatarColor)
                     .combinedClickable(
-                        onClick = { 
+                        onClick = {
                             // Клик на аватар = клик на письмо (открыть или выделить/снять в режиме выделения)
                             onClick()
                         },
@@ -658,9 +657,9 @@ private fun SearchResultItem(
                     )
                 }
             }
-            
+
             Spacer(modifier = Modifier.width(12.dp))
-            
+
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.weight(1f)) {
@@ -682,7 +681,7 @@ private fun SearchResultItem(
                     Text(
                         text = formatRelativeDate(email.dateReceived),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (email.read) MaterialTheme.colorScheme.onSurfaceVariant 
+                        color = if (email.read) MaterialTheme.colorScheme.onSurfaceVariant
                                else MaterialTheme.colorScheme.primary
                     )
                 }
@@ -702,7 +701,7 @@ private fun SearchResultItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            
+
             // Звёздочка
             if (email.flagged) {
                 Spacer(modifier = Modifier.width(8.dp))

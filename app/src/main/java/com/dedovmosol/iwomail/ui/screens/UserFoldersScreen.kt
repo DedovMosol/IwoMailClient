@@ -1,6 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -13,12 +13,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,13 +30,16 @@ import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
-import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.AppLanguage
+import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
+import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.components.DragSelectionIndicator
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
-import com.dedovmosol.iwomail.ui.LocalLanguage
-import com.dedovmosol.iwomail.ui.AppLanguage
+import com.dedovmosol.iwomail.util.SafeToast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,13 +59,13 @@ fun UserFoldersScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
-    
+
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
-    
+
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
-    
+
     // Все папки из Room Flow → фильтруем пользовательские
     val allFolders by remember(accountId) { mailRepo.getFolders(accountId) }
         .collectAsState(initial = emptyList())
@@ -66,34 +73,54 @@ fun UserFoldersScreen(
         allFolders.filter { it.type in listOf(1, FolderType.USER_CREATED) }
             .sortedBy { it.displayName }
     }
-    
+
     // Состояния
     var isSyncing by remember { mutableStateOf(false) }
-    
+
     // Диалог создания папки
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var newFolderName by rememberSaveable { mutableStateOf("") }
     var isCreatingFolder by remember { mutableStateOf(false) }
-    
+
     // Контекстное меню (long press)
     var folderForMenu by remember { mutableStateOf<FolderEntity?>(null) }
-    
+
     // Диалог переименования — ID сохраняется при повороте
     var folderToRenameId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToRename = folderToRenameId?.let { id -> userFolders.find { it.id == id } }
     var renameNewName by rememberSaveable { mutableStateOf("") }
-    
+
     // Диалог удаления — ID сохраняется при повороте
     var folderToDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
     val folderToDelete = folderToDeleteId?.let { id -> userFolders.find { it.id == id } }
-    
+
+    // Batch-selection: выбранные ID сохраняются при повороте
+    var selectedFolderIds by rememberSaveable(
+        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
+    ) { mutableStateOf(setOf<String>()) }
+    val isSelectionMode = selectedFolderIds.isNotEmpty()
+    var showBatchDeleteDialog by rememberSaveable { mutableStateOf(false) }
+    // Прогресс batch-удаления: null = неактивно, (done, total)
+    var batchDeleteProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    val haptic = LocalHapticFeedback.current
+    // Очищаем выбор, если пользовательский набор папок изменился (например, после sync)
+    LaunchedEffect(userFolders) {
+        val existing = userFolders.map { it.id }.toSet()
+        if (selectedFolderIds.any { it !in existing }) {
+            selectedFolderIds = selectedFolderIds intersect existing
+        }
+    }
+    // Системная кнопка «назад»: сначала гасим selection
+    BackHandler(enabled = isSelectionMode) { selectedFolderIds = emptySet() }
+
     // Кэш строк для use в корутинах (вне @Composable)
     val foldersSyncedText = Strings.foldersSynced
     val folderCreatedText = Strings.folderCreated
     val folderDeletedText = Strings.folderDeleted
     val folderRenamedText = Strings.folderRenamed
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
-    
+
     // Автоматическая синхронизация при первом открытии если папок нет
     LaunchedEffect(accountId, userFolders.isEmpty()) {
         if (accountId > 0 && userFolders.isEmpty() && !isSyncing) {
@@ -104,64 +131,74 @@ fun UserFoldersScreen(
             }
         }
     }
-    
+
     val colorTheme = LocalColorTheme.current
-    
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(Strings.userFolders, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                actions = {
-                    // Кнопка синхронизации
-                    IconButton(
-                        onClick = {
-                            val accId = accountId
-                            if (accId > 0) {
-                                syncScope.launch {
-                                    isSyncing = true
-                                    val result = withContext(Dispatchers.IO) {
-                                        mailRepo.syncFolders(accId)
-                                    }
-                                    isSyncing = false
-                                    when (result) {
-                                        is EasResult.Success -> {
-                                            Toast.makeText(context, foldersSyncedText, Toast.LENGTH_SHORT).show()
+            if (isSelectionMode) {
+                FoldersSelectionTopBar(
+                    selectedCount = selectedFolderIds.size,
+                    onClearSelection = { selectedFolderIds = emptySet() },
+                    onDelete = { showBatchDeleteDialog = true }
+                )
+            } else {
+                TopAppBar(
+                    title = { Text(Strings.userFolders, color = Color.White) },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
+                        }
+                    },
+                    actions = {
+                        // Кнопка синхронизации
+                        IconButton(
+                            onClick = {
+                                val accId = accountId
+                                if (accId > 0) {
+                                    syncScope.launch {
+                                        isSyncing = true
+                                        val result = withContext(Dispatchers.IO) {
+                                            mailRepo.syncFolders(accId)
                                         }
-                                        is EasResult.Error -> {
-                                            val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        isSyncing = false
+                                        when (result) {
+                                            is EasResult.Success -> {
+                                                SafeToast.short(context, foldersSyncedText)
+                                            }
+                                            is EasResult.Error -> {
+                                                val msg = NotificationStrings.localizeError(result.message, isRussian)
+                                                SafeToast.long(context, msg)
+                                            }
                                         }
                                     }
                                 }
+                            },
+                            enabled = !isSyncing
+                        ) {
+                            if (isSyncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(AppIcons.Refresh, Strings.syncFolders, tint = Color.White)
                             }
-                        },
-                        enabled = !isSyncing
-                    ) {
-                        if (isSyncing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(AppIcons.Refresh, Strings.syncFolders, tint = Color.White)
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = colorTheme.gradientStart),
-            )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = colorTheme.gradientStart),
+                )
+            }
         },
         floatingActionButton = {
-            com.dedovmosol.iwomail.ui.theme.AnimatedFab(
-                onClick = onComposeClick,
-                containerColor = colorTheme.gradientStart
-            ) {
-                Icon(AppIcons.Edit, Strings.compose, tint = Color.White)
+            if (!isSelectionMode) {
+                com.dedovmosol.iwomail.ui.theme.AnimatedFab(
+                    onClick = onComposeClick,
+                    containerColor = colorTheme.gradientStart
+                ) {
+                    Icon(AppIcons.Edit, Strings.compose, tint = Color.White)
+                }
             }
         },
         containerColor = Color.White
@@ -203,39 +240,107 @@ fun UserFoldersScreen(
                 }
             } else {
                 val listState = rememberLazyListState()
+                val folderKeys = remember(userFolders) { userFolders.map { it.id } }
+                val dragModifier = rememberDragSelectModifier(
+                    listState = listState,
+                    itemKeys = folderKeys,
+                    selectedIds = selectedFolderIds,
+                    onSelectionChange = { newIds -> selectedFolderIds = newIds }
+                )
                 Box(modifier = Modifier.fillMaxSize()) {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = dragModifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (isSelectionMode) {
+                            item {
+                                val allSelected = userFolders.isNotEmpty() &&
+                                    selectedFolderIds.size == userFolders.size
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedFolderIds = if (allSelected) emptySet()
+                                            else userFolders.map { it.id }.toSet()
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = allSelected,
+                                        onCheckedChange = {
+                                            selectedFolderIds = if (allSelected) emptySet()
+                                            else userFolders.map { it.id }.toSet()
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(Strings.selectAll)
+                                }
+                                HorizontalDivider()
+                            }
+                        }
                         items(userFolders, key = { it.id }) { folder ->
                             UserFolderItem(
                                 folder = folder,
-                                onClick = { onFolderClick(folder.id) },
-                                onLongClick = { folderForMenu = folder }
+                                isSelected = folder.id in selectedFolderIds,
+                                isSelectionMode = isSelectionMode,
+                                onClick = {
+                                    if (isSelectionMode) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        selectedFolderIds = if (folder.id in selectedFolderIds) {
+                                            selectedFolderIds - folder.id
+                                        } else {
+                                            selectedFolderIds + folder.id
+                                        }
+                                    } else {
+                                        onFolderClick(folder.id)
+                                    }
+                                },
+                                onLongClick = {
+                                    if (isSelectionMode) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        selectedFolderIds = selectedFolderIds + folder.id
+                                    } else {
+                                        folderForMenu = folder
+                                    }
+                                }
                             )
                         }
-                        
+
                         // Отступ для FAB
                         item { Spacer(modifier = Modifier.height(72.dp)) }
                     }
                     LazyColumnScrollbar(listState)
                 }
             }
-            
-            // Кнопка создать папку — слева внизу
-            SmallFloatingActionButton(
-                onClick = { showCreateDialog = true },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 16.dp, bottom = 16.dp),
-                containerColor = colorTheme.gradientStart
-            ) {
-                Icon(AppIcons.CreateNewFolder, Strings.createFolder, tint = Color.White)
+
+            // Кнопка создать папку — слева внизу (скрывается в selection mode)
+            if (!isSelectionMode) {
+                SmallFloatingActionButton(
+                    onClick = { showCreateDialog = true },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 16.dp, bottom = 16.dp),
+                    containerColor = colorTheme.gradientStart
+                ) {
+                    Icon(AppIcons.CreateNewFolder, Strings.createFolder, tint = Color.White)
+                }
             }
-            
+
+            // Прогресс batch-удаления
+            batchDeleteProgress?.let { (done, total) ->
+                LinearProgressIndicator(
+                    progress = { if (total > 0) done.toFloat() / total else 0f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter),
+                    color = colorTheme.gradientStart,
+                    trackColor = colorTheme.gradientStart.copy(alpha = 0.2f)
+                )
+            }
+
             // Индикатор синхронизации
             if (isSyncing && userFolders.isNotEmpty()) {
                 LinearProgressIndicator(
@@ -248,9 +353,9 @@ fun UserFoldersScreen(
             }
         }
     }
-    
+
     // === Диалоги ===
-    
+
     // Диалог создания папки
     if (showCreateDialog) {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -281,11 +386,11 @@ fun UserFoldersScreen(
                                 isCreatingFolder = false
                                 when (result) {
                                     is EasResult.Success -> {
-                                        Toast.makeText(context, folderCreatedText, Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, folderCreatedText)
                                     }
                                     is EasResult.Error -> {
                                         val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        SafeToast.long(context, msg)
                                     }
                                 }
                                 showCreateDialog = false
@@ -309,7 +414,7 @@ fun UserFoldersScreen(
             }
         )
     }
-    
+
     // Контекстное меню (переименовать / удалить)
     folderForMenu?.let { folder ->
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -361,7 +466,7 @@ fun UserFoldersScreen(
             }
         )
     }
-    
+
     // Диалог переименования
     folderToRename?.let { folder ->
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -394,12 +499,11 @@ fun UserFoldersScreen(
                                 }
                                 when (result) {
                                     is EasResult.Success -> {
-                                        Toast.makeText(context, folderRenamedText, Toast.LENGTH_SHORT).show()
-                                        withContext(Dispatchers.IO) { mailRepo.syncFolders(accId) }
+                                        SafeToast.short(context, folderRenamedText)
                                     }
                                     is EasResult.Error -> {
                                         val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        SafeToast.long(context, msg)
                                     }
                                 }
                             }
@@ -420,7 +524,7 @@ fun UserFoldersScreen(
             }
         )
     }
-    
+
     // Диалог удаления
     folderToDelete?.let { folder ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -442,12 +546,11 @@ fun UserFoldersScreen(
                                 }
                                 when (result) {
                                     is EasResult.Success -> {
-                                        Toast.makeText(context, folderDeletedText, Toast.LENGTH_SHORT).show()
-                                        withContext(Dispatchers.IO) { mailRepo.syncFolders(accId) }
+                                        SafeToast.short(context, folderDeletedText)
                                     }
                                     is EasResult.Error -> {
                                         val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        SafeToast.long(context, msg)
                                     }
                                 }
                             }
@@ -464,6 +567,99 @@ fun UserFoldersScreen(
             }
         )
     }
+
+    // Диалог массового удаления выбранных папок
+    if (showBatchDeleteDialog) {
+        val count = selectedFolderIds.size
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { showBatchDeleteDialog = false },
+            icon = { Icon(AppIcons.Delete, null) },
+            title = { Text(Strings.deleteFolders(count)) },
+            text = { Text(Strings.deleteFoldersConfirm(count)) },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.DeleteButton(
+                    onClick = {
+                        val accId = accountId
+                        val idsToDelete = selectedFolderIds.toList()
+                        showBatchDeleteDialog = false
+                        if (accId > 0 && idsToDelete.isNotEmpty()) {
+                            com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                            selectedFolderIds = emptySet()
+                            syncScope.launch {
+                                val total = idsToDelete.size
+                                batchDeleteProgress = 0 to total
+                                var processed = 0
+                                var deleted = 0
+                                var failedMsg: String? = null
+                                // Последовательное удаление: FolderSyncService per-account Mutex
+                                // всё равно сериализовал бы параллельные вызовы, но явный цикл
+                                // даёт прогресс и корректный порядок SyncKey по MS-ASCMD 2.2.1.4.
+                                for (fid in idsToDelete) {
+                                    val res = withContext(Dispatchers.IO) {
+                                        mailRepo.deleteFolder(accId, fid)
+                                    }
+                                    when (res) {
+                                        is EasResult.Success -> deleted++
+                                        is EasResult.Error -> {
+                                            if (failedMsg == null) {
+                                                failedMsg = NotificationStrings.localizeError(res.message, isRussian)
+                                            }
+                                        }
+                                    }
+                                    processed++
+                                    batchDeleteProgress = processed to total
+                                }
+                                batchDeleteProgress = null
+                                if (deleted > 0) {
+                                    SafeToast.short(context, Strings.foldersDeleted(deleted, isRussian))
+                                }
+                                failedMsg?.let { SafeToast.long(context, it) }
+                            }
+                        }
+                    },
+                    text = Strings.yes
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showBatchDeleteDialog = false },
+                    text = Strings.no
+                )
+            }
+        )
+    }
+}
+
+/**
+ * Топ-бар в режиме массового выделения папок
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FoldersSelectionTopBar(
+    selectedCount: Int,
+    onClearSelection: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val colorTheme = LocalColorTheme.current
+    TopAppBar(
+        title = { Text("$selectedCount", color = Color.White) },
+        navigationIcon = {
+            IconButton(onClick = onClearSelection) {
+                Icon(AppIcons.ArrowBack, Strings.cancelSelection, tint = Color.White)
+            }
+        },
+        actions = {
+            IconButton(onClick = onDelete, enabled = selectedCount > 0) {
+                Icon(AppIcons.Delete, Strings.delete, tint = Color.White)
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+        modifier = Modifier.background(
+            Brush.horizontalGradient(
+                colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
+            )
+        )
+    )
 }
 
 /**
@@ -473,19 +669,26 @@ fun UserFoldersScreen(
 @Composable
 private fun UserFolderItem(
     folder: FolderEntity,
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
     val colorTheme = LocalColorTheme.current
+    val backgroundColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
+            .then(
+                if (isSelectionMode) Modifier.clickable(onClick = onClick)
+                else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
             ),
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        color = backgroundColor,
         tonalElevation = 1.dp
     ) {
         Row(
@@ -494,6 +697,10 @@ private fun UserFolderItem(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (isSelectionMode) {
+                DragSelectionIndicator(selected = isSelected)
+                Spacer(modifier = Modifier.width(12.dp))
+            }
             // Иконка папки — контрастный цвет темы
             Box(
                 modifier = Modifier
@@ -509,9 +716,9 @@ private fun UserFolderItem(
                     modifier = Modifier.size(22.dp)
                 )
             }
-            
+
             Spacer(modifier = Modifier.width(14.dp))
-            
+
             // Название папки
             Text(
                 text = folder.displayName,
@@ -522,7 +729,7 @@ private fun UserFolderItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            
+
             // Счётчики справа: непрочитанные (акцентный) + общий (серый)
             if (folder.unreadCount > 0) {
                 // Бейдж непрочитанных — яркий акцентный
@@ -579,7 +786,7 @@ private fun UserFolderItem(
                     )
                 }
             }
-            
+
             // Стрелка навигации
             Spacer(modifier = Modifier.width(8.dp))
             Icon(

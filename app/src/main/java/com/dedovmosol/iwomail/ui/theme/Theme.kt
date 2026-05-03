@@ -2,9 +2,13 @@ package com.dedovmosol.iwomail.ui.theme
 
 import android.os.Build
 import android.text.format.DateFormat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -25,8 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.dedovmosol.iwomail.ui.LocalFontScale
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
-import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
-import com.dedovmosol.iwomail.ui.utils.rememberWobble
 
 /**
  * Цветовые темы приложения
@@ -66,7 +68,7 @@ enum class AppColorTheme(
         gradientStart = Color(0xFF2E7D32),
         gradientEnd = Color(0xFF1B5E20)
     );
-    
+
     companion object {
         fun fromCode(code: String): AppColorTheme {
             return entries.find { it.code == code } ?: PURPLE
@@ -97,10 +99,15 @@ fun AnimatedFab(
     content: @Composable () -> Unit
 ) {
     val animationsEnabled = LocalAnimationsEnabled.current
-    
-    val scale = rememberPulseScale(animationsEnabled, from = 1f, to = 1.08f, durationMs = 800)
-    val rotation = rememberWobble(animationsEnabled, amplitude = 8f, durationMs = 600)
-    
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val scale by animateFloatAsState(
+        targetValue = if (animationsEnabled && isPressed) 0.94f else 1f,
+        animationSpec = if (animationsEnabled) spring() else snap(),
+        label = "fab_scale"
+    )
+
     FloatingActionButton(
         onClick = onClick,
         modifier = modifier.graphicsLayer {
@@ -108,11 +115,10 @@ fun AnimatedFab(
             scaleY = scale
         },
         containerColor = containerColor,
-        contentColor = contentColor
+        contentColor = contentColor,
+        interactionSource = interactionSource
     ) {
-        Box(modifier = androidx.compose.ui.Modifier.graphicsLayer { rotationZ = rotation }) {
-            content()
-        }
+        content()
     }
 }
 
@@ -154,7 +160,7 @@ fun ExchangeMailTheme(
             onSurface = Color.Black
         )
     }
-    
+
     val currentDensity = LocalDensity.current
     val scaledDensity = remember(currentDensity, fontScale) {
         Density(
@@ -205,7 +211,7 @@ fun ScaledAlertDialog(
 ) {
     val configuration = LocalConfiguration.current
     val maxDialogHeight = (configuration.screenHeightDp * 0.92f).dp.coerceAtMost(600.dp)
-    
+
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismissRequest,
         properties = properties
@@ -252,7 +258,7 @@ fun ScaledAlertDialog(
                                 }
                             }
                         }
-                        
+
                         // Заголовок (вне скролла)
                         title?.let {
                             Box(
@@ -273,7 +279,7 @@ fun ScaledAlertDialog(
                                 }
                             }
                         }
-                        
+
                         // Скроллируемый текст с видимым скроллбаром
                         text?.let {
                             Box(
@@ -302,7 +308,7 @@ fun ScaledAlertDialog(
                                 ScrollColumnScrollbar(dialogScrollState)
                             }
                         }
-                        
+
                         // Кнопки по разным сторонам (фиксированы внизу)
                         Row(
                             modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
@@ -404,11 +410,11 @@ fun StyledAlertDialog(
 ) {
     val colorTheme = LocalColorTheme.current
     val animationsEnabled = LocalAnimationsEnabled.current
-    
+
     // Анимация появления
     var visible by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(Unit) { visible = true }
-    
+
     val scale by androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (animationsEnabled) { if (visible) 1f else 0.8f } else 1f,
         animationSpec = androidx.compose.animation.core.spring(
@@ -422,7 +428,7 @@ fun StyledAlertDialog(
         animationSpec = androidx.compose.animation.core.tween(200),
         label = "alpha"
     )
-    
+
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismissRequest,
         properties = properties
@@ -453,7 +459,7 @@ fun StyledAlertDialog(
                                 )
                             )
                     )
-                    
+
                     Column(
                         modifier = androidx.compose.ui.Modifier.padding(24.dp),
                         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
@@ -479,7 +485,7 @@ fun StyledAlertDialog(
                             }
                             Spacer(modifier = androidx.compose.ui.Modifier.height(16.dp))
                         }
-                        
+
                         // Заголовок
                         title?.let {
                             CompositionLocalProvider(
@@ -496,7 +502,7 @@ fun StyledAlertDialog(
                             }
                             Spacer(modifier = androidx.compose.ui.Modifier.height(16.dp))
                         }
-                        
+
                         // Текст
                         text?.let {
                             CompositionLocalProvider(
@@ -512,9 +518,9 @@ fun StyledAlertDialog(
                                 }
                             }
                         }
-                        
+
                         Spacer(modifier = androidx.compose.ui.Modifier.height(24.dp))
-                        
+
                         // Кнопки по разным углам
                         Row(
                             modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
@@ -701,18 +707,18 @@ object AppColors {
     val sent = Color(0xFF9C27B0)            // Отправленные — пурпурный
     val outbox = Color(0xFF00897B)          // Исходящие — бирюзовый
     val spam = Color(0xFFE53935)            // Спам — красный
-    
+
     // Специальные разделы
     val contacts = Color(0xFF1565C0)        // Контакты — синий
     val notes = Color(0xFF2E7D32)           // Заметки — зелёный (как карточка)
     val calendar = Color(0xFF1E88E5)        // Календарь — синий (как карточка)
     val tasks = Color(0xFF006D77)           // Задачи — бирюзовый teal (как карточка)
     val favorites = Color(0xFFC77700)       // Избранные — янтарный (как карточка)
-    
+
     // Утилиты
     val settings = Color(0xFF757575)        // Настройки — серый
     val createFolder = Color(0xFF00897B)    // Создать папку — бирюзовый
-    
+
     // Действия
     val delete = Color(0xFFF44336)          // Удаление — красный
 

@@ -1,12 +1,10 @@
-package com.dedovmosol.iwomail.ui.screens.calendar
+﻿package com.dedovmosol.iwomail.ui.screens.calendar
 
 import android.content.ContentValues
 import android.content.Intent
 import android.provider.MediaStore
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -19,10 +17,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.repository.CalendarRepository
 import com.dedovmosol.iwomail.eas.EasResult
-import com.dedovmosol.iwomail.ui.Strings
-import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
+import com.dedovmosol.iwomail.ui.LocalLanguage
+import com.dedovmosol.iwomail.ui.NotificationStrings
+import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
+import com.dedovmosol.iwomail.util.SafeToast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,8 +41,8 @@ internal fun CalendarAttachmentsList(
     val context = LocalContext.current
     val accountRepo = remember { com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context) }
     val scope = rememberCoroutineScope()
-    val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
-    
+    val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
+
     val attachments = remember(attachmentsJson) {
         try {
             val jsonArray = org.json.JSONArray(attachmentsJson)
@@ -59,20 +59,15 @@ internal fun CalendarAttachmentsList(
             emptyList()
         }
     }
-    
+
     if (attachments.isEmpty()) return
-    
+
     // Save As: системный файл-пикер
     var pendingSaveAsAtt by remember { mutableStateOf<CalendarAttachmentInfo?>(null) }
-    var pendingPreviewFile by remember { mutableStateOf<java.io.File?>(null) }
     var downloadingRef by remember { mutableStateOf<String?>(null) }
     val previewLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
-    ) {
-        // Удаляем временный файл после возврата из просмотрщика
-        pendingPreviewFile?.delete()
-        pendingPreviewFile = null
-    }
+    ) { }
     val saveAsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
@@ -87,19 +82,19 @@ internal fun CalendarAttachmentsList(
                         withContext(Dispatchers.IO) {
                             context.contentResolver.openOutputStream(uri)?.use { out -> out.write(result.data) }
                         }
-                        Toast.makeText(context, if (isRussian) "Файл сохранён" else "File saved", Toast.LENGTH_SHORT).show()
+                        SafeToast.short(context, if (isRussian) "Файл сохранён" else "File saved")
                     }
-                    is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    is EasResult.Error -> SafeToast.long(context, result.message)
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                SafeToast.long(context, e.message ?: "Error")
             } finally {
                 downloadingRef = null
             }
         }
     }
-    
+
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -116,7 +111,7 @@ internal fun CalendarAttachmentsList(
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
-        
+
         attachments.forEach { att ->
             val isDownloading = downloadingRef == att.fileReference
             var showSaveMenu by remember { mutableStateOf(false) }
@@ -126,17 +121,29 @@ internal fun CalendarAttachmentsList(
                     try {
                         when (val result = calendarRepo.downloadCalendarAttachment(accountId, att.fileReference)) {
                             is EasResult.Success -> {
-                                val safeFileName = att.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                                val safeFileName = att.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "attachment" }
+                                val previewFileName = "${Integer.toHexString(att.fileReference.hashCode())}_$safeFileName"
                                 val tempFile = withContext(Dispatchers.IO) {
-                                    val previewDir = java.io.File(context.cacheDir, "calendar_preview")
+                                    val previewDir = File(context.cacheDir, "calendar_preview")
                                     if (!previewDir.exists()) previewDir.mkdirs()
-                                    java.io.File(previewDir, safeFileName).apply {
+                                    val now = System.currentTimeMillis()
+                                    val previewRetentionMs = 60 * 60 * 1000L
+                                    previewDir.listFiles()?.forEach { file ->
+                                        if (
+                                            file.name != previewFileName &&
+                                            now - file.lastModified() > previewRetentionMs
+                                        ) {
+                                            file.delete()
+                                        }
+                                    }
+                                    File(previewDir, previewFileName).apply {
                                         writeBytes(result.data)
                                     }
                                 }
+                                val tempFileLastModified = tempFile.lastModified()
 
                                 val mimeType = android.webkit.MimeTypeMap.getSingleton()
-                                    .getMimeTypeFromExtension(java.io.File(att.name).extension.lowercase(Locale.ROOT))
+                                    .getMimeTypeFromExtension(File(att.name).extension.lowercase(Locale.ROOT))
                                     ?: "application/octet-stream"
 
                                 val uri = androidx.core.content.FileProvider.getUriForFile(
@@ -145,45 +152,41 @@ internal fun CalendarAttachmentsList(
                                     tempFile
                                 )
 
-                                pendingPreviewFile = tempFile
                                 try {
-                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
                                         setDataAndType(uri, mimeType)
-                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
                                     previewLauncher.launch(intent)
 
                                     // Fallback: если внешнее приложение не вернёт result, чистим позже
                                     scope.launch {
                                         kotlinx.coroutines.delay(60 * 60 * 1000L)
-                                        if (pendingPreviewFile?.absolutePath == tempFile.absolutePath) {
-                                            pendingPreviewFile?.delete()
-                                            pendingPreviewFile = null
+                                        if (
+                                            tempFile.exists() &&
+                                            tempFile.lastModified() == tempFileLastModified
+                                        ) {
+                                            tempFile.delete()
                                         }
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
                                     withContext(Dispatchers.IO) { tempFile.delete() }
-                                    pendingPreviewFile = null
-                                    Toast.makeText(
-                                        context,
-                                        if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    SafeToast.short(context, if (isRussian) "Нет приложения для просмотра файла" else "No app to preview this file")
                                 }
                             }
-                            is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                            is EasResult.Error -> SafeToast.long(context, result.message)
                         }
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        Toast.makeText(context, e.message ?: (if (isRussian) "Ошибка просмотра" else "Preview error"), Toast.LENGTH_LONG).show()
+                        SafeToast.long(context, e.message ?: (if (isRussian) "Ошибка просмотра" else "Preview error"))
                     } finally {
                         downloadingRef = null
                     }
                 }
                 Unit
             }
-            
+
             Box {
                 Card(
                     modifier = Modifier
@@ -243,7 +246,7 @@ internal fun CalendarAttachmentsList(
                         }
                     }
                 }
-                
+
                 DropdownMenu(
                     expanded = showSaveMenu,
                     onDismissRequest = { showSaveMenu = false }
@@ -257,7 +260,7 @@ internal fun CalendarAttachmentsList(
                         leadingIcon = { Icon(AppIcons.Visibility, contentDescription = null) }
                     )
                     DropdownMenuItem(
-                        text = { Text(com.dedovmosol.iwomail.ui.Strings.save) },
+                        text = { Text(Strings.save) },
                         onClick = {
                             showSaveMenu = false
                             downloadingRef = att.fileReference
@@ -269,37 +272,35 @@ internal fun CalendarAttachmentsList(
                                             val calendarPath = withContext(Dispatchers.IO) {
                                                 accountRepo.getResolvedCalendarRelativePath(accountId)
                                             } ?: run {
-                                                Toast.makeText(
-                                                    context,
-                                                    com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(
+                                                SafeToast.long(context,
+                                                    NotificationStrings.localizeError(
                                                         com.dedovmosol.iwomail.data.repository.RepositoryErrors.ACCOUNT_NOT_FOUND,
                                                         isRussian
-                                                    ),
-                                                    Toast.LENGTH_LONG
-                                                ).show()
+                                                    )
+                                                )
                                                 return@launch
                                             }
                                             withContext(Dispatchers.IO) {
-                                                val contentValues = android.content.ContentValues().apply {
-                                                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, safeFileName)
-                                                    put(android.provider.MediaStore.Downloads.MIME_TYPE,
+                                                val contentValues = ContentValues().apply {
+                                                    put(MediaStore.Downloads.DISPLAY_NAME, safeFileName)
+                                                    put(MediaStore.Downloads.MIME_TYPE,
                                                         android.webkit.MimeTypeMap.getSingleton()
-                                                            .getMimeTypeFromExtension(java.io.File(safeFileName).extension) ?: "application/octet-stream")
-                                                    put(android.provider.MediaStore.Downloads.RELATIVE_PATH, calendarPath)
+                                                            .getMimeTypeFromExtension(File(safeFileName).extension) ?: "application/octet-stream")
+                                                    put(MediaStore.Downloads.RELATIVE_PATH, calendarPath)
                                                 }
                                                 val uri = context.contentResolver.insert(
-                                                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
+                                                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
                                                 )
                                                 uri?.let { context.contentResolver.openOutputStream(it)?.use { out -> out.write(result.data) } }
                                             }
                                             val calPath = "Downloads/${calendarPath.removePrefix("Download/")}"
-                                            Toast.makeText(context, if (isRussian) "Сохранено в $calPath/" else "Saved to $calPath/", Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, if (isRussian) "Сохранено в $calPath/" else "Saved to $calPath/")
                                         }
-                                        is EasResult.Error -> Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                        is EasResult.Error -> SafeToast.long(context, result.message)
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                                    SafeToast.long(context, e.message ?: "Error")
                                 } finally {
                                     downloadingRef = null
                                 }
@@ -308,7 +309,7 @@ internal fun CalendarAttachmentsList(
                         leadingIcon = { Icon(AppIcons.Download, contentDescription = null) }
                     )
                     DropdownMenuItem(
-                        text = { Text(com.dedovmosol.iwomail.ui.Strings.saveAs) },
+                        text = { Text(Strings.saveAs) },
                         onClick = {
                             showSaveMenu = false
                             pendingSaveAsAtt = att

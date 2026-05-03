@@ -24,13 +24,13 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun calendarEventDao(): CalendarEventDao
     abstract fun taskDao(): TaskDao
     abstract fun syncDao(): SyncDao
-    
+
     companion object {
         private const val TAG = "MailDatabase"
-        
+
         @Volatile
         private var INSTANCE: MailDatabase? = null
-        
+
         /**
          * Флаг: БД была пересоздана из-за отсутствующей миграции.
          * Все данные потеряны — нужна полная повторная синхронизация.
@@ -39,11 +39,11 @@ abstract class MailDatabase : RoomDatabase() {
         @Volatile
         var wasDestructivelyMigrated = false
             private set
-        
+
         fun clearDestructiveMigrationFlag() {
             wasDestructivelyMigrated = false
         }
-        
+
         /**
          * Миграции базы данных.
          * При добавлении новых полей в таблицы — добавлять миграцию здесь.
@@ -57,7 +57,7 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_accountId_folderId_dateReceived ON emails(accountId, folderId, dateReceived)")
             }
         }
-        
+
         private val MIGRATION_24_25 = object : Migration(24, 25) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем поля для ответа на приглашения в календаре
@@ -65,7 +65,7 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE calendar_events ADD COLUMN isMeeting INTEGER NOT NULL DEFAULT 0")
             }
         }
-        
+
         private val MIGRATION_25_26 = object : Migration(25, 26) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем per-account настройки ночного режима и игнорирования экономии батареи
@@ -73,14 +73,14 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE accounts ADD COLUMN ignoreBatterySaver INTEGER NOT NULL DEFAULT 0")
             }
         }
-        
+
         private val MIGRATION_26_27 = object : Migration(26, 27) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем поле isHtml для подписей с форматированием
                 db.execSQL("ALTER TABLE signatures ADD COLUMN isHtml INTEGER NOT NULL DEFAULT 0")
             }
         }
-        
+
         private val MIGRATION_27_28 = object : Migration(27, 28) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем поле isDeleted для задач (корзина)
@@ -88,21 +88,21 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_tasks_isDeleted ON tasks(isDeleted)")
             }
         }
-        
+
         private val MIGRATION_28_29 = object : Migration(28, 29) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем поле clientCertificatePath для клиентских сертификатов
                 db.execSQL("ALTER TABLE accounts ADD COLUMN clientCertificatePath TEXT DEFAULT NULL")
             }
         }
-        
+
         private val MIGRATION_29_30 = object : Migration(29, 30) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем поле isDeleted для заметок (корзина)
                 db.execSQL("ALTER TABLE notes ADD COLUMN isDeleted INTEGER NOT NULL DEFAULT 0")
             }
         }
-        
+
         private val MIGRATION_30_31 = object : Migration(30, 31) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем поля для Certificate Pinning (защита от MITM атак)
@@ -115,7 +115,7 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE accounts ADD COLUMN certificatePinningFailCount INTEGER NOT NULL DEFAULT 0")
             }
         }
-        
+
         private val MIGRATION_31_32 = object : Migration(31, 32) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Добавляем поле isDeleted для событий календаря (корзина)
@@ -123,7 +123,7 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_isDeleted ON calendar_events(isDeleted)")
             }
         }
-        
+
         private val MIGRATION_32_33 = object : Migration(32, 33) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE calendar_events ADD COLUMN organizerName TEXT NOT NULL DEFAULT ''")
@@ -139,26 +139,26 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE calendar_events ADD COLUMN attachments TEXT NOT NULL DEFAULT ''")
             }
         }
-        
+
         private val MIGRATION_33_34 = object : Migration(33, 34) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE accounts ADD COLUMN draftMode TEXT NOT NULL DEFAULT 'SERVER'")
             }
         }
-        
+
         private val MIGRATION_34_35 = object : Migration(34, 35) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE tasks ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE tasks ADD COLUMN assignTo TEXT NOT NULL DEFAULT ''")
             }
         }
-        
+
         private val MIGRATION_35_36 = object : Migration(35, 36) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_lastModified ON calendar_events(lastModified)")
             }
         }
-        
+
         private val MIGRATION_36_37 = object : Migration(36, 37) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_contacts_source ON contacts(source)")
@@ -208,7 +208,7 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_38_39,
             MIGRATION_39_40
         )
-        
+
         fun getInstance(context: Context): MailDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -237,13 +237,13 @@ abstract class MailDatabase : RoomDatabase() {
 class Converters {
     @TypeConverter
     fun fromTimestamp(value: Long?): java.util.Date? = value?.let { java.util.Date(it) }
-    
+
     @TypeConverter
     fun dateToTimestamp(date: java.util.Date?): Long? = date?.time
-    
+
     @TypeConverter
     fun fromContactSource(source: ContactSource): String = source.name
-    
+
     @TypeConverter
     fun toContactSource(value: String): ContactSource = try {
         ContactSource.valueOf(value)
@@ -269,7 +269,7 @@ enum class AccountType(val displayName: String) {
 enum class SyncMode(val displayNameRu: String, val displayNameEn: String) {
     PUSH("Push (мгновенно)", "Push (instant)"),
     SCHEDULED("По расписанию", "Scheduled");
-    
+
     fun getDisplayName(isRussian: Boolean): String = if (isRussian) displayNameRu else displayNameEn
 }
 
@@ -412,6 +412,7 @@ data class EmailDedupInfo(
     val serverId: String,
     val subject: String,
     val from: String,
+    val to: String,
     val dateReceived: Long
 )
 

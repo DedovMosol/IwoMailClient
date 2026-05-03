@@ -193,6 +193,13 @@ object CalendarDateUtils {
         else -> "Busy"
     }
 
+    fun mapSensitivityToEws(sensitivity: Int): String = when (sensitivity) {
+        1 -> "Personal"
+        2 -> "Private"
+        3 -> "Confidential"
+        else -> "Normal"
+    }
+
     // ========================= Timezone =========================
 
     /**

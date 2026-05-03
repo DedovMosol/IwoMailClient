@@ -1,762 +1,415 @@
 # Архитектура проекта / Project Architecture
 
-**iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS), IMAP, POP3.
-**iwo Mail Client** — Android client for Microsoft Exchange (EAS/EWS), IMAP, POP3.
+**iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS) с beta-поддержкой IMAP/POP3.
 
-**Версия / Version:** 1.6.2  
-**Пакет / Package:** com.dedovmosol.iwomail  
-**Min SDK:** 26 (Android 8.0) | **Target SDK:** 36 (Android 16)
+**Версия:** 1.6.2
+**Пакет:** `com.dedovmosol.iwomail`
+**Gradle root:** `IwoMailClient`
+**Android module:** `:app`
 
 ---
 
-## English
+## 1. Состояние проекта v1.6.2
 
-### Package Structure
+| Область | Значение |
+|---------|----------|
+| Application ID / namespace | `com.dedovmosol.iwomail` |
+| Version | `versionName = 1.6.2`, `versionCode = 25` |
+| SDK | `minSdk = 26`, `compileSdk = 36`, `targetSdk = 36` |
+| JVM target | Java/Kotlin `17` |
+| Kotlin | `1.9.22` |
+| AGP | `8.7.3` |
+| UI | Jetpack Compose + Material 3 |
+| DB | Room `MailDatabase` version `40`, schema export enabled |
+| Runtime model | Offline-first: Room + Flow → UI, background sync updates DB |
 
-`
+Основной production-сценарий — on-premise Exchange, особенно Exchange 2007 SP1/SP2. IMAP/POP3 реализованы как beta-клиенты для базового чтения/синхронизации почты и не дают parity с Exchange-функциями.
+
+---
+
+## 2. Слои приложения
+
+```text
+MainActivity / MailApplication
+  ├─ старт приложения, Conscrypt, notification channels, permissions
+  ├─ обработка mailto/share/update/shortcut intents
+  └─ Compose content + AppNavigation
+
+UI Layer
+  ├─ Jetpack Compose screens
+  ├─ Navigation, Theme, Localization
+  ├─ feature subpackages: calendar, compose, contacts, emaildetail
+  └─ reusable components, animations, custom icons, rich text widgets
+
+Repository Layer
+  ├─ AccountRepository
+  ├─ MailRepository
+  ├─ CalendarRepository / TaskRepository / NoteRepository / ContactRepository
+  ├─ SettingsRepository
+  ├─ AccountServerHealthRepository
+  └─ EmailSyncService / EmailOperationsService / FolderSyncService / AppFileCleanupService
+
+Protocol Layer
+  ├─ EasClient facade
+  ├─ EasTransport: EAS WBXML + EWS SOAP + Provision
+  ├─ EAS feature services: email, folders, contacts, calendar, tasks, notes, drafts, attachments
+  ├─ EwsClient + NtlmAuthenticator
+  └─ ImapClient / Pop3Client beta via JavaMail
+
+Persistence / System Layer
+  ├─ Room: accounts, folders, emails, attachments, contacts, groups, signatures, notes, calendar, tasks
+  ├─ DataStore: UI settings, sync checkpoints, notification checkpoints, update settings
+  ├─ HttpClientProvider: shared OkHttp, TLS, mTLS, certificate pinning
+  ├─ FileProvider + MediaStore/Downloads integration
+  └─ Glance widget + Android shortcuts/deep links
+
+Background Layer
+  ├─ PushService: EAS Ping Direct Push foreground service
+  ├─ SyncWorker: periodic/manual sync, cleanup, notification pass
+  ├─ OutboxWorker: offline outbox send
+  ├─ CalendarReminderReceiver / TaskReminderReceiver / reschedule worker
+  └─ BootReceiver / SyncAlarmReceiver / PushRestartWorker / ServiceWatchdogReceiver
+```
+
+---
+
+## 3. Пакетная структура
+
+```text
 com.dedovmosol.iwomail/
-├── MainActivity.kt                    # Entry point, intent handling (mailto, share)
-├── MailApplication.kt                 # Application class, Conscrypt initialization
+├── MainActivity.kt
+├── MailApplication.kt
 │
-├── ui/                                # UI Layer (Jetpack Compose)
-│   ├── MainScreen.kt                  # Main screen with folder cards
-│   ├── MainScreenDrawer.kt            # Navigation Drawer
-│   ├── Localization.kt                # Bilingual localization (RU/EN)
-│   ├── navigation/
-│   │   └── AppNavigation.kt           # Screen navigation
-│   ├── screens/                       # 19 top-level screens + 3 supporting files + 4 subpackages
-│   │   ├── AboutScreen.kt             # About + easter egg
-│   │   ├── AccountSettingsScreen.kt   # Account settings
-│   │   ├── AddAnotherAccountScreen.kt # Add account
-│   │   ├── CalendarScreen.kt          # Calendar (orchestrator, delegates to calendar/)
-│   │   ├── ComposeScreen.kt           # Compose/reply/forward email (delegates to compose/)
-│   │   ├── ComposeUtils.kt            # ComposeScreen utilities
-│   │   ├── ContactsScreen.kt          # Contacts orchestrator (delegates to contacts/)
-│   │   ├── EmailDetailScreen.kt       # Email viewer (delegates to emaildetail/)
-│   │   ├── EmailListScreen.kt         # Email list in folder
-│   │   ├── NotesScreen.kt             # Notes
-│   │   ├── OnboardingScreen.kt        # Onboarding for new users
-│   │   ├── PersonalizationScreen.kt   # Themes and personalization
-│   │   ├── ScheduleSendDialog.kt      # Scheduled send dialog
-│   │   ├── ScheduledEmailWorker.kt    # Worker for scheduled send
-│   │   ├── SearchScreen.kt            # Email search + easter egg
-│   │   ├── SettingsScreen.kt          # General settings
-│   │   ├── SetupScreen.kt             # New account setup
-│   │   ├── SyncCleanupScreen.kt       # Sync cleanup
-│   │   ├── TasksScreen.kt             # Tasks
-│   │   ├── UpdatesScreen.kt           # Update check (GitHub)
-│   │   ├── UserFoldersScreen.kt       # Folder management
-│   │   ├── VerificationScreen.kt      # Server connection verification
-│   │   ├── calendar/                  # Calendar subpackage (6 files)
-│   │   │   ├── AgendaView.kt          # Agenda list + event cards + drag select
-│   │   │   ├── CalendarAttachmentsList.kt # Attachment display for events
-│   │   │   ├── CalendarSelectionTopBar.kt # Multi-select top bar
-│   │   │   ├── CreateEventDialog.kt   # Create/edit event dialog
-│   │   │   ├── EventDetailDialog.kt   # Event detail + deleted event dialogs
-│   │   │   └── MonthView.kt           # Month grid + year view + day cells
-│   │   ├── compose/                   # Compose subpackage (2 files)
-│   │   │   ├── ComposeModels.kt       # EmailSuggestion, SuggestionSource, ImageQuality, AttachmentInfo
-│   │   │   └── ComposeTextUtils.kt    # Saver, regex, formatHtmlSignature/Quote, CID replacement
-│   │   ├── contacts/                  # Contacts subpackage (4 files)
-│   │   │   ├── ContactDetailsDialog.kt # Contact details + export dialog
-│   │   │   ├── ContactEditDialog.kt   # Contact create/edit dialog
-│   │   │   ├── ContactListViews.kt    # PersonalContactsList, OrganizationContactsList, ContactItem
-│   │   │   └── ContactUtils.kt        # Regex, GROUP_COLORS, cleanContactEmail, shareFile
-│   │   └── emaildetail/              # Email detail subpackage (2 files)
-│   │       ├── AttachmentsSection.kt  # Attachment list composable
-│   │       └── EmailDetailActions.kt  # Business logic state holder
-│   ├── components/                    # 10 reusable components
-│   │   ├── ComposableUtils.kt         # Common Compose utilities + drag-select modifier
-│   │   ├── ContactPickerDialog.kt     # Contact picker
-│   │   ├── DeletionProgressBar.kt     # Deletion progress
-│   │   ├── DragSelectionIndicator.kt  # Drag-select visual indicator (animated badge)
-│   │   ├── EasterEggOverlay.kt        # Easter egg (music + animation)
-│   │   ├── NetworkBanner.kt           # No-network banner
-│   │   ├── RichTextEditor.kt          # Rich Text editor (HTML)
-│   │   ├── RichTextWithImages.kt      # HTML display with inline images
-│   │   ├── SendProgressBar.kt         # Send progress
-│   │   └── ServerStatusBanner.kt      # Server health status banner
-│   ├── utils/                         # Shared UI utilities (DRY)
-│   │   ├── AnimationHelpers.kt      # Compose animation helpers
-│   │   ├── AnimationSpecs.kt        # Shared animation specs
-│   │   ├── AvatarColors.kt           # Avatar color palette + getAvatarColor()
-│   │   └── DateFormatUtils.kt        # Relative date formatting (formatRelativeDate)
-│   └── theme/                         # Theme and styles
-│       ├── AppIcons.kt                # File icons by extension
-│       ├── CustomTextToolbar.kt       # Custom text toolbar
-│       └── Theme.kt                   # Material 3 theme (4 color schemes)
+├── ui/
+│   ├── MainScreen.kt
+│   ├── MainScreenDrawer.kt
+│   ├── Localization.kt
+│   ├── navigation/AppNavigation.kt
+│   ├── screens/
+│   │   ├── SetupScreen.kt / VerificationScreen.kt / OnboardingScreen.kt
+│   │   ├── EmailListScreen.kt / EmailDetailScreen.kt / ComposeScreen.kt
+│   │   ├── ContactsScreen.kt / CalendarScreen.kt / NotesScreen.kt / TasksScreen.kt
+│   │   ├── SettingsScreen.kt / AccountSettingsScreen.kt / PersonalizationScreen.kt
+│   │   ├── SyncCleanupScreen.kt / UserFoldersScreen.kt / UpdatesScreen.kt / AboutScreen.kt
+│   │   ├── ScheduleSendDialog.kt / ScheduledEmailWorker.kt / SearchScreen.kt
+│   │   ├── calendar/ — AgendaView, MonthView, event dialogs, attachments, selection top bar
+│   │   ├── compose/ — compose models and text/html helpers
+│   │   ├── contacts/ — contact dialogs, list views and utilities
+│   │   └── emaildetail/ — attachment section and action state holder
+│   ├── components/
+│   ├── theme/
+│   └── utils/
 │
-├── data/                              # Data Layer
-│   ├── model/                         # Data models
-│   │   └── AccountServerHealth.kt     # Server health state model
-│   ├── database/                      # Room Database
-│   │   ├── MailDatabase.kt            # Database (migrations up to v39)
-│   │   ├── Daos.kt                    # EmailDao, FolderDao, AccountDao
-│   │   ├── NotificationEmailSummary.kt # Lightweight projection for notification queries
-│   │   ├── CalendarEventDao.kt        # Calendar event DAO
-│   │   ├── CalendarEventEntity.kt     # Entity (11+ fields from MS-ASCAL)
-│   │   ├── ContactDao.kt             # Contact DAO
-│   │   ├── ContactEntity.kt          # Contact entity
-│   │   ├── ContactGroupDao.kt        # Contact group DAO
-│   │   ├── ContactGroupEntity.kt     # Group entity
-│   │   ├── NoteDao.kt                # Note DAO
-│   │   ├── NoteEntity.kt             # Note entity
-│   │   ├── SignatureDao.kt            # Signature DAO
-│   │   ├── SignatureEntity.kt         # HTML signature entity
-│   │   ├── TaskDao.kt                # Task DAO
-│   │   └── TaskEntity.kt             # Task entity
-│   └── repository/                    # Repositories and services
-│       ├── AccountRepository.kt       # Account management (CRUD, Keystore, profile folder reconciliation)
-│       ├── AccountServerHealthRepository.kt # Server health monitoring (dual-URL probe, retry logic)
-│       ├── MailRepository.kt          # Mail: sync, send, drafts, move, delete
-│       ├── CalendarRepository.kt      # Calendar: sync, CRUD, attachments, reminders
-│       ├── ContactRepository.kt       # Contacts: sync, GAL, import/export, per-account sync guard
-│       ├── NoteRepository.kt          # Notes: sync, CRUD
-│       ├── TaskRepository.kt          # Tasks: sync, CRUD, reminders
-│       ├── SettingsRepository.kt      # Settings + per-account sync/notification checkpoints (DataStore)
-│       ├── EmailSyncService.kt        # Email sync (incremental/full)
-│       ├── EmailOperationsService.kt  # Operations: move, delete, flag, markRead, MDN
-│       ├── FolderSyncService.kt       # Folder sync + per-account SyncKey serialization
-│       ├── AppFileCleanupService.kt   # Download file cleanup (age-based, MediaStore/legacy)
-│       ├── ProfilePathResolver.kt     # Per-profile download path resolution + collision handling
-│       ├── RepositoryProvider.kt      # Manual DI (singleton)
-│       ├── RepositoryExtensions.kt    # Extension functions
-│       ├── RepositoryErrors.kt        # Error handling
-│       ├── RecurrenceHelper.kt        # Recurring event helper
-│       └── FoldersCache.kt            # Thread-safe LRU folder cache (shared across UI/sync)
+├── data/
+│   ├── database/ — Room database, entities, DAOs, notification projections
+│   ├── model/ — server health model
+│   └── repository/ — repositories, sync/operation services, provider, caches, helpers
 │
-├── eas/                               # Protocol Layer — Exchange
-│   ├── EasClient.kt                   # EAS facade (delegates to services)
-│   ├── EasTransport.kt               # HTTP/WBXML transport + Provision
-│   ├── EasVersionDetector.kt         # OPTIONS / version negotiation
-│   ├── EasFolderSyncService.kt       # FolderSync + CRUD + folder ID cache
-│   ├── EwsClient.kt                   # Exchange Web Services (NTLM/Basic)
-│   ├── EasEmailService.kt            # Mail: sync, send, fetch body, MDN parsing
-│   ├── EasCalendarService.kt         # Calendar: sync, CRUD orchestration (EAS + EWS)
-│   ├── CalendarDateUtils.kt          # Calendar date/time/timezone utilities
-│   ├── CalendarXmlParser.kt          # Calendar XML parsing (EAS + EWS events, attendees, attachments)
-│   ├── CalendarRecurrenceBuilder.kt  # Calendar recurrence XML building (EAS + EWS)
-│   ├── CalendarExceptionService.kt   # Recurring exception handling (EAS Sync + EWS supplement)
-│   ├── CalendarAttachmentService.kt  # Calendar EWS attachment CRUD + supplement
-│   ├── EasCalendarSyncService.kt     # Calendar sync orchestration (EAS loop + EWS + SyncKey + folder cache)
-│   ├── EasCalendarCrudService.kt     # Calendar CRUD operations (EAS + EWS paths, helpers)
-│   ├── EasContactsService.kt         # Contacts: sync, GAL search
-│   ├── EasNotesService.kt            # Notes: sync, CRUD (EAS + EWS)
-│   ├── EasTasksService.kt            # Tasks: sync, CRUD (EAS + EWS)
-│   ├── EasDraftsService.kt           # Drafts: create, update, delete (EWS)
-│   ├── EasAttachmentService.kt       # Attachment download, MDN send
-│   ├── EasProvisioning.kt            # Provisioning (security policies)
-│   ├── EasXmlTemplates.kt            # XML templates for EAS/EWS requests
-│   ├── EasXmlParser.kt               # XML response parser
-│   ├── EasPatterns.kt                # Regex patterns for parsing (incl. MIME/MDN)
-│   ├── EasCodePages.kt               # WBXML code pages (EAS)
-│   ├── EasResultExtensions.kt        # Extensions for EasResult<T>
-│   ├── WbxmlParser.kt                # WBXML parser (binary XML)
-│   ├── XmlUtils.kt                   # Shared XML escape/unescape (DRY)
-│   ├── XmlValueExtractor.kt          # XML value extraction
-│   ├── FolderType.kt                 # Exchange folder types
-│   ├── NtlmAuthenticator.kt          # NTLMv2 authentication
-│   └── AttachmentManager.kt          # Attachment file management
-│
-├── imap/
-│   └── ImapClient.kt                 # IMAP client (JavaMail) — beta
-│
-├── pop3/
-│   └── Pop3Client.kt                 # POP3 client (JavaMail) — beta
-│
-├── shared/                            # Cross-protocol shared code
-│   ├── MailClient.kt                  # Mail client interface
-│   ├── MailMessageParser.kt           # MIME message parser
-│   └── MessageToEntityConverter.kt    # Message → Entity converter
-│
-├── network/                           # Network Layer
-│   ├── HttpClientProvider.kt          # OkHttpClient factory (SSL, mTLS, cert pinning)
-│   └── NetworkMonitor.kt              # Connection monitor
-│
-├── sync/                              # Background Services
-│   ├── PushService.kt                 # Direct Push + shared notification pipeline (Foreground Service, EAS Ping)
-│   ├── SyncWorker.kt                 # Periodic sync + auto-cleanup + shared notification pipeline (WorkManager)
-│   ├── SyncHelper.kt                 # Shared sync utilities (syncFolderWithRetry)
-│   ├── OutboxWorker.kt               # Outbox send (offline-first)
-│   ├── PushRestartWorker.kt          # Push restart after failure
-│   ├── BootReceiver.kt               # Start sync after reboot
-│   ├── SyncAlarmReceiver.kt          # AlarmManager fallback for OEM
-│   ├── ServiceWatchdogReceiver.kt    # PushService watchdog
-│   ├── MailNotificationActionReceiver.kt # Notification action handler (mark read)
-│   ├── CalendarReminderReceiver.kt   # Calendar event reminders
-│   ├── TaskReminderReceiver.kt       # Task reminders
-│   ├── MarkEmailReadWorker.kt       # Unique worker to mark emails as read
-│   ├── MarkTaskCompleteWorker.kt    # Worker to mark tasks as complete
-│   ├── NotificationHelper.kt       # Unified notification logic (shared mutex, bounded batches/actions)
-│   ├── InitialSyncController.kt    # Initial/manual sync orchestrator (reactive Compose state)
-│   └── RescheduleRemindersWorker.kt # Re-schedule calendar/task reminders after reboot
-│
-├── update/
-│   └── UpdateChecker.kt              # Update check (GitHub API)
-│
-├── util/                              # Utilities
-│   ├── DateUtils.kt                   # Date formatting
-│   ├── HtmlUtils.kt                   # HTML processing + escapeHtml + sanitizeEmailHtml (DRY)
-│   ├── EmailUtils.kt                  # Shared email helpers (extractName, stripHtml, CN_REGEX)
-│   ├── MimeHtmlProcessor.kt          # MIME/HTML body processing
-│   ├── ICalParser.kt                  # iCalendar (.ics) parser
-│   ├── DeletedIdsTracker.kt           # Anti-resurrection tracker (SharedPreferences + ConcurrentHashMap)
-│   └── SoundPlayer.kt                # Sound effects (send/receive/delete)
-│
-└── widget/                            # Home-screen widget
-    ├── MailWidget.kt                  # GlanceAppWidget (deep link navigation via iwomail:// URIs)
-    └── WidgetConfigActivity.kt        # Widget configuration
-`
+├── eas/ — EAS/EWS protocol layer and Exchange feature services
+├── imap/ImapClient.kt
+├── pop3/Pop3Client.kt
+├── shared/ — JavaMail shared interfaces/parsers/converters
+├── network/ — HttpClientProvider, NetworkMonitor
+├── sync/ — workers, receivers, PushService, notifications and reminders
+├── update/UpdateChecker.kt
+├── util/ — date/html/email/mime/ics/sound/deleted-id utilities
+└── widget/ — Glance widget and config activity
+```
 
 ---
 
-### Architecture Layers
+## 4. Данные и хранилище
 
-`
-┌─────────────────────────────────────────────────────────┐
-│  UI Layer (Jetpack Compose)                             │
-│  22 screens + 4 subpackages (14 extracted components)   │
-│  10 shared components, 1 Navigation, 3 Theme files      │
-│  Material Design 3, 4 color schemes                     │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Repository Layer                                        │
-│  8 repositories + 4 services                             │
-│  AccountRepository, AccountServerHealthRepository,       │
-│  MailRepository, CalendarRepository, ContactRepository,  │
-│  NoteRepository, TaskRepository, SettingsRepository      │
-│  + EmailSyncService, EmailOperationsService,             │
-│    FolderSyncService, AppFileCleanupService              │
-│  + ProfilePathResolver (per-profile path utility)        │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Protocol Layer                                          │
-│  EAS/EWS: EasClient (Facade) →                          │
-│    Transport + VersionDetector + FolderSync              │
-│    + 7 services (Email/Calendar/Contacts/Notes/          │
-│      Tasks/Drafts/Attachment) + EwsClient                │
-│  Calendar: Facade → 7 decomposed services                │
-│  IMAP: ImapClient  │  POP3: Pop3Client                   │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Database Layer              │  Network Layer            │
-│  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
-│  MailDatabase (v39)          │  NetworkMonitor           │
-│                              │  NtlmAuthenticator        │
-└──────────────────────────────┴──────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Background Services                                     │
-│  PushService, SyncWorker, OutboxWorker                   │
-│  BootReceiver, SyncAlarmReceiver, PushRestartWorker      │
-│  ServiceWatchdogReceiver, NotificationHelper             │
-│  CalendarReminderReceiver, TaskReminderReceiver          │
-│  InitialSyncController, RescheduleRemindersWorker        │
-└─────────────────────────────────────────────────────────┘
-`
+### Room
+
+`MailDatabase` содержит 10 entity-классов и 11 DAO/accessors:
+
+- **AccountEntity:** тип аккаунта, URL, alternate URL, sync mode, certificate metadata, draft mode, per-account intervals.
+- **FolderEntity:** Exchange/IMAP/POP3 folders and per-folder SyncKey.
+- **EmailEntity:** message metadata/body, flags, attachments marker, MDN fields, meeting message class, Internet Message-ID.
+- **AttachmentEntity:** email attachments, local download state, inline CID metadata.
+- **ContactEntity / ContactGroupEntity:** local and Exchange contacts, groups, favorites and usage counters.
+- **SignatureEntity:** HTML signatures.
+- **NoteEntity:** Exchange notes with local trash flag.
+- **CalendarEventEntity:** calendar events, meetings, recurrence fields, exceptions, attachments JSON, online links, meeting request IDs.
+- **TaskEntity:** task fields, deadlines, priority, reminders, owner/assignee and local trash flag.
+
+Current DB version is **40**. Migrations currently cover `23→40`; missing migration fallback recreates DB and triggers full resync behavior.
+
+### DataStore
+
+`SettingsRepository` stores UI preferences, default draft mode, update-check settings, sync checkpoints, notification checkpoints and per-account cleanup/non-email sync timestamps.
+
+### Secure storage
+
+`AccountRepository` stores passwords in `EncryptedSharedPreferences`. If Android Keystore is unavailable or corrupted, it falls back to obfuscated SharedPreferences instead of plaintext.
 
 ---
 
-### Tech Stack
+## 5. Exchange protocol architecture
 
-| Category | Technology | Version |
-|----------|------------|---------|
-| Language | Kotlin | 1.9.22 |
-| UI | Jetpack Compose | — |
-| Design | Material Design 3 | — |
-| Async | Coroutines + Flow | — |
-| Database | Room | — |
-| Settings | DataStore | — |
-| HTTP | OkHttp | 4.12.0 |
-| TLS | Conscrypt | 2.5.2 |
-| Protocols | EAS 12.1-14.1, EWS (NTLM/Basic), IMAP, POP3 | — |
-| Mail | JavaMail (com.sun.mail) | — |
-| DI | Manual (RepositoryProvider) | — |
-| Background | WorkManager, AlarmManager, Foreground Service | — |
-| Images | Coil | — |
-| Widget | Glance (AppWidget) | — |
+### EasClient
 
----
+`EasClient` is the facade used by repositories. It owns stable `DeviceId`, shared OkHttp client, `EasTransport`, `EasVersionDetector`, EAS feature services and `EwsClient`.
 
-### Exchange 2007 SP1 Compatibility
+### EasTransport
 
-Exchange 2007 SP1 supports EAS 12.1 ([MS-ASHTTP] Appendix A, <2>: "Exchange 2007 SP1 sets the Protocol version field to 121"). Limitations and fallback mechanisms:
+`EasTransport` is responsible for WBXML generation/parsing, `PolicyKey` handling, HTTP `449` Provision retry, EWS execution with Basic Auth first and NTLM fallback, and shared error normalization.
 
-| Feature | EAS 12.1 | Fallback (EWS) |
-|---------|----------|----------------|
-| Mail: sync/send/delete/move/flag | ✅ | EWS HardDelete (fallback when syncKey=0) |
-| Contacts: sync, GAL search | ✅ | — |
-| Folders: sync/create/rename/delete | ✅ | — |
-| Provisioning (security policies) | ✅ | — |
-| Direct Push (Ping) | ✅ | — |
-| Notes: sync (EAS Notes class) | ❌ (14.0+ only) | EWS CreateItem/UpdateItem (NTLMv2) |
-| Tasks: create/delete | Limited | EWS CreateItem/DeleteItem (NTLMv2) |
-| Calendar: single occurrence edit | ❌ | EWS FindItem(CalendarView) + UpdateItem |
-| Calendar invitations (iCalendar) | ❌ | EWS CreateItem (MeetingRequest) |
-| Server drafts | Limited | EWS CreateItem (MimeContent) + 4-step delete fallback |
+### EWS
 
-Conscrypt 2.5.2 provides TLS compatibility with legacy Exchange 2007 servers.
+EWS requests use SOAP and `RequestServerVersion="Exchange2007_SP1"` by default. EWS is used where EAS 12.x is incomplete or unreliable: notes, many task paths, server drafts, calendar details/meetings/exceptions/attachments and selected fallback deletes.
+
+### IMAP/POP3 beta
+
+`ImapClient` and `Pop3Client` implement `shared.MailClient` via JavaMail. IMAP supports folders and message flags. POP3 is INBOX-only and cannot preserve server read/flag state. Full SMTP parity is not implemented as a separate production layer.
 
 ---
 
-### Key Design Decisions
+## 6. Основные runtime flows
 
-#### Manual DI (RepositoryProvider)
+### Startup
 
-Instead of Dagger/Hilt, manual Dependency Injection via RepositoryProvider is used. Reasons:
-- Minimal dependencies
-- Full lifecycle control
-- Simple debugging
-- Shared EasClient via AccountRepository
+1. `MailApplication.onCreate()` installs Conscrypt.
+2. Notification channels are created for mail, sync, reminders, outbox, scheduled send and updates.
+3. Stale temp files, duplicate DB records and old attachments are cleaned.
+4. Periodic sync is scheduled.
+5. `PushService` is started when at least one Exchange account is in Push mode.
+6. `MainActivity` handles permissions and external intents, then starts Compose navigation.
 
-#### Dual-body approach for drafts
+### Account setup
 
-When saving drafts with inline images, two body representations are used:
+1. `SetupScreen` collects account data.
+2. Exchange accounts go through `VerificationScreen`.
+3. Verification checks server connectivity and can send a test email.
+4. Sensitive passwords are passed through in-memory `VerificationSecrets`, then persisted by `AccountRepository`.
+5. IMAP/POP3 accounts are beta accounts with simpler validation.
+6. Server certificates, self-signed certificates, client `.p12/.pfx` certs and pinning metadata are handled through `HttpClientProvider` and account fields.
 
-| | Server body | Local body |
-|---|---|---|
-| **Image format** | cid:img1_timestamp | data:image/png;base64,... |
-| **Storage** | Exchange Server (EWS CreateItem + MimeContent) | Room Database (EmailEntity.body) |
-| **Reason** | Outlook (Word HTML engine does not support data: URLs) | App (WebView, instant display) |
+### Mail sync
 
-#### Offline-first
+1. `FolderSyncService` syncs folders and serializes folder operations per account.
+2. `EmailSyncService` syncs system folders and user folders with full/incremental strategies.
+3. `MailRepository` exposes UI-facing methods and delegates heavy logic.
+4. `EmailOperationsService` handles move, delete, permanent delete, mark read, flag and MDN flows.
+5. `OutboxWorker` retries offline outgoing messages when network returns.
 
-All data is stored in Room DB. UI reads data via Flow. Background sync updates the DB, UI reacts automatically.
+Orphan detection after full resync uses lightweight DAO projections to avoid loading full `EmailEntity` for large folders:
 
-### Sync Levels
+| Use case | Projection |
+|----------|-----------|
+| Sent full resync orphan detection (`syncSentFull`) | `EmailDedupInfo` (6 fields) |
+| Sent reconcile after full resync (`reconcileSentAfterFullResync`) | `List<String>` ids only |
+| Generic folder reconcile after full resync (`reconcileGenericFolderAfterFullResync`) | `List<String>` ids only |
+| ServerId content-matching after SyncKey=0 reset (`resolveEmailIds`) | `EmailDedupInfo` |
 
-1. **Direct Push** (PushService) — instant notifications from Exchange
-2. **WorkManager** — periodic synchronization of all data types
-3. **AlarmManager** — fallback for aggressive OEMs (Xiaomi, Huawei, Samsung)
-4. **ServiceWatchdog** — PushService health monitoring and restart
+Drafts-specific reconcile keeps full `EmailEntity` because body/bodyType migration is required.
 
-### Notification Pipeline
+### Calendar/tasks/notes/contacts
 
-- `PushService` and `SyncWorker` share `NotificationHelper.notificationMutex`, so notification evaluation and display happen atomically across both channels.
-- Per-account notification checkpoints are persisted in `SettingsRepository` (`DataStore`) and survive process death/restarts.
-- Notification queries use `NotificationEmailSummary` instead of full `EmailEntity` bodies, and notification batches/actions are size-limited to reduce memory and Binder pressure under large mail bursts.
+1. Repositories own local Room state and UI operations.
+2. EAS/EWS services own protocol details.
+3. Calendar and task reminders are scheduled via Android receivers/workers.
+4. Local `isDeleted` flags and `DeletedIdsTracker` prevent resurrection while Exchange state catches up.
+5. Calendar attachments are represented as JSON metadata in `CalendarEventEntity.attachments`; file bytes are downloaded only on demand.
+6. Recurring calendar series store attachment metadata on the master/exception path and virtual occurrences reuse it instead of duplicating payloads.
+7. Permanent calendar deletion requires server success first; local deletion/trash clearing happens only after confirmed EAS/EWS delete.
+8. Attendee meeting deletion sends `MeetingResponse` or EWS `DeclineItem` before delete to prevent Calendar Repair Assistant resurrection.
 
-### Multi-account
+### Notifications
 
-- Each account has its own type (Exchange/IMAP/POP3), sync mode (Push/Scheduled), interval
-- Per-account settings: night mode, Battery Saver level
-- Shared EasClient with accountId for SSL connection reuse
+1. `PushService` receives EAS Ping changes.
+2. `SyncWorker` also checks notifications during periodic/manual sync.
+3. Both use `NotificationHelper.notificationMutex` to avoid duplicate notification races.
+4. Notification queries use lightweight projections and bounded action batches.
 
-### Concurrency Guards
+### Updates and rollback
 
-- `SyncWorker` uses a process-level mutex to avoid overlapping periodic sync runs.
-- `FolderSyncService` serializes per-account folder operations to protect Exchange `SyncKey` state, especially important for Exchange 2007 SP1 / EAS 12.1.
-- `ContactRepository` serializes per-account contact/GAL sync to avoid duplicate concurrent pulls for the same account.
-
----
-
-### Resources
-
-| Directory | Content |
-|-----------|---------|
-| `res/drawable/` | 135+ icons (ic_*.xml) |
-| `res/layout/` | widget_loading.xml, widget_preview.xml |
-| `res/raw/` | Sounds: delete_message.mp3, get_message.mp3, send_message.mp3 |
-| `res/xml/` | backup_rules, data_extraction_rules, file_paths, mail_widget_info, network_security_config, shortcuts |
-| `res/values/` | strings.xml (EN), themes.xml |
-| `res/values-ru/` | strings.xml (RU) |
-
-### XmlPullParser Migration (planned v1.7.0)
-
-`EasXmlParser.kt` utility ready. Migration plan: ~280 regex → XmlPullParser in 8 services.
-Status: utility created, migration not yet started. See `docs/XMLPULLPARSER_MIGRATION_PLAN.md`.
+1. `UpdateChecker` reads GitHub `update.json`.
+2. APK URL is selected by device ABI with universal fallback.
+3. Downloads use shared OkHttp clients with long timeouts.
+4. Install intents use `FileProvider`.
+5. Rollback preparation copies APKs to Downloads/MediaStore and exposes an Open Downloads flow before uninstall.
 
 ---
 
-### Documentation
+## 7. Background components
 
-| File | Description |
-|------|-------------|
-| docs/ARCHITECTURE.md | This document — project architecture |
-| docs/CHANGELOG_RU.md | Detailed changelog in Russian |
-| docs/CHANGELOG_EN.md | Detailed changelog in English |
-| docs/XMLPULLPARSER_MIGRATION_PLAN.md | XmlPullParser migration plan (v1.7.0) |
-| docs/PRIVACY_POLICY.md | Privacy policy (EN + RU) |
-| README.md | README in Russian |
-| README_EN.md | README in English |
-
----
-
-## Русский
-
-## Структура пакетов
-
-`
-com.dedovmosol.iwomail/
-├── MainActivity.kt                    # Точка входа, обработка intent (mailto, share)
-├── MailApplication.kt                 # Application class, инициализация Conscrypt
-│
-├── ui/                                # UI Layer (Jetpack Compose)
-│   ├── MainScreen.kt                  # Главный экран с карточками папок
-│   ├── MainScreenDrawer.kt            # Navigation Drawer
-│   ├── Localization.kt                # Двуязычная локализация (RU/EN)
-│   ├── navigation/
-│   │   └── AppNavigation.kt           # Навигация между экранами
-│   ├── screens/                       # 19 верхнеуровневых экранов + 3 вспомогательных файла + 4 подпакета
-│   │   ├── AboutScreen.kt             # О приложении + пасхалка
-│   │   ├── AccountSettingsScreen.kt   # Настройки аккаунта
-│   │   ├── AddAnotherAccountScreen.kt # Добавление аккаунта
-│   │   ├── CalendarScreen.kt          # Календарь (оркестратор, делегирует в calendar/)
-│   │   ├── ComposeScreen.kt           # Написание/ответ/пересылка (делегирует в compose/)
-│   │   ├── ComposeUtils.kt            # Утилиты для ComposeScreen
-│   │   ├── ContactsScreen.kt          # Контакты (оркестратор, делегирует в contacts/)
-│   │   ├── EmailDetailScreen.kt       # Просмотр письма (делегирует в emaildetail/)
-│   │   ├── EmailListScreen.kt         # Список писем в папке
-│   │   ├── NotesScreen.kt             # Заметки
-│   │   ├── OnboardingScreen.kt        # Онбординг для новых пользователей
-│   │   ├── PersonalizationScreen.kt   # Темы и персонализация
-│   │   ├── ScheduleSendDialog.kt      # Диалог отложенной отправки
-│   │   ├── ScheduledEmailWorker.kt    # Worker для отложенной отправки
-│   │   ├── SearchScreen.kt            # Поиск писем + пасхалка
-│   │   ├── SettingsScreen.kt          # Общие настройки
-│   │   ├── SetupScreen.kt             # Настройка нового аккаунта
-│   │   ├── SyncCleanupScreen.kt       # Очистка синхронизации
-│   │   ├── TasksScreen.kt             # Задачи
-│   │   ├── UpdatesScreen.kt           # Проверка обновлений (GitHub)
-│   │   ├── UserFoldersScreen.kt       # Управление папками
-│   │   ├── VerificationScreen.kt      # Верификация подключения к серверу
-│   │   ├── calendar/                  # Подпакет календаря (6 файлов)
-│   │   │   ├── AgendaView.kt          # Список повестки + карточки событий + drag select
-│   │   │   ├── CalendarAttachmentsList.kt # Отображение вложений событий
-│   │   │   ├── CalendarSelectionTopBar.kt # Верхняя панель мультивыбора
-│   │   │   ├── CreateEventDialog.kt   # Диалог создания/редактирования события
-│   │   │   ├── EventDetailDialog.kt   # Детали события + удалённые события
-│   │   │   └── MonthView.kt           # Месячная сетка + годовой вид + ячейки дней
-│   │   ├── compose/                   # Подпакет написания писем (2 файла)
-│   │   │   ├── ComposeModels.kt       # EmailSuggestion, SuggestionSource, ImageQuality, AttachmentInfo
-│   │   │   └── ComposeTextUtils.kt    # Saver, regex, formatHtmlSignature/Quote, CID-замена
-│   │   ├── contacts/                  # Подпакет контактов (4 файла)
-│   │   │   ├── ContactDetailsDialog.kt # Детали контакта + диалог экспорта
-│   │   │   ├── ContactEditDialog.kt   # Диалог создания/редактирования контакта
-│   │   │   ├── ContactListViews.kt    # PersonalContactsList, OrganizationContactsList, ContactItem
-│   │   │   └── ContactUtils.kt        # Regex, GROUP_COLORS, cleanContactEmail, shareFile
-│   │   └── emaildetail/              # Подпакет деталей письма (2 файла)
-│   │       ├── AttachmentsSection.kt  # Composable списка вложений
-│   │       └── EmailDetailActions.kt  # Бизнес-логика (state holder)
-│   ├── components/                    # 10 переиспользуемых компонентов
-│   │   ├── ComposableUtils.kt         # Общие Compose-утилиты + drag-select модификатор
-│   │   ├── ContactPickerDialog.kt     # Выбор контактов
-│   │   ├── DeletionProgressBar.kt     # Прогресс удаления
-│   │   ├── DragSelectionIndicator.kt  # Визуальный индикатор drag-select (анимированный бейдж)
-│   │   ├── EasterEggOverlay.kt        # Пасхалка (музыка + анимация)
-│   │   ├── NetworkBanner.kt           # Баннер отсутствия сети
-│   │   ├── RichTextEditor.kt          # Rich Text редактор (HTML)
-│   │   ├── RichTextWithImages.kt      # Отображение HTML с inline-картинками
-│   │   ├── SendProgressBar.kt         # Прогресс отправки
-│   │   └── ServerStatusBanner.kt      # Баннер статуса сервера
-│   ├── utils/                         # Общие UI-утилиты (DRY)
-│   │   ├── AnimationHelpers.kt      # Compose-хелперы анимаций
-│   │   ├── AnimationSpecs.kt        # Общие спеки анимаций
-│   │   ├── AvatarColors.kt           # Палитра цветов аватаров + getAvatarColor()
-│   │   └── DateFormatUtils.kt        # Относительное форматирование дат (formatRelativeDate)
-│   └── theme/                         # Тема и стили
-│       ├── AppIcons.kt                # Иконки файлов по расширению
-│       ├── CustomTextToolbar.kt       # Кастомный toolbar для текста
-│       └── Theme.kt                   # Material 3 тема (4 цветовые схемы)
-│
-├── data/                              # Data Layer
-│   ├── model/                         # Модели данных
-│   │   └── AccountServerHealth.kt     # Модель состояния здоровья сервера
-│   ├── database/                      # Room Database
-│   │   ├── MailDatabase.kt            # База данных (миграции до v39)
-│   │   ├── Daos.kt                    # EmailDao, FolderDao, AccountDao
-│   │   ├── NotificationEmailSummary.kt # Лёгкая проекция для запросов уведомлений
-│   │   ├── CalendarEventDao.kt        # DAO для событий календаря
-│   │   ├── CalendarEventEntity.kt     # Entity (11+ полей из MS-ASCAL)
-│   │   ├── ContactDao.kt             # DAO для контактов
-│   │   ├── ContactEntity.kt          # Entity контакта
-│   │   ├── ContactGroupDao.kt        # DAO для групп контактов
-│   │   ├── ContactGroupEntity.kt     # Entity группы
-│   │   ├── NoteDao.kt                # DAO для заметок
-│   │   ├── NoteEntity.kt             # Entity заметки
-│   │   ├── SignatureDao.kt            # DAO для подписей
-│   │   ├── SignatureEntity.kt         # Entity HTML-подписи
-│   │   ├── TaskDao.kt                # DAO для задач
-│   │   └── TaskEntity.kt             # Entity задачи
-│   └── repository/                    # Репозитории и сервисы
-│       ├── AccountRepository.kt       # Управление аккаунтами (CRUD, Keystore, reconciliation папок профилей)
-│       ├── AccountServerHealthRepository.kt # Мониторинг здоровья сервера (dual-URL probe, retry)
-│       ├── MailRepository.kt          # Почта: sync, send, drafts, move, delete
-│       ├── CalendarRepository.kt      # Календарь: sync, CRUD, вложения, напоминания
-│       ├── ContactRepository.kt       # Контакты: sync, GAL, import/export, защита от параллельного sync по аккаунту
-│       ├── NoteRepository.kt          # Заметки: sync, CRUD
-│       ├── TaskRepository.kt          # Задачи: sync, CRUD, напоминания
-│       ├── SettingsRepository.kt      # Настройки + чекпоинты sync/уведомлений по аккаунтам (DataStore)
-│       ├── EmailSyncService.kt        # Синхронизация писем (incremental/full)
-│       ├── EmailOperationsService.kt  # Операции: move, delete, flag, markRead, MDN
-│       ├── FolderSyncService.kt       # Синхронизация папок + сериализация SyncKey по аккаунту
-│       ├── AppFileCleanupService.kt   # Очистка загруженных файлов (по возрасту, MediaStore/legacy)
-│       ├── ProfilePathResolver.kt     # Разрешение путей для подпапок профилей + обработка коллизий
-│       ├── RepositoryProvider.kt      # Manual DI (singleton)
-│       ├── RepositoryExtensions.kt    # Extension-функции
-│       ├── RepositoryErrors.kt        # Обработка ошибок
-│       ├── RecurrenceHelper.kt        # Помощник повторяющихся событий
-│       └── FoldersCache.kt            # Потокобезопасный LRU кэш папок (общий UI/sync)
-│
-├── eas/                               # Protocol Layer — Exchange
-│   ├── EasClient.kt                   # Фасад EAS (делегирует в сервисы)
-│   ├── EasTransport.kt               # HTTP/WBXML транспорт + Provision
-│   ├── EasVersionDetector.kt         # OPTIONS / определение версии
-│   ├── EasFolderSyncService.kt       # FolderSync + CRUD + кэш ID папок
-│   ├── EwsClient.kt                   # Exchange Web Services (NTLM/Basic)
-│   ├── EasEmailService.kt            # Почта: sync, send, fetch body, парсинг MDN
-│   ├── EasCalendarService.kt         # Календарь: sync, CRUD оркестрация (EAS + EWS)
-│   ├── CalendarDateUtils.kt          # Утилиты дат/времени/таймзон для календаря
-│   ├── CalendarXmlParser.kt          # Парсинг XML для календаря (EAS + EWS events, attendees, attachments)
-│   ├── CalendarRecurrenceBuilder.kt  # Построение XML повторений (EAS + EWS)
-│   ├── CalendarExceptionService.kt   # Обработка исключений повторений (EAS Sync + EWS дополнение)
-│   ├── CalendarAttachmentService.kt  # Работа с вложениями через EWS (CRUD + supplement)
-│   ├── EasCalendarSyncService.kt     # Синхронизация календаря (EAS цикл + EWS + SyncKey + кеш папок)
-│   ├── EasCalendarCrudService.kt     # CRUD операции календаря (EAS + EWS пути, хелперы)
-│   ├── EasContactsService.kt         # Контакты: sync, GAL search
-│   ├── EasNotesService.kt            # Заметки: sync, CRUD (EAS + EWS)
-│   ├── EasTasksService.kt            # Задачи: sync, CRUD (EAS + EWS)
-│   ├── EasDraftsService.kt           # Черновики: create, update, delete (EWS)
-│   ├── EasAttachmentService.kt       # Скачивание вложений, отправка MDN
-│   ├── EasProvisioning.kt            # Provisioning (политики безопасности)
-│   ├── EasXmlTemplates.kt            # XML-шаблоны EAS/EWS запросов
-│   ├── EasXmlParser.kt               # Парсинг XML-ответов
-│   ├── EasPatterns.kt                # Regex-паттерны для парсинга (вкл. MIME/MDN)
-│   ├── EasCodePages.kt               # WBXML code pages (EAS)
-│   ├── EasResultExtensions.kt        # Extensions для EasResult<T>
-│   ├── WbxmlParser.kt                # Парсер WBXML (бинарный XML)
-│   ├── XmlUtils.kt                   # Общий XML escape/unescape (DRY)
-│   ├── XmlValueExtractor.kt          # Извлечение значений из XML
-│   ├── FolderType.kt                 # Типы папок Exchange
-│   ├── NtlmAuthenticator.kt          # NTLMv2 аутентификация
-│   └── AttachmentManager.kt          # Управление файлами вложений
-│
-├── imap/
-│   └── ImapClient.kt                 # IMAP клиент (JavaMail) — beta
-│
-├── pop3/
-│   └── Pop3Client.kt                 # POP3 клиент (JavaMail) — beta
-│
-├── shared/                            # Общий код для протоколов
-│   ├── MailClient.kt                  # Интерфейс почтового клиента
-│   ├── MailMessageParser.kt           # Парсинг MIME-сообщений
-│   └── MessageToEntityConverter.kt    # Конвертация Message → Entity
-│
-├── network/                           # Сетевой слой
-│   ├── HttpClientProvider.kt          # OkHttpClient factory (SSL, mTLS, cert pinning)
-│   └── NetworkMonitor.kt              # Мониторинг подключения
-│
-├── sync/                              # Background Services
-│   ├── PushService.kt                 # Direct Push + общий пайплайн уведомлений (Foreground Service, EAS Ping)
-│   ├── SyncWorker.kt                 # Периодическая синхронизация + автоочистка + общий пайплайн уведомлений (WorkManager)
-│   ├── SyncHelper.kt                 # Общие утилиты синхронизации (syncFolderWithRetry)
-│   ├── OutboxWorker.kt               # Отправка из Outbox (offline-first)
-│   ├── PushRestartWorker.kt          # Перезапуск Push после сбоя
-│   ├── BootReceiver.kt               # Запуск sync после перезагрузки
-│   ├── SyncAlarmReceiver.kt          # AlarmManager fallback для OEM
-│   ├── ServiceWatchdogReceiver.kt    # Watchdog для PushService
-│   ├── MailNotificationActionReceiver.kt # Обработчик действий из уведомлений (прочитано)
-│   ├── CalendarReminderReceiver.kt   # Напоминания о событиях
-│   ├── TaskReminderReceiver.kt       # Напоминания о задачах
-│   ├── MarkEmailReadWorker.kt       # Уникальный Worker для пометки писем прочитанными
-│   ├── MarkTaskCompleteWorker.kt    # Worker для пометки задач выполненными
-│   ├── NotificationHelper.kt       # Единая логика уведомлений (общий mutex, ограниченные батчи и действия)
-│   ├── InitialSyncController.kt    # Оркестратор первичной/ручной синхронизации (Compose state)
-│   └── RescheduleRemindersWorker.kt # Перепланирование напоминаний после перезагрузки
-│
-├── update/
-│   └── UpdateChecker.kt              # Проверка обновлений (GitHub API)
-│
-├── util/                              # Утилиты
-│   ├── DateUtils.kt                   # Форматирование дат
-│   ├── HtmlUtils.kt                   # Обработка HTML + escapeHtml + sanitizeEmailHtml (DRY)
-│   ├── EmailUtils.kt                  # Общие email-хелперы (extractName, stripHtml, CN_REGEX)
-│   ├── MimeHtmlProcessor.kt          # MIME/HTML обработка body
-│   ├── ICalParser.kt                  # iCalendar (.ics) парсер
-│   ├── DeletedIdsTracker.kt           # Anti-resurrection трекер (SharedPreferences + ConcurrentHashMap)
-│   └── SoundPlayer.kt                # Звуковые эффекты (send/receive/delete)
-│
-└── widget/                            # Виджет на домашнем экране
-    ├── MailWidget.kt                  # GlanceAppWidget (deep link навигация через iwomail:// URI)
-    └── WidgetConfigActivity.kt        # Настройка виджета
-`
+| Component | Responsibility |
+|-----------|----------------|
+| `PushService` | Foreground Direct Push service, adaptive EAS Ping heartbeat, per-account jobs |
+| `SyncWorker` | Periodic/manual sync, notification pass, auto-cleanup, PushService health check |
+| `OutboxWorker` | Offline outbox send |
+| `PushRestartWorker` | Push restart after failures |
+| `BootReceiver` | Start sync/push after reboot or package replacement |
+| `SyncAlarmReceiver` | AlarmManager fallback for aggressive OEM ROMs |
+| `ServiceWatchdogReceiver` | PushService watchdog on screen/user/power events |
+| `MailNotificationActionReceiver` | Notification action handling for mail |
+| `CalendarReminderReceiver` | Calendar reminder actions |
+| `TaskReminderReceiver` | Task reminder actions |
+| `MarkEmailReadWorker` | Unique worker to mark email as read |
+| `MarkTaskCompleteWorker` | Worker to complete tasks from notifications |
+| `RescheduleRemindersWorker` | Rebuild reminder alarms after reboot/update |
 
 ---
 
-## Слои архитектуры
+## 8. Security and network
 
-`
-┌─────────────────────────────────────────────────────────┐
-│  UI Layer (Jetpack Compose)                             │
-│  22 экрана + 4 подпакета (14 извлечённых компонентов)   │
-│  10 общих компонентов, 1 Navigation, 3 Theme files      │
-│  Material Design 3, 4 цветовые схемы                     │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Repository Layer                                        │
-│  8 репозиториев + 4 сервиса                              │
-│  AccountRepository, AccountServerHealthRepository,       │
-│  MailRepository, CalendarRepository, ContactRepository,  │
-│  NoteRepository, TaskRepository, SettingsRepository      │
-│  + EmailSyncService, EmailOperationsService,             │
-│    FolderSyncService, AppFileCleanupService              │
-│  + ProfilePathResolver (утилита путей профилей)          │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Protocol Layer                                          │
-│  EAS/EWS: EasClient (Фасад) →                           │
-│    Transport + VersionDetector + FolderSync              │
-│    + 7 сервисов (Email/Calendar/Contacts/Notes/          │
-│      Tasks/Drafts/Attachment) + EwsClient                │
-│  Calendar: Фасад → 7 декомпозированных сервисов          │
-│  IMAP: ImapClient  │  POP3: Pop3Client                   │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Database Layer              │  Network Layer            │
-│  Room — 11 DAO, 10 Entity   │  HttpClientProvider       │
-│  MailDatabase (v39)          │  NetworkMonitor           │
-│                              │  NtlmAuthenticator        │
-└──────────────────────────────┴──────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Background Services                                     │
-│  PushService, SyncWorker, OutboxWorker                   │
-│  BootReceiver, SyncAlarmReceiver, PushRestartWorker      │
-│  ServiceWatchdogReceiver, NotificationHelper             │
-│  CalendarReminderReceiver, TaskReminderReceiver          │
-│  InitialSyncController, RescheduleRemindersWorker        │
-└─────────────────────────────────────────────────────────┘
-`
+`HttpClientProvider` centralizes OkHttp creation to avoid connection/thread pool leaks.
+
+Supported network/security paths:
+
+- normal system trust;
+- accept-all mode for legacy/self-signed environments;
+- custom server certificate;
+- PKCS#12 client certificate with mTLS;
+- certificate pinning with saved SHA-256 and metadata;
+- Conscrypt provider for legacy TLS compatibility.
+
+`AccountRepository` caches `EasClient` per account and invalidates cache when certificate/server settings change. Alternate Exchange URL fallback is supported for connection-level errors, with later probe/switchback to primary.
+
+### Email body rendering (WebView)
+
+Email HTML bodies are sanitized before being loaded into `WebView`:
+
+- `HtmlUtils.sanitizeEmailHtml` removes:
+  - `<script>` blocks and standalone tags;
+  - plugin containers: `<iframe>`, `<object>`, `<embed>`, `<applet>` (both paired and self-closing forms);
+  - `<meta http-equiv="refresh">` redirects;
+  - inline event handlers `on*="..."`/`on*='...'`/unquoted;
+  - `javascript:` and `data:text/html` URIs in `href`/`src`/`action`/`formaction`/`xlink:href` attributes.
+- All regexes are idempotent and ReDoS-safe (no catastrophic backtracking).
+- `EmailDetailScreen` loads sanitized HTML with `loadDataWithBaseURL(null, ...)`. Null-baseURL blocks cross-origin requests, cookie/localStorage exfiltration and service workers, complementing the tag-level blocklist.
+
+### Password storage
+
+Passwords are persisted via `EncryptedSharedPreferences` (AES256-GCM / AES256-SIV with a master key stored in Android Keystore). When Keystore is unavailable or corrupted, `AccountRepository` falls back to an obfuscated `SharedPreferences` store instead of plaintext, and password char arrays are zeroed (`fill('\u0000')`) after use in `HttpClientProvider`.
 
 ---
 
-## Технологический стек
+## 9. Exchange 2007 SP1 compatibility
 
-| Категория | Технология | Версия |
-|-----------|-----------|--------|
-| Язык | Kotlin | 1.9.22 |
-| UI | Jetpack Compose | — |
-| Дизайн | Material Design 3 | — |
-| Async | Coroutines + Flow | — |
-| БД | Room | — |
-| Настройки | DataStore | — |
-| HTTP | OkHttp | 4.12.0 |
-| TLS | Conscrypt | 2.5.2 |
-| Протоколы | EAS 12.1-14.1, EWS (NTLM/Basic), IMAP, POP3 | — |
-| JavaMail | JavaMail (com.sun.mail) | — |
-| DI | Manual (RepositoryProvider) | — |
-| Background | WorkManager, AlarmManager, Foreground Service | — |
-| Изображения | Coil | — |
-| Виджет | Glance (AppWidget) | — |
+Exchange 2007 SP1 exposes EAS 12.1. The app keeps Exchange 2007 behavior as a first-class constraint:
 
----
+| Feature | Main path | Fallback / detail |
+|---------|-----------|-------------------|
+| Mail sync/send/move/flag | EAS | EWS fallback for selected hard-delete/error paths |
+| Folder sync/CRUD | EAS FolderSync | Serialized per account to protect SyncKey state |
+| Direct Push | EAS Ping | Adaptive heartbeat |
+| Contacts | EAS + GAL search | Local contacts also supported |
+| Notes | EWS on Exchange 2007 | EAS Notes class is 14.0+ |
+| Tasks | EAS/EWS depending on version/path | EWS for Exchange 2007 task gaps |
+| Calendar sync | EAS primary | EWS supplement for details/attachments/meeting paths |
+| Calendar attachments | EWS CreateAttachment/GetAttachment | EWS ItemId, recurring master ItemId and RootItemChangeKey sequencing required |
+| Calendar delete | EAS Sync Delete / EWS DeleteItem | SyncKey catch-up, server-confirmed local delete, DeclineItem/MeetingResponse for attendees |
+| Drafts | EWS server drafts or local mode | Dual body for inline images |
 
-## Совместимость с Exchange 2007 SP1
+Important compatibility rules captured in code:
 
-Exchange 2007 SP1 поддерживает EAS 12.1 ([MS-ASHTTP] Appendix A, <2>: "Exchange 2007 SP1 sets the Protocol version field to 121"). Ограничения и fallback-механизмы:
-
-| Функция | EAS 12.1 | Fallback (EWS) |
-|---------|----------|---------------------|
-| Почта: sync, send, delete, move, flag | ✅ | EWS HardDelete (fallback при syncKey=0) |
-| Контакты: sync, GAL search | ✅ | — |
-| Папки: sync, create, rename, delete | ✅ | — |
-| Provisioning (политики безопасности) | ✅ | — |
-| Direct Push (Ping) | ✅ | — |
-| Заметки: sync (EAS Notes class) | ❌ (14.0+) | EWS CreateItem/UpdateItem с NTLMv2 |
-| Задачи: создание и удаление | Ограничено | EWS CreateItem/DeleteItem с NTLMv2 |
-| Календарь: редактирование одного вхождения | ❌ | EWS FindItem(CalendarView) + UpdateItem |
-| Приглашения в календарь (iCalendar) | ❌ | EWS CreateItem (MeetingRequest) |
-| Черновики на сервере | Ограничено | EWS CreateItem (MimeContent) + 4-шаговый fallback удаления |
-
-Заметки через EAS НЕ поддерживаются на EAS 12.1 — Notes class требует EAS 14.0+ ([MS-ASCMD] 2.2.3.27.6). На Exchange 2007 SP1 заметки работают только через EWS (IPM.StickyNote).
-
-Conscrypt 2.5.2 обеспечивает TLS-совместимость со старыми серверами Exchange 2007.
+- EWS outgoing SOAP uses declared namespace prefixes and `Exchange2007_SP1`.
+- EWS response parsing must tolerate prefixed and unprefixed XML elements.
+- Calendar EAS Sync chains must not force inconsistent `FilterType`.
+- EAS operations that require current SyncKey perform catch-up/refresh before sending commands where needed.
+- Meeting deletion distinguishes attendee/organizer/non-meeting paths to avoid Exchange Calendar Repair Assistant resurrection.
+- Calendar permanent delete and trash cleanup must not remove local server-backed records until the server delete path succeeds.
+- Recurring calendar attachments must use metadata references and EWS master ItemId resolution rather than duplicating file payloads per occurrence.
 
 ---
 
-## Ключевые архитектурные решения
+## 10. Key design decisions
 
-### Manual DI (RepositoryProvider)
+### Manual DI
 
-Вместо Dagger/Hilt используется ручное Dependency Injection через RepositoryProvider. Причины:
-- Минимум зависимостей
-- Полный контроль над lifecycle
-- Простая отладка
-- Shared EasClient через AccountRepository
-
-### Dual-body подход для черновиков
-
-При сохранении черновиков с inline-картинками используются два представления body:
-
-| | Серверный body | Локальный body |
-|---|---|---|
-| **Формат изображений** | cid:img1_timestamp | data:image/png;base64,... |
-| **Хранение** | Exchange Server (EWS CreateItem + MimeContent) | Room Database (EmailEntity.body) |
-| **Причина** | Outlook (Word HTML engine не поддерживает data: URL) | Приложение (WebView, мгновенное отображение) |
+The app uses `RepositoryProvider` instead of Hilt/Dagger: minimal dependency footprint, simple lifecycle/debugging, shared singleton repositories and centralized client creation in `AccountRepository`.
 
 ### Offline-first
 
-Все данные сохраняются в Room DB. UI читает данные через Flow. Фоновая синхронизация обновляет БД, UI реагирует автоматически.
+UI reads Room/Flow. Network operations update local DB. This keeps the app usable with unstable Exchange connections and gives predictable UI state during long syncs.
 
-### Уровни синхронизации
+### Service decomposition
 
-1. **Direct Push** (PushService) — мгновенные уведомления от Exchange
-2. **WorkManager** — периодическая синхронизация всех типов данных
-3. **AlarmManager** — fallback для агрессивных OEM (Xiaomi, Huawei, Samsung)
-4. **ServiceWatchdog** — мониторинг и перезапуск PushService
+Large protocol logic is split into specialized services: `EasTransport` for transport/provision/auth, feature services for mail/folders/calendar/tasks/notes/drafts/contacts/attachments, and repository-level services for sync and operations.
 
-### Пайплайн уведомлений
+### Draft body model
 
-- `PushService` и `SyncWorker` используют общий `NotificationHelper.notificationMutex`, поэтому оценка и показ уведомлений выполняются атомарно между обоими каналами.
-- Чекпоинты уведомлений по аккаунтам сохраняются в `SettingsRepository` (`DataStore`) и переживают перезапуск процесса/устройства.
-- Запросы для уведомлений используют `NotificationEmailSummary` вместо полных `EmailEntity` body, а размеры батчей и действий уведомлений ограничены для снижения нагрузки на память и Binder при больших всплесках писем.
+Drafts with inline images use two body representations:
 
-### Мультиаккаунт
+| Representation | Purpose |
+|----------------|---------|
+| `cid:` server body | Compatible with Outlook/Exchange rendering |
+| `data:image/...base64` local body | Instant in-app display/editing |
 
-- Каждый аккаунт имеет свой тип (Exchange/IMAP/POP3), режим синхронизации (Push/Scheduled), интервал
-- Per-account настройки: ночной режим, уровень Battery Saver
-- Shared EasClient с accountId для переиспользования SSL-соединений
+Server mode stores drafts through EWS. Local mode stores drafts only in Room and is beta.
 
-### Защита от гонок
+### Concurrency guards
 
-- `SyncWorker` использует mutex на уровне процесса, чтобы не запускать несколько пересекающихся periodic sync одновременно.
-- `FolderSyncService` сериализует операции с папками по аккаунту, чтобы защищать состояние Exchange `SyncKey`, что особенно важно для Exchange 2007 SP1 / EAS 12.1.
-- `ContactRepository` сериализует синхронизацию контактов/GAL по аккаунту, чтобы не выполнять дублирующие конкурентные запросы для одного аккаунта.
+- `SyncWorker` has a process-level mutex.
+- Folder operations are serialized per account to protect SyncKey state.
+- Calendar/task/note repositories use per-account sync locks; calendar delete/restore/permanent-delete/trash operations share the same lock as calendar sync.
+- Notification display uses a shared mutex across push and worker paths.
 
 ---
 
-## Ресурсы
+## 11. Current constraints
 
-| Каталог | Содержимое |
-|---------|------------|
-| `res/drawable/` | 135+ иконок (ic_*.xml) |
-| `res/layout/` | widget_loading.xml, widget_preview.xml |
-| `res/raw/` | Звуки: delete_message.mp3, get_message.mp3, send_message.mp3 |
-| `res/xml/` | backup_rules, data_extraction_rules, file_paths, mail_widget_info, network_security_config, shortcuts |
-| `res/values/` | strings.xml (EN), themes.xml |
-| `res/values-ru/` | strings.xml (RU) |
-
-### Миграция на XmlPullParser (план v1.7.0)
-
-Утилита `EasXmlParser.kt` готова. План миграции: ~280 regex → XmlPullParser в 8 сервисах.
-Статус: утилита создана, миграция не начата. См. `docs/XMLPULLPARSER_MIGRATION_PLAN.md`.
+- OAuth 2.0 / Modern Auth is not implemented.
+- Office 365 / Exchange Online is not a primary target without Basic Auth.
+- IMAP/POP3 are beta and do not support Exchange groupware features.
+- EAS 16.x is not the current optimization target.
+- XML parsing is still largely regex/string based; `EasXmlParser.kt` exists for planned XmlPullParser migration.
+- S/MIME signing/encryption is not implemented.
 
 ---
 
-## Документация
+## 12. Build and resources
 
-| Файл | Описание |
-|------|----------|
-| docs/ARCHITECTURE.md | Этот документ — архитектура проекта |
-| docs/CHANGELOG_RU.md | Подробный changelog на русском |
-| docs/CHANGELOG_EN.md | Подробный changelog на английском |
-| docs/XMLPULLPARSER_MIGRATION_PLAN.md | План миграции на XmlPullParser (v1.7.0) |
-| docs/PRIVACY_POLICY.md | Политика конфиденциальности (EN + RU) |
-| README.md | README на русском |
-| README_EN.md | README на английском |
+```bash
+./gradlew assembleDebug
+./gradlew assembleRelease
+```
+
+On Windows:
+
+```powershell
+.\gradlew.bat assembleDebug
+.\gradlew.bat assembleRelease
+```
+
+| Directory | Content |
+|-----------|---------|
+| `res/drawable/` | custom vector icons, file icons |
+| `res/layout/` | widget preview/loading layouts |
+| `res/raw/` | send/receive/delete sounds |
+| `res/xml/` | backup rules, FileProvider paths, widget info, shortcuts, network security config |
+| `res/values/` | default strings/theme resources |
+| `res/values-ru/` | Russian strings |
+
+---
+
+## 13. Documentation map
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Russian project overview |
+| `README_EN.md` | English project overview |
+| `docs/ARCHITECTURE.md` | This architecture document |
+| `docs/CHANGELOG_RU.md` | Russian changelog |
+| `docs/CHANGELOG_EN.md` | English changelog |
+| `docs/PRIVACY_POLICY.md` | Privacy policy |
+| `docs/XMLPULLPARSER_MIGRATION_PLAN.md` | Planned XML parser migration |
+| `docs/EXCHANGE_DELETE_OPTIMIZATION.md` | Exchange delete optimization notes |
+| `docs/PERFORMANCE_AUDIT.md` | Performance audit notes |
+
+---
+
+## English summary
+
+iwo Mail Client is an offline-first Android mail client focused on on-premise Microsoft Exchange, especially Exchange 2007 SP1. The app uses Jetpack Compose, Room, DataStore, WorkManager, OkHttp and Conscrypt. Exchange support is implemented through EAS/WBXML and EWS/SOAP with Basic/NTLM authentication. IMAP/POP3 support exists as a beta JavaMail path for basic mail reading and sync.
+
+The architecture is layered as:
+
+```text
+Compose UI → Repositories → EAS/EWS/IMAP/POP3 protocol services → Room/DataStore/Network → Background services
+```
+
+Current main constraints are no OAuth/Modern Auth, beta IMAP/POP3, no S/MIME, and regex/string XML parsing pending a planned XmlPullParser migration.

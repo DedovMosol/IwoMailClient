@@ -57,26 +57,53 @@ private val ENCODED_HTML_EMAIL_FRAGMENT = Regex(
 )
 
 /**
- * XSS protection: removes script tags, event handlers, and javascript: URIs.
+ * XSS protection: removes script tags, event handlers, javascript:/data:text/html URIs,
+ * embedded plugin containers (iframe/object/embed/applet) and meta-refresh redirects.
  * Idempotent — safe to call multiple times on the same HTML.
  * Used before injecting email body into WebView.
+ *
+ * Note: WebView baseURL is null when loading sanitized email body
+ * (see EmailDetailScreen.loadDataWithBaseURL(null, ...)). Null-baseURL prevents
+ * cross-origin requests, cookie/localStorage exfiltration and service workers,
+ * but does NOT prevent UI manipulation, external navigation, or plugin loading.
+ * The blocklist below complements null-baseURL.
  */
 private val SANITIZE_SCRIPT_TAG = Regex("(?si)<script[^>]*>.*?</script>")
 private val SANITIZE_SCRIPT_OPEN_CLOSE = Regex("(?i)</?script[^>]*>")
+private val SANITIZE_IFRAME_TAG = Regex("(?si)<iframe[^>]*>.*?</iframe>")
+private val SANITIZE_IFRAME_OPEN_CLOSE = Regex("(?i)</?iframe[^>]*>")
+private val SANITIZE_OBJECT_TAG = Regex("(?si)<object[^>]*>.*?</object>")
+private val SANITIZE_OBJECT_OPEN_CLOSE = Regex("(?i)</?object[^>]*>")
+private val SANITIZE_EMBED = Regex("(?i)<embed\\b[^>]*/?>")
+private val SANITIZE_APPLET_TAG = Regex("(?si)<applet[^>]*>.*?</applet>")
+private val SANITIZE_APPLET_OPEN_CLOSE = Regex("(?i)</?applet[^>]*>")
+private val SANITIZE_META_REFRESH = Regex("""(?i)<meta\b[^>]*http-equiv\s*=\s*['"]?refresh['"]?[^>]*>""")
 private val SANITIZE_EVENT_DOUBLE = Regex("""(?i)\s+on\w+\s*=\s*"[^"]*"""")
 private val SANITIZE_EVENT_SINGLE = Regex("""(?i)\s+on\w+\s*=\s*'[^']*'""")
 private val SANITIZE_EVENT_UNQUOTED = Regex("""(?i)\s+on\w+\s*=\s*[^\s>"']+""")
-private val SANITIZE_JS_URI_DOUBLE = Regex("""(?i)(href|src|action|formaction)\s*=\s*"\s*javascript:[^"]*"""")
-private val SANITIZE_JS_URI_SINGLE = Regex("""(?i)(href|src|action|formaction)\s*=\s*'\s*javascript:[^']*'""")
+private val SANITIZE_JS_URI_DOUBLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*"\s*javascript:[^"]*"""")
+private val SANITIZE_JS_URI_SINGLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*'\s*javascript:[^']*'""")
+private val SANITIZE_DATA_HTML_DOUBLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*"\s*data:text/html[^"]*"""")
+private val SANITIZE_DATA_HTML_SINGLE = Regex("""(?i)(href|src|action|formaction|xlink:href)\s*=\s*'\s*data:text/html[^']*'""")
 
 fun sanitizeEmailHtml(html: String): String = html
     .replace(SANITIZE_SCRIPT_TAG, "")
     .replace(SANITIZE_SCRIPT_OPEN_CLOSE, "")
+    .replace(SANITIZE_IFRAME_TAG, "")
+    .replace(SANITIZE_IFRAME_OPEN_CLOSE, "")
+    .replace(SANITIZE_OBJECT_TAG, "")
+    .replace(SANITIZE_OBJECT_OPEN_CLOSE, "")
+    .replace(SANITIZE_EMBED, "")
+    .replace(SANITIZE_APPLET_TAG, "")
+    .replace(SANITIZE_APPLET_OPEN_CLOSE, "")
+    .replace(SANITIZE_META_REFRESH, "")
     .replace(SANITIZE_EVENT_DOUBLE, "")
     .replace(SANITIZE_EVENT_SINGLE, "")
     .replace(SANITIZE_EVENT_UNQUOTED, "")
     .replace(SANITIZE_JS_URI_DOUBLE, """$1="#"""")
     .replace(SANITIZE_JS_URI_SINGLE, """$1='#'""")
+    .replace(SANITIZE_DATA_HTML_DOUBLE, """$1="#"""")
+    .replace(SANITIZE_DATA_HTML_SINGLE, """$1='#'""")
 
 /**
  * Email HTML часто приходит как fragment без <html>/<body>:

@@ -1,8 +1,8 @@
-package com.dedovmosol.iwomail.ui.screens
+﻿package com.dedovmosol.iwomail.ui.screens
 
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
+import com.dedovmosol.iwomail.util.SafeToast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -78,16 +78,16 @@ fun ContactsScreen(
 
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
     val accountId = activeAccount?.id ?: 0L
-    
+
     // Вкладки: Личные | Exchange (папка Contacts) | GAL (адресная книга)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    
+
     // Личные контакты - используем key чтобы пересоздавать Flow при смене accountId
     val localContacts by remember(accountId) { contactRepo.getLocalContacts(accountId) }.collectAsState(initial = emptyList())
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedLocalSearch by rememberDebouncedState(localSearchQuery)
     // filteredLocalContacts вычисляется ниже через remember с ключами
-    
+
     // Группы контактов - используем key чтобы пересоздавать Flow при смене accountId
     val groups by remember(accountId) { contactRepo.getGroups(accountId) }.collectAsState(initial = emptyList())
     var selectedGroupId by rememberSaveable { mutableStateOf<String?>(null) } // null = все контакты
@@ -98,27 +98,27 @@ fun ContactsScreen(
     val groupToDelete = groups.find { it.id == groupToDeleteId }
     var moveToGroupContactId by rememberSaveable { mutableStateOf<String?>(null) }
     val showMoveToGroupDialog = moveToGroupContactId?.let { id -> localContacts.find { it.id == id } }
-    
+
     // Избранные контакты
     val favoriteContacts by remember(accountId) { contactRepo.getFavoriteContacts(accountId) }.collectAsState(initial = emptyList())
-    
+
     // Tab 1: Exchange Folder контакты (папка Contacts на сервере)
     val exchangeFolderContacts by remember(accountId) { contactRepo.getExchangeFolderContacts(accountId) }.collectAsState(initial = emptyList())
     var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedExchangeSearch by rememberDebouncedState(exchangeSearchQuery)
     var isExchangeSyncing by remember { mutableStateOf(false) }
     var exchangeSyncError by remember(accountId) { mutableStateOf<String?>(null) }
-    
+
     // Tab 2: GAL контакты (глобальная адресная книга)
     val galContacts by remember(accountId) { contactRepo.getGalContacts(accountId) }.collectAsState(initial = emptyList())
     var galSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedGalSearch by rememberDebouncedState(galSearchQuery)
     var isGalSyncing by remember { mutableStateOf(false) }
     var galSyncError by remember(accountId) { mutableStateOf<String?>(null) }
-    
+
     var initialExchangeSyncDone by rememberSaveable(accountId) { mutableStateOf(false) }
     var initialGalSyncDone by rememberSaveable(accountId) { mutableStateOf(false) }
-    
+
     // Автоматическая синхронизация Exchange при первом открытии
     LaunchedEffect(accountId) {
         if (accountId > 0 && !initialExchangeSyncDone && !isExchangeSyncing) {
@@ -133,7 +133,7 @@ fun ContactsScreen(
             }
         }
     }
-    
+
     // Автоматическая синхронизация GAL при первом переключении на вкладку GAL.
     // snapshotFlow гарантирует, что смена вкладки не отменит уже запущенную синхронизацию.
     LaunchedEffect(accountId) {
@@ -151,7 +151,7 @@ fun ContactsScreen(
             }
         }
     }
-    
+
     // Множественный выбор
     var isSelectionMode by rememberSaveable { mutableStateOf(false) }
     // Используем ArrayList<String> saver: Set<String> не всегда надёжно сохраняется в Bundle
@@ -161,10 +161,10 @@ fun ContactsScreen(
     // Флаг для пропуска первого срабатывания LaunchedEffect(selectedTab) при повороте экрана.
     // remember (не rememberSaveable) — пересоздаётся при rotation, что нам и нужно.
     var skipFirstTabEffect by remember { mutableStateOf(true) }
-    
+
     // Email текущего аккаунта для фильтрации себя
     val ownEmail = activeAccount?.email?.lowercase() ?: ""
-    
+
     // Количество контактов Exchange Folder (без себя)
     val exchangeFolderCount = remember(exchangeFolderContacts, ownEmail) {
         if (ownEmail.isNotBlank()) {
@@ -173,7 +173,7 @@ fun ContactsScreen(
             exchangeFolderContacts.size
         }
     }
-    
+
     // Количество контактов GAL (без себя)
     val galCount = remember(galContacts, ownEmail) {
         if (ownEmail.isNotBlank()) {
@@ -182,7 +182,7 @@ fun ContactsScreen(
             galContacts.size
         }
     }
-    
+
     // Фильтрация Exchange Folder контактов по поиску (исключая себя)
     val filteredExchangeContacts = remember(exchangeFolderContacts, debouncedExchangeSearch, ownEmail) {
         val filtered = if (debouncedExchangeSearch.isBlank()) {
@@ -200,7 +200,7 @@ fun ContactsScreen(
             filtered
         }
     }
-    
+
     // Фильтрация GAL контактов по поиску (исключая себя)
     val filteredGalContacts = remember(galContacts, debouncedGalSearch, ownEmail) {
         val filtered = if (debouncedGalSearch.isBlank()) {
@@ -218,7 +218,7 @@ fun ContactsScreen(
             filtered
         }
     }
-    
+
     // Диалоги - используем rememberSaveable для сохранения при повороте
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     var editingContactId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -247,11 +247,11 @@ fun ContactsScreen(
     }
     var duplicateExistingContactId by rememberSaveable { mutableStateOf<String?>(null) }
     val duplicateExistingContact = duplicateExistingContactId?.let { id -> localContacts.find { it.id == id } }
-    
+
     // Получаем объекты контактов по ID
     val editingContact = editingContactId?.let { id -> localContacts.find { it.id == id } }
     val showDeleteDialog = showDeleteDialogId?.let { id -> localContacts.find { it.id == id } }
-    val showContactDetails: ContactEntity? = showContactDetailsId?.let { id -> 
+    val showContactDetails: ContactEntity? = showContactDetailsId?.let { id ->
         localContacts.find { it.id == id }
             ?: exchangeFolderContacts.find { it.id == id }
             ?: galContacts.find { it.id == id }
@@ -286,7 +286,7 @@ fun ContactsScreen(
         pendingBulkContacts.size == bulkNewCount &&
             pendingBulkDuplicatePairs.size == bulkDuplicateTotalCount
     }
-    
+
     // Импорт
     val importedMessage = if (isRussian) "Импортировано контактов:" else "Imported contacts:"
     val contactSavedMsg = if (isRussian) "Контакт сохранён" else "Contact saved"
@@ -294,7 +294,7 @@ fun ContactsScreen(
     val contactDeletedMsg = if (isRussian) "Контакт удалён" else "Contact deleted"
     val emailCopiedMsg = if (isRussian) "Email скопирован" else "Email copied"
     val noContactsToExportMsg = if (isRussian) "Нет контактов для экспорта" else "No contacts to export"
-    
+
     val importVCardLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -307,14 +307,14 @@ fun ContactsScreen(
                         } ?: ""
                     }
                     val count = contactRepo.importFromVCard(accountId, content)
-                    Toast.makeText(context, "$importedMessage $count", Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, "$importedMessage $count")
                 } catch (e: Exception) {
-                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                    SafeToast.long(context, e.message ?: "Error")
                 }
             }
         }
     }
-    
+
     val importCSVLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -327,14 +327,14 @@ fun ContactsScreen(
                         } ?: ""
                     }
                     val count = contactRepo.importFromCSV(accountId, content)
-                    Toast.makeText(context, "$importedMessage $count", Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, "$importedMessage $count")
                 } catch (e: Exception) {
-                    Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                    SafeToast.long(context, e.message ?: "Error")
                 }
             }
         }
     }
-    
+
     val filteredLocalContacts = remember(localContacts, debouncedLocalSearch, selectedGroupId, ownEmail) {
         localContacts.filter { contact ->
             val notSelf = ownEmail.isBlank() || contact.email.lowercase() != ownEmail
@@ -344,15 +344,15 @@ fun ContactsScreen(
                 "ungrouped" -> contact.groupId == null
                 else -> contact.groupId == selectedGroupId
             }
-            val matchesSearch = debouncedLocalSearch.isBlank() || 
+            val matchesSearch = debouncedLocalSearch.isBlank() ||
                 contact.displayName.contains(debouncedLocalSearch, true) ||
                 contact.email.contains(debouncedLocalSearch, true) ||
                 contact.company.contains(debouncedLocalSearch, true)
-            
+
             notSelf && matchesGroup && matchesSearch
         }
     }
-    
+
     val groupCounts = remember(localContacts) {
         val counts = mutableMapOf<String, Int>()
         var ungroupedCount = 0
@@ -367,19 +367,19 @@ fun ContactsScreen(
         counts["__ungrouped__"] = ungroupedCount
         counts
     }
-    
+
     val groupedContacts = remember(filteredLocalContacts) {
         filteredLocalContacts
             .sortedBy { it.displayName.lowercase() }
             .groupBy { it.displayName.firstOrNull()?.uppercaseChar() ?: '#' }
     }
 
-    
+
     // Диалог добавления/редактирования контакта
     if (showAddDialog || editingContact != null) {
         ContactEditDialog(
             contact = editingContact,
-            onDismiss = { 
+            onDismiss = {
                 showAddDialog = false
                 editingContactId = null
             },
@@ -415,7 +415,7 @@ fun ContactsScreen(
                             notes = notes
                         )
                     }
-                    Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, contactSavedMsg)
                 }
                 showAddDialog = false
                 editingContactId = null
@@ -500,7 +500,7 @@ fun ContactsScreen(
                                 } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
                             }
                             val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
-                            Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
+                            SafeToast.short(context, "$msg: $count")
                             pendingBulkContactIds = emptySet()
                             pendingBulkDuplicatePairIds = emptyList()
                             bulkDuplicateTotalCount = 0
@@ -524,7 +524,7 @@ fun ContactsScreen(
                                 } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
                             }
                             val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
-                            Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
+                            SafeToast.short(context, "$msg: $count")
                             pendingBulkContactIds = emptySet()
                             pendingBulkDuplicatePairIds = emptyList()
                             bulkDuplicateTotalCount = 0
@@ -537,7 +537,7 @@ fun ContactsScreen(
             }
         )
     }
-    
+
     // Диалог удаления
     showDeleteDialog?.let { contact ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -550,7 +550,7 @@ fun ContactsScreen(
                     onClick = {
                         scope.launch {
                             contactRepo.deleteContact(contact.id)
-                            Toast.makeText(context, contactDeletedMsg, Toast.LENGTH_SHORT).show()
+                            SafeToast.short(context, contactDeletedMsg)
                         }
                         showDeleteDialogId = null
                     },
@@ -565,7 +565,7 @@ fun ContactsScreen(
             }
         )
     }
-    
+
     // Диалог деталей контакта
     showContactDetails?.let { contact ->
         ContactDetailsDialog(
@@ -578,7 +578,7 @@ fun ContactsScreen(
             },
             onCopyEmail = { email ->
                 clipboardManager.setText(AnnotatedString(email))
-                Toast.makeText(context, emailCopiedMsg, Toast.LENGTH_SHORT).show()
+                SafeToast.short(context, emailCopiedMsg)
             },
             onCall = { phone ->
                 try {
@@ -586,7 +586,7 @@ fun ContactsScreen(
                 } catch (_: Exception) {
                     // Планшет без приложения «Телефон» — копируем номер в буфер обмена
                     clipboardManager.setText(AnnotatedString(phone))
-                    Toast.makeText(context, if (isRussian) "Номер скопирован" else "Number copied", Toast.LENGTH_SHORT).show()
+                    SafeToast.short(context, if (isRussian) "Номер скопирован" else "Number copied")
                 }
             },
             onEdit = {
@@ -611,13 +611,13 @@ fun ContactsScreen(
                         }
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        Toast.makeText(context, if (isRussian) "Ошибка проверки контакта" else "Failed to check contact", Toast.LENGTH_SHORT).show()
+                        SafeToast.short(context, if (isRussian) "Ошибка проверки контакта" else "Failed to check contact")
                     }
                 }
             }
         )
     }
-    
+
     // Диалог экспорта
     if (showExportDialog) {
         ExportDialog(
@@ -626,7 +626,7 @@ fun ContactsScreen(
                 scope.launch {
                     val contacts = when (selectedTab) { 0 -> filteredLocalContacts; 1 -> filteredExchangeContacts; else -> filteredGalContacts }
                     if (contacts.isEmpty()) {
-                        Toast.makeText(context, noContactsToExportMsg, Toast.LENGTH_SHORT).show()
+                        SafeToast.short(context, noContactsToExportMsg)
                         return@launch
                     }
                     val vcardData = contactRepo.exportToVCard(contacts)
@@ -638,7 +638,7 @@ fun ContactsScreen(
                 scope.launch {
                     val contacts = when (selectedTab) { 0 -> filteredLocalContacts; 1 -> filteredExchangeContacts; else -> filteredGalContacts }
                     if (contacts.isEmpty()) {
-                        Toast.makeText(context, noContactsToExportMsg, Toast.LENGTH_SHORT).show()
+                        SafeToast.short(context, noContactsToExportMsg)
                         return@launch
                     }
                     val csvData = contactRepo.exportToCSV(contacts)
@@ -711,10 +711,10 @@ fun ContactsScreen(
                                     department = galContact.department,
                                     jobTitle = galContact.jobTitle
                                 )
-                                Toast.makeText(context, contactReplacedMsg, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, contactReplacedMsg)
                             } catch (e: Exception) {
                                 if (e is kotlinx.coroutines.CancellationException) throw e
-                                Toast.makeText(context, if (isRussian) "Ошибка замены контакта" else "Failed to replace contact", Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, if (isRussian) "Ошибка замены контакта" else "Failed to replace contact")
                             }
                         }
                         duplicateCheckContactId = null
@@ -734,7 +734,7 @@ fun ContactsScreen(
             }
         )
     }
-    
+
     // Диалог подтверждения добавления GAL-контакта в личные контакты
     addToContactsConfirmContact?.let { galContact ->
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
@@ -787,10 +787,10 @@ fun ContactsScreen(
                                     department = contactToAdd.department,
                                     jobTitle = contactToAdd.jobTitle
                                 )
-                                Toast.makeText(context, contactSavedMsg, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, contactSavedMsg)
                             } catch (e: Exception) {
                                 if (e is kotlinx.coroutines.CancellationException) throw e
-                                Toast.makeText(context, if (isRussian) "Ошибка сохранения контакта" else "Failed to save contact", Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, if (isRussian) "Ошибка сохранения контакта" else "Failed to save contact")
                             }
                         }
                     },
@@ -805,19 +805,19 @@ fun ContactsScreen(
             }
         )
     }
-    
+
     // Диалог создания группы
     if (showCreateGroupDialog) {
         var newGroupName by rememberSaveable { mutableStateOf("") }
         val groupCreatedMsg = Strings.groupCreated
-        
+
         val defaultColor = remember(groups) {
             val usedColors = groups.map { it.color }.toSet()
             GROUP_COLORS.firstOrNull { it !in usedColors } ?: GROUP_COLORS[0]
         }
-        
+
         var selectedColor by rememberSaveable { mutableIntStateOf(defaultColor) }
-        
+
         val currentConfig = LocalContext.current.resources.configuration
         val isLandscape = currentConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val screenHeightDp = currentConfig.screenHeightDp
@@ -827,22 +827,22 @@ fun ContactsScreen(
         } else {
             300.dp
         }
-        
+
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = { showCreateGroupDialog = false },
             scrollable = false, // скроллим только текстовую область, кнопки всегда видны
-            icon = { 
+            icon = {
                 Icon(
-                    AppIcons.CreateNewFolder, 
+                    AppIcons.CreateNewFolder,
                     null,
                     tint = Color(selectedColor),
                     modifier = Modifier.size(48.dp)
-                ) 
+                )
             },
             title = { Text(Strings.createGroup) },
             text = {
                 val scrollState = rememberScrollState()
-                
+
                 Box(modifier = Modifier.fillMaxWidth().heightIn(max = maxTextHeight)) {
                     Column(
                         modifier = Modifier
@@ -857,9 +857,9 @@ fun ContactsScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
-                        
+
                         Spacer(modifier = Modifier.height(16.dp))
-                        
+
                         // Заголовок палитры — центрирован
                         Text(
                             text = if (LocalLanguage.current == AppLanguage.RUSSIAN) "Цвет группы" else "Group color",
@@ -868,9 +868,9 @@ fun ContactsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
-                        
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        
+
                         // Палитра цветов — 2 ряда по 6, центрирована, с отступами
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -913,7 +913,7 @@ fun ContactsScreen(
                             }
                         }
                     }
-                    
+
                     ScrollColumnScrollbar(scrollState)
                 }
             },
@@ -923,7 +923,7 @@ fun ContactsScreen(
                         if (newGroupName.isNotBlank()) {
                             scope.launch {
                                 contactRepo.createGroup(accountId, newGroupName, selectedColor)
-                                Toast.makeText(context, groupCreatedMsg, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, groupCreatedMsg)
                             }
                             showCreateGroupDialog = false
                         }
@@ -940,14 +940,14 @@ fun ContactsScreen(
             }
         )
     }
-    
+
     // Диалог переименования группы
     groupToRename?.let { group ->
         var newName by rememberSaveable { mutableStateOf(group.name) }
         val groupRenamedMsg = Strings.groupRenamed
-        
+
         var selectedColor by rememberSaveable { mutableIntStateOf(group.color) }
-        
+
         val currentConfig = LocalContext.current.resources.configuration
         val isLandscape = currentConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val screenHeightDp = currentConfig.screenHeightDp
@@ -956,22 +956,22 @@ fun ContactsScreen(
         } else {
             300.dp
         }
-        
+
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = { groupToRenameId = null },
             scrollable = false,
-            icon = { 
+            icon = {
                 Icon(
-                    AppIcons.Edit, 
+                    AppIcons.Edit,
                     null,
                     tint = Color(selectedColor),
                     modifier = Modifier.size(48.dp)
-                ) 
+                )
             },
             title = { Text(Strings.renameGroup) },
             text = {
                 val scrollState = rememberScrollState()
-                
+
                 Box(modifier = Modifier.fillMaxWidth().heightIn(max = maxTextHeight)) {
                     Column(
                         modifier = Modifier
@@ -986,9 +986,9 @@ fun ContactsScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
-                        
+
                         Spacer(modifier = Modifier.height(16.dp))
-                        
+
                         // Заголовок палитры — центрирован
                         Text(
                             text = if (LocalLanguage.current == AppLanguage.RUSSIAN) "Цвет группы" else "Group color",
@@ -997,9 +997,9 @@ fun ContactsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
-                        
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        
+
                         // Палитра цветов — 2 ряда по 6, центрирована, с отступами
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -1042,7 +1042,7 @@ fun ContactsScreen(
                             }
                         }
                     }
-                    
+
                     ScrollColumnScrollbar(scrollState)
                 }
             },
@@ -1051,7 +1051,7 @@ fun ContactsScreen(
                     onClick = {
                         val nameChanged = newName.isNotBlank() && newName != group.name
                         val colorChanged = selectedColor != group.color
-                        
+
                         if (nameChanged || colorChanged) {
                             scope.launch {
                                 if (nameChanged) {
@@ -1060,7 +1060,7 @@ fun ContactsScreen(
                                 if (colorChanged) {
                                     contactRepo.updateGroupColor(group.id, selectedColor)
                                 }
-                                Toast.makeText(context, groupRenamedMsg, Toast.LENGTH_SHORT).show()
+                                SafeToast.short(context, groupRenamedMsg)
                             }
                             groupToRenameId = null
                         }
@@ -1077,11 +1077,11 @@ fun ContactsScreen(
             }
         )
     }
-    
+
     // Диалог удаления группы — StyledAlertDialog как при удалении писем/событий
     groupToDelete?.let { group ->
         val groupDeletedMsg = Strings.groupDeleted
-        
+
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { groupToDeleteId = null },
             icon = { Icon(AppIcons.Delete, null) },
@@ -1095,7 +1095,7 @@ fun ContactsScreen(
                             if (selectedGroupId == group.id) {
                                 selectedGroupId = null
                             }
-                            Toast.makeText(context, groupDeletedMsg, Toast.LENGTH_SHORT).show()
+                            SafeToast.short(context, groupDeletedMsg)
                         }
                         groupToDeleteId = null
                     },
@@ -1110,7 +1110,7 @@ fun ContactsScreen(
             }
         )
     }
-    
+
     // Диалог перемещения контакта в группу
     showMoveToGroupDialog?.let { contact ->
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
@@ -1124,12 +1124,12 @@ fun ContactsScreen(
                     item {
                         ListItem(
                             headlineContent = { Text(Strings.withoutGroup) },
-                            leadingContent = { 
+                            leadingContent = {
                                 Icon(
-                                    AppIcons.FolderOff, 
+                                    AppIcons.FolderOff,
                                     null,
                                     tint = if (contact.groupId == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                ) 
+                                )
                             },
                             modifier = Modifier.clickable {
                                 scope.launch {
@@ -1176,7 +1176,7 @@ fun ContactsScreen(
         val allContacts = localContacts + exchangeFolderContacts + galContacts
         allContacts.filter { it.id in selectedContactIds }
     }
-    
+
     // Выход из режима выбора при смене вкладки.
     // skipFirstTabEffect предотвращает сброс выделения при повороте экрана:
     // LaunchedEffect запускается при каждом входе в composable, но первый запуск — это rotation,
@@ -1247,7 +1247,7 @@ fun ContactsScreen(
                                                 } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
                                             }
                                             val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getCopiedToPersonalContacts(isRussian)
-                                            Toast.makeText(context, "$msg: $count", Toast.LENGTH_SHORT).show()
+                                            SafeToast.short(context, "$msg: $count")
                                         } else {
                                             pendingBulkContactIds = newOnes.map { it.id }.toSet()
                                             pendingBulkDuplicatePairIds = duplicates.map { it.first.id to it.second.id }
@@ -1327,7 +1327,7 @@ fun ContactsScreen(
                                                 showDeleteConfirm = false
                                                 scope.launch {
                                                     val deleted = contactRepo.deleteContacts(idsToDelete)
-                                                    Toast.makeText(context, "$contactDeletedMsg: $deleted", Toast.LENGTH_SHORT).show()
+                                                    SafeToast.short(context, "$contactDeletedMsg: $deleted")
                                                     isSelectionMode = false
                                                     selectedContactIds = emptySet()
                                                 }
@@ -1476,7 +1476,7 @@ fun ContactsScreen(
                     text = { Text("${Strings.galContacts} ($galCount)") }
                 )
             }
-            
+
             // Поле поиска
             OutlinedTextField(
                 value = when (selectedTab) { 0 -> localSearchQuery; 1 -> exchangeSearchQuery; else -> galSearchQuery },
@@ -1500,7 +1500,7 @@ fun ContactsScreen(
                 },
                 singleLine = true
             )
-            
+
             // Контент
             when (selectedTab) {
                 0 -> PersonalContactsList(
@@ -1512,7 +1512,7 @@ fun ContactsScreen(
                     onGroupRename = { groupToRenameId = it.id },
                     onGroupDelete = { groupToDeleteId = it.id },
                     groupedContacts = groupedContacts,
-                    onContactClick = { 
+                    onContactClick = {
                         if (isSelectionMode) {
                             selectedContactIds = if (it.id in selectedContactIds) {
                                 selectedContactIds - it.id
@@ -1545,7 +1545,7 @@ fun ContactsScreen(
                     syncError = exchangeSyncError,
                     title = if (isRussian) "Контакты Exchange" else "Exchange Contacts",
                     emptySubtitle = if (isRussian) "Нажмите для синхронизации" else "Tap to sync",
-                    onContactClick = { 
+                    onContactClick = {
                         if (isSelectionMode) {
                             selectedContactIds = if (it.id in selectedContactIds) {
                                 selectedContactIds - it.id
@@ -1570,7 +1570,7 @@ fun ContactsScreen(
                                 when (val result = contactRepo.syncExchangeContacts(accountId)) {
                                     is EasResult.Success -> {
                                         val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getSynced(result.data, isRussian)
-                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, msg)
                                     }
                                     is EasResult.Error -> {
                                         exchangeSyncError = result.message
@@ -1591,7 +1591,7 @@ fun ContactsScreen(
                     syncError = galSyncError,
                     title = com.dedovmosol.iwomail.ui.NotificationStrings.getOrganizationAddressBook(isRussian),
                     emptySubtitle = com.dedovmosol.iwomail.ui.NotificationStrings.getGlobalAddressList(isRussian),
-                    onContactClick = { 
+                    onContactClick = {
                         if (isSelectionMode) {
                             selectedContactIds = if (it.id in selectedContactIds) {
                                 selectedContactIds - it.id
@@ -1616,7 +1616,7 @@ fun ContactsScreen(
                                 when (val result = contactRepo.syncGalContactsToDb(accountId)) {
                                     is EasResult.Success -> {
                                         val msg = com.dedovmosol.iwomail.ui.NotificationStrings.getSynced(result.data, isRussian)
-                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        SafeToast.short(context, msg)
                                     }
                                     is EasResult.Error -> {
                                         galSyncError = result.message
