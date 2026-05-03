@@ -31,7 +31,7 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 - ✅ **Tasks** — create, edit, assign, reminders, sync
 - ✅ **Notifications** — Push (Direct Push), background sync, night mode
 - ✅ **Auto-cleanup** — configurable Trash/Drafts/Spam cleanup per account (interval-based or disabled via “Never”)
-- ✅ **Widget** — home screen widget with quick access to emails, search, calendar, tasks, and compose
+- ✅ **Widget** — home screen widget with quick access to emails, search, calendar, tasks, and compose; widget data uses lightweight Room projections without loading heavy email/event bodies
 - ✅ **Interface** — dark/light theme, 4 color schemes, personalization
 - ✅ **Multiple accounts** — with individual signatures and settings
 - ✅ **MDN/DSN** — read and delivery receipt requests
@@ -89,6 +89,13 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 - **CRA resurrection prevention** — attendee meetings are declined through `MeetingResponse` or EWS `DeclineItem` before deletion; if the original meeting request cannot be found, local deletion is blocked.
 - **Preview cache** — attachment previews use `cacheDir/calendar_preview`, stable names derived from `fileReference`, and delayed cleanup designed to avoid races with external viewers.
 
+## 🧩 Widget and Performance
+
+- **Lightweight DAO projections** — the widget reads only displayed fields for recent unread emails, the next task and the next calendar event.
+- **Correct unread logic** — the widget's new-mail list is limited to Inbox and `read = 0`.
+- **Race protection** — `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
+- **Room v42** — hot widget paths are indexed for unread Inbox, folder type lookup, active tasks, current calendar events and upcoming calendar events.
+
 ## 💡 Known Limitations
 
 - **Office 365 / Modern Auth** — OAuth 2.0 not yet supported (Basic Auth only)
@@ -106,6 +113,7 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 
 **Storage:**
 - Room Database — local DB
+- Room schema version: `MailDatabase` v42
 - DataStore — settings and per-account sync/notification checkpoints
 
 **Network & Protocols:**
@@ -128,6 +136,8 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 - Coil — image loading
 
 ## 🔧 Build
+
+Recommended production build path is Android Studio with JDK 17. The CLI commands below are a supplemental option when `JAVA_HOME` is configured correctly.
 
 ```bash
 ./gradlew assembleDebug    # Debug
@@ -183,7 +193,7 @@ Protocol Layer
     ↓
 Database Layer                    Network Layer
   Room — 11 DAOs, 10 Entities      HttpClientProvider, NetworkMonitor
-  MailDatabase (v40)                NtlmAuthenticator
+  MailDatabase (v42)                NtlmAuthenticator
     ↓
 Background Services
   PushService, SyncWorker, OutboxWorker

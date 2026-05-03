@@ -28,7 +28,8 @@ enum class TaskImportance(val value: Int) {
         Index("complete"),
         Index("isDeleted"),
         Index(value = ["accountId", "isDeleted", "complete", "dueDate", "subject"]),
-        Index(value = ["accountId", "isDeleted", "lastModified"])
+        Index(value = ["accountId", "isDeleted", "lastModified"]),
+        Index(value = ["complete", "isDeleted", "dueDate", "subject"])
     ]
 )
 data class TaskEntity(

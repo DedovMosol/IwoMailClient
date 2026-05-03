@@ -23,6 +23,8 @@ import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.sync.SyncAlarmReceiver
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.*
 
@@ -43,13 +45,21 @@ class MailWidget : GlanceAppWidget() {
     )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        val appContext = context.applicationContext
         try {
-            val data = withContext(Dispatchers.IO) { loadWidgetData(context) }
-            provideContent { MailWidgetContent(data, context) }
+            val data = withContext(Dispatchers.IO) { loadWidgetData(appContext) }
+            provideContent { MailWidgetContent(data, appContext) }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             provideContent {
-                MailWidgetContent(WidgetData(emptyList(), null, false), context)
+                MailWidgetContent(
+                    WidgetData(
+                        accounts = emptyList(),
+                        nextEvent = null,
+                        hasAccount = false
+                    ),
+                    appContext
+                )
             }
         }
     }
@@ -59,7 +69,15 @@ class MailWidget : GlanceAppWidget() {
             MailDatabase.getInstance(context)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            return WidgetData(emptyList(), null, false, "", 0, 0, emptyList())
+            return WidgetData(
+                accounts = emptyList(),
+                nextEvent = null,
+                hasAccount = false,
+                todayDate = "",
+                todayTasksCount = 0,
+                activeTasksCount = 0,
+                recentEmails = emptyList()
+            )
         }
 
         val accounts = try { db.accountDao().getAllAccountsList() } catch (e: Exception) {
@@ -75,7 +93,10 @@ class MailWidget : GlanceAppWidget() {
         }
 
         val now = System.currentTimeMillis()
-        val nextEvent = try { db.calendarEventDao().getNextEventGlobalSync(now) } catch (e: Exception) {
+        val nextEvent = try {
+            db.calendarEventDao().getCurrentEventGlobalSync(now)
+                ?: db.calendarEventDao().getNextUpcomingEventGlobalSync(now)
+        } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
         val eventInfo = nextEvent?.let {
@@ -99,7 +120,10 @@ class MailWidget : GlanceAppWidget() {
         val activeTasksCount = try { db.taskDao().getActiveTasksCountGlobal() } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; 0
         }
-        val nextTask = try { db.taskDao().getNextTaskGlobalSync() } catch (e: Exception) {
+        val nextTask = try {
+            db.taskDao().getNextDatedTaskGlobalSync()
+                ?: db.taskDao().getFirstUndatedTaskGlobalSync()
+        } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
         val nextTaskTitle = nextTask?.subject?.take(30) ?: ""
@@ -129,19 +153,25 @@ class MailWidget : GlanceAppWidget() {
 
         val settingsRepo = SettingsRepository.getInstance(context)
         val themeCode = try { settingsRepo.getCurrentThemeSync() } catch (_: Exception) { "purple" }
-        val gradientRes = themeToGradient(themeCode)
         val lastSyncTime = try { settingsRepo.getLastSyncTimeSync() } catch (_: Exception) { 0L }
         val lastSyncStr = formatSyncAgo(context, lastSyncTime)
         val themeColor = themeToColor(themeCode)
 
-        return WidgetData(accountsWithUnread, eventInfo, accounts.isNotEmpty(), dateStr, todayTasksCount, activeTasksCount, recentEmails, gradientRes, totalUnread, notesCount, lastSyncStr, calendarEventsCount, nextTaskTitle, themeColor)
-    }
-    
-    private fun themeToGradient(themeCode: String): Int = when (themeCode) {
-        "blue" -> R.drawable.widget_gradient_blue
-        "yellow" -> R.drawable.widget_gradient_yellow
-        "green" -> R.drawable.widget_gradient_green
-        else -> R.drawable.widget_gradient_purple
+        return WidgetData(
+            accounts = accountsWithUnread,
+            nextEvent = eventInfo,
+            hasAccount = accounts.isNotEmpty(),
+            todayDate = dateStr,
+            todayTasksCount = todayTasksCount,
+            activeTasksCount = activeTasksCount,
+            recentEmails = recentEmails,
+            totalUnread = totalUnread,
+            notesCount = notesCount,
+            lastSyncStr = lastSyncStr,
+            calendarEventsCount = calendarEventsCount,
+            nextTaskTitle = nextTaskTitle,
+            themeColor = themeColor
+        )
     }
     
     private fun themeToColor(themeCode: String): Int = when (themeCode) {
@@ -184,7 +214,6 @@ data class WidgetData(
     val todayTasksCount: Int = 0,
     val activeTasksCount: Int = 0,
     val recentEmails: List<RecentEmail> = emptyList(),
-    val gradientRes: Int = R.drawable.widget_gradient_purple,
     val totalUnread: Int = 0,
     val notesCount: Int = 0,
     val lastSyncStr: String = "",
@@ -202,6 +231,7 @@ private val textLight = Color(0xFFEEEEEE)
 private val textLightAlpha = Color(0xB3EEEEEE)
 private val textDimmed = Color(0x80EEEEEE)
 private val accentBlue = Color(0xFF448AFF)
+private val widgetUpdateMutex = Mutex()
 
 @Composable
 private fun MailWidgetContent(data: WidgetData, context: Context) {
@@ -667,7 +697,10 @@ class MailWidgetReceiver : GlanceAppWidgetReceiver() {
 }
 
 suspend fun updateMailWidget(context: Context) {
-    try { MailWidget().updateAll(context) } catch (e: Exception) {
-        if (e is kotlinx.coroutines.CancellationException) throw e
+    val appContext = context.applicationContext
+    widgetUpdateMutex.withLock {
+        try { MailWidget().updateAll(appContext) } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+        }
     }
 }

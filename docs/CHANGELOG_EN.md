@@ -28,6 +28,13 @@
 - `EmailOperationsService.resolveEmailIds` — content-matching during ServerId migration after SyncKey=0 reset now uses lightweight projection
 - Expected impact: for Sent folders with 10k+ emails — peak memory during orphan detection reduced ~4-5x
 
+### Widget — stability and performance
+- `MailWidget` now uses `applicationContext` and serializes `GlanceAppWidget.updateAll()` through a shared mutex to avoid concurrent updates from sync/UI/account paths.
+- Recent widget emails are limited to Inbox and `read = 0`; already-read messages are no longer shown as new.
+- Recent email loading now uses `WidgetRecentEmailSummary` without loading heavy `EmailEntity.body`.
+- The next task and calendar event are loaded through `WidgetTaskSummary` / `WidgetCalendarEventSummary` without body, attendees or attachment JSON payloads.
+- `MailDatabase` was updated to v42 with hot widget indexes: `emails(read, dateReceived)`, `folders(type)`, `tasks(complete, isDeleted, dueDate, subject)`, `calendar_events(isDeleted, startTime, endTime)`, `calendar_events(isDeleted, endTime, startTime)`.
+
 ### Calendar — recurring attachments and safe deletion
 - Recurring event attachments follow DRY: the local DB stores JSON metadata and occurrences do not duplicate file bytes.
 - Exchange 2007 SP1 recurring series use the EWS master ItemId for calendar attachment upload/fetch.

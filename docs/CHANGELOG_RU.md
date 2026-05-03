@@ -28,6 +28,13 @@
 - `EmailOperationsService.resolveEmailIds` — content-matching при миграции ServerId после SyncKey=0 reset теперь через lightweight-проекцию
 - Ожидаемый эффект: для Sent с 10k+ писем — снижение пикового потребления памяти при orphan detection в 4-5 раз
 
+### Виджет — стабильность и производительность
+- `MailWidget` использует `applicationContext` и сериализует `GlanceAppWidget.updateAll()` через общий mutex, чтобы избежать параллельных обновлений из sync/UI/account paths.
+- Последние письма в виджете теперь берутся только из Inbox и только с `read = 0`; прочитанные письма больше не отображаются как новые.
+- Запрос последних писем переведён на `WidgetRecentEmailSummary` без загрузки тяжёлого `EmailEntity.body`.
+- Ближайшая задача и событие календаря читаются через `WidgetTaskSummary`/`WidgetCalendarEventSummary` без загрузки body, attendees и JSON вложений.
+- `MailDatabase` обновлён до v42; добавлены индексы под горячие запросы виджета: `emails(read, dateReceived)`, `folders(type)`, `tasks(complete, isDeleted, dueDate, subject)`, `calendar_events(isDeleted, startTime, endTime)`, `calendar_events(isDeleted, endTime, startTime)`.
+
 ### Календарь — повторения, вложения и безопасное удаление
 - Вложения повторяющихся событий соблюдают DRY: в локальной БД хранятся JSON-метаданные, вхождения не дублируют байты файлов.
 - Для Exchange 2007 SP1 повторяющиеся серии используют EWS master ItemId при загрузке/получении вложений календаря.

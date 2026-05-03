@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 41,
+    version = 42,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -203,6 +203,16 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_41_42 = object : Migration(41, 42) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_read_dateReceived ON emails(read, dateReceived)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_folders_type ON folders(type)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_tasks_complete_isDeleted_dueDate_subject ON tasks(complete, isDeleted, dueDate, subject)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_isDeleted_startTime_endTime ON calendar_events(isDeleted, startTime, endTime)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_isDeleted_endTime_startTime ON calendar_events(isDeleted, endTime, startTime)")
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -221,7 +231,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_37_38,
             MIGRATION_38_39,
             MIGRATION_39_40,
-            MIGRATION_40_41
+            MIGRATION_40_41,
+            MIGRATION_41_42
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -365,7 +376,7 @@ enum class DraftMode {
         childColumns = ["accountId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("accountId"), Index(value = ["accountId", "type"])]
+    indices = [Index("accountId"), Index(value = ["accountId", "type"]), Index("type")]
 )
 data class FolderEntity(
     @PrimaryKey val id: String, // accountId_serverId
@@ -398,7 +409,8 @@ data class FolderEntity(
         Index(value = ["folderId", "dateReceived"]),
         Index(value = ["accountId", "flagged", "dateReceived"]),
         Index(value = ["accountId", "dateReceived"]),
-        Index(value = ["accountId", "messageClass", "subject", "dateReceived"])
+        Index(value = ["accountId", "messageClass", "subject", "dateReceived"]),
+        Index(value = ["read", "dateReceived"])
     ]
 )
 data class EmailEntity(

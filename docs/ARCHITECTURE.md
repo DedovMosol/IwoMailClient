@@ -20,7 +20,7 @@
 | Kotlin | `1.9.22` |
 | AGP | `8.7.3` |
 | UI | Jetpack Compose + Material 3 |
-| DB | Room `MailDatabase` version `40`, schema export enabled |
+| DB | Room `MailDatabase` version `42`, schema export enabled |
 | Runtime model | Offline-first: Room + Flow → UI, background sync updates DB |
 
 Основной production-сценарий — on-premise Exchange, особенно Exchange 2007 SP1/SP2. IMAP/POP3 реализованы как beta-клиенты для базового чтения/синхронизации почты и не дают parity с Exchange-функциями.
@@ -134,7 +134,17 @@ com.dedovmosol.iwomail/
 - **CalendarEventEntity:** calendar events, meetings, recurrence fields, exceptions, attachments JSON, online links, meeting request IDs.
 - **TaskEntity:** task fields, deadlines, priority, reminders, owner/assignee and local trash flag.
 
-Current DB version is **40**. Migrations currently cover `23→40`; missing migration fallback recreates DB and triggers full resync behavior.
+Current DB version is **42**. Migrations currently cover `23→42`; missing migration fallback recreates DB and triggers full resync behavior.
+
+Widget hot paths use dedicated lightweight projections instead of full entities:
+
+| Use case | DAO projection / query shape |
+|----------|------------------------------|
+| Recent unread Inbox emails | `WidgetRecentEmailSummary` without `EmailEntity.body` |
+| Current/upcoming calendar event | `WidgetCalendarEventSummary` without body/attendees/attachments JSON |
+| Next task title | `WidgetTaskSummary` without task body |
+
+Room v42 adds indexes for these home-screen widget paths: `emails(read, dateReceived)`, `folders(type)`, `tasks(complete, isDeleted, dueDate, subject)`, `calendar_events(isDeleted, startTime, endTime)` and `calendar_events(isDeleted, endTime, startTime)`.
 
 ### DataStore
 
@@ -222,6 +232,14 @@ Drafts-specific reconcile keeps full `EmailEntity` because body/bodyType migrati
 2. `SyncWorker` also checks notifications during periodic/manual sync.
 3. Both use `NotificationHelper.notificationMutex` to avoid duplicate notification races.
 4. Notification queries use lightweight projections and bounded action batches.
+
+### Home-screen widget
+
+1. `MailWidget` is a Glance `GlanceAppWidget` with `SizeMode.Responsive` to avoid launcher crashes caused by exact size-map RemoteViews on problematic ROMs.
+2. Widget data is loaded on `Dispatchers.IO` from Room and DataStore using `applicationContext`.
+3. Recent mail, next task and calendar event queries use widget-specific projections and indexes to avoid loading heavy email bodies, task bodies, attendees or calendar attachment JSON.
+4. `updateMailWidget(context)` serializes `MailWidget().updateAll()` through a process-level mutex so sync, notification, account and personalization paths cannot run concurrent widget updates.
+5. Widget clicks route through `MainActivity` deep links/extras; manual sync uses `SyncAlarmReceiver.ACTION_SYNC_NOW` and is delegated to `SyncWorker`.
 
 ### Updates and rollback
 
@@ -347,6 +365,7 @@ Server mode stores drafts through EWS. Local mode stores drafts only in Room and
 - Folder operations are serialized per account to protect SyncKey state.
 - Calendar/task/note repositories use per-account sync locks; calendar delete/restore/permanent-delete/trash operations share the same lock as calendar sync.
 - Notification display uses a shared mutex across push and worker paths.
+- Glance widget updates are serialized through `widgetUpdateMutex`.
 
 ---
 
@@ -362,6 +381,8 @@ Server mode stores drafts through EWS. Local mode stores drafts only in Room and
 ---
 
 ## 12. Build and resources
+
+Recommended production build path is Android Studio with JDK 17. The command line examples below are supplemental and require a correctly configured `JAVA_HOME`.
 
 ```bash
 ./gradlew assembleDebug

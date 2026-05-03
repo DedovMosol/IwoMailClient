@@ -359,13 +359,15 @@ interface EmailDao {
     suspend fun getUnreadCountsByAccount(): List<AccountUnreadCount>
 
     @Query("""
-        SELECT e.* FROM emails e
+        SELECT e.id, e.`from`, e.fromName, e.subject, e.preview, e.folderId, e.dateReceived
+        FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
-        WHERE f.type = 2
+        WHERE e.read = 0
+        AND f.type = 2
         ORDER BY e.dateReceived DESC
         LIMIT :limit
     """)
-    suspend fun getRecentUnreadInboxGlobal(limit: Int = 3): List<EmailEntity>
+    suspend fun getRecentUnreadInboxGlobal(limit: Int = 3): List<WidgetRecentEmailSummary>
 
     @Query("""
         SELECT folderId,
@@ -662,6 +664,16 @@ data class FolderEmailCounts(
 data class EmailHistoryResult(
     val email: String,
     val name: String
+)
+
+data class WidgetRecentEmailSummary(
+    val id: String,
+    val from: String,
+    val fromName: String,
+    val subject: String,
+    val preview: String,
+    val folderId: String,
+    val dateReceived: Long
 )
 
 @Dao

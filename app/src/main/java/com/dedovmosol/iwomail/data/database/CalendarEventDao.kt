@@ -45,8 +45,11 @@ interface CalendarEventDao {
     @Query("SELECT COUNT(*) FROM calendar_events WHERE isDeleted = 0")
     suspend fun getEventsCountGlobal(): Int
 
-    @Query("SELECT * FROM calendar_events WHERE isDeleted = 0 AND endTime > :now ORDER BY startTime ASC LIMIT 1")
-    suspend fun getNextEventGlobalSync(now: Long): CalendarEventEntity?
+    @Query("SELECT subject, startTime, endTime, location FROM calendar_events WHERE isDeleted = 0 AND startTime <= :now AND endTime > :now ORDER BY endTime ASC LIMIT 1")
+    suspend fun getCurrentEventGlobalSync(now: Long): WidgetCalendarEventSummary?
+
+    @Query("SELECT subject, startTime, endTime, location FROM calendar_events WHERE isDeleted = 0 AND startTime > :now ORDER BY startTime ASC LIMIT 1")
+    suspend fun getNextUpcomingEventGlobalSync(now: Long): WidgetCalendarEventSummary?
     
     @Query("""
         SELECT * FROM calendar_events 
@@ -106,3 +109,10 @@ interface CalendarEventDao {
     @Query("SELECT * FROM calendar_events WHERE accountId = :accountId AND isMeeting = 1 AND subject = :subject AND isDeleted = 0 LIMIT 1")
     suspend fun findMeetingBySubject(accountId: Long, subject: String): CalendarEventEntity?
 }
+
+data class WidgetCalendarEventSummary(
+    val subject: String,
+    val startTime: Long,
+    val endTime: Long,
+    val location: String
+)

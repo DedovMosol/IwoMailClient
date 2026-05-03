@@ -29,7 +29,7 @@
 - **Заметки:** синхронизация Exchange Notes, создание/редактирование, корзина и восстановление.
 - **Уведомления:** Direct Push через EAS Ping, WorkManager-синхронизация, AlarmManager fallback, уведомления писем, календаря, задач, обновлений и исходящих.
 - **Интерфейс:** Jetpack Compose, Material 3, RU/EN локализация, тёмная/светлая тема, цветовые схемы, ежедневные темы, кастомные иконки файлов, drag selection.
-- **Виджет и shortcuts:** домашний виджет Glance, быстрый доступ к письмам, поиску, календарю, задачам и созданию письма.
+- **Виджет и shortcuts:** домашний виджет Glance, быстрый доступ к письмам, поиску, календарю, задачам и созданию письма; данные виджета читаются лёгкими Room-проекциями без загрузки тяжёлых тел писем/событий.
 - **Обновления:** проверка `update.json` на GitHub, выбор APK по ABI, скачивание, установка и подготовка отката.
 
 ## Требования
@@ -64,6 +64,13 @@
 - **Защита от CRA resurrection:** attendee-встречи перед удалением отклоняются через `MeetingResponse`/EWS `DeclineItem`; если исходный meeting request не найден, локальное удаление не выполняется.
 - **Preview cache:** предпросмотр вложений использует временный каталог `cacheDir/calendar_preview`, стабильные имена по `fileReference` и отложенную очистку без гонок с внешними просмотрщиками.
 
+## Виджет и производительность
+
+- **Лёгкие DAO-проекции:** виджет читает только отображаемые поля для последних непрочитанных писем, ближайшей задачи и события календаря.
+- **Корректная логика непрочитанных:** список новых писем в виджете фильтруется по Inbox и `read = 0`.
+- **Защита от гонок:** `updateMailWidget()` сериализует `GlanceAppWidget.updateAll()` через общий mutex и использует `applicationContext`.
+- **Room v42:** добавлены индексы под горячие widget-запросы: unread Inbox, тип папки, активные задачи, текущие и ближайшие события календаря.
+
 ## Безопасность и совместимость
 
 - **Conscrypt:** добавлен для TLS 1.0/1.1 и совместимости со старыми Exchange 2007-инсталляциями.
@@ -86,11 +93,11 @@
 
 | Категория | Технологии |
 |-----------|------------|
-| Язык | Kotlin 1.9.22, Java 17 |
+| Kotlin | Kotlin 1.9.22, Java 17 |
 | Android | AGP 8.7.3, minSdk 26, targetSdk 36 |
 | UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3 |
 | Асинхронность | Coroutines 1.7.3, Flow |
-| Хранилище | Room 2.6.1 (`MailDatabase` v40), DataStore Preferences |
+| Хранилище | Room 2.6.1 (`MailDatabase` v42), DataStore Preferences |
 | Сеть | OkHttp 4.12.0, Conscrypt 2.5.2 |
 | Протоколы | EAS, EWS, JavaMail IMAP/POP3 |
 | Фоновые задачи | WorkManager 2.9.0, Foreground Service, AlarmManager |
@@ -115,7 +122,7 @@ Protocol Layer
   EasTransport + EAS services + EWS client + IMAP/POP3 beta clients
     ↓
 Persistence / Network
-  Room MailDatabase v40, DataStore
+  Room MailDatabase v42, DataStore
   HttpClientProvider, NetworkMonitor, NtlmAuthenticator
     ↓
 Background
@@ -125,6 +132,8 @@ Background
 Подробно: [Архитектура проекта](docs/ARCHITECTURE.md)
 
 ## Сборка
+
+Рекомендуемый production-способ сборки — через Android Studio с JDK 17. CLI-команды ниже подходят как вспомогательный вариант при корректно настроенном `JAVA_HOME`.
 
 ```bash
 ./gradlew assembleDebug

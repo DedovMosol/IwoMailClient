@@ -113,13 +113,13 @@ interface TaskDao {
     """)
     suspend fun getTodayTasksCountGlobal(endOfDay: Long): Int
 
-    @Query("""
-        SELECT * FROM tasks 
-        WHERE complete = 0 AND isDeleted = 0
-        ORDER BY 
-            CASE WHEN dueDate > 0 THEN 0 ELSE 1 END,
-            dueDate ASC
-        LIMIT 1
-    """)
-    suspend fun getNextTaskGlobalSync(): TaskEntity?
+    @Query("SELECT subject FROM tasks WHERE complete = 0 AND isDeleted = 0 AND dueDate > 0 ORDER BY dueDate ASC LIMIT 1")
+    suspend fun getNextDatedTaskGlobalSync(): WidgetTaskSummary?
+
+    @Query("SELECT subject FROM tasks WHERE complete = 0 AND isDeleted = 0 AND dueDate = 0 ORDER BY subject ASC LIMIT 1")
+    suspend fun getFirstUndatedTaskGlobalSync(): WidgetTaskSummary?
 }
+
+data class WidgetTaskSummary(
+    val subject: String
+)

@@ -42,7 +42,9 @@ enum class MeetingResponseStatus(val value: Int) {
         Index("isDeleted"),
         Index("lastModified"),
         Index(value = ["accountId", "isDeleted", "startTime"]),
-        Index(value = ["accountId", "isDeleted", "lastModified"])
+        Index(value = ["accountId", "isDeleted", "lastModified"]),
+        Index(value = ["isDeleted", "startTime", "endTime"]),
+        Index(value = ["isDeleted", "endTime", "startTime"])
     ]
 )
 data class CalendarEventEntity(
