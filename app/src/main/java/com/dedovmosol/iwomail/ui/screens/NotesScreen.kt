@@ -90,7 +90,7 @@ fun NotesScreen(
     // Таб: 0 = Активные, 1 = Удалённые
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showDeletedTab by rememberSaveable { mutableStateOf(false) }
-    var selectedIds by rememberSaveable(
+    var selectedIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
@@ -109,7 +109,7 @@ fun NotesScreen(
     }
     var isSyncing by remember { mutableStateOf(false) }
     // КРИТИЧНО: dataLoaded rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
-    var dataLoaded by rememberSaveable { mutableStateOf(false) }
+    var dataLoaded by rememberSaveable(accountId) { mutableStateOf(false) }
     LaunchedEffect(notes) {
         if (notes.isNotEmpty()) dataLoaded = true
     }
@@ -151,12 +151,12 @@ fun NotesScreen(
             }
         }
     }
-    var selectedNoteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedNoteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val selectedNote = remember(selectedNoteId, notes, deletedNotes) {
         selectedNoteId?.let { id -> notes.find { it.id == id } ?: deletedNotes.find { it.id == id } }
     }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var editingNoteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingNoteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val editingNote = remember(editingNoteId, notes) {
         editingNoteId?.let { id -> notes.find { it.id == id } }
     }

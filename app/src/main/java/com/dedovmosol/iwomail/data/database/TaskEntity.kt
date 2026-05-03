@@ -22,7 +22,14 @@ enum class TaskImportance(val value: Int) {
         childColumns = ["accountId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("accountId"), Index("dueDate"), Index("complete"), Index("isDeleted")]
+    indices = [
+        Index("accountId"),
+        Index("dueDate"),
+        Index("complete"),
+        Index("isDeleted"),
+        Index(value = ["accountId", "isDeleted", "complete", "dueDate", "subject"]),
+        Index(value = ["accountId", "isDeleted", "lastModified"])
+    ]
 )
 data class TaskEntity(
     @PrimaryKey val id: String,  // accountId_serverId

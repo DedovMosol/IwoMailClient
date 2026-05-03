@@ -217,11 +217,11 @@ class MailRepository(private val context: Context) {
     }
     
     fun getEmails(folderId: String): Flow<List<EmailEntity>> {
-        return emailDao.getEmailsByFolder(folderId)
+        return emailDao.getEmailSummariesByFolder(folderId)
     }
     
     fun getFlaggedEmails(accountId: Long): Flow<List<EmailEntity>> {
-        return emailDao.getFlaggedEmails(accountId)
+        return emailDao.getFlaggedEmailSummaries(accountId)
     }
     
     fun getFlaggedCount(accountId: Long): Flow<Int> {

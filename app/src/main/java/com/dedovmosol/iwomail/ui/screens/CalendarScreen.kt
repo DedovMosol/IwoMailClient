@@ -165,26 +165,26 @@ fun CalendarScreen(
             }
         }
     }
-    var selectedEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedEventId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
     var selectedDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
     val selectedDate = remember(selectedDateMillis) { Date(selectedDateMillis) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var editingEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingEventId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val editingEvent = remember(editingEventId, events) {
         editingEventId?.let { id -> events.find { it.id == id } }
     }
     var isCreating by remember { mutableStateOf(false) }
 
     // Редактирование одного вхождения повторяющегося события
-    var editingOccurrenceStartTime by rememberSaveable { mutableStateOf<Long?>(null) }
+    var editingOccurrenceStartTime by rememberSaveable(accountId) { mutableStateOf<Long?>(null) }
     var cachedOccurrenceEvent by remember { mutableStateOf<CalendarEventEntity?>(null) }
     var showEditChoiceDialog by rememberSaveable { mutableStateOf(false) }
-    var pendingEditOccurrenceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingEditOccurrenceId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
 
     // Множественный выбор
     val haptic = LocalHapticFeedback.current
-    var selectedEventIds by rememberSaveable(
+    var selectedEventIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedEventIds.isNotEmpty()
@@ -209,7 +209,7 @@ fun CalendarScreen(
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
-    var deleteConfirmTargetIds by rememberSaveable(
+    var deleteConfirmTargetIds by rememberSaveable(accountId,
         saver = listSaver(
             save = { it.value.toList() },
             restore = { mutableStateOf(it.toSet()) }
@@ -218,7 +218,7 @@ fun CalendarScreen(
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
     // Диалог выбора: удалить вхождение или серию
     var showOccurrenceDeleteChoice by rememberSaveable { mutableStateOf(false) }
-    var pendingOccurrenceIds by rememberSaveable(
+    var pendingOccurrenceIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
 

@@ -60,6 +60,7 @@ import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -117,20 +118,26 @@ fun EmailListScreen(
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
 
     // Подписываемся на Flow напрямую - Room автоматически обновляет при изменении данных
-    val emails by remember(folderId, activeAccount?.id) {
-        if (isTodayAll) {
-            // Кросс-папочный список: Inbox + пользовательские папки за сегодня
-            mailRepo.getTodayEmailsAcrossFolders(activeAccount?.id ?: 0)
-        } else {
-            mailRepo.getEmails(folderId)
+    val emails by remember(folderId, activeAccount?.id, isFavorites, isTodayAll) {
+        when {
+            isFavorites -> flowOf(emptyList<EmailEntity>())
+            isTodayAll -> {
+                // Кросс-папочный список: Inbox + пользовательские папки за сегодня
+                mailRepo.getTodayEmailsAcrossFolders(activeAccount?.id ?: 0)
+            }
+            else -> mailRepo.getEmails(folderId)
         }
     }.collectAsState(initial = emptyList())
 
-    val favoriteEmails by remember(activeAccount?.id) {
-        mailRepo.getFlaggedEmails(activeAccount?.id ?: 0)
+    val favoriteEmails by remember(activeAccount?.id, isFavorites) {
+        if (isFavorites) {
+            mailRepo.getFlaggedEmails(activeAccount?.id ?: 0)
+        } else {
+            flowOf(emptyList<EmailEntity>())
+        }
     }.collectAsState(initial = emptyList())
 
-    var folder by remember { mutableStateOf<FolderEntity?>(null) }
+    var folder by remember(folderId, activeAccount?.id) { mutableStateOf<FolderEntity?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -147,7 +154,7 @@ fun EmailListScreen(
     var dateFilter by rememberSaveable { mutableStateOf(initialDateFilter) }
 
     // Режим выбора
-    var selectedIds by rememberSaveable(
+    var selectedIds by rememberSaveable(folderId, activeAccount?.id,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedIds.isNotEmpty()
@@ -156,7 +163,7 @@ fun EmailListScreen(
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
-    var folders by remember { mutableStateOf<List<FolderEntity>>(emptyList()) }
+    var folders by remember(activeAccount?.id) { mutableStateOf<List<FolderEntity>>(emptyList()) }
     val deletingSelectedMessage = Strings.deletingEmails(selectedIds.size)
 
     val displayEmails = remember(isFavorites, isTodayAll, favoriteEmails, emails) {
@@ -199,7 +206,7 @@ fun EmailListScreen(
                 }
                 val matchesDate = !needsDateFilter || email.dateReceived >= dateCutoff
                 matchesMail && matchesDate
-            }.sortedByDescending { it.dateReceived }
+            }
     }
 
     // Количество активных фильтров
@@ -221,7 +228,7 @@ fun EmailListScreen(
     // переоценивает activeAccount?.id), запуская sync для Drafts каждый раз.
     // Повторный sync при повороте: (1) лишняя нагрузка на сервер,
     // (2) потенциальная гонка с PushService → INVALID_SYNCKEY → full resync → потеря данных.
-    var draftsSynced by rememberSaveable { mutableStateOf(false) }
+    var draftsSynced by rememberSaveable(folderId, activeAccount?.id) { mutableStateOf(false) }
 
     // Загружаем папку + отменяем уведомление при входе во Входящие
     LaunchedEffect(folderId, activeAccount?.id) {
@@ -233,7 +240,7 @@ fun EmailListScreen(
             val accId = activeAccount?.id
             if (accId != null && loadedFolder?.type == FolderType.INBOX) {
                 val nm = context.getSystemService(android.app.NotificationManager::class.java)
-                nm?.cancel(3000 + accId.toInt())
+                nm?.cancel(com.dedovmosol.iwomail.sync.NotificationHelper.notificationIdForAccount(accId))
             }
 
             // Автоматическая синхронизация для черновиков при входе в папку

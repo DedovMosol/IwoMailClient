@@ -1139,7 +1139,7 @@ class EmailOperationsService(
     private fun cancelNotificationForAccount(accountId: Long) {
         try {
             val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
-            val notificationId = 3000 + accountId.toInt()
+            val notificationId = com.dedovmosol.iwomail.sync.NotificationHelper.notificationIdForAccount(accountId)
             notificationManager?.cancel(notificationId)
         } catch (e: Exception) {
             android.util.Log.w("EmailOps", "cancelNotificationForAccount failed", e)

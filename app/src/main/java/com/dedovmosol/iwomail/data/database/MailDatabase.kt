@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 40,
+    version = 41,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -189,6 +189,20 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_folderId_dateReceived ON emails(folderId, dateReceived)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_accountId_flagged_dateReceived ON emails(accountId, flagged, dateReceived)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_accountId_dateReceived ON emails(accountId, dateReceived)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_emails_accountId_messageClass_subject_dateReceived ON emails(accountId, messageClass, subject, dateReceived)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_tasks_accountId_isDeleted_complete_dueDate_subject ON tasks(accountId, isDeleted, complete, dueDate, subject)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_tasks_accountId_isDeleted_lastModified ON tasks(accountId, isDeleted, lastModified)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_notes_accountId_isDeleted_lastModified ON notes(accountId, isDeleted, lastModified)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_calendar_events_accountId_isDeleted_lastModified ON calendar_events(accountId, isDeleted, lastModified)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_folders_accountId_type ON folders(accountId, type)")
+            }
+        }
+
         private val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -206,7 +220,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_36_37,
             MIGRATION_37_38,
             MIGRATION_38_39,
-            MIGRATION_39_40
+            MIGRATION_39_40,
+            MIGRATION_40_41
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -350,7 +365,7 @@ enum class DraftMode {
         childColumns = ["accountId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("accountId")]
+    indices = [Index("accountId"), Index(value = ["accountId", "type"])]
 )
 data class FolderEntity(
     @PrimaryKey val id: String, // accountId_serverId
@@ -379,7 +394,11 @@ data class FolderEntity(
         Index("flagged"),  // Для фильтра "Избранные"
         Index("read"),     // Для фильтра "Непрочитанные"
         Index("importance"), // Для фильтра "Важные"
-        Index(value = ["accountId", "folderId", "dateReceived"]) // Составной для сортировки
+        Index(value = ["accountId", "folderId", "dateReceived"]), // Составной для сортировки
+        Index(value = ["folderId", "dateReceived"]),
+        Index(value = ["accountId", "flagged", "dateReceived"]),
+        Index(value = ["accountId", "dateReceived"]),
+        Index(value = ["accountId", "messageClass", "subject", "dateReceived"])
     ]
 )
 data class EmailEntity(

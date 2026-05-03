@@ -35,7 +35,15 @@ enum class MeetingResponseStatus(val value: Int) {
         childColumns = ["accountId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("accountId"), Index("startTime"), Index("endTime"), Index("isDeleted"), Index("lastModified"), Index(value = ["accountId", "isDeleted", "startTime"])]
+    indices = [
+        Index("accountId"),
+        Index("startTime"),
+        Index("endTime"),
+        Index("isDeleted"),
+        Index("lastModified"),
+        Index(value = ["accountId", "isDeleted", "startTime"]),
+        Index(value = ["accountId", "isDeleted", "lastModified"])
+    ]
 )
 data class CalendarEventEntity(
     @PrimaryKey val id: String,  // accountId_serverId

@@ -13,7 +13,12 @@ import androidx.room.*
         childColumns = ["accountId"],
         onDelete = ForeignKey.CASCADE
     )],
-    indices = [Index("accountId"), Index("lastModified"), Index("isDeleted")]
+    indices = [
+        Index("accountId"),
+        Index("lastModified"),
+        Index("isDeleted"),
+        Index(value = ["accountId", "isDeleted", "lastModified"])
+    ]
 )
 data class NoteEntity(
     @PrimaryKey val id: String,  // accountId_serverId

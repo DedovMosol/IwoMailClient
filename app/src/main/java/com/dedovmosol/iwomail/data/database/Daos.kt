@@ -204,6 +204,17 @@ interface EmailDao {
     @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC")
     fun getEmailsByFolder(folderId: String): Flow<List<EmailEntity>>
 
+    @Query("""
+        SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
+               subject, preview, '' AS body, bodyType, dateReceived, read,
+               flagged, importance, hasAttachments, originalFolderId,
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId
+        FROM emails
+        WHERE folderId = :folderId
+        ORDER BY dateReceived DESC
+    """)
+    fun getEmailSummariesByFolder(folderId: String): Flow<List<EmailEntity>>
+
     @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC")
     suspend fun getEmailsByFolderList(folderId: String): List<EmailEntity>
 
@@ -385,6 +396,18 @@ interface EmailDao {
     @Query("SELECT * FROM emails WHERE accountId = :accountId AND flagged = 1 ORDER BY dateReceived DESC")
     fun getFlaggedEmails(accountId: Long): Flow<List<EmailEntity>>
 
+    @Query("""
+        SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
+               subject, preview, '' AS body, bodyType, dateReceived, read,
+               flagged, importance, hasAttachments, originalFolderId,
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId
+        FROM emails
+        WHERE accountId = :accountId AND flagged = 1
+        ORDER BY dateReceived DESC
+    """)
+    fun getFlaggedEmailSummaries(accountId: Long): Flow<List<EmailEntity>>
+
+
     @Query("SELECT COUNT(*) FROM emails WHERE accountId = :accountId AND flagged = 1")
     suspend fun getFlaggedCount(accountId: Long): Int
 
@@ -514,8 +537,11 @@ interface EmailDao {
      * Используется для инициализации кэша имён при старте приложения
      */
     @Query("""
-        SELECT DISTINCT `from` as email, fromName as name FROM emails
+        SELECT `from` as email, MAX(fromName) as name FROM emails
         WHERE accountId = :accountId AND fromName IS NOT NULL AND fromName != '' AND fromName NOT LIKE '%@%'
+        GROUP BY LOWER(`from`)
+        ORDER BY MAX(dateReceived) DESC
+        LIMIT 5000
     """)
     suspend fun getAllSenderNames(accountId: Long): List<EmailHistoryResult>
 
@@ -542,7 +568,12 @@ interface EmailDao {
      * и пользовательских папок (1, 12), отсортированные по дате.
      */
     @Query("""
-        SELECT e.* FROM emails e
+        SELECT e.id, e.accountId, e.folderId, e.serverId, e.`from`, e.fromName,
+               e.`to`, e.cc, e.subject, e.preview, '' AS body, e.bodyType,
+               e.dateReceived, e.read, e.flagged, e.importance, e.hasAttachments,
+               e.originalFolderId, e.mdnRequestedBy, e.mdnSent, e.messageClass,
+               e.internetMessageId
+        FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
         WHERE e.accountId = :accountId
         AND f.type IN (2, 1, 12)

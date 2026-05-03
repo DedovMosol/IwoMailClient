@@ -44,6 +44,8 @@ object NotificationHelper {
     // Большой массив emailIds в PendingIntent рискует упереться в Binder limit.
     const val MAX_MARK_READ_ACTION_EMAILS = 25
 
+    fun notificationIdForAccount(accountId: Long): Int = 200_000 + accountId.toInt()
+
     fun getShownNotifications(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         return prefs.getStringSet(KEY_SHOWN, emptySet())?.toSet() ?: emptySet()
@@ -150,7 +152,7 @@ object NotificationHelper {
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(subject))
         }
 
-        val notificationId = 200_000 + accountId.toInt()
+        val notificationId = notificationIdForAccount(accountId)
         if (markReadEmailIds.isNotEmpty()) {
             val markReadIntent = Intent(context, MailNotificationActionReceiver::class.java).apply {
                 action = MailNotificationActionReceiver.ACTION_MARK_READ

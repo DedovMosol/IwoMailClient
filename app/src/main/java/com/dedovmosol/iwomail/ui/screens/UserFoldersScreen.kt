@@ -2,10 +2,8 @@ package com.dedovmosol.iwomail.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -49,7 +47,7 @@ import kotlinx.coroutines.withContext
  * Показывает список user-created папок (type 1 и 12 по EAS спецификации)
  * с возможностью создания, переименования, удаления и навигации к письмам.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UserFoldersScreen(
     onBackClick: () -> Unit,
@@ -82,20 +80,20 @@ fun UserFoldersScreen(
     var newFolderName by rememberSaveable { mutableStateOf("") }
     var isCreatingFolder by remember { mutableStateOf(false) }
 
-    // Контекстное меню (long press)
-    var folderForMenu by remember { mutableStateOf<FolderEntity?>(null) }
+    // Контекстное меню через явную кнопку действий
+    var folderForMenu by remember(accountId) { mutableStateOf<FolderEntity?>(null) }
 
     // Диалог переименования — ID сохраняется при повороте
-    var folderToRenameId by rememberSaveable { mutableStateOf<String?>(null) }
+    var folderToRenameId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val folderToRename = folderToRenameId?.let { id -> userFolders.find { it.id == id } }
     var renameNewName by rememberSaveable { mutableStateOf("") }
 
     // Диалог удаления — ID сохраняется при повороте
-    var folderToDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var folderToDeleteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val folderToDelete = folderToDeleteId?.let { id -> userFolders.find { it.id == id } }
 
     // Batch-selection: выбранные ID сохраняются при повороте
-    var selectedFolderIds by rememberSaveable(
+    var selectedFolderIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedFolderIds.isNotEmpty()
@@ -298,14 +296,7 @@ fun UserFoldersScreen(
                                         onFolderClick(folder.id)
                                     }
                                 },
-                                onLongClick = {
-                                    if (isSelectionMode) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        selectedFolderIds = selectedFolderIds + folder.id
-                                    } else {
-                                        folderForMenu = folder
-                                    }
-                                }
+                                onMenuClick = { folderForMenu = folder }
                             )
                         }
 
@@ -665,14 +656,13 @@ private fun FoldersSelectionTopBar(
 /**
  * Элемент списка пользовательской папки
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun UserFolderItem(
     folder: FolderEntity,
     isSelected: Boolean,
     isSelectionMode: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onMenuClick: () -> Unit
 ) {
     val colorTheme = LocalColorTheme.current
     val backgroundColor = if (isSelected) {
@@ -683,10 +673,7 @@ private fun UserFolderItem(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (isSelectionMode) Modifier.clickable(onClick = onClick)
-                else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            ),
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         color = backgroundColor,
         tonalElevation = 1.dp
@@ -787,14 +774,19 @@ private fun UserFolderItem(
                 }
             }
 
-            // Стрелка навигации
             Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                AppIcons.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.size(20.dp)
-            )
+            if (!isSelectionMode) {
+                IconButton(
+                    onClick = onMenuClick,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        AppIcons.MoreVert,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
         }
     }
 }

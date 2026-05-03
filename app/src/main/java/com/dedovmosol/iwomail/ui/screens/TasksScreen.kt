@@ -92,7 +92,7 @@ fun TasksScreen(
 
     // Флаг: данные из Room загружены (Flow эмитнул хотя бы раз)
     // КРИТИЧНО: rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
-    var dataLoaded by rememberSaveable { mutableStateOf(false) }
+    var dataLoaded by rememberSaveable(accountId) { mutableStateOf(false) }
     LaunchedEffect(allTasks) {
         if (allTasks.isNotEmpty()) dataLoaded = true
     }
@@ -113,12 +113,12 @@ fun TasksScreen(
 
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
-    var selectedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedTaskId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val selectedTask = remember(selectedTaskId, allTasks, deletedTasks) {
         selectedTaskId?.let { id -> allTasks.find { it.id == id } ?: deletedTasks.find { it.id == id } }
     }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var editingTaskId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingTaskId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val editingTask = remember(editingTaskId, allTasks) {
         editingTaskId?.let { id -> allTasks.find { it.id == id } }
     }
@@ -127,11 +127,11 @@ fun TasksScreen(
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
 
     // Множественный выбор для активных задач
-    var selectedTaskIds by rememberSaveable(
+    var selectedTaskIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     // Множественный выбор для удалённых задач
-    var selectedDeletedIds by rememberSaveable(
+    var selectedDeletedIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
     val isSelectionMode = selectedTaskIds.isNotEmpty() || selectedDeletedIds.isNotEmpty()
@@ -142,7 +142,7 @@ fun TasksScreen(
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
-    var deleteConfirmTargetIds by rememberSaveable(
+    var deleteConfirmTargetIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
 
