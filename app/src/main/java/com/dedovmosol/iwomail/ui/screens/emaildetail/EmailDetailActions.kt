@@ -20,6 +20,8 @@ private fun <T> EasResult<T>.toUnit(): EasResult<Unit> = when (this) {
     is EasResult.Success -> EasResult.Success(Unit)
     is EasResult.Error -> this
 }
+private const val MAX_AUTO_INLINE_IMAGE_BYTES = 2_097_152L
+private const val MAX_AUTO_INLINE_TOTAL_BYTES = 5_242_880L
 
 /**
  * Business logic holder for EmailDetailScreen.
@@ -93,11 +95,12 @@ class EmailDetailActions(
     }
 
     suspend fun syncAndReloadBody(emailId: String, accountId: Long, folderId: String): EasResult<Unit> {
-        withContext(Dispatchers.IO) {
-            mailRepo.syncEmails(accountId, folderId)
-        }
+        val syncResult = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
+            withContext(Dispatchers.IO) { mailRepo.syncEmails(accountId, folderId) }
+        } ?: return EasResult.Error("TIMEOUT")
+        if (syncResult is EasResult.Error) return syncResult.toUnit()
         val result = kotlinx.coroutines.withTimeoutOrNull(30_000L) {
-            mailRepo.loadEmailBody(emailId, forceReload = true)
+            withContext(Dispatchers.IO) { mailRepo.loadEmailBody(emailId, forceReload = true) }
         } ?: return EasResult.Error("TIMEOUT")
         return result.toUnit()
     }
@@ -159,6 +162,8 @@ class EmailDetailActions(
 
         val inlineAttachments = attachments.filter { att ->
             if (att.contentId == null) return@filter false
+            if (!att.contentType.startsWith("image/", ignoreCase = true)) return@filter false
+            if (att.estimatedSize <= 0L || att.estimatedSize > MAX_AUTO_INLINE_IMAGE_BYTES) return@filter false
             val cleanCid = att.contentId.removeSurrounding("<", ">")
             cidRefs.contains(cleanCid) || cidRefs.contains(att.contentId) || cidRefs.contains(att.displayName)
         }
@@ -167,7 +172,18 @@ class EmailDetailActions(
         val newImages = mutableMapOf<String, String>()
 
         withContext(Dispatchers.IO) {
-            val attachmentsWithRef = inlineAttachments.filter { it.fileReference.isNotBlank() }
+            var totalInlineBytes = 0L
+            val attachmentsWithRef = inlineAttachments
+                .filter { it.fileReference.isNotBlank() }
+                .filter { att ->
+                    val nextTotal = totalInlineBytes + att.estimatedSize
+                    if (nextTotal <= MAX_AUTO_INLINE_TOTAL_BYTES) {
+                        totalInlineBytes = nextTotal
+                        true
+                    } else {
+                        false
+                    }
+                }
             if (attachmentsWithRef.isNotEmpty()) {
                 supervisorScope {
                     attachmentsWithRef.map { att ->
@@ -196,7 +212,10 @@ class EmailDetailActions(
             val missingCids = cidRefs.filter { cid ->
                 !newImages.containsKey(cid) && !newImages.containsKey("<$cid>")
             }
-            if (missingCids.isNotEmpty()) {
+            val canUseMimeFallback = attachments.isNotEmpty() &&
+                attachments.all { it.estimatedSize > 0L && it.estimatedSize <= MAX_AUTO_INLINE_IMAGE_BYTES } &&
+                attachments.sumOf { it.estimatedSize } <= MAX_AUTO_INLINE_TOTAL_BYTES
+            if (missingCids.isNotEmpty() && canUseMimeFallback) {
                 try {
                     val easClient = accountRepo.createEasClient(account.id)
                     if (easClient != null) {

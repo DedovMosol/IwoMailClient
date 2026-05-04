@@ -58,6 +58,8 @@ class EasEmailService internal constructor(
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         private const val SENTINEL_NOT_FOUND = "OBJECT_NOT_FOUND"
+        private const val BODY_TRUNCATION_SIZE = 1_048_576
+        private const val MIME_HEADER_TRUNCATION_SIZE = 65_536
 
         private val EMAIL_PATTERN = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
 
@@ -382,54 +384,37 @@ class EasEmailService internal constructor(
 
     /**
      * Загрузка тела письма с MDN информацией
-     * Сначала пробует MIME (Type=4) для парсинга заголовков, потом HTML, потом plain text
+     * Сначала пробует body-only HTML/plain text, затем маленький MIME-фрагмент для заголовков
      */
-    suspend fun fetchEmailBodyWithMdn(collectionId: String, serverId: String): EasResult<EmailBodyResult> {
+    suspend fun fetchEmailBodyWithMdn(
+        collectionId: String,
+        serverId: String,
+        fetchMimeHeaders: Boolean = true
+    ): EasResult<EmailBodyResult> {
         return withTimeoutOrNull(45_000L) {
-            // MIME (Type=4): TruncationSize=5МБ (base64 +33%, inline-картинки + вложения)
-            val mimeResult = fetchItemBody(
-                collectionId, serverId,
-                bodyType = 4, truncationSize = 5_242_880,
-                mimeSupport = 2, includeBodyFallback = false
-            )
-
-            if (mimeResult is EasResult.Success && mimeResult.data == SENTINEL_NOT_FOUND) {
-                return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
-            }
-
             var mdnRequestedBy: String? = null
             var originalMessageId: String? = null
             var bodyContent = ""
 
-            if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty()) {
-                val decodedMimeData = decodeMimeData(mimeResult.data)
-                val mimeHeaders = extractTopLevelMimeHeaders(decodedMimeData)
-                mdnRequestedBy = parseMdnHeader(mimeHeaders)
-                originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
-                bodyContent = extractBodyFromMime(decodedMimeData)
+            // HTML fallback (Type=2)
+            val htmlResult = fetchItemBody(
+                collectionId, serverId,
+                bodyType = 2, truncationSize = BODY_TRUNCATION_SIZE
+            )
+
+            if (htmlResult is EasResult.Success && htmlResult.data == SENTINEL_NOT_FOUND) {
+                return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
             }
 
-            // HTML fallback (Type=2)
-            if (bodyContent.isEmpty()) {
-                val htmlResult = fetchItemBody(
-                    collectionId, serverId,
-                    bodyType = 2, truncationSize = 512_000
-                )
-
-                if (htmlResult is EasResult.Success && htmlResult.data == SENTINEL_NOT_FOUND) {
-                    return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
-                }
-
-                if (htmlResult is EasResult.Success && htmlResult.data.isNotBlank()) {
-                    bodyContent = htmlResult.data
-                }
+            if (htmlResult is EasResult.Success && htmlResult.data.isNotBlank()) {
+                bodyContent = htmlResult.data
             }
 
             // Plain text fallback (Type=1)
             if (bodyContent.isEmpty()) {
                 val plainResult = fetchItemBody(
                     collectionId, serverId,
-                    bodyType = 1, truncationSize = 512_000
+                    bodyType = 1, truncationSize = BODY_TRUNCATION_SIZE
                 )
 
                 if (plainResult is EasResult.Success && plainResult.data == SENTINEL_NOT_FOUND) {
@@ -440,6 +425,25 @@ class EasEmailService internal constructor(
                     bodyContent = plainResult.data
                 } else if (plainResult is EasResult.Error) {
                     return@withTimeoutOrNull EasResult.Error(plainResult.message)
+                }
+            }
+
+            if (fetchMimeHeaders) {
+                val mimeResult = fetchItemBody(
+                    collectionId, serverId,
+                    bodyType = 4, truncationSize = MIME_HEADER_TRUNCATION_SIZE,
+                    mimeSupport = 2, includeBodyFallback = false
+                )
+
+                if (mimeResult is EasResult.Success && mimeResult.data == SENTINEL_NOT_FOUND && bodyContent.isEmpty()) {
+                    return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
+                }
+
+                if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty() && mimeResult.data != SENTINEL_NOT_FOUND) {
+                    val decodedMimeData = decodeMimeData(mimeResult.data)
+                    val mimeHeaders = extractTopLevelMimeHeaders(decodedMimeData)
+                    mdnRequestedBy = parseMdnHeader(mimeHeaders)
+                    originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
                 }
             }
 
@@ -489,22 +493,24 @@ class EasEmailService internal constructor(
 </ItemOperations>""".trimIndent()
 
         return deps.executeEasCommand("ItemOperations", xml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
+            val status = EasPatterns.ITEM_OPS_FETCH_STATUS
+                .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
+                ?: deps.extractValue(responseXml, "Status")?.toIntOrNull()
             if (status == 8) {
                 return@executeEasCommand SENTINEL_NOT_FOUND
             }
 
-            val truncated = deps.extractValue(responseXml, "Truncated")
-            if (truncated == "1") {
-                return@executeEasCommand ""
-            }
-
-            XmlUtils.unescape(
+            val data = XmlUtils.unescape(
                 deps.extractValue(responseXml, "Data")
                     ?: (if (includeBodyFallback) deps.extractValue(responseXml, "Body") else null)
                     ?: AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                     ?: ""
             )
+            val truncated = deps.extractValue(responseXml, "Truncated")
+            if (truncated == "1" && data.isBlank()) {
+                return@executeEasCommand ""
+            }
+            data
         }
     }
 

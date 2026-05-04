@@ -743,8 +743,12 @@ class EasClient(
      * Загрузка тела письма с MDN информацией
      * @see EasEmailService.fetchEmailBodyWithMdn
      */
-    suspend fun fetchEmailBodyWithMdn(collectionId: String, serverId: String): EasResult<EmailBodyResult> =
-        emailService.fetchEmailBodyWithMdn(collectionId, serverId)
+    suspend fun fetchEmailBodyWithMdn(
+        collectionId: String,
+        serverId: String,
+        fetchMimeHeaders: Boolean = true
+    ): EasResult<EmailBodyResult> =
+        emailService.fetchEmailBodyWithMdn(collectionId, serverId, fetchMimeHeaders)
 
     /**
      * Получает свежие метаданные вложений конкретного письма через ItemOperations
@@ -848,6 +852,12 @@ class EasClient(
                             add(buildDateRestriction(15_000L, field))
                             add(buildDateRestriction(120_000L, field))
                             add(buildDateRestriction(600_000L, field))
+                            if (isSentFolder) {
+                                add(buildDateRestriction(3_600_000L, field))
+                            }
+                        }
+                        if (isSentFolder && internetMessageId.isNullOrBlank()) {
+                            add(subjectOnlyRestriction)
                         }
                     } else if (internetMessageId.isNullOrBlank()) {
                         add(subjectOnlyRestriction)
@@ -855,6 +865,7 @@ class EasClient(
                 }
 
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
+                val sortDateField = if (isSentFolder) "item:DateTimeSent" else "item:DateTimeReceived"
 
                 suspend fun findCandidateIds(restriction: String): EasResult<List<String>> {
                     val findRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -875,7 +886,7 @@ class EasClient(
             </m:Restriction>
             <m:SortOrder>
                 <t:FieldOrder Order="Descending">
-                    <t:FieldURI FieldURI="item:DateTimeReceived"/>
+                    <t:FieldURI FieldURI="$sortDateField"/>
                 </t:FieldOrder>
             </m:SortOrder>
             <m:ParentFolderIds>
@@ -947,11 +958,12 @@ class EasClient(
                 val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
                     ?: return@withContext EasResult.Error("GetItem request failed")
 
-                // Извлекаем Body
-                val bodyPattern = "<t:Body[^>]*>([\\s\\S]*?)</t:Body>".toRegex()
-                val bodyMatch = bodyPattern.find(getItemResponse)
-                if (bodyMatch != null) {
-                    var body = bodyMatch.groupValues[1]
+                // Извлекаем Body. ВАЖНО: используем префикс `t:`, потому что в SOAP
+                // ответе есть <soap:Body> (обёртка), а нас интересует <t:Body> внутри
+                // <t:Message>. Поиск без префикса мог бы ошибочно захватить SOAP Body.
+                val bodyValue = XmlUtils.extractTagValue(getItemResponse, "t:Body")
+                if (bodyValue != null) {
+                    var body = bodyValue
                     // Убираем CDATA если есть
                     if (body.startsWith("<![CDATA[") && body.endsWith("]]>")) {
                         body = body.removePrefix("<![CDATA[").removeSuffix("]]>")
@@ -963,10 +975,7 @@ class EasClient(
                     // Это ОСНОВНАЯ причина бага на Exchange 2007, где ItemOperations
                     // возвращает пустое тело и используется этот EWS fallback.
                     body = unescapeXml(body)
-                    val ewsMessageId = "<t:InternetMessageId>([\\s\\S]*?)</t:InternetMessageId>".toRegex()
-                        .find(getItemResponse)
-                        ?.groupValues
-                        ?.get(1)
+                    val ewsMessageId = XmlUtils.extractTagValue(getItemResponse, "t:InternetMessageId")
                         ?.trim()
                         ?.takeIf { it.isNotBlank() }
                         ?.let(::unescapeXml)

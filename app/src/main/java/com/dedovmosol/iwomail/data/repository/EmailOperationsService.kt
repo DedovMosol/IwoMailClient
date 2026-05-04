@@ -30,6 +30,15 @@ class EmailOperationsService(
     private val moveItemsStatusRegex = Regex("status=(\\d+)")
     private val previewWhitespaceRegex = Regex("\\s+")
 
+    private fun toEwsFolderType(folderType: Int?): String? = when (folderType) {
+        FolderType.INBOX -> "inbox"
+        FolderType.SENT_ITEMS -> "sentitems"
+        FolderType.DRAFTS -> "drafts"
+        FolderType.DELETED_ITEMS -> "deleteditems"
+        FolderType.OUTBOX -> "outbox"
+        else -> null
+    }
+
     /**
      * Пометить письмо как прочитанное/непрочитанное
      */
@@ -229,7 +238,11 @@ class EmailOperationsService(
 
             val folderServerId = email.folderId.substringAfter("_")
 
-            return when (val result = client.fetchEmailBodyWithMdn(folderServerId, email.serverId)) {
+            return when (val result = client.fetchEmailBodyWithMdn(
+                folderServerId,
+                email.serverId,
+                fetchMimeHeaders = folder?.type != FolderType.SENT_ITEMS
+            )) {
                 is EasResult.Success -> {
                     var bodyContent = result.data.body
                     var resolvedMessageId = result.data.originalMessageId
@@ -240,14 +253,7 @@ class EmailOperationsService(
                         android.util.Log.d("BDY", "loadEmailBody: Empty body from ItemOperations, trying EWS fallback...")
 
                         // Получаем тип папки для EWS DistinguishedFolderId
-                        val folderTypeStr = when (folder?.type) {
-                            FolderType.INBOX -> "inbox"
-                            FolderType.SENT_ITEMS -> "sentitems"
-                            FolderType.DRAFTS -> "drafts"
-                            FolderType.DELETED_ITEMS -> "deleteditems"
-                            FolderType.OUTBOX -> "outbox"
-                            else -> null
-                        }
+                        val folderTypeStr = toEwsFolderType(folder?.type)
 
                         if (folderTypeStr != null) {
                             val ewsResult = client.fetchEmailBodyViaEws(
@@ -311,14 +317,7 @@ class EmailOperationsService(
                         var recovered = false
 
                         if (client.isExchange2007()) {
-                            val folderTypeStr = when (folderForCheck?.type) {
-                                FolderType.INBOX -> "inbox"
-                                FolderType.SENT_ITEMS -> "sentitems"
-                                FolderType.DRAFTS -> "drafts"
-                                FolderType.DELETED_ITEMS -> "deleteditems"
-                                FolderType.OUTBOX -> "outbox"
-                                else -> null
-                            }
+                            val folderTypeStr = toEwsFolderType(folderForCheck?.type)
                             if (folderTypeStr != null) {
                                 android.util.Log.d("BDY", "loadEmailBody: OBJECT_NOT_FOUND, trying EWS fallback for folder=$folderTypeStr")
                                 val ewsResult = client.fetchEmailBodyViaEws(
@@ -406,7 +405,12 @@ class EmailOperationsService(
             val client = accountRepo.createEasClient(email.accountId) ?: return
             val folderServerId = email.folderId.substringAfter("_")
 
-            val attResult = client.fetchAttachmentMetadata(folderServerId, sid)
+            val attResult = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+                client.fetchAttachmentMetadata(folderServerId, sid)
+            } ?: run {
+                android.util.Log.w("EmailOps", "refreshAttachmentMetadata timeout emailId=$emailId")
+                return
+            }
             if (attResult is EasResult.Success) {
                 emailSyncService.reconcileAttachments(emailId, attResult.data)
             }

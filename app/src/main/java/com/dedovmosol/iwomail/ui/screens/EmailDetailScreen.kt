@@ -235,19 +235,28 @@ fun EmailDetailScreen(
         }
 
         isLoadingInlineImages = true
-        val loaded = actions.loadInlineImages(
-            emailBody = body,
-            bodyType = currentEmail.bodyType,
-            emailServerId = currentEmail.serverId,
-            folderId = currentEmail.folderId,
-            accountId = currentEmail.accountId,
-            attachments = attachments
-        )
-        if (BuildConfig.DEBUG) {
-            android.util.Log.d("InlineImages", "=== FINISH: Total ${loaded.size} images loaded")
+        try {
+            val loaded = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+                actions.loadInlineImages(
+                    emailBody = body,
+                    bodyType = currentEmail.bodyType,
+                    emailServerId = currentEmail.serverId,
+                    folderId = currentEmail.folderId,
+                    accountId = currentEmail.accountId,
+                    attachments = attachments
+                )
+            } ?: emptyMap()
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("InlineImages", "=== FINISH: Total ${loaded.size} images loaded")
+            }
+            inlineImages = loaded
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("InlineImages", "Failed to load inline images: ${e.message}")
+            inlineImages = emptyMap()
+        } finally {
+            isLoadingInlineImages = false
         }
-        inlineImages = loaded
-        isLoadingInlineImages = false
     }
 
     LaunchedEffect(emailId) {
@@ -287,9 +296,19 @@ fun EmailDetailScreen(
                 }
                 when (result) {
                     is EasResult.Success -> {
-                        launch(Dispatchers.IO) {
-                            try { actions.refreshAttachmentMetadata(emailId) } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e
+                        if (result.data.isBlank() && currentEmail.preview.isNotBlank()) {
+                            val fresh = withContext(Dispatchers.IO) { actions.getEmailSync(emailId) }
+                            if (fresh?.body.isNullOrBlank()) {
+                                bodyLoadError = if (isRussian)
+                                    "Сервер не вернул текст письма. Попробуйте обновить письмо или открыть его через Outlook Web Access."
+                                else
+                                    "Server returned no message body. Try refreshing this email or opening it in Outlook Web Access."
+                            }
+                        } else {
+                            launch(Dispatchers.IO) {
+                                try { actions.refreshAttachmentMetadata(emailId) } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                }
                             }
                         }
                     }
@@ -560,6 +579,7 @@ fun EmailDetailScreen(
                                                     "Сервер не вернул текст письма. Откройте его через Outlook Web Access."
                                                 else
                                                     "Server returned no message body. Try opening this email in Outlook Web Access."
+                                                bodyLoadError = msg
                                                 SafeToast.long(context, msg)
                                             } else {
                                                 SafeToast.short(context, if (isRussian) "Письмо обновлено" else "Email refreshed")
