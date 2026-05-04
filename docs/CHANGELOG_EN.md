@@ -28,6 +28,12 @@
 - `EmailOperationsService.resolveEmailIds` — content-matching during ServerId migration after SyncKey=0 reset now uses lightweight projection
 - Expected impact: for Sent folders with 10k+ emails — peak memory during orphan detection reduced ~4-5x
 
+### Email detail — Sent Items and screen rotations
+- Fixed empty body for some emails in Sent Items on Exchange 2007 SP1: the EWS fallback `fetchEmailBodyViaEws` now additionally searches by `item:DateTimeSent` (the semantically correct field for Sent), uses `IgnoreCaseAndNonSpacingCharacters` for subject matching, and adds a 10-minute window for clock-drift / indexing-lag cases on the server.
+- On ambiguous EWS matches (multiple candidates with the same subject) the fallback no longer bails out — it retries the next, more specific restriction; the existing cached body is never overwritten with an empty server response.
+- After a manual email refresh, if the server did not return the body, a clear toast is shown instead of a misleading "Email refreshed".
+- Removed the redundant `forceReload` of the email body on every `EmailDetailScreen` recomposition. Rotating the screen no longer reloads the body — `LaunchedEffect(emailId)` only fetches when the local body is empty.
+
 ### Widget — stability and performance
 - `MailWidget` now uses `applicationContext` and serializes `GlanceAppWidget.updateAll()` through a shared mutex to avoid concurrent updates from sync/UI/account paths.
 - Recent widget emails are limited to Inbox and `read = 0`; already-read messages are no longer shown as new.

@@ -273,6 +273,11 @@ fun EmailDetailScreen(
             }
         }
 
+        // Тело подгружается только если локально пусто. После поворота экрана
+        // тело уже в БД, LaunchedEffect не запускает повторную сетевую загрузку.
+        // Для ручного обновления используется кнопка refresh в TopAppBar
+        // (syncAndReloadBody → forceReload=true). Это исключает лишние запросы
+        // при рекомпозициях и config changes (best practice для Compose).
         if (currentEmail.body.isEmpty() && !isLoadingBody) {
             isLoadingBody = true
             bodyLoadError = null
@@ -312,16 +317,6 @@ fun EmailDetailScreen(
             } finally {
                 isLoadingBody = false
             }
-        } else if (currentEmail.body.isNotEmpty() && !isLoadingBody) {
-            isLoadingBody = true
-            try {
-                withContext(Dispatchers.IO) {
-                    actions.loadEmailBody(emailId, forceReload = true)
-                    actions.refreshAttachmentMetadata(emailId)
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-            } finally { isLoadingBody = false }
         }
     }
 
@@ -554,7 +549,21 @@ fun EmailDetailScreen(
                                     val result = actions.syncAndReloadBody(emailId, currentEmail.accountId, currentEmail.folderId)
                                     when (result) {
                                         is EasResult.Success -> {
-                                            SafeToast.short(context, if (isRussian) "Письмо обновлено" else "Email refreshed")
+                                            // Проверяем, удалось ли действительно подтянуть тело.
+                                            // Exchange 2007 SP1 может вернуть пустое тело для части
+                                            // Sent Items (ItemOperations Status=8 + нет EWS-кандидатов).
+                                            // В этом случае сообщаем пользователю, а не делаем вид,
+                                            // что всё обновилось.
+                                            val fresh = withContext(Dispatchers.IO) { actions.getEmailSync(emailId) }
+                                            if (fresh?.body.isNullOrEmpty()) {
+                                                val msg = if (isRussian)
+                                                    "Сервер не вернул текст письма. Откройте его через Outlook Web Access."
+                                                else
+                                                    "Server returned no message body. Try opening this email in Outlook Web Access."
+                                                SafeToast.long(context, msg)
+                                            } else {
+                                                SafeToast.short(context, if (isRussian) "Письмо обновлено" else "Email refreshed")
+                                            }
                                         }
                                         is EasResult.Error -> {
                                             bodyLoadError = result.message

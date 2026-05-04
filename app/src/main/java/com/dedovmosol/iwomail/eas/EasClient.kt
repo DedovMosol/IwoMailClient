@@ -792,28 +792,39 @@ class EasClient(
                 // Экранируем subject для XML
                 val escapedSubject = escapeXml(subject)
 
-                fun buildDateRestriction(windowMs: Long): String {
+                // Для Sent Items семантически корректное поле — DateTimeSent.
+                // DateTimeReceived на отправленных письмах тоже выставляется Exchange,
+                // но на некоторых инсталляциях Exchange 2007 SP1 оно может отличаться от
+                // значения, которое вернул EAS Sync (DateReceived), что ломает узкое окно.
+                val isSentFolder = distinguishedFolderId == "sentitems"
+                val dateFieldsToTry: List<String> = if (isSentFolder) {
+                    listOf("item:DateTimeSent", "item:DateTimeReceived")
+                } else {
+                    listOf("item:DateTimeReceived")
+                }
+
+                fun buildDateRestriction(windowMs: Long, dateField: String): String {
                     val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
                     sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
                     val dateFrom = sdf.format(java.util.Date(dateReceived - windowMs))
                     val dateTo = sdf.format(java.util.Date(dateReceived + windowMs))
                     return """<t:And>
-                    <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
+                    <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
                         <t:FieldURI FieldURI="item:Subject"/>
                         <t:Constant Value="$escapedSubject"/>
                     </t:Contains>
                     <t:IsGreaterThanOrEqualTo>
-                        <t:FieldURI FieldURI="item:DateTimeReceived"/>
+                        <t:FieldURI FieldURI="$dateField"/>
                         <t:FieldURIOrConstant><t:Constant Value="$dateFrom"/></t:FieldURIOrConstant>
                     </t:IsGreaterThanOrEqualTo>
                     <t:IsLessThanOrEqualTo>
-                        <t:FieldURI FieldURI="item:DateTimeReceived"/>
+                        <t:FieldURI FieldURI="$dateField"/>
                         <t:FieldURIOrConstant><t:Constant Value="$dateTo"/></t:FieldURIOrConstant>
                     </t:IsLessThanOrEqualTo>
                 </t:And>"""
                 }
 
-                val subjectOnlyRestriction = """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCase">
+                val subjectOnlyRestriction = """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
                     <t:FieldURI FieldURI="item:Subject"/>
                     <t:Constant Value="$escapedSubject"/>
                 </t:Contains>"""
@@ -830,10 +841,14 @@ class EasClient(
                         )
                     }
                     if (dateReceived > 0L) {
-                        // Сначала узкое окно, затем более широкое. Оба варианта допускаются
-                        // только если найден РОВНО один кандидат.
-                        add(buildDateRestriction(15_000L))
-                        add(buildDateRestriction(120_000L))
+                        // Порядок: от самого узкого к более широкому окну; для Sent пробуем
+                        // дополнительно DateTimeSent, а затем DateTimeReceived. На каждое окно
+                        // требуется РОВНО один кандидат — иначе fallback отменяется.
+                        for (field in dateFieldsToTry) {
+                            add(buildDateRestriction(15_000L, field))
+                            add(buildDateRestriction(120_000L, field))
+                            add(buildDateRestriction(600_000L, field))
+                        }
                     } else if (internetMessageId.isNullOrBlank()) {
                         add(subjectOnlyRestriction)
                     }
@@ -887,11 +902,14 @@ class EasClient(
                                 }
                                 0 -> Unit
                                 else -> {
+                                    // Ambiguous — следующее restriction может быть более
+                                    // специфичным (другое date-поле / иное окно) и дать 1.
+                                    // Если все restrictions вернут 0 или 2+, fallback завершится
+                                    // пустым телом ниже — оригинальный кэш не перезаписывается.
                                     android.util.Log.w(
                                         "EasClient",
-                                        "fetchEmailBodyViaEws: ambiguous EWS match for subject='$subject', folder='$distinguishedFolderId', candidates=${findResult.data.size}"
+                                        "fetchEmailBodyViaEws: ambiguous EWS match for subject='$subject', folder='$distinguishedFolderId', candidates=${findResult.data.size}, trying next restriction"
                                     )
-                                    return@withContext EasResult.Success(EmailBodyResult(""))
                                 }
                             }
                         }
