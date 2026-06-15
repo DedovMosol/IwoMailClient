@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,9 +44,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
-import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
@@ -57,9 +57,6 @@ import com.dedovmosol.iwomail.ui.components.EasterEggPlayer
 import com.dedovmosol.iwomail.ui.components.EasterEggOverlay
 import com.dedovmosol.iwomail.ui.utils.getAvatarColor
 import com.dedovmosol.iwomail.ui.utils.formatRelativeDate
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private fun ContextWrapper.findActivity(): Activity? {
     var current: android.content.Context? = this
@@ -83,16 +80,22 @@ fun SearchScreen(
     onComposeClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
-    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
 
-    var query by rememberSaveable { mutableStateOf("") }
-    var dateFilter by rememberSaveable { mutableStateOf(DateFilter.ALL) }
+    val viewModel: SearchViewModel = viewModel(
+        factory = SearchViewModel.provideFactory(context.applicationContext as android.app.Application)
+    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val query = uiState.query
+    val dateFilter = uiState.dateFilter
+    val isSearching = uiState.isSearching
+    val selectedIds = uiState.selectedIds
+    val isSelectionMode = selectedIds.isNotEmpty()
+
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
+    var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
 
     // Сохранение фокуса при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
@@ -104,27 +107,8 @@ fun SearchScreen(
         }
     }
 
-    var searchResultIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
-    var allResults by remember { mutableStateOf<List<EmailEntity>>(emptyList()) }
-    var isSearching by rememberSaveable { mutableStateOf(false) }
-
-    // Режим выбора
-    var selectedIds by rememberSaveable(
-        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
-    ) { mutableStateOf(setOf<String>()) }
-    val isSelectionMode = selectedIds.isNotEmpty()
-    var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
-
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-
-    LaunchedEffect(searchResultIds, activeAccount) {
-        if (searchResultIds.isNotEmpty() && allResults.isEmpty() && activeAccount != null) {
-            allResults = mailRepo.getEmailsByIds(searchResultIds)
-        }
-    }
-
-    val filteredResults = remember(allResults, dateFilter) {
-        allResults.filter { email ->
+    val filteredResults = remember(uiState.allResults, dateFilter) {
+        uiState.allResults.filter { email ->
             dateFilter.days?.let { days ->
                 val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
                 email.dateReceived >= cutoff
@@ -132,93 +116,31 @@ fun SearchScreen(
         }
     }
 
-    var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-
-    fun search() {
-        if (query.length < 2) return
-        if (query.trim().equals("I Want Out", ignoreCase = true)) {
-            keyboardController?.hide()
-            showEasterEgg = true
-            return
-        }
-        activeAccount?.let { account ->
-            searchJob?.cancel()
-            searchJob = scope.launch {
-                try {
-                    isSearching = true
-                    selectedIds = emptySet()
-                    val results = mailRepo.search(account.id, query)
-                    allResults = results
-                    searchResultIds = results.map { it.id }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("SearchScreen", "Search failed", e)
-                    allResults = emptyList()
-                    searchResultIds = emptyList()
-                } finally {
-                    isSearching = false
-                }
-            }
-        }
-    }
-
+    // Дебаунс поиска: состояние и корутина живут в ViewModel, здесь — только UI-триггер
     LaunchedEffect(query) {
         if (query.length >= 2) {
             kotlinx.coroutines.delay(300)
-            search()
+            viewModel.search()
         }
     }
 
-    fun deleteSelected() {
-        scope.launch {
-            com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-            val result = withContext(Dispatchers.IO) {
-                mailRepo.moveToTrash(selectedIds.toList())
-            }
-            when (result) {
-                is EasResult.Success -> {
-                    val message = if (result.data > 0) {
-                        NotificationStrings.getMovedToTrash(isRussian)
-                    } else {
-                        NotificationStrings.getDeletedPermanently(isRussian)
-                    }
-                    SafeToast.short(context, message)
-                    // Убираем удалённые из результатов
-                    allResults = allResults.filter { it.id !in selectedIds }
-                    searchResultIds = allResults.map { it.id }
-                }
-                is EasResult.Error -> {
-                    SafeToast.long(context, result.message)
+    // Одноразовые события из ViewModel (тосты, звук удаления, пасхалка)
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                SearchEvent.PlayDeleteSound ->
+                    com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                SearchEvent.MovedToTrash ->
+                    SafeToast.short(context, NotificationStrings.getMovedToTrash(isRussian))
+                SearchEvent.DeletedPermanently ->
+                    SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
+                is SearchEvent.ShowError ->
+                    SafeToast.long(context, event.message)
+                SearchEvent.ShowEasterEgg -> {
+                    keyboardController?.hide()
+                    showEasterEgg = true
                 }
             }
-            selectedIds = emptySet()
-        }
-    }
-
-    fun markSelectedAsRead(read: Boolean) {
-        scope.launch {
-            val ids = selectedIds.toList()
-            selectedIds = emptySet()
-            when (val result = mailRepo.markAsReadBatch(ids, read)) {
-                is EasResult.Success -> {
-                    allResults = allResults.map { email ->
-                        if (email.id in ids) email.copy(read = read) else email
-                    }
-                }
-                is EasResult.Error -> {
-                    SafeToast.short(context, result.message)
-                }
-            }
-        }
-    }
-
-    fun starSelected() {
-        scope.launch {
-            selectedIds.forEach { id -> mailRepo.toggleFlag(id) }
-            allResults = allResults.map { email ->
-                if (email.id in selectedIds) email.copy(flagged = !email.flagged) else email
-            }
-            selectedIds = emptySet()
         }
     }
 
@@ -231,7 +153,7 @@ fun SearchScreen(
             text = { Text(Strings.emailsWillBeMovedToTrash(selectedIds.size)) },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
-                    onClick = { showDeleteDialog = false; deleteSelected() },
+                    onClick = { showDeleteDialog = false; viewModel.deleteSelected() },
                     text = Strings.yes
                 )
             },
@@ -253,15 +175,15 @@ fun SearchScreen(
                 TopAppBar(
                     title = { Text("${selectedIds.size}") },
                     navigationIcon = {
-                        IconButton(onClick = { selectedIds = emptySet() }) {
+                        IconButton(onClick = { viewModel.clearSelection() }) {
                             Icon(AppIcons.Close, Strings.close)
                         }
                     },
                     actions = {
-                        IconButton(onClick = { markSelectedAsRead(true) }) {
+                        IconButton(onClick = { viewModel.markSelectedAsRead(true) }) {
                             Icon(AppIcons.MarkEmailRead, Strings.markRead)
                         }
-                        IconButton(onClick = { starSelected() }) {
+                        IconButton(onClick = { viewModel.starSelected() }) {
                             Icon(AppIcons.Star, Strings.favorites)
                         }
                         IconButton(onClick = { showDeleteDialog = true }) {
@@ -278,7 +200,7 @@ fun SearchScreen(
                     title = {
                         TextField(
                             value = query,
-                            onValueChange = { query = it },
+                            onValueChange = { viewModel.onQueryChange(it) },
                             placeholder = { Text(Strings.searchInMail, color = Color.White.copy(alpha = 0.7f)) },
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
@@ -291,15 +213,10 @@ fun SearchScreen(
                                 cursorColor = Color.White
                             ),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(onSearch = { search() }),
+                            keyboardActions = KeyboardActions(onSearch = { viewModel.search() }),
                             trailingIcon = {
                                 if (query.isNotEmpty()) {
-                                    IconButton(onClick = {
-                                        query = ""
-                                        allResults = emptyList()
-                                        searchResultIds = emptyList()
-                                        selectedIds = emptySet()
-                                    }) {
+                                    IconButton(onClick = { viewModel.clearQuery() }) {
                                         Icon(AppIcons.Clear, Strings.close, tint = Color.White)
                                     }
                                 }
@@ -344,8 +261,8 @@ fun SearchScreen(
             // Фильтры
             FilterBar(
                 dateFilter = dateFilter,
-                onDateFilterChange = { dateFilter = it },
-                hasResults = allResults.isNotEmpty()
+                onDateFilterChange = { viewModel.setDateFilter(it) },
+                hasResults = uiState.allResults.isNotEmpty()
             )
 
             // Плавные переходы между состояниями контента при смене фильтров
@@ -353,7 +270,7 @@ fun SearchScreen(
                 isSearching -> 0
                 query.isEmpty() -> 1
                 filteredResults.isEmpty() && query.length >= 2 -> 2
-                allResults.isEmpty() -> 3
+                uiState.allResults.isEmpty() -> 3
                 else -> 4
             }
 
@@ -383,7 +300,7 @@ fun SearchScreen(
                             ) {
                                 Text(Strings.noResults, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 if (dateFilter != DateFilter.ALL) {
-                                    TextButton(onClick = { dateFilter = DateFilter.ALL }) {
+                                    TextButton(onClick = { viewModel.setDateFilter(DateFilter.ALL) }) {
                                         Text(Strings.resetAll)
                                     }
                                 }
@@ -400,10 +317,10 @@ fun SearchScreen(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    selectedIds = if (selectedIds.size == filteredResults.size)
-                                                        emptySet()
-                                                    else
-                                                        filteredResults.map { it.id }.toSet()
+                                                    viewModel.setSelection(
+                                                        if (selectedIds.size == filteredResults.size) emptySet()
+                                                        else filteredResults.map { it.id }.toSet()
+                                                    )
                                                 }
                                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                                             verticalAlignment = Alignment.CenterVertically
@@ -411,7 +328,7 @@ fun SearchScreen(
                                             Checkbox(
                                                 checked = selectedIds.size == filteredResults.size,
                                                 onCheckedChange = {
-                                                    selectedIds = if (it) filteredResults.map { e -> e.id }.toSet() else emptySet()
+                                                    viewModel.setSelection(if (it) filteredResults.map { e -> e.id }.toSet() else emptySet())
                                                 }
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
@@ -440,15 +357,12 @@ fun SearchScreen(
                                         isSelectionMode = isSelectionMode,
                                         onClick = {
                                             if (isSelectionMode) {
-                                                selectedIds = if (email.id in selectedIds)
-                                                    selectedIds - email.id
-                                                else
-                                                    selectedIds + email.id
+                                                viewModel.toggleSelection(email.id)
                                             } else {
                                                 onEmailClick(email.id)
                                             }
                                         },
-                                        onLongClick = { selectedIds = selectedIds + email.id },
+                                        onLongClick = { viewModel.addToSelection(email.id) },
                                         modifier = Modifier
                                     )
                                 }

@@ -2,19 +2,19 @@
 
 **iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS) с beta-поддержкой IMAP/POP3.
 
-**Версия:** 1.6.2
+**Версия:** 1.6.3
 **Пакет:** `com.dedovmosol.iwomail`
 **Gradle root:** `IwoMailClient`
 **Android module:** `:app`
 
 ---
 
-## 1. Состояние проекта v1.6.2
+## 1. Состояние проекта v1.6.3
 
 | Область | Значение |
 |---------|----------|
 | Application ID / namespace | `com.dedovmosol.iwomail` |
-| Version | `versionName = 1.6.2`, `versionCode = 25` |
+| Version | `versionName = 1.6.3`, `versionCode = 26` |
 | SDK | `minSdk = 26`, `compileSdk = 36`, `targetSdk = 36` |
 | JVM target | Java/Kotlin `17` |
 | Kotlin | `1.9.22` |
@@ -70,6 +70,36 @@ Background Layer
   ├─ CalendarReminderReceiver / TaskReminderReceiver / reschedule worker
   └─ BootReceiver / SyncAlarmReceiver / PushRestartWorker / ServiceWatchdogReceiver
 ```
+
+---
+
+## 2.1. Модель состояния UI (MVVM, внедряется инкрементально)
+
+Исторически экраны держат состояние прямо в `@Composable` через `remember`/`rememberSaveable`/`LaunchedEffect`, без ViewModel. Это требует ручных защит от пересоздания при повороте (`*Loaded`/`*Initialized`-флаги) и смешивает презентационную логику с отрисовкой.
+
+Вводится слой **`androidx.lifecycle.ViewModel` + неизменяемый `UiState` + `StateFlow`**, экран за экраном (чисто слой представления — протокол EAS/EWS и совместимость с Exchange 2007 SP1/SP2 не затрагиваются):
+
+```text
+Composable ──collectAsStateWithLifecycle──> StateFlow<UiState>  (ViewModel)
+Composable ──вызовы событий (vm.setX())───> ViewModel ──> Repository (RepositoryProvider)
+```
+
+Принципы:
+- **UiState** — `data class` с неизменяемыми полями; единый источник правды экрана.
+- **ViewModel** переживает поворот → состояние сохраняется «бесплатно», убирая ручные флаги и лишние чтения из БД (выигрыш по производительности/энергии).
+- Корутины запускаются в `viewModelScope` (живёт дольше композиции) → операции записи в БД не отменяются при повороте.
+- Зависимости берутся из существующего `RepositoryProvider` через `ViewModelProvider.Factory` (nav-аргументы передаются в фабрику). `RepositoryProvider` сохраняется как DI-механизм.
+- **Одноразовые события** (тосты, звук, навигация, пасхалка) — НЕ часть состояния. Передаются через `Channel(Channel.BUFFERED)` → `receiveAsFlow()`, который UI собирает в `LaunchedEffect`. ViewModel остаётся независимой от языка/ресурсов: эмитит семантическое событие, локализация — в UI.
+- **Тестируемость (DIP).** Зависимости (репозитории, диспетчеры, системные side-effect'ы) передаются через конструктор. Фабрика подставляет боевые реализации из `RepositoryProvider`/Android-контекста, юнит-тест — моки. Системные эффекты (`PushService`/`SyncWorker`) скрыты за интерфейсом (напр. `SyncEffects`), поэтому ViewModel не зависит от Android-классов и тестируется обычным JUnit + MockK без Robolectric.
+
+**Мигрировано:**
+- `SyncCleanupScreen` ↔ `SyncCleanupViewModel`/`SyncCleanupUiState` — настройки аккаунта (fire-and-forget записи + перезагрузка). Plain `ViewModel` с конструкторной инъекцией: `AccountRepository` + `SettingsRepository` + `SyncEffects` (push/reschedule за интерфейсом). Покрыт `SyncCleanupViewModelTest`.
+- `SearchScreen` ↔ `SearchViewModel`/`SearchUiState` + `SearchEvent` — поиск с дебаунсом, выделение, batch-операции; результаты живут в VM и переживают поворот (раньше — хрупкая связка `rememberSaveable(ids)` + повторный запрос в БД, с риском `TransactionTooLargeException` на больших выборках). После полной смерти процесса поиск сбрасывается — осознанный безопасный компромисс. Plain `ViewModel` с инъекцией репозиториев + `CoroutineDispatcher`; покрыт `SearchViewModelTest`.
+- `NotesScreen` ↔ `NotesViewModel`/`NotesUiState` + `NotesEvent` — заметки/корзина/выделение/поиск + авто-синхронизация и троттлинг синка корзины. Реактивная связка `activeAccount → getNotes/getDeletedNotes/getDeletedNotesCount` через `flatMapLatest`-подобный `collectLatest`; убран флаг `dataLoaded`, дававший лишнюю синхронизацию при повороте/смене аккаунта. Операции с прогресс-баром (окончательное удаление/восстановление/очистка корзины) — тонкие `suspend`-обёртки VM, вызываемые из `DeletionController` (Compose-механизм undo/прогресса остаётся в UI). Plain `ViewModel` с инъекцией репозиториев + `CoroutineDispatcher`; покрыт `NotesViewModelTest`.
+
+Следующие кандидаты — `TasksScreen` (тот же паттерн `dataLoaded`/корзина) и тяжёлый `ComposeScreen`.
+
+Зависимости: `lifecycle-viewmodel-ktx`, `lifecycle-viewmodel-compose`, `lifecycle-runtime-compose` (`2.7.0`).
 
 ---
 
@@ -366,6 +396,14 @@ Server mode stores drafts through EWS. Local mode stores drafts only in Room and
 - Calendar/task/note repositories use per-account sync locks; calendar delete/restore/permanent-delete/trash operations share the same lock as calendar sync.
 - Notification display uses a shared mutex across push and worker paths.
 - Glance widget updates are serialized through `widgetUpdateMutex`.
+
+### UI state preservation across configuration changes
+
+Compose screens keep user-editable state across rotation/process death and prevent loader effects from overwriting it:
+
+- Editable fields use `rememberSaveable` (large bodies use file-backed savers).
+- One-shot loaders guard against re-running on configuration change with a `rememberSaveable` flag — e.g. `replyLoaded` / `forwardLoaded` / `signatureInitialized` (`ComposeScreen`), `datesInitialized` (`CreateEventDialog` / `CreateTaskDialog`), `dataLoaded` (`TasksScreen` / `NotesScreen`). The effect returns early when its flag is set.
+- `RichTextEditor` restores from the freshest source (`controller.latestHtml`, persisted via a `Saver`) and reconciles the parent body on restore, so the value-driven update effect cannot clobber recovered content.
 
 ---
 

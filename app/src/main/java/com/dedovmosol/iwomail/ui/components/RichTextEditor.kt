@@ -1086,10 +1086,13 @@ fun RichTextEditor(
                         view?.animate()?.alpha(1f)?.setDuration(150)?.start()
                         isLoaded = true
                         controller.isLoaded = true
+                        // Приоритет восстановления: controller.latestHtml — самый свежий источник
+                        // (обновляется немедленно через cacheHtml на каждый ввод и сохраняется
+                        // через Saver), поэтому он надёжнее дебаунс-устаревшего webViewStateBundle.
                         val savedHtml = webViewStateBundle.getString("editor_html")
                         val currentInitialHtml = when {
-                            !savedHtml.isNullOrEmpty() -> savedHtml
                             controller.latestHtml.isNotEmpty() -> controller.latestHtml
+                            !savedHtml.isNullOrEmpty() -> savedHtml
                             else -> initialHtmlRef.value
                         }
                         if (currentInitialHtml.isNotEmpty()) {
@@ -1103,6 +1106,12 @@ fun RichTextEditor(
                                 .replace("\n", "\\n")
                                 .replace("\r", "")
                             evaluateJavascript("setHtml(\"$escapedHtml\");", null)
+                            // Синхронизируем родительский body с восстановленным содержимым.
+                            // Иначе LaunchedEffect(initialHtml) увидит устаревший body и перезапишет
+                            // редактор им (теряя текст, оставляя только подпись) после поворота.
+                            if (currentInitialHtml != initialHtmlRef.value) {
+                                onHtmlChangedRef.value(currentInitialHtml)
+                            }
                         }
                         // Вызываем checkFormatState чтобы обновить состояние форматирования
                         evaluateJavascript("checkFormatState();", null)

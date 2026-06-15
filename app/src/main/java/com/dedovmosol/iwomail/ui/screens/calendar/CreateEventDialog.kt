@@ -262,6 +262,11 @@ internal fun CreateEventDialog(
     var endDateText by rememberSaveable { mutableStateOf("") }
     var endTimeText by rememberSaveable { mutableStateOf("") }
 
+    // Флаг: даты уже инициализированы (защита от перезаписи при повороте экрана).
+    // Без него LaunchedEffect(event, initialDate) повторно срабатывает при повороте
+    // и затирает отредактированные пользователем дату/время исходными значениями.
+    var datesInitialized by rememberSaveable { mutableStateOf(false) }
+
     var showReminderMenu by rememberSaveable { mutableStateOf(false) }
     var showStatusMenu by rememberSaveable { mutableStateOf(false) }
 
@@ -271,8 +276,11 @@ internal fun CreateEventDialog(
     var showEndDatePicker by rememberSaveable { mutableStateOf(false) }
     var showEndTimePicker by rememberSaveable { mutableStateOf(false) }
 
-    // Инициализация текстовых полей из существующих дат
+    // Инициализация текстовых полей из существующих дат.
+    // datesInitialized защищает от перезаписи при повороте экрана.
     LaunchedEffect(event, initialDate) {
+        if (datesInitialized) return@LaunchedEffect
+        datesInitialized = true
         // КРИТИЧНО: НЕ устанавливаем UTC, т.к. пользователь работает в LOCAL timezone
         // БД хранит UTC, но отображаем в LOCAL
 

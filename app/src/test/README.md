@@ -4,10 +4,24 @@
 
 ```
 test/
-└── java/com/dedovmosol/iwomail/eas/
-    ├── EasXmlTemplatesTest.kt              # Тесты генерации XML-шаблонов
-    ├── EasNotesServiceTest.kt               # Юнит-тесты сервиса заметок
-    └── EasClientNotesIntegrationTest.kt     # Интеграционные тесты делегирования
+└── java/com/dedovmosol/iwomail/
+    ├── eas/
+    │   ├── EasXmlTemplatesTest.kt           # Генерация XML-шаблонов
+    │   ├── EasNotesServiceTest.kt           # Юнит-тесты сервиса заметок
+    │   ├── EasClientNotesIntegrationTest.kt # Интеграционные тесты делегирования
+    │   ├── XmlUtilsTest.kt                  # escape/unescape, извлечение тегов
+    │   ├── XmlValueExtractorTest.kt         # Унифицированное извлечение значений
+    │   └── EasPatternsTest.kt               # Regex-паттерны EAS/EWS + кэш
+    ├── util/
+    │   ├── HtmlUtilsTest.kt                 # escapeHtml, sanitizeEmailHtml (XSS), strip
+    │   ├── EmailUtilsTest.kt                # Имена/адреса/получатели, размеры файлов
+    │   ├── DateUtilsTest.kt                 # Границы дня, диапазон (TZ-pinned)
+    │   └── ICalParserTest.kt                # iCalendar/задачи (TZ-pinned)
+    └── ui/screens/
+        ├── SearchViewModelTest.kt          # MVVM: StateFlow + one-shot события (DIP-моки)
+        ├── SyncCleanupViewModelTest.kt     # MVVM: настройки синхронизации/очистки (SyncEffects-мок)
+        └── compose/
+            └── ComposeTextUtilsTest.kt     # Подпись/цитата, cid→data:, извлечение email
 ```
 
 ## Запуск тестов
@@ -67,6 +81,24 @@ test/
 - ✅ deleteNote
 - ✅ deleteNotePermanently
 - ✅ restoreNote
+
+### SearchViewModel (MVVM-слой, 13 тестов)
+Первый юнит-тест ViewModel. VM тестируется БЕЗ Robolectric благодаря конструкторной инъекции (DIP): репозитории — MockK-моки, IO-диспетчер и `Dispatchers.setMain` — тестовые.
+- ✅ onQueryChange / setDateFilter / clearQuery
+- ✅ search: игнор < 2 символов, наполнение результатов, пасхалка (`ShowEasterEgg`)
+- ✅ выделение: toggle / set
+- ✅ deleteSelected: `MovedToTrash` / `DeletedPermanently` / `ShowError` + удаление из списка
+- ✅ markSelectedAsRead / starSelected (оптимистичное обновление + сброс выделения)
+- ✅ one-shot события через `Channel`/`receiveAsFlow` (сбор в `backgroundScope`)
+
+### SyncCleanupViewModel (MVVM-слой, 15 тестов)
+VM без Robolectric: `AccountRepository`, `SettingsRepository` и интерфейс `SyncEffects` (push/reschedule) — MockK-моки.
+- ✅ init: загрузка аккаунта + настроек очистки в state
+- ✅ setSyncMode PUSH/SCHEDULED: запись режима + `setPushEnabled` + `rescheduleSync` + refresh
+- ✅ setSyncInterval/NightMode/IgnoreBatterySaver: запись + `rescheduleSync` (без push)
+- ✅ contacts/notes/calendar/tasks intervals: запись + НЕ reschedule (verify exactly=0)
+- ✅ autoCleanup trash/drafts/spam: запись + refresh аккаунта
+- ✅ downloads/rollback days: запись в settings + оптимистичное обновление state
 
 ### EasClient (делегирование заметок)
 - ✅ syncNotes → notesService
@@ -148,14 +180,27 @@ fun `syncNotes delegates to notesService`() = runTest {
 
 ## Что дальше?
 
-### Следующие шаги:
-1. ✅ EasXmlTemplates - базовые тесты
-2. ✅ EasNotesService - юнит-тесты
-3. ✅ EasClient - интеграционные тесты
-4. ⚪ EasContactsService - юнит-тесты
-5. ⚪ EasTasksService - юнит-тесты
-6. ⚪ XmlValueExtractor - тесты парсинга
-7. ⚪ EasPatterns - тесты regex
+### Сделано (чистый JUnit, без Android-зависимостей):
+1. ✅ EasXmlTemplates — генерация XML
+2. ✅ EasNotesService — юнит-тесты
+3. ✅ EasClient — интеграционные тесты делегирования
+4. ✅ XmlUtils — escape/unescape, извлечение тегов/блоков
+5. ✅ XmlValueExtractor — извлечение значений XML
+6. ✅ EasPatterns — regex-паттерны + кэш динамических паттернов
+7. ✅ HtmlUtils — escapeHtml, sanitizeEmailHtml (XSS), strip, decodeNumericEntity
+8. ✅ EmailUtils — имена/адреса/получатели, formatFileSize (Locale-pinned)
+9. ✅ DateUtils — границы дня и диапазон (TZ-pinned)
+10. ✅ ICalParser — iCalendar и задачи из писем (TZ-pinned)
+11. ✅ ComposeTextUtils — подпись/цитата, cid→data:, извлечение email
+12. ✅ SearchViewModel — MVVM-слой (StateFlow + события), тестируем через конструкторную инъекцию
+13. ✅ SyncCleanupViewModel — MVVM-слой (настройки синхронизации/очистки), side-effects за интерфейсом `SyncEffects`
+
+> **Паттерн тестирования ViewModel:** принимай зависимости (репозитории + `CoroutineDispatcher`) через конструктор. Фабрика берёт реальные из `RepositoryProvider`, тест — моки. Андроид-конструктор репозиториев не запускается (MockK через Objenesis), поэтому Robolectric не нужен.
+
+### Не покрывается чистым JUnit (нужен Robolectric или androidTest):
+- ⚪ RecurrenceHelper — использует `org.json.JSONObject` (Android-stub → "not mocked")
+- ⚪ EasContactsService / EasTasksService — сетевые/Android-зависимости
+- ⚪ Compose-экраны и диалоги — нужны Compose UI тесты в `androidTest`
 
 ### Цель: > 60% покрытия кода
 

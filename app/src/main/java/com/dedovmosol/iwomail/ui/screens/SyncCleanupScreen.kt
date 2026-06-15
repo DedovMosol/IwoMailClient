@@ -15,17 +15,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.dedovmosol.iwomail.data.database.AccountEntity
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.SyncMode
-import com.dedovmosol.iwomail.data.repository.RepositoryProvider
-import com.dedovmosol.iwomail.sync.SyncWorker
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,22 +32,19 @@ fun SyncCleanupScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
-    val settingsRepo = remember { com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context) }
     val isRu = isRussian()
 
-    var account by remember { mutableStateOf<AccountEntity?>(null) }
-    var downloadsDays by remember { mutableStateOf(0) }
-    var rollbackDays by remember { mutableStateOf(0) }
-
-    LaunchedEffect(accountId) {
-        account = accountRepo.getAccount(accountId)
-        downloadsDays = settingsRepo.getAutoCleanupDownloadsDays()
-        rollbackDays = settingsRepo.getAutoCleanupRollbackDays()
-    }
+    val viewModel: SyncCleanupViewModel = viewModel(
+        factory = SyncCleanupViewModel.provideFactory(
+            context.applicationContext as android.app.Application,
+            accountId
+        )
+    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     
-    val currentAccount = account ?: return
+    val currentAccount = uiState.account ?: return
+    val downloadsDays = uiState.downloadsDays
+    val rollbackDays = uiState.rollbackDays
     
     val accountType = try {
         AccountType.valueOf(currentAccount.accountType)
@@ -84,16 +79,7 @@ fun SyncCleanupScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    scope.launch {
-                                        accountRepo.updateSyncMode(accountId, mode)
-                                        if (mode == SyncMode.PUSH) {
-                                            com.dedovmosol.iwomail.sync.PushService.start(context)
-                                        } else {
-                                            com.dedovmosol.iwomail.sync.PushService.stop(context)
-                                        }
-                                        SyncWorker.scheduleWithNightMode(context)
-                                        account = accountRepo.getAccount(accountId)
-                                    }
+                                    viewModel.setSyncMode(mode)
                                     showSyncModeDialog = false
                                 }
                                 .padding(vertical = 12.dp),
@@ -128,11 +114,7 @@ fun SyncCleanupScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    scope.launch {
-                                        accountRepo.updateSyncInterval(accountId, minutes)
-                                        SyncWorker.scheduleWithNightMode(context)
-                                        account = accountRepo.getAccount(accountId)
-                                    }
+                                    viewModel.setSyncInterval(minutes)
                                     showSyncIntervalDialog = false
                                 }
                                 .padding(vertical = 12.dp),
@@ -163,36 +145,11 @@ fun SyncCleanupScreen(
             spamDays = currentAccount.autoCleanupSpamDays,
             downloadsDays = downloadsDays,
             rollbackDays = rollbackDays,
-            onTrashDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateAutoCleanupTrashDays(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDraftsDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateAutoCleanupDraftsDays(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onSpamDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateAutoCleanupSpamDays(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
-            onDownloadsDaysChange = { days ->
-                scope.launch {
-                    settingsRepo.setAutoCleanupDownloadsDays(days)
-                    downloadsDays = days
-                }
-            },
-            onRollbackDaysChange = { days ->
-                scope.launch {
-                    settingsRepo.setAutoCleanupRollbackDays(days)
-                    rollbackDays = days
-                }
-            },
+            onTrashDaysChange = { days -> viewModel.setAutoCleanupTrashDays(days) },
+            onDraftsDaysChange = { days -> viewModel.setAutoCleanupDraftsDays(days) },
+            onSpamDaysChange = { days -> viewModel.setAutoCleanupSpamDays(days) },
+            onDownloadsDaysChange = { days -> viewModel.setDownloadsDays(days) },
+            onRollbackDaysChange = { days -> viewModel.setRollbackDays(days) },
             onDismiss = { showAutoCleanupDialog = false }
         )
     }
@@ -202,12 +159,7 @@ fun SyncCleanupScreen(
         ContactsSyncDialog(
             isRu = isRu,
             currentDays = currentAccount.contactsSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateContactsSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
+            onDaysChange = { days -> viewModel.setContactsSyncInterval(days) },
             onDismiss = { showContactsSyncDialog = false }
         )
     }
@@ -218,12 +170,7 @@ fun SyncCleanupScreen(
             isRu = isRu,
             title = NotificationStrings.getNotesSyncTitle(isRu),
             currentDays = currentAccount.notesSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateNotesSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
+            onDaysChange = { days -> viewModel.setNotesSyncInterval(days) },
             onDismiss = { showNotesSyncDialog = false }
         )
     }
@@ -234,12 +181,7 @@ fun SyncCleanupScreen(
             isRu = isRu,
             title = NotificationStrings.getCalendarSyncTitle(isRu),
             currentDays = currentAccount.calendarSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateCalendarSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
+            onDaysChange = { days -> viewModel.setCalendarSyncInterval(days) },
             onDismiss = { showCalendarSyncDialog = false }
         )
     }
@@ -250,12 +192,7 @@ fun SyncCleanupScreen(
             isRu = isRu,
             title = if (isRu) "Синхронизация задач" else "Tasks sync",
             currentDays = currentAccount.tasksSyncIntervalDays,
-            onDaysChange = { days ->
-                scope.launch {
-                    accountRepo.updateTasksSyncInterval(accountId, days)
-                    account = accountRepo.getAccount(accountId)
-                }
-            },
+            onDaysChange = { days -> viewModel.setTasksSyncInterval(days) },
             onDismiss = { showTasksSyncDialog = false }
         )
     }
@@ -336,13 +273,7 @@ fun SyncCleanupScreen(
                     trailingContent = {
                         Switch(
                             checked = currentAccount.nightModeEnabled,
-                            onCheckedChange = { enabled ->
-                                scope.launch {
-                                    accountRepo.updateNightModeEnabled(accountId, enabled)
-                                    SyncWorker.scheduleWithNightMode(context)
-                                    account = accountRepo.getAccount(accountId)
-                                }
-                            }
+                            onCheckedChange = { enabled -> viewModel.setNightModeEnabled(enabled) }
                         )
                     }
                 )
@@ -356,13 +287,7 @@ fun SyncCleanupScreen(
                     trailingContent = {
                         Switch(
                             checked = currentAccount.ignoreBatterySaver,
-                            onCheckedChange = { ignore ->
-                                scope.launch {
-                                    accountRepo.updateIgnoreBatterySaver(accountId, ignore)
-                                    SyncWorker.scheduleWithNightMode(context)
-                                    account = accountRepo.getAccount(accountId)
-                                }
-                            }
+                            onCheckedChange = { ignore -> viewModel.setIgnoreBatterySaver(ignore) }
                         )
                     }
                 )

@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,15 +36,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dedovmosol.iwomail.data.database.NoteEntity
-import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.delay
@@ -65,38 +62,49 @@ fun NotesScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val noteRepo = remember { RepositoryProvider.getNoteRepository(context) }
-    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-
-    // Отдельный scope для синхронизации, чтобы не отменялась при навигации
-    val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
-
     val haptic = LocalHapticFeedback.current
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-    val accountId = activeAccount?.id ?: 0L
 
-    val notes by remember(accountId) { noteRepo.getNotes(accountId) }.collectAsState(initial = emptyList())
-    val deletedNotes by remember(accountId) { noteRepo.getDeletedNotes(accountId) }.collectAsState(initial = emptyList())
-    val deletedCount by remember(accountId) { noteRepo.getDeletedNotesCount(accountId) }.collectAsState(initial = 0)
-    val deletingNotesText = Strings.deletingNotes(deletedNotes.size)
-    val notesTrashEmptiedText = Strings.notesTrashEmptied
+    val viewModel: NotesViewModel = viewModel(
+        factory = NotesViewModel.provideFactory(context.applicationContext as android.app.Application)
+    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Производные значения состояния (только чтение из VM).
+    val accountId = uiState.accountId
+    val notes = uiState.notes
+    val deletedNotes = uiState.deletedNotes
+    val deletedCount = uiState.deletedCount
+    val selectedTab = uiState.selectedTab
+    val selectedIds = uiState.selectedIds
+    val isSelectionMode = selectedIds.isNotEmpty()
+    val isSyncing = uiState.isSyncing
+    val isCreating = uiState.isCreating
+    val isInitialLoadDone = uiState.isInitialLoadDone
+
+    // Локализованные строки для канала событий (VM эмитит семантические события без ресурсов).
+    val notesSyncedText = Strings.notesSynced
+    val noteMovedToTrashText = Strings.noteMovedToTrash
+    val noteCreatedText = Strings.noteCreated
+    val noteUpdatedText = Strings.noteUpdated
     val noteRestoredText = Strings.noteRestored
     val notesRestoredText = Strings.notesRestored
-    val deletedPermanentlyText = Strings.deletedPermanently
 
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
-    // Таб: 0 = Активные, 1 = Удалённые
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var showDeletedTab by rememberSaveable { mutableStateOf(false) }
-    var selectedIds by rememberSaveable(accountId,
-        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
-    ) { mutableStateOf(setOf<String>()) }
-    val isSelectionMode = selectedIds.isNotEmpty()
-
- var searchQuery by rememberSaveable { mutableStateOf("") }
-    val debouncedSearchQuery by rememberDebouncedState(searchQuery)
+    // === UI-состояние (навигация диалогов/просмотра, сортировка, фокус) — не относится к данным ===
+    var selectedNoteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
+    val selectedNote = remember(selectedNoteId, notes, deletedNotes) {
+        selectedNoteId?.let { id -> notes.find { it.id == id } ?: deletedNotes.find { it.id == id } }
+    }
+    var showCreateDialog by rememberSaveable { mutableStateOf(false) }
+    var editingNoteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
+    val editingNote = remember(editingNoteId, notes) {
+        editingNoteId?.let { id -> notes.find { it.id == id } }
+    }
+    var showEmptyTrashConfirm by rememberSaveable { mutableStateOf(false) }
+    var showDeleteSelectedDialog by rememberSaveable { mutableStateOf(false) }
+    var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
 
     // Сохранение фокуса поиска при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
@@ -107,63 +115,6 @@ fun NotesScreen(
             try { searchFocusRequester.requestFocus() } catch (_: Exception) {}
         }
     }
-    var isSyncing by remember { mutableStateOf(false) }
-    // КРИТИЧНО: dataLoaded rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
-    var dataLoaded by rememberSaveable(accountId) { mutableStateOf(false) }
-    LaunchedEffect(notes) {
-        if (notes.isNotEmpty()) dataLoaded = true
-    }
-
-    // Автоматическая синхронизация при первом открытии если нет данных
-    LaunchedEffect(accountId) {
-        if (accountId > 0 && !dataLoaded) {
-            delay(500)
-            if (notes.isEmpty() && !isSyncing) {
-                dataLoaded = true
-                isSyncing = true
-                try {
-                    withContext(Dispatchers.IO) {
-                        noteRepo.syncNotes(accountId)
-                    }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                } finally {
-                    isSyncing = false
-                }
-            }
-        }
-    }
-
-    var lastDeletedSyncMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(selectedTab) {
-        val now = System.currentTimeMillis()
-        if (selectedTab == 1 && accountId > 0 && !isSyncing && now - lastDeletedSyncMs > 30_000L) {
-            lastDeletedSyncMs = now
-            isSyncing = true
-            try {
-                withContext(Dispatchers.IO) {
-                    noteRepo.syncNotes(accountId, skipRecentDeleteCheck = true)
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-            } finally {
-                isSyncing = false
-            }
-        }
-    }
-    var selectedNoteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
-    val selectedNote = remember(selectedNoteId, notes, deletedNotes) {
-        selectedNoteId?.let { id -> notes.find { it.id == id } ?: deletedNotes.find { it.id == id } }
-    }
-    var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var editingNoteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
-    val editingNote = remember(editingNoteId, notes) {
-        editingNoteId?.let { id -> notes.find { it.id == id } }
-    }
-    var isCreating by remember { mutableStateOf(false) }
-    var showEmptyTrashConfirm by rememberSaveable { mutableStateOf(false) }
-    var showDeleteSelectedDialog by rememberSaveable { mutableStateOf(false) }
-    var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
 
     // Состояние списка для автоскролла
     val listState = rememberLazyListState()
@@ -171,7 +122,35 @@ fun NotesScreen(
     // Состояние сортировки (true = новые сверху, false = старые сверху)
     var sortDescending by rememberSaveable { mutableStateOf(true) }
 
-    // Фильтрация по поиску (учитываем выбранный таб)
+    val debouncedSearchQuery by rememberDebouncedState(uiState.query)
+
+    // Одноразовые события из VM → тосты/автоскролл (локализация в UI).
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is NotesEvent.Synced -> SafeToast.short(context, "$notesSyncedText: ${event.count}")
+                is NotesEvent.MovedToTrash ->
+                    SafeToast.short(context, if (event.count == 1) noteMovedToTrashText else Strings.notesMovedToTrash(event.count))
+                NotesEvent.NoteCreated -> {
+                    SafeToast.short(context, noteCreatedText)
+                    showCreateDialog = false
+                    editingNoteId = null
+                }
+                NotesEvent.NoteUpdated -> {
+                    SafeToast.short(context, noteUpdatedText)
+                    showCreateDialog = false
+                    editingNoteId = null
+                }
+                NotesEvent.ScrollToTop -> {
+                    delay(100)
+                    listState.animateScrollToItem(0)
+                }
+                is NotesEvent.Error -> SafeToast.long(context, event.message)
+            }
+        }
+    }
+
+    // Фильтрация по поиску (учитываем выбранный таб) — чистая производная от состояния VM.
     val currentNotes = if (selectedTab == 0) notes else deletedNotes
     val filteredNotes = remember(currentNotes, debouncedSearchQuery, sortDescending) {
         val filtered = if (debouncedSearchQuery.isBlank()) {
@@ -191,10 +170,6 @@ fun NotesScreen(
 
     // Диалог просмотра заметки
     selectedNote?.let { note ->
-        val noteMovedToTrashText = Strings.noteMovedToTrash
-        val noteDeletedPermanentlyText = Strings.deletedPermanently
-        val noteRestoredText = Strings.noteRestored
-        val undoText = Strings.undo
         val deletingOneNoteText = Strings.deletingNotes(1)
 
         NoteDetailDialog(
@@ -217,37 +192,16 @@ fun NotesScreen(
                         message = deletingOneNoteText,
                         scope = scope,
                         isRestore = false
-                    ) { ids, onProgress ->
-                        val result = withContext(Dispatchers.IO) {
-                            noteRepo.deleteNotePermanently(note)
-                        }
+                    ) { _, onProgress ->
+                        val result = viewModel.deleteNotePermanently(note)
                         onProgress(1, 1)
-                        when (result) {
-                            is EasResult.Error -> {
-                                withContext(Dispatchers.Main) {
-                                    SafeToast.long(context, result.message)
-                                }
-                            }
-                            else -> {}
+                        if (result is EasResult.Error) {
+                            SafeToast.long(context, result.message)
                         }
                     }
                 } else {
-                    // Обычное удаление в корзину (без прогресса)
-                    scope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            noteRepo.deleteNote(note)
-                        }
-                        when (result) {
-                            is EasResult.Success -> {
-                                SafeToast.short(context, noteMovedToTrashText)
-                                showDeletedTab = true
-                                // Синхронизация уже происходит внутри deleteNote()
-                            }
-                            is EasResult.Error -> {
-                                SafeToast.long(context, result.message)
-                            }
-                        }
-                    }
+                    // Обычное удаление в корзину — тост через канал событий VM
+                    viewModel.deleteNoteToTrash(note)
                 }
             },
             onRestoreClick = {
@@ -259,36 +213,15 @@ fun NotesScreen(
                     message = noteRestoredText,
                     scope = scope,
                     isRestore = true
-                ) { ids, onProgress ->
-                    val result = withContext(Dispatchers.IO) {
-                        noteRepo.restoreNote(note)
-                    }
+                ) { _, onProgress ->
+                    val result = viewModel.restoreNote(note)
                     onProgress(1, 1)
-                    when (result) {
-                        is EasResult.Success -> {
-                            // Toast уже показан через message
-                        }
-                        is EasResult.Error -> {
-                            withContext(Dispatchers.Main) {
-                                SafeToast.long(context, result.message)
-                            }
-                        }
+                    if (result is EasResult.Error) {
+                        SafeToast.long(context, result.message)
                     }
                 }
             }
         )
-    }
-
-    // Управляем видимостью вкладки "Удалённые"
-    // Если удалённых заметок нет и мы на вкладке удалённых - возвращаемся на активные
-    LaunchedEffect(deletedNotes.size) {
-        if (deletedNotes.isEmpty() && selectedTab == 1) {
-            selectedTab = 0
-        }
-    }
-
-    LaunchedEffect(selectedTab) {
-        selectedIds = emptySet()
     }
 
     // Диалог подтверждения очистки корзины заметок
@@ -308,32 +241,17 @@ fun NotesScreen(
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
 
                         val noteIds = deletedNotes.map { it.id }
+                        val serverIds = deletedNotes.map { it.serverId }
                         if (noteIds.isNotEmpty()) {
                             deletionController.startDeletion(
                                 emailIds = noteIds,
                                 message = deletingMessage,
                                 scope = scope,
                                 isRestore = false
-                            ) { ids, onProgress ->
-                                // Удаление с реальным прогрессом
-                                val serverIds = deletedNotes.map { it.serverId }
-                                val result = withContext(Dispatchers.IO) {
-                                    noteRepo.emptyNotesTrashWithProgress(accountId, serverIds) { deleted, total ->
-                                        onProgress(deleted, total)
-                                    }
-                                }
-                                when (result) {
-                                    is EasResult.Success -> {
-                                        withContext(Dispatchers.Main) {
-                                            SafeToast.short(context, notesTrashEmptiedText)
-                                            showDeletedTab = false
-                                        }
-                                    }
-                                    is EasResult.Error -> {
-                                        withContext(Dispatchers.Main) {
-                                            SafeToast.long(context, result.message)
-                                        }
-                                    }
+                            ) { _, onProgress ->
+                                when (val result = viewModel.emptyTrash(serverIds) { deleted, total -> onProgress(deleted, total) }) {
+                                    is EasResult.Success -> SafeToast.short(context, notesTrashEmptiedText)
+                                    is EasResult.Error -> SafeToast.long(context, result.message)
                                 }
                             }
                         }
@@ -354,7 +272,6 @@ fun NotesScreen(
     // Soft-delete: без прогресс-бара, просто удаляем
     if (showDeleteSelectedDialog) {
         val count = selectedIds.size
-        val movedToTrashMsg = Strings.notesMovedToTrash(count)
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeleteSelectedDialog = false },
             icon = { Icon(AppIcons.Delete, null) },
@@ -364,25 +281,10 @@ fun NotesScreen(
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
                         showDeleteSelectedDialog = false
-                        val notesToDelete = notes.filter { it.id in selectedIds }
-                        if (notesToDelete.isNotEmpty()) {
+                        if (notes.any { it.id in selectedIds }) {
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    noteRepo.deleteNotes(notesToDelete)
-                                }
-                                when (result) {
-                                    is EasResult.Success -> {
-                                        SafeToast.short(context, movedToTrashMsg)
-                                        showDeletedTab = true
-                                    }
-                                    is EasResult.Error -> {
-                                        SafeToast.long(context, result.message)
-                                    }
-                                }
-                            }
                         }
-                        selectedIds = emptySet()
+                        viewModel.deleteSelectedToTrash()
                     },
                     text = Strings.yes
                 )
@@ -400,8 +302,6 @@ fun NotesScreen(
     if (showDeletePermanentlyDialog) {
         val count = selectedIds.size
         val deletingPermanentlyMessage = Strings.deletingNotes(count)
-        val undoText = Strings.undo
-        val notesRestoredText = Strings.notesRestored
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = { showDeletePermanentlyDialog = false },
             icon = { Icon(AppIcons.DeleteForever, null) },
@@ -416,26 +316,19 @@ fun NotesScreen(
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
 
                             val noteIds = notesToDelete.map { it.id }
-                            selectedIds = emptySet()
+                            viewModel.clearSelection()
 
                             deletionController.startDeletion(
                                 emailIds = noteIds,
                                 message = deletingPermanentlyMessage,
                                 scope = scope,
                                 isRestore = false
-                            ) { ids, onProgress ->
-                                val result = withContext(Dispatchers.IO) {
-                                    noteRepo.deleteNotesPermanentlyWithProgress(notesToDelete) { deleted, total ->
-                                        onProgress(deleted, total)
-                                    }
+                            ) { _, onProgress ->
+                                val result = viewModel.deleteNotesPermanently(notesToDelete) { deleted, total ->
+                                    onProgress(deleted, total)
                                 }
-                                when (result) {
-                                    is EasResult.Error -> {
-                                        withContext(Dispatchers.Main) {
-                                            SafeToast.long(context, result.message)
-                                        }
-                                    }
-                                    else -> {}
+                                if (result is EasResult.Error) {
+                                    SafeToast.long(context, result.message)
                                 }
                             }
                         }
@@ -454,9 +347,6 @@ fun NotesScreen(
 
     // Диалог создания/редактирования заметки
     if (showCreateDialog) {
-        val noteUpdatedText = Strings.noteUpdated
-        val noteCreatedText = Strings.noteCreated
-        val isEditing = editingNote != null
         CreateNoteDialog(
             note = editingNote,
             isCreating = isCreating,
@@ -465,38 +355,9 @@ fun NotesScreen(
                 editingNoteId = null
             },
             onSave = { subject, body ->
-                // Защита от double-tap: если уже создаём — игнорируем
-                if (isCreating) return@CreateNoteDialog
-                isCreating = true
-                scope.launch {
-                    // Захватываем editingNote в локальную переменную для безопасного доступа
-                    val noteToEdit = editingNote
-                    val result = if (noteToEdit != null) {
-                        withContext(Dispatchers.IO) {
-                            noteRepo.updateNote(noteToEdit, subject, body)
-                        }
-                    } else {
-                        withContext(Dispatchers.IO) {
-                            noteRepo.createNote(accountId, subject, body)
-                        }
-                    }
-                    isCreating = false
-                    when (result) {
-                        is EasResult.Success -> {
-                            SafeToast.short(context, if (isEditing) noteUpdatedText else noteCreatedText)
-                            showCreateDialog = false
-                            editingNoteId = null
-                            // Автоскролл вверх после создания (с задержкой для обновления списка)
-                            if (!isEditing) {
-                                kotlinx.coroutines.delay(100)
-                                listState.animateScrollToItem(0)
-                            }
-                        }
-                        is EasResult.Error -> {
-                            SafeToast.long(context, result.message)
-                        }
-                    }
-                }
+                // Создание/обновление + защита от double-tap в VM; закрытие диалога
+                // и автоскролл — по событиям NoteCreated/NoteUpdated/ScrollToTop.
+                viewModel.saveNote(editingNote, subject, body)
             }
         )
     }
@@ -509,7 +370,7 @@ fun NotesScreen(
                 NotesSelectionTopBar(
                     selectedCount = selectedIds.size,
                     isDeletedTab = selectedTab == 1,
-                    onClearSelection = { selectedIds = emptySet() },
+                    onClearSelection = { viewModel.clearSelection() },
                     onRestore = {
                         val notesToRestore = deletedNotes.filter { it.id in selectedIds }
                         if (notesToRestore.isNotEmpty()) {
@@ -519,21 +380,15 @@ fun NotesScreen(
                                 scope = scope,
                                 isRestore = true
                             ) { _, onProgress ->
-                                val result = withContext(Dispatchers.IO) {
-                                    noteRepo.restoreNotesWithProgress(notesToRestore) { restored, total ->
-                                        onProgress(restored, total)
-                                    }
+                                val result = viewModel.restoreNotes(notesToRestore) { restored, total ->
+                                    onProgress(restored, total)
                                 }
                                 when (result) {
-                                    is EasResult.Success -> {
-                                        val msg = if (notesToRestore.size > 1) notesRestoredText else noteRestoredText
-                                        SafeToast.short(context, msg)
-                                    }
-                                    is EasResult.Error -> {
-                                        SafeToast.long(context, result.message)
-                                    }
+                                    is EasResult.Success ->
+                                        SafeToast.short(context, if (notesToRestore.size > 1) notesRestoredText else noteRestoredText)
+                                    is EasResult.Error -> SafeToast.long(context, result.message)
                                 }
-                                selectedIds = emptySet()
+                                viewModel.clearSelection()
                             }
                         }
                     },
@@ -554,31 +409,9 @@ fun NotesScreen(
                         }
                     },
                     actions = {
-                        // Кнопка синхронизации
-                        val notesSyncedText = Strings.notesSynced
+                        // Кнопка синхронизации (результат — через канал событий VM)
                         IconButton(
-                            onClick = {
-                                syncScope.launch {
-                                    isSyncing = true
-                                    try {
-                                        val result = withContext(Dispatchers.IO) {
-                                            noteRepo.syncNotes(accountId)
-                                        }
-                                        when (result) {
-                                            is EasResult.Success -> {
-                                                SafeToast.short(context, "$notesSyncedText: ${result.data}")
-                                            }
-                                            is EasResult.Error -> {
-                                                SafeToast.long(context, result.message)
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        if (e is kotlinx.coroutines.CancellationException) throw e
-                                    } finally {
-                                        isSyncing = false
-                                    }
-                                }
-                            },
+                            onClick = { viewModel.syncNotes() },
                             enabled = !isSyncing
                         ) {
                             if (isSyncing) {
@@ -633,8 +466,8 @@ fun NotesScreen(
         ) {
             // Поле поиска (на всю ширину)
             OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
+                value = uiState.query,
+                onValueChange = { viewModel.onQueryChange(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -643,8 +476,8 @@ fun NotesScreen(
                 placeholder = { Text(Strings.searchNotes) },
                 leadingIcon = { Icon(AppIcons.Search, null) },
                 trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
+                    if (uiState.query.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.clearQuery() }) {
                             Icon(AppIcons.Clear, Strings.clear)
                         }
                     }
@@ -663,7 +496,7 @@ fun NotesScreen(
                 ) {
                     Tab(
                         selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
+                        onClick = { viewModel.selectTab(0) },
                         text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(Strings.notes)
@@ -676,7 +509,7 @@ fun NotesScreen(
                     )
                     Tab(
                         selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
+                        onClick = { viewModel.selectTab(1) },
                         text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(Strings.deleted)
@@ -707,7 +540,7 @@ fun NotesScreen(
                         .padding(32.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (!dataLoaded || isSyncing) {
+                    if (!isInitialLoadDone || isSyncing) {
                         CircularProgressIndicator()
                     } else {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -734,7 +567,7 @@ fun NotesScreen(
                     listState = listState,
                     itemKeys = noteKeys,
                     selectedIds = selectedIds,
-                    onSelectionChange = { newIds -> selectedIds = newIds }
+                    onSelectionChange = { newIds -> viewModel.setSelection(newIds) }
                 )
 
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -751,11 +584,9 @@ fun NotesScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        selectedIds = if (allSelected) {
-                                            emptySet()
-                                        } else {
-                                            filteredNotes.map { it.id }.toSet()
-                                        }
+                                        viewModel.setSelection(
+                                            if (allSelected) emptySet() else filteredNotes.map { it.id }.toSet()
+                                        )
                                     }
                                     .padding(horizontal = 8.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -763,11 +594,9 @@ fun NotesScreen(
                                 Checkbox(
                                     checked = allSelected,
                                     onCheckedChange = {
-                                        selectedIds = if (allSelected) {
-                                            emptySet()
-                                        } else {
-                                            filteredNotes.map { it.id }.toSet()
-                                        }
+                                        viewModel.setSelection(
+                                            if (allSelected) emptySet() else filteredNotes.map { it.id }.toSet()
+                                        )
                                     }
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -784,7 +613,7 @@ fun NotesScreen(
                             onClick = {
                                 if (isSelectionMode) {
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    selectedIds = if (note.id in selectedIds) selectedIds - note.id else selectedIds + note.id
+                                    viewModel.toggleSelection(note.id)
                                 } else {
                                     selectedNoteId = note.id
                                 }
@@ -792,7 +621,7 @@ fun NotesScreen(
                             onLongClick = {
                                 if (!isSelectionMode) {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    selectedIds = selectedIds + note.id
+                                    viewModel.addToSelection(note.id)
                                 }
                             }
                         )

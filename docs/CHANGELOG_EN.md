@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.6.3
+
+### Architecture — MVVM adoption (incremental)
+- Introduced a `ViewModel` + immutable `UiState` + `StateFlow` layer to eliminate state-loss bugs on configuration changes (rotation)
+- `SyncCleanupScreen` → `SyncCleanupViewModel`: sync & cleanup settings survive rotation without manual flags
+- `SearchScreen` → `SearchViewModel`: search results, selection and batch operations live in the ViewModel; removed the fragile `rememberSaveable` + DB re-query dance (eliminates `TransactionTooLargeException` risk)
+- `NotesScreen` → `NotesViewModel`: notes/trash/selection/search and auto-sync live in the ViewModel; removed the `dataLoaded` flag that could trigger redundant syncs on rotation/account switch; progress-bar operations (permanent delete/restore/empty trash) are encapsulated behind suspend methods
+- One-shot UI events (toasts, sound, easter egg) moved to an event channel (`Channel` + `receiveAsFlow`) — the ViewModel stays independent of localization/resources
+- Dependencies are constructor-injected (DIP): system push/sync side-effects are hidden behind a `SyncEffects` interface
+
+### Tests
+- Added ViewModel unit tests (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`) on plain JUnit + MockK, no Robolectric
+
+
 ## v1.6.2 (27.02.2026)
 
 - Redesigned UI: new elements, custom file icons, extra scrollbars, updated widget
@@ -51,6 +65,12 @@
 - Calendar delete/restore operations are serialized with the per-account sync mutex so sync cannot overwrite `isDeleted` or resurrect stale records.
 - Attendee meetings send `MeetingResponse`/EWS `DeclineItem` before deletion; if the original meeting request cannot be found, the operation returns an error without local deletion.
 - Calendar attachment preview cache uses stable `fileReference`-based names, age-based cleanup and delayed `path + lastModified` cleanup to avoid races with external viewers.
+
+### Compose and editors — preserving input across screen rotation
+- `ComposeScreen`: reply (`replyToEmailId`) and forward (`forwardEmailId`) no longer re-run their loaders on rotation — added `rememberSaveable` flags `replyLoaded`/`forwardLoaded`. Previously rotation overwrote the email body (signature + quote), and forward additionally reset the "To" field, attachments (with re-download) and the SmartForward source.
+- `ComposeScreen`: a new email's signature is initialized once (`signatureInitialized`) — a user-deleted signature is no longer restored or duplicated on rotation.
+- `RichTextEditor`: restore after rotation prefers the freshest `controller.latestHtml`, and the parent `body` is reconciled with the recovered content. Fixes loss of typed text (where only the signature remained); also fixes the HTML-signature editor in settings.
+- `CreateEventDialog` (calendar): event start/end date and time are no longer reset on rotation — added a `datesInitialized` guard (mirroring the task dialog).
 
 ## v1.6.1 (09.02.2026) — Package rename → "com.dedovmosol.iwomail", reinstall required
 

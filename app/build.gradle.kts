@@ -12,8 +12,8 @@ android {
         applicationId = "com.dedovmosol.iwomail"
         minSdk = 26  // Android 8.0
         targetSdk = 36  // Android 16
-        versionCode = 25
-        versionName = "1.6.2"
+        versionCode = 26
+        versionName = "1.6.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -94,6 +94,10 @@ dependencies {
     // Core Android
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    // ViewModel + Compose интеграция (MVVM): viewModelScope, viewModel(), collectAsStateWithLifecycle
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     
     // Compose BOM - используем стабильную версию

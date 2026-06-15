@@ -267,6 +267,9 @@ fun ComposeScreen(
     var signatures by remember { mutableStateOf<List<SignatureEntity>>(emptyList()) }
     var selectedSignature by remember { mutableStateOf<SignatureEntity?>(null) }
     var showSignaturePicker by rememberSaveable { mutableStateOf(false) }
+    // Подпись уже была добавлена в body (переживает поворот): на повороте НЕ возвращаем
+    // подпись, удалённую пользователем, и не добавляем дубликат.
+    var signatureInitialized by rememberSaveable { mutableStateOf(false) }
 
     // FocusRequester для полей ввода
     val toFocusRequester = remember { FocusRequester() }
@@ -573,13 +576,15 @@ fun ComposeScreen(
                 // Заменяем старую подпись на новую (HTML формат)
                 if (body.contains("<div class=\"signature\">")) {
                     body = body.replace(HTML_SIGNATURE_REGEX, newSignatureHtml)
-                } else if (newSignatureHtml.isNotBlank()) {
-                    // Подпись в конце для нового письма
+                } else if (!signatureInitialized && newSignatureHtml.isNotBlank()) {
+                    // Подпись в конце только при ПЕРВОЙ инициализации нового письма.
+                    // На повороте (signatureInitialized=true) не возвращаем удалённую подпись.
                     body = body + newSignatureHtml
                 }
             }
 
             selectedSignature = newSignature
+            signatureInitialized = true
         } ?: run {
             // Аккаунт не выбран — очищаем подписи
             signatures = emptyList()
@@ -651,9 +656,15 @@ fun ComposeScreen(
     val quoteSubjectStr = Strings.quoteSubject
     val quoteToStr = Strings.quoteTo
 
+    // Флаг: данные ответа уже загружены — переживает поворот/process death.
+    // Без него LaunchedEffect(replyToEmailId) повторно срабатывает при повороте и
+    // перезаписывает body (подпись + цитата), уничтожая введённый пользователем текст.
+    var replyLoaded by rememberSaveable { mutableStateOf(false) }
     // Загружаем данные для ответа
     LaunchedEffect(replyToEmailId) {
+        if (replyLoaded) return@LaunchedEffect
         replyToEmailId?.let { emailId ->
+            replyLoaded = true
             mailRepo.getEmailSync(emailId)?.let { email ->
                 // Проверяем, из какой папки письмо
                 val folder = withContext(Dispatchers.IO) {
@@ -814,9 +825,15 @@ fun ComposeScreen(
         }
     }
 
+    // Флаг: данные пересылки уже загружены — переживает поворот/process death.
+    // Без него LaunchedEffect(forwardEmailId) повторно срабатывает при повороте и
+    // сбрасывает to/вложения/источник и перезаписывает body, уничтожая ввод пользователя.
+    var forwardLoaded by rememberSaveable { mutableStateOf(false) }
     // Загружаем данные для пересылки
     LaunchedEffect(forwardEmailId) {
+        if (forwardLoaded) return@LaunchedEffect
         forwardEmailId?.let { emailId ->
+            forwardLoaded = true
             mailRepo.getEmailSync(emailId)?.let { email ->
                 // SmartForward: сохраняем source (collectionId + itemId)
                 val fwdFolderForSource = withContext(Dispatchers.IO) {
