@@ -11,7 +11,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,10 +23,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dedovmosol.iwomail.data.database.FolderEntity
-import com.dedovmosol.iwomail.data.repository.RepositoryProvider
-import com.dedovmosol.iwomail.eas.EasResult
-import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
@@ -38,9 +36,6 @@ import com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.util.SafeToast
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Экран пользовательских папок.
@@ -55,30 +50,25 @@ fun UserFoldersScreen(
     onComposeClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
+    val haptic = LocalHapticFeedback.current
 
-    val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
-    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
+    val viewModel: UserFoldersViewModel = viewModel(
+        factory = UserFoldersViewModel.provideFactory(context.applicationContext as android.app.Application)
+    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-    val accountId = activeAccount?.id ?: 0L
+    // Производные значения состояния (только чтение из VM).
+    val accountId = uiState.accountId
+    val userFolders = uiState.folders
+    val isSyncing = uiState.isSyncing
+    val isCreatingFolder = uiState.isCreatingFolder
+    val selectedFolderIds = uiState.selectedIds
+    val isSelectionMode = uiState.isSelectionMode
+    val batchDeleteProgress = uiState.batchDeleteProgress
 
-    // Все папки из Room Flow → фильтруем пользовательские
-    val allFolders by remember(accountId) { mailRepo.getFolders(accountId) }
-        .collectAsState(initial = emptyList())
-    val userFolders = remember(allFolders) {
-        allFolders.filter { it.type in listOf(1, FolderType.USER_CREATED) }
-            .sortedBy { it.displayName }
-    }
-
-    // Состояния
-    var isSyncing by remember { mutableStateOf(false) }
-
-    // Диалог создания папки
+    // Диалог создания папки (UI-состояние)
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var newFolderName by rememberSaveable { mutableStateOf("") }
-    var isCreatingFolder by remember { mutableStateOf(false) }
 
     // Контекстное меню через явную кнопку действий
     var folderForMenu by remember(accountId) { mutableStateOf<FolderEntity?>(null) }
@@ -92,41 +82,50 @@ fun UserFoldersScreen(
     var folderToDeleteId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     val folderToDelete = folderToDeleteId?.let { id -> userFolders.find { it.id == id } }
 
-    // Batch-selection: выбранные ID сохраняются при повороте
-    var selectedFolderIds by rememberSaveable(accountId,
-        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
-    ) { mutableStateOf(setOf<String>()) }
-    val isSelectionMode = selectedFolderIds.isNotEmpty()
     var showBatchDeleteDialog by rememberSaveable { mutableStateOf(false) }
-    // Прогресс batch-удаления: null = неактивно, (done, total)
-    var batchDeleteProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    val haptic = LocalHapticFeedback.current
-    // Очищаем выбор, если пользовательский набор папок изменился (например, после sync)
-    LaunchedEffect(userFolders) {
-        val existing = userFolders.map { it.id }.toSet()
-        if (selectedFolderIds.any { it !in existing }) {
-            selectedFolderIds = selectedFolderIds intersect existing
-        }
-    }
     // Системная кнопка «назад»: сначала гасим selection
-    BackHandler(enabled = isSelectionMode) { selectedFolderIds = emptySet() }
+    BackHandler(enabled = isSelectionMode) { viewModel.clearSelection() }
 
-    // Кэш строк для use в корутинах (вне @Composable)
+    // Локализованные строки для канала событий (VM эмитит семантические события без ресурсов).
     val foldersSyncedText = Strings.foldersSynced
     val folderCreatedText = Strings.folderCreated
     val folderDeletedText = Strings.folderDeleted
     val folderRenamedText = Strings.folderRenamed
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
 
-    // Автоматическая синхронизация при первом открытии если папок нет
-    LaunchedEffect(accountId, userFolders.isEmpty()) {
-        if (accountId > 0 && userFolders.isEmpty() && !isSyncing) {
-            isSyncing = true
-            syncScope.launch {
-                withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
-                isSyncing = false
+    // Одноразовые события из VM → тосты (локализация в UI).
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                UserFoldersEvent.Synced -> SafeToast.short(context, foldersSyncedText)
+                UserFoldersEvent.FolderCreated -> {
+                    // Закрываем диалог по успеху через буферизованное событие — переживает поворот,
+                    // даже если создание завершилось ровно во время recreation (createInFlight-трекер
+                    // дополнительно закрывает диалог в случае ошибки).
+                    showCreateDialog = false
+                    newFolderName = ""
+                    SafeToast.short(context, folderCreatedText)
+                }
+                UserFoldersEvent.FolderRenamed -> SafeToast.short(context, folderRenamedText)
+                UserFoldersEvent.FolderDeleted -> SafeToast.short(context, folderDeletedText)
+                is UserFoldersEvent.FoldersDeleted ->
+                    SafeToast.short(context, Strings.foldersDeleted(event.count, isRussian))
+                is UserFoldersEvent.Error ->
+                    SafeToast.long(context, NotificationStrings.localizeError(event.message, isRussian))
             }
+        }
+    }
+
+    // Закрываем диалог создания по завершении попытки (успех или ошибка) — как в исходном UI.
+    var createInFlight by remember { mutableStateOf(false) }
+    LaunchedEffect(isCreatingFolder) {
+        if (isCreatingFolder) {
+            createInFlight = true
+        } else if (createInFlight) {
+            createInFlight = false
+            showCreateDialog = false
+            newFolderName = ""
         }
     }
 
@@ -137,7 +136,7 @@ fun UserFoldersScreen(
             if (isSelectionMode) {
                 FoldersSelectionTopBar(
                     selectedCount = selectedFolderIds.size,
-                    onClearSelection = { selectedFolderIds = emptySet() },
+                    onClearSelection = { viewModel.clearSelection() },
                     onDelete = { showBatchDeleteDialog = true }
                 )
             } else {
@@ -151,27 +150,7 @@ fun UserFoldersScreen(
                     actions = {
                         // Кнопка синхронизации
                         IconButton(
-                            onClick = {
-                                val accId = accountId
-                                if (accId > 0) {
-                                    syncScope.launch {
-                                        isSyncing = true
-                                        val result = withContext(Dispatchers.IO) {
-                                            mailRepo.syncFolders(accId)
-                                        }
-                                        isSyncing = false
-                                        when (result) {
-                                            is EasResult.Success -> {
-                                                SafeToast.short(context, foldersSyncedText)
-                                            }
-                                            is EasResult.Error -> {
-                                                val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                                SafeToast.long(context, msg)
-                                            }
-                                        }
-                                    }
-                                }
-                            },
+                            onClick = { viewModel.syncFolders() },
                             enabled = !isSyncing
                         ) {
                             if (isSyncing) {
@@ -243,7 +222,7 @@ fun UserFoldersScreen(
                     listState = listState,
                     itemKeys = folderKeys,
                     selectedIds = selectedFolderIds,
-                    onSelectionChange = { newIds -> selectedFolderIds = newIds }
+                    onSelectionChange = { newIds -> viewModel.setSelection(newIds) }
                 )
                 Box(modifier = Modifier.fillMaxSize()) {
                     LazyColumn(
@@ -259,19 +238,13 @@ fun UserFoldersScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable {
-                                            selectedFolderIds = if (allSelected) emptySet()
-                                            else userFolders.map { it.id }.toSet()
-                                        }
+                                        .clickable { viewModel.toggleSelectAll() }
                                         .padding(horizontal = 8.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Checkbox(
                                         checked = allSelected,
-                                        onCheckedChange = {
-                                            selectedFolderIds = if (allSelected) emptySet()
-                                            else userFolders.map { it.id }.toSet()
-                                        }
+                                        onCheckedChange = { viewModel.toggleSelectAll() }
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(Strings.selectAll)
@@ -287,11 +260,7 @@ fun UserFoldersScreen(
                                 onClick = {
                                     if (isSelectionMode) {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        selectedFolderIds = if (folder.id in selectedFolderIds) {
-                                            selectedFolderIds - folder.id
-                                        } else {
-                                            selectedFolderIds + folder.id
-                                        }
+                                        viewModel.toggleSelection(folder.id)
                                     } else {
                                         onFolderClick(folder.id)
                                     }
@@ -366,29 +335,7 @@ fun UserFoldersScreen(
             },
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = {
-                        val accId = accountId
-                        if (accId > 0 && newFolderName.isNotBlank() && !isCreatingFolder) {
-                            isCreatingFolder = true
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    mailRepo.createFolder(accId, newFolderName)
-                                }
-                                isCreatingFolder = false
-                                when (result) {
-                                    is EasResult.Success -> {
-                                        SafeToast.short(context, folderCreatedText)
-                                    }
-                                    is EasResult.Error -> {
-                                        val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                        SafeToast.long(context, msg)
-                                    }
-                                }
-                                showCreateDialog = false
-                                newFolderName = ""
-                            }
-                        }
-                    },
+                    onClick = { viewModel.createFolder(newFolderName) },
                     enabled = newFolderName.isNotBlank() && !isCreatingFolder,
                     isLoading = isCreatingFolder,
                     text = Strings.save
@@ -478,27 +425,11 @@ fun UserFoldersScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
-                        val accId = accountId
                         val folderId = folder.id
                         val newName = renameNewName
                         folderToRenameId = null
                         renameNewName = ""
-                        if (accId > 0) {
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    mailRepo.renameFolder(accId, folderId, newName)
-                                }
-                                when (result) {
-                                    is EasResult.Success -> {
-                                        SafeToast.short(context, folderRenamedText)
-                                    }
-                                    is EasResult.Error -> {
-                                        val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                        SafeToast.long(context, msg)
-                                    }
-                                }
-                            }
-                        }
+                        viewModel.renameFolder(folderId, newName)
                     },
                     enabled = renameNewName.isNotBlank(),
                     text = Strings.save
@@ -526,26 +457,10 @@ fun UserFoldersScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
-                        val accId = accountId
                         val folderId = folder.id
                         folderToDeleteId = null
-                        if (accId > 0) {
-                            scope.launch {
-                                com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                                val result = withContext(Dispatchers.IO) {
-                                    mailRepo.deleteFolder(accId, folderId)
-                                }
-                                when (result) {
-                                    is EasResult.Success -> {
-                                        SafeToast.short(context, folderDeletedText)
-                                    }
-                                    is EasResult.Error -> {
-                                        val msg = NotificationStrings.localizeError(result.message, isRussian)
-                                        SafeToast.long(context, msg)
-                                    }
-                                }
-                            }
-                        }
+                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                        viewModel.deleteFolder(folderId)
                     },
                     text = Strings.yes
                 )
@@ -570,43 +485,9 @@ fun UserFoldersScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.DeleteButton(
                     onClick = {
-                        val accId = accountId
-                        val idsToDelete = selectedFolderIds.toList()
                         showBatchDeleteDialog = false
-                        if (accId > 0 && idsToDelete.isNotEmpty()) {
-                            com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                            selectedFolderIds = emptySet()
-                            syncScope.launch {
-                                val total = idsToDelete.size
-                                batchDeleteProgress = 0 to total
-                                var processed = 0
-                                var deleted = 0
-                                var failedMsg: String? = null
-                                // Последовательное удаление: FolderSyncService per-account Mutex
-                                // всё равно сериализовал бы параллельные вызовы, но явный цикл
-                                // даёт прогресс и корректный порядок SyncKey по MS-ASCMD 2.2.1.4.
-                                for (fid in idsToDelete) {
-                                    val res = withContext(Dispatchers.IO) {
-                                        mailRepo.deleteFolder(accId, fid)
-                                    }
-                                    when (res) {
-                                        is EasResult.Success -> deleted++
-                                        is EasResult.Error -> {
-                                            if (failedMsg == null) {
-                                                failedMsg = NotificationStrings.localizeError(res.message, isRussian)
-                                            }
-                                        }
-                                    }
-                                    processed++
-                                    batchDeleteProgress = processed to total
-                                }
-                                batchDeleteProgress = null
-                                if (deleted > 0) {
-                                    SafeToast.short(context, Strings.foldersDeleted(deleted, isRussian))
-                                }
-                                failedMsg?.let { SafeToast.long(context, it) }
-                            }
-                        }
+                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                        viewModel.deleteSelectedFolders()
                     },
                     text = Strings.yes
                 )

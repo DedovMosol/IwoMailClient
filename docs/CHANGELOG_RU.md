@@ -8,11 +8,12 @@
 - `SearchScreen` → `SearchViewModel`: результаты поиска, выделение и batch-операции живут в ViewModel; убрана хрупкая связка `rememberSaveable` + повторный запрос в БД (снят риск `TransactionTooLargeException`)
 - `NotesScreen` → `NotesViewModel`: заметки/корзина/выделение/поиск и авто-синхронизация живут в ViewModel; убран флаг `dataLoaded`, который при повороте/смене аккаунта мог приводить к лишней синхронизации; операции с прогресс-баром (окончательное удаление/восстановление/очистка корзины) инкапсулированы за suspend-методами
 - `TasksScreen` → `TasksViewModel`: задачи/корзина/фильтр/выделение/поиск и авто-синхронизация живут в ViewModel; убран флаг `dataLoaded`; пакетные операции восстановления и окончательного удаления (с прогресс-баром) перенесены из Composable в suspend-обёртки ViewModel
+- `UserFoldersScreen` → `UserFoldersViewModel`: список пользовательских папок (фильтр/сортировка), выделение, создание/переименование/удаление и пакетное удаление с прогрессом живут в ViewModel; долгие операции перенесены из `rememberSyncScope` (отменялся при повороте) в `viewModelScope` — теперь переживают поворот
 - Одноразовые UI-события (тосты, звук, пасхалка) вынесены в канал событий (`Channel` + `receiveAsFlow`) — ViewModel не зависит от локализации/ресурсов
 - Зависимости передаются через конструктор (DIP): системные эффекты push/синхронизации скрыты за интерфейсом `SyncEffects`
 
 ### Тесты
-- Добавлены юнит-тесты ViewModel (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`) на чистом JUnit + MockK, без Robolectric
+- Добавлены юнит-тесты ViewModel (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`) на чистом JUnit + MockK, без Robolectric
 
 
 ## v1.6.2 (27.02.2026)

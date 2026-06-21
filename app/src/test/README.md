@@ -22,6 +22,7 @@ test/
         ├── SyncCleanupViewModelTest.kt     # MVVM: настройки синхронизации/очистки (SyncEffects-мок)
         ├── NotesViewModelTest.kt           # MVVM: заметки/корзина/выделение + прогресс-обёртки
         ├── TasksViewModelTest.kt           # MVVM: задачи/корзина/фильтр + пакетные прогресс-обёртки
+        ├── UserFoldersViewModelTest.kt     # MVVM: папки/фильтр/выделение + пакетное удаление с прогрессом
         └── compose/
             └── ComposeTextUtilsTest.kt     # Подпись/цитата, cid→data:, извлечение email
 ```
@@ -122,6 +123,17 @@ VM без Robolectric: `TaskRepository` + `AccountRepository` — MockK-моки
 - ✅ toggleComplete → `CompleteToggled`; мягкое удаление (одиночное/пакетное) + сброс выделения
 - ✅ выделение (активные/удалённые/removeFromSelection); запрос
 - ✅ пакетные прогресс-обёртки: цикл `restoreTasks`/`deleteTasksPermanently` + `onProgress` + подсчёт успехов; `emptyTrash`
+
+### UserFoldersViewModel (MVVM-слой)
+VM без Robolectric: `MailRepository` + `AccountRepository` — MockK-моки, IO-диспетчер тестовый.
+- ✅ init: фильтр только пользовательских папок (EAS type 1/12), сортировка по имени, `isInitialLoadDone`
+- ✅ авто-синхронизация один раз при пустом списке; пропуск при наличии папок; нет активного аккаунта → no-op
+- ✅ syncFolders: `Synced`/`Error`
+- ✅ create: `FolderCreated`/`Error`, trim имени, защита от double-tap, пустое имя → no-op
+- ✅ rename: `FolderRenamed`/`Error` (trim), пустое имя → no-op
+- ✅ delete (одиночное): `FolderDeleted`/`Error`
+- ✅ пакетное удаление: цикл по выбранным + прогресс в state (синхронная инициализация `0 to N`), `FoldersDeleted(count)` + первая `Error`, сброс выделения; пустой выбор → no-op
+- ✅ выделение: toggle/set/clear/selectAll; сброс устаревших id при изменении списка папок
 
 ### EasClient (делегирование заметок)
 - ✅ syncNotes → notesService
