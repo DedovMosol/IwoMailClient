@@ -43,7 +43,7 @@ interface SyncEffects {
     fun setPushEnabled(enabled: Boolean)
 
     /** Перепланирует периодическую синхронизацию с учётом ночного режима. */
-    fun rescheduleSync()
+    suspend fun rescheduleSync()
 }
 
 /**
@@ -57,7 +57,7 @@ class AndroidSyncEffects(context: Context) : SyncEffects {
         if (enabled) PushService.start(appContext) else PushService.stop(appContext)
     }
 
-    override fun rescheduleSync() {
+    override suspend fun rescheduleSync() {
         SyncWorker.scheduleWithNightMode(appContext)
     }
 }

@@ -83,7 +83,7 @@ class SyncCleanupViewModelTest {
 
         coVerify { accountRepo.updateSyncMode(ACCOUNT_ID, SyncMode.PUSH) }
         verify { effects.setPushEnabled(true) }
-        verify { effects.rescheduleSync() }
+        coVerify { effects.rescheduleSync() }
         assertThat(vm.uiState.value.account).isSameInstanceAs(refreshed)
     }
 
@@ -97,7 +97,7 @@ class SyncCleanupViewModelTest {
 
         coVerify { accountRepo.updateSyncMode(ACCOUNT_ID, SyncMode.SCHEDULED) }
         verify { effects.setPushEnabled(false) }
-        verify { effects.rescheduleSync() }
+        coVerify { effects.rescheduleSync() }
     }
 
     // ===================== schedule-affecting setters =====================
@@ -111,7 +111,7 @@ class SyncCleanupViewModelTest {
         advanceUntilIdle()
 
         coVerify { accountRepo.updateSyncInterval(ACCOUNT_ID, 30) }
-        verify { effects.rescheduleSync() }
+        coVerify { effects.rescheduleSync() }
         verify(exactly = 0) { effects.setPushEnabled(any()) }
     }
 
@@ -124,7 +124,7 @@ class SyncCleanupViewModelTest {
         advanceUntilIdle()
 
         coVerify { accountRepo.updateNightModeEnabled(ACCOUNT_ID, true) }
-        verify { effects.rescheduleSync() }
+        coVerify { effects.rescheduleSync() }
     }
 
     @Test
@@ -136,7 +136,7 @@ class SyncCleanupViewModelTest {
         advanceUntilIdle()
 
         coVerify { accountRepo.updateIgnoreBatterySaver(ACCOUNT_ID, true) }
-        verify { effects.rescheduleSync() }
+        coVerify { effects.rescheduleSync() }
     }
 
     // ===================== per-collection intervals (no reschedule) =====================
@@ -150,7 +150,7 @@ class SyncCleanupViewModelTest {
         advanceUntilIdle()
 
         coVerify { accountRepo.updateContactsSyncInterval(ACCOUNT_ID, 3) }
-        verify(exactly = 0) { effects.rescheduleSync() }
+        coVerify(exactly = 0) { effects.rescheduleSync() }
         verify(exactly = 0) { effects.setPushEnabled(any()) }
     }
 

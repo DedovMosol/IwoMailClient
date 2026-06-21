@@ -40,6 +40,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dedovmosol.iwomail.data.database.NoteEntity
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.ui.AppLanguage
+import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
@@ -85,6 +87,7 @@ fun NotesScreen(
     // Локализованные строки для канала событий (VM эмитит семантические события без ресурсов).
     val notesSyncedText = Strings.notesSynced
     val noteMovedToTrashText = Strings.noteMovedToTrash
+    val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     val noteCreatedText = Strings.noteCreated
     val noteUpdatedText = Strings.noteUpdated
     val noteRestoredText = Strings.noteRestored
@@ -130,7 +133,7 @@ fun NotesScreen(
             when (event) {
                 is NotesEvent.Synced -> SafeToast.short(context, "$notesSyncedText: ${event.count}")
                 is NotesEvent.MovedToTrash ->
-                    SafeToast.short(context, if (event.count == 1) noteMovedToTrashText else Strings.notesMovedToTrash(event.count))
+                    SafeToast.short(context, if (event.count == 1) noteMovedToTrashText else Strings.notesMovedToTrash(event.count, isRussian))
                 NotesEvent.NoteCreated -> {
                     SafeToast.short(context, noteCreatedText)
                     showCreateDialog = false

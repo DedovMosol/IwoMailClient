@@ -975,7 +975,8 @@ object Strings {
     val noteUpdated: String @Composable get() = if (isRussian()) "Заметка обновлена" else "Note updated"
     val noteMovedToTrash: String @Composable get() = if (isRussian()) "Заметка перемещена в корзину" else "Note moved to trash"
     @Composable
-    fun notesMovedToTrash(count: Int): String = if (isRussian()) {
+    fun notesMovedToTrash(count: Int): String = notesMovedToTrash(count, isRussian())
+    fun notesMovedToTrash(count: Int, isRussian: Boolean): String = if (isRussian) {
         when {
             count == 1 -> "Заметка перемещена в корзину"
             count % 10 in 2..4 && count % 100 !in 12..14 -> "$count заметки перемещены в корзину"
