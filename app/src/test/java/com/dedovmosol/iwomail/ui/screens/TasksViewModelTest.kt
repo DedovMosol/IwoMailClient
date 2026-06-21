@@ -99,6 +99,20 @@ class TasksViewModelTest {
         coVerify(exactly = 0) { taskRepo.syncTasks(any(), any()) }
     }
 
+    @Test
+    fun `no active account marks load done and makes syncTasks a no-op`() = runTest(dispatcher) {
+        every { accountRepo.activeAccount } returns flowOf(null)
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.accountId).isEqualTo(0L)
+        assertThat(vm.uiState.value.isInitialLoadDone).isTrue()
+
+        vm.syncTasks()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { taskRepo.syncTasks(any(), any()) }
+    }
+
     // ===================== sync =====================
 
     @Test
@@ -157,6 +171,18 @@ class TasksViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) { taskRepo.syncTasks(ACCOUNT_ID, false) }
+    }
+
+    @Test
+    fun `selectFilter to a non-deleted filter does not sync`() = runTest(dispatcher) {
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.selectFilter(TaskFilter.COMPLETED)
+        advanceUntilIdle()
+
+        assertThat(vm.uiState.value.filter).isEqualTo(TaskFilter.COMPLETED)
+        coVerify(exactly = 0) { taskRepo.syncTasks(any(), any()) }
     }
 
     @Test
@@ -271,6 +297,20 @@ class TasksViewModelTest {
 
         assertThat(events).contains(TasksEvent.MovedToTrash(1))
         coVerify { taskRepo.deleteTask(target) }
+    }
+
+    @Test
+    fun `deleteToTrash error emits Error`() = runTest(dispatcher) {
+        val target = task("a")
+        coEvery { taskRepo.deleteTask(target) } returns EasResult.Error("no")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.deleteToTrash(target)
+        advanceUntilIdle()
+
+        assertThat(events).contains(TasksEvent.Error("no"))
     }
 
     @Test
