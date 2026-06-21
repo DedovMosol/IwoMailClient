@@ -7,11 +7,12 @@
 - `SyncCleanupScreen` → `SyncCleanupViewModel`: sync & cleanup settings survive rotation without manual flags
 - `SearchScreen` → `SearchViewModel`: search results, selection and batch operations live in the ViewModel; removed the fragile `rememberSaveable` + DB re-query dance (eliminates `TransactionTooLargeException` risk)
 - `NotesScreen` → `NotesViewModel`: notes/trash/selection/search and auto-sync live in the ViewModel; removed the `dataLoaded` flag that could trigger redundant syncs on rotation/account switch; progress-bar operations (permanent delete/restore/empty trash) are encapsulated behind suspend methods
+- `TasksScreen` → `TasksViewModel`: tasks/trash/filter/selection/search and auto-sync live in the ViewModel; removed the `dataLoaded` flag; batch restore and permanent-delete (with progress bar) moved out of the Composable into ViewModel suspend wrappers
 - One-shot UI events (toasts, sound, easter egg) moved to an event channel (`Channel` + `receiveAsFlow`) — the ViewModel stays independent of localization/resources
 - Dependencies are constructor-injected (DIP): system push/sync side-effects are hidden behind a `SyncEffects` interface
 
 ### Tests
-- Added ViewModel unit tests (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`) on plain JUnit + MockK, no Robolectric
+- Added ViewModel unit tests (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`) on plain JUnit + MockK, no Robolectric
 
 
 ## v1.6.2 (27.02.2026)

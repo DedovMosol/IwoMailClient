@@ -41,19 +41,15 @@ import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.database.TaskEntity
 import com.dedovmosol.iwomail.data.database.TaskImportance
-import com.dedovmosol.iwomail.data.repository.RepositoryProvider
-import com.dedovmosol.iwomail.data.repository.TaskRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.components.ContactPickerDialog
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlinx.coroutines.delay
 
 // ThreadLocal гарантирует thread-safety для SimpleDateFormat (каждый поток — свой экземпляр)
 private val TASK_PARSE_DATE_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
@@ -76,29 +72,29 @@ fun TasksScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
-    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
-
-    // Отдельный scope для синхронизации, чтобы не отменялась при навигации
-    val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
-
     val haptic = LocalHapticFeedback.current
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-    val accountId = activeAccount?.id ?: 0L
 
-    val allTasks by remember(accountId) { taskRepo.getTasks(accountId) }.collectAsState(initial = emptyList())
-    val deletedTasks by remember(accountId) { taskRepo.getDeletedTasks(accountId) }.collectAsState(initial = emptyList())
+    val viewModel: TasksViewModel = viewModel(
+        factory = TasksViewModel.provideFactory(context.applicationContext as android.app.Application, initialFilter)
+    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    // Флаг: данные из Room загружены (Flow эмитнул хотя бы раз)
-    // КРИТИЧНО: rememberSaveable чтобы при повороте экрана НЕ запускалась повторная синхронизация
-    var dataLoaded by rememberSaveable(accountId) { mutableStateOf(false) }
-    LaunchedEffect(allTasks) {
-        if (allTasks.isNotEmpty()) dataLoaded = true
-    }
+    // Производные значения состояния (только чтение из VM).
+    val accountId = uiState.accountId
+    val allTasks = uiState.tasks
+    val deletedTasks = uiState.deletedTasks
+    val currentFilter = uiState.filter
+    val selectedTaskIds = uiState.selectedActiveIds
+    val selectedDeletedIds = uiState.selectedDeletedIds
+    val isSelectionMode = uiState.isSelectionMode
+    val hasDeletedSelected = selectedDeletedIds.isNotEmpty()
+    val hasActiveSelected = selectedTaskIds.isNotEmpty()
+    val isSyncing = uiState.isSyncing
+    val isCreating = uiState.isCreating
+    val dataLoaded = uiState.isInitialLoadDone
 
-    var searchQuery by rememberSaveable { mutableStateOf("") }
-    val debouncedSearchQuery by rememberDebouncedState(searchQuery)
+    val debouncedSearchQuery by rememberDebouncedState(uiState.query)
 
     // Сохранение фокуса поиска при повороте экрана
     val searchFocusRequester = remember { FocusRequester() }
@@ -109,8 +105,6 @@ fun TasksScreen(
             try { searchFocusRequester.requestFocus() } catch (_: Exception) {}
         }
     }
-    var isSyncing by remember { mutableStateOf(false) }
-
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
     var selectedTaskId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
@@ -122,21 +116,7 @@ fun TasksScreen(
     val editingTask = remember(editingTaskId, allTasks) {
         editingTaskId?.let { id -> allTasks.find { it.id == id } }
     }
-    var isCreating by remember { mutableStateOf(false) }
-    var currentFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
-
-    // Множественный выбор для активных задач
-    var selectedTaskIds by rememberSaveable(accountId,
-        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
-    ) { mutableStateOf(setOf<String>()) }
-    // Множественный выбор для удалённых задач
-    var selectedDeletedIds by rememberSaveable(accountId,
-        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
-    ) { mutableStateOf(setOf<String>()) }
-    val isSelectionMode = selectedTaskIds.isNotEmpty() || selectedDeletedIds.isNotEmpty()
-    val hasDeletedSelected = selectedDeletedIds.isNotEmpty()
-    val hasActiveSelected = selectedTaskIds.isNotEmpty()
 
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
@@ -146,47 +126,36 @@ fun TasksScreen(
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
     ) { mutableStateOf(setOf<String>()) }
 
-    // Автоматическая синхронизация при первом открытии если нет данных
-    // Ждём загрузку из Room (небольшая задержка) перед тем как решить что данных нет
-    // КРИТИЧНО: проверяем !dataLoaded чтобы при повороте экрана НЕ запускать повторную синхронизацию
-    LaunchedEffect(accountId) {
-        if (accountId > 0 && !dataLoaded) {
-            kotlinx.coroutines.delay(500)
-            if (allTasks.isEmpty() && !isSyncing) {
-                dataLoaded = true
-                isSyncing = true
-                try {
-                    withContext(Dispatchers.IO) {
-                        taskRepo.syncTasks(accountId)
-                    }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                } finally {
-                    isSyncing = false
-                }
-            }
-        }
-    }
+    // Локализованные строки для канала событий (VM эмитит семантические события без ресурсов).
+    val tasksSyncedText = Strings.tasksSynced
+    val taskCreatedText = Strings.taskCreated
+    val taskUpdatedText = Strings.taskUpdated
+    val taskDeletedEventText = Strings.taskDeleted
+    val taskCompletedEventText = Strings.taskCompleted
+    val taskNotCompletedEventText = Strings.taskNotCompleted
 
-    var lastDeletedSyncMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(currentFilter) {
-        val now = System.currentTimeMillis()
-        if (currentFilter == TaskFilter.DELETED && accountId > 0 && !isSyncing && now - lastDeletedSyncMs > 30_000L) {
-            lastDeletedSyncMs = now
-            isSyncing = true
-            try {
-                withContext(Dispatchers.IO) {
-                    taskRepo.syncTasks(accountId)
+    // Одноразовые события из VM → тосты (локализация в UI).
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is TasksEvent.Synced -> SafeToast.short(context, "$tasksSyncedText: ${event.count}")
+                TasksEvent.TaskCreated -> {
+                    SafeToast.short(context, taskCreatedText)
+                    showCreateDialog = false
+                    editingTaskId = null
                 }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-            } finally {
-                isSyncing = false
+                TasksEvent.TaskUpdated -> {
+                    SafeToast.short(context, taskUpdatedText)
+                    showCreateDialog = false
+                    editingTaskId = null
+                }
+                is TasksEvent.MovedToTrash ->
+                    SafeToast.short(context, if (event.count == 1) taskDeletedEventText else "$taskDeletedEventText: ${event.count}")
+                is TasksEvent.CompleteToggled ->
+                    SafeToast.short(context, if (event.completed) taskCompletedEventText else taskNotCompletedEventText)
+                is TasksEvent.Error -> SafeToast.long(context, event.message)
             }
         }
-        // Сбрасываем выбор при смене фильтра
-        selectedTaskIds = emptySet()
-        selectedDeletedIds = emptySet()
     }
 
     val listState = rememberLazyListState()
@@ -246,12 +215,7 @@ fun TasksScreen(
     }
 
     // Строки для диалогов (вынесены из @Composable контекста)
-    val taskDeletedText = Strings.taskDeleted
-    val taskRestoredText = Strings.taskRestored
     val restoringOneTaskText = Strings.restoringTasks(1)
-    val taskDeletedPermanentlyText = Strings.taskDeletedPermanently
-    val taskCompletedText = Strings.taskCompleted
-    val taskNotCompletedText = Strings.taskNotCompleted
     val deletingOneTaskText = Strings.deletingTasks(1)
 
     // Диалог просмотра/редактирования задачи
@@ -271,17 +235,10 @@ fun TasksScreen(
                         scope = scope,
                         isRestore = true
                     ) { _, onProgress ->
-                        val result = withContext(Dispatchers.IO) {
-                            taskRepo.restoreTask(task)
-                        }
+                        val result = viewModel.restoreTask(task)
                         onProgress(1, 1)
-                        when (result) {
-                            is EasResult.Error -> {
-                                withContext(Dispatchers.Main) {
-                                    SafeToast.long(context, result.message)
-                                }
-                            }
-                            else -> {}
+                        if (result is EasResult.Error) {
+                            SafeToast.long(context, result.message)
                         }
                     }
                 },
@@ -294,18 +251,11 @@ fun TasksScreen(
                         message = deletingOneTaskText,
                         scope = scope,
                         isRestore = false
-                    ) { ids, onProgress ->
-                        val result = withContext(Dispatchers.IO) {
-                            taskRepo.deleteTaskPermanently(task)
-                        }
+                    ) { _, onProgress ->
+                        val result = viewModel.deleteTaskPermanently(task)
                         onProgress(1, 1)
-                        when (result) {
-                            is EasResult.Error -> {
-                                withContext(Dispatchers.Main) {
-                                    SafeToast.long(context, result.message)
-                                }
-                            }
-                            else -> {}
+                        if (result is EasResult.Error) {
+                            SafeToast.long(context, result.message)
                         }
                     }
                 }
@@ -314,7 +264,6 @@ fun TasksScreen(
             // Обычный диалог для активной задачи
             TaskDetailDialog(
                 task = task,
-                taskRepo = taskRepo,
                 onDismiss = { selectedTaskId = null },
                 onEditClick = {
                     editingTaskId = task.id
@@ -322,37 +271,12 @@ fun TasksScreen(
                     showCreateDialog = true
                 },
                 onDeleteClick = {
-                    scope.launch {
-                        selectedTaskId = null
-                        val result = withContext(Dispatchers.IO) {
-                            taskRepo.deleteTask(task)
-                        }
-                        when (result) {
-                            is EasResult.Success -> {
-                                SafeToast.short(context, taskDeletedText)
-                            }
-                            is EasResult.Error -> {
-                                SafeToast.long(context, result.message)
-                            }
-                        }
-                    }
+                    selectedTaskId = null
+                    viewModel.deleteToTrash(task)
                 },
                 onToggleComplete = {
-                    scope.launch {
-                        selectedTaskId = null
-                        val result = withContext(Dispatchers.IO) {
-                            taskRepo.toggleTaskComplete(task)
-                        }
-                        when (result) {
-                            is EasResult.Success -> {
-                                val msg = if (result.data.complete) taskCompletedText else taskNotCompletedText
-                                SafeToast.short(context, msg)
-                            }
-                            is EasResult.Error -> {
-                                SafeToast.long(context, result.message)
-                            }
-                        }
-                    }
+                    selectedTaskId = null
+                    viewModel.toggleComplete(task)
                 }
             )
         }
@@ -360,69 +284,29 @@ fun TasksScreen(
 
     // Диалог создания/редактирования
     if (showCreateDialog) {
-        val taskUpdatedText = Strings.taskUpdated
-        val taskCreatedText = Strings.taskCreated
-        val isEditing = editingTask != null
         val database = remember { MailDatabase.getInstance(context) }
         CreateTaskDialog(
             task = editingTask,
             isCreating = isCreating,
             accountId = accountId,
             database = database,
-            activeAccountEmail = activeAccount?.email ?: "",
+            activeAccountEmail = uiState.accountEmail,
             onDismiss = {
                 showCreateDialog = false
                 editingTaskId = null
             },
             onSave = { subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo ->
-                // Защита от double-tap: если уже создаём — игнорируем
-                if (isCreating) return@CreateTaskDialog
-                isCreating = true
-                scope.launch {
-                    // Захватываем editingTask в локальную переменную для безопасного доступа
-                    val taskToEdit = editingTask
-                    val result = if (taskToEdit != null) {
-                        withContext(Dispatchers.IO) {
-                            taskRepo.updateTask(
-                                task = taskToEdit,
-                                subject = subject,
-                                body = body,
-                                startDate = startDate,
-                                dueDate = dueDate,
-                                complete = taskToEdit.complete,
-                                importance = importance,
-                                reminderSet = reminderSet,
-                                reminderTime = reminderTime,
-                                assignTo = assignTo
-                            )
-                        }
-                    } else {
-                        withContext(Dispatchers.IO) {
-                            taskRepo.createTask(
-                                accountId = accountId,
-                                subject = subject,
-                                body = body,
-                                startDate = startDate,
-                                dueDate = dueDate,
-                                importance = importance,
-                                reminderSet = reminderSet,
-                                reminderTime = reminderTime,
-                                assignTo = assignTo
-                            )
-                        }
-                    }
-                    isCreating = false
-                    when (result) {
-                        is EasResult.Success -> {
-                            SafeToast.short(context, if (isEditing) taskUpdatedText else taskCreatedText)
-                            showCreateDialog = false
-                            editingTaskId = null
-                        }
-                        is EasResult.Error -> {
-                            SafeToast.long(context, result.message)
-                        }
-                    }
-                }
+                viewModel.saveTask(
+                    existing = editingTask,
+                    subject = subject,
+                    body = body,
+                    startDate = startDate,
+                    dueDate = dueDate,
+                    importance = importance,
+                    reminderSet = reminderSet,
+                    reminderTime = reminderTime,
+                    assignTo = assignTo
+                )
             }
         )
     }
@@ -451,21 +335,13 @@ fun TasksScreen(
                                 scope = scope,
                                 isRestore = false
                             ) { ids, onProgress ->
-                                val result = withContext(Dispatchers.IO) {
-                                    taskRepo.emptyTasksTrash(accountId)
-                                }
+                                val result = viewModel.emptyTrash()
                                 onProgress(ids.size, ids.size)
                                 when (result) {
-                                    is EasResult.Success -> {
-                                        withContext(Dispatchers.Main) {
-                                            SafeToast.short(context, "$tasksTrashEmptiedText: ${result.data}")
-                                        }
-                                    }
-                                    is EasResult.Error -> {
-                                        withContext(Dispatchers.Main) {
-                                            SafeToast.long(context, result.message)
-                                        }
-                                    }
+                                    is EasResult.Success ->
+                                        SafeToast.short(context, "$tasksTrashEmptiedText: ${result.data}")
+                                    is EasResult.Error ->
+                                        SafeToast.long(context, result.message)
                                 }
                             }
                         }
@@ -484,8 +360,6 @@ fun TasksScreen(
 
     // Диалог подтверждения удаления задач
     if (showDeleteConfirmDialog) {
-        val taskDeletedText = Strings.taskDeleted
-        val tasksDeletedPermanentlyText = Strings.tasksDeletedPermanently
         val deletingTasksText = Strings.deletingTasks(deleteConfirmCount)
         // Вычисляем список задач для удаления заранее
         val tasksToDeleteList = if (deleteConfirmIsPermanent) {
@@ -523,10 +397,10 @@ fun TasksScreen(
                     onClick = {
                         showDeleteConfirmDialog = false
                         if (deleteConfirmIsPermanent) {
-                            // Permanent delete - используем deletionController
+                            // Окончательное удаление — через deletionController
                             com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                             val taskIds = tasksToDeleteList.map { it.id }
-                            selectedDeletedIds = selectedDeletedIds - taskIds.toSet()
+                            viewModel.removeFromSelection(taskIds.toSet())
 
                             if (taskIds.isNotEmpty()) {
                                 deletionController.startDeletion(
@@ -534,33 +408,13 @@ fun TasksScreen(
                                     message = deletingTasksMessage,
                                     scope = scope,
                                     isRestore = false
-                                ) { ids, onProgress ->
-                                    var deleted = 0
-                                    for (task in tasksToDeleteList) {
-                                        val result = withContext(Dispatchers.IO) {
-                                            taskRepo.deleteTaskPermanently(task)
-                                        }
-                                        if (result is EasResult.Success) deleted++
-                                        onProgress(deleted, tasksToDeleteList.size)
-                                    }
+                                ) { _, onProgress ->
+                                    viewModel.deleteTasksPermanently(tasksToDeleteList, onProgress)
                                 }
                             }
                         } else {
-                            // Regular delete to trash - без прогресса
-                            val tasksToSoftDelete = tasksToDeleteList
-                            selectedTaskIds = selectedTaskIds - tasksToSoftDelete.map { it.id }.toSet()
-                            scope.launch {
-                                var deleted = 0
-                                for (task in tasksToSoftDelete) {
-                                    val result = withContext(Dispatchers.IO) {
-                                        taskRepo.deleteTask(task)
-                                    }
-                                    if (result is EasResult.Success) deleted++
-                                }
-                                if (deleted > 0) {
-                                    SafeToast.short(context, "$taskDeletedText: $deleted")
-                                }
-                            }
+                            // Мягкое удаление в корзину — без прогресса (тост через канал событий VM)
+                            viewModel.deleteSelectedToTrash(tasksToDeleteList)
                         }
                     },
                     text = Strings.yes
@@ -580,7 +434,6 @@ fun TasksScreen(
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
             if (isSelectionMode) {
-                val tasksRestoredText = Strings.tasksRestored
                 val restoringTasksMessage = Strings.restoringTasks(selectedDeletedIds.size)
                 val selectedCount = selectedTaskIds.size + selectedDeletedIds.size
                 val deletePermanently = hasDeletedSelected && !hasActiveSelected
@@ -589,15 +442,12 @@ fun TasksScreen(
                     selectedCount = selectedCount,
                     showRestore = hasDeletedSelected,
                     deleteIsPermanent = deletePermanently,
-                    onClearSelection = {
-                        selectedTaskIds = emptySet()
-                        selectedDeletedIds = emptySet()
-                    },
+                    onClearSelection = { viewModel.clearSelection() },
                     onRestore = {
                         if (hasDeletedSelected) {
                             val tasksToRestore = deletedTasks.filter { it.id in selectedDeletedIds }
                             val taskIds = tasksToRestore.map { it.id }
-                            selectedDeletedIds = selectedDeletedIds - taskIds.toSet()
+                            viewModel.removeFromSelection(taskIds.toSet())
 
                             if (taskIds.isNotEmpty()) {
                                 deletionController.startDeletion(
@@ -606,14 +456,7 @@ fun TasksScreen(
                                     scope = scope,
                                     isRestore = true
                                 ) { _, onProgress ->
-                                    var restored = 0
-                                    for (task in tasksToRestore) {
-                                        val result = withContext(Dispatchers.IO) {
-                                            taskRepo.restoreTask(task)
-                                        }
-                                        if (result is EasResult.Success) restored++
-                                        onProgress(restored, tasksToRestore.size)
-                                    }
+                                    viewModel.restoreTasks(tasksToRestore, onProgress)
                                 }
                             }
                         }
@@ -638,30 +481,8 @@ fun TasksScreen(
                     },
                     actions = {
                         // Кнопка синхронизации
-                        val tasksSyncedText = Strings.tasksSynced
                         IconButton(
-                            onClick = {
-                                syncScope.launch {
-                                    isSyncing = true
-                                    try {
-                                        val result = withContext(Dispatchers.IO) {
-                                            taskRepo.syncTasks(accountId)
-                                        }
-                                        when (result) {
-                                            is EasResult.Success -> {
-                                                SafeToast.short(context, "$tasksSyncedText: ${result.data}")
-                                            }
-                                            is EasResult.Error -> {
-                                                SafeToast.long(context, result.message)
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        if (e is kotlinx.coroutines.CancellationException) throw e
-                                    } finally {
-                                        isSyncing = false
-                                    }
-                                }
-                            },
+                            onClick = { viewModel.syncTasks() },
                             enabled = !isSyncing
                         ) {
                             if (isSyncing) {
@@ -706,8 +527,8 @@ fun TasksScreen(
         ) {
             // Поле поиска (на всю ширину)
             OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
+                value = uiState.query,
+                onValueChange = { viewModel.onQueryChange(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -716,8 +537,8 @@ fun TasksScreen(
                 placeholder = { Text(Strings.searchTasks) },
                 leadingIcon = { Icon(AppIcons.Search, null) },
                 trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
+                    if (uiState.query.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.clearQuery() }) {
                             Icon(AppIcons.Clear, Strings.clear)
                         }
                     }
@@ -729,7 +550,7 @@ fun TasksScreen(
             // Фильтры
             TaskFilterChips(
                 currentFilter = currentFilter,
-                onFilterChange = { currentFilter = it },
+                onFilterChange = { viewModel.selectFilter(it) },
                 deletedCount = deletedTasks.size,
                 onEmptyTrash = { showEmptyTrashDialog = true }
             )
@@ -773,8 +594,6 @@ fun TasksScreen(
                     ScrollColumnScrollbar(emptyScrollState)
                 }
             } else {
-                val taskCompletedTextList = Strings.taskCompleted
-                val taskNotCompletedTextList = Strings.taskNotCompleted
                 val isDeletedFilter = currentFilter == TaskFilter.DELETED
 
                 // Drag selection
@@ -787,13 +606,13 @@ fun TasksScreen(
                     selectedIds = selectedTaskIds + selectedDeletedIds,
                     onSelectionChange = { newIds ->
                         if (isDeletedFilter) {
-                            selectedDeletedIds = newIds
+                            viewModel.setDeletedSelection(newIds)
                         } else if (currentFilter == TaskFilter.ALL) {
                             // В ALL фильтре разделяем ID по типу задачи
-                            selectedTaskIds = newIds.filter { it !in deletedTaskIdSet }.toSet()
-                            selectedDeletedIds = newIds.filter { it in deletedTaskIdSet }.toSet()
+                            viewModel.setActiveSelection(newIds.filter { it !in deletedTaskIdSet }.toSet())
+                            viewModel.setDeletedSelection(newIds.filter { it in deletedTaskIdSet }.toSet())
                         } else {
-                            selectedTaskIds = newIds
+                            viewModel.setActiveSelection(newIds)
                         }
                     }
                 )
@@ -805,8 +624,7 @@ fun TasksScreen(
                             indication = null,
                             interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         ) {
-                            selectedTaskIds = emptySet()
-                            selectedDeletedIds = emptySet()
+                            viewModel.clearSelection()
                         } else Modifier
                     )
                 ) {
@@ -828,18 +646,14 @@ fun TasksScreen(
                                 onClick = {
                                     if (isSelectionMode) {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        selectedDeletedIds = if (task.id in selectedDeletedIds) {
-                                            selectedDeletedIds - task.id
-                                        } else {
-                                            selectedDeletedIds + task.id
-                                        }
+                                        viewModel.toggleDeletedSelection(task.id)
                                     } else {
                                         selectedTaskId = task.id
                                     }
                                 },
                                 onLongClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    selectedDeletedIds = selectedDeletedIds + task.id
+                                    viewModel.addDeletedSelection(task.id)
                                 }
                             )
                         } else {
@@ -851,35 +665,16 @@ fun TasksScreen(
                                 onClick = {
                                     if (isSelectionMode) {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        selectedTaskIds = if (task.id in selectedTaskIds) {
-                                            selectedTaskIds - task.id
-                                        } else {
-                                            selectedTaskIds + task.id
-                                        }
+                                        viewModel.toggleActiveSelection(task.id)
                                     } else {
                                         selectedTaskId = task.id
                                     }
                                 },
                                 onLongClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    selectedTaskIds = selectedTaskIds + task.id
+                                    viewModel.addActiveSelection(task.id)
                                 },
-                                onToggleComplete = {
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            taskRepo.toggleTaskComplete(task)
-                                        }
-                                        when (result) {
-                                            is EasResult.Success -> {
-                                                val msg = if (result.data.complete) taskCompletedTextList else taskNotCompletedTextList
-                                                SafeToast.short(context, msg)
-                                            }
-                                            is EasResult.Error -> {
-                                                SafeToast.long(context, result.message)
-                                            }
-                                        }
-                                    }
-                                }
+                                onToggleComplete = { viewModel.toggleComplete(task) }
                             )
                         }
                     }
@@ -1258,7 +1053,6 @@ private fun TaskCard(
 @Composable
 private fun TaskDetailDialog(
     task: TaskEntity,
-    taskRepo: TaskRepository,
     onDismiss: () -> Unit,
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit,
