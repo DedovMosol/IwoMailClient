@@ -9,11 +9,12 @@
 - `NotesScreen` → `NotesViewModel`: заметки/корзина/выделение/поиск и авто-синхронизация живут в ViewModel; убран флаг `dataLoaded`, который при повороте/смене аккаунта мог приводить к лишней синхронизации; операции с прогресс-баром (окончательное удаление/восстановление/очистка корзины) инкапсулированы за suspend-методами
 - `TasksScreen` → `TasksViewModel`: задачи/корзина/фильтр/выделение/поиск и авто-синхронизация живут в ViewModel; убран флаг `dataLoaded`; пакетные операции восстановления и окончательного удаления (с прогресс-баром) перенесены из Composable в suspend-обёртки ViewModel
 - `UserFoldersScreen` → `UserFoldersViewModel`: список пользовательских папок (фильтр/сортировка), выделение, создание/переименование/удаление и пакетное удаление с прогрессом живут в ViewModel; долгие операции перенесены из `rememberSyncScope` (отменялся при повороте) в `viewModelScope` — теперь переживают поворот
+- `EmailListScreen` → `EmailListViewModel`: список писем (папка/избранное/«Сегодня»), фильтры, выделение, синхронизация и пакетные операции (в корзину/спам, перемещение, восстановление, прочитано/непрочитано, флаги) живут в ViewModel; операции перенесены из `rememberCoroutineScope` (отменялся при повороте) в `viewModelScope` — теперь не прерываются при повороте; авто-синк «Черновиков» выполняется ровно один раз (без повторного синка и гонок при повороте); текущая папка и список папок для переноса берутся из единого реактивного потока
 - Одноразовые UI-события (тосты, звук, пасхалка) вынесены в канал событий (`Channel` + `receiveAsFlow`) — ViewModel не зависит от локализации/ресурсов
 - Зависимости передаются через конструктор (DIP): системные эффекты push/синхронизации скрыты за интерфейсом `SyncEffects`
 
 ### Тесты
-- Добавлены юнит-тесты ViewModel (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`) на чистом JUnit + MockK, без Robolectric
+- Добавлены юнит-тесты ViewModel (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`, `EmailListViewModelTest`) на чистом JUnit + MockK, без Robolectric
 
 
 ## v1.6.2 (27.02.2026)

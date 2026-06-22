@@ -23,7 +23,6 @@ import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +36,8 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.dedovmosol.iwomail.data.database.AccountType
@@ -60,7 +61,6 @@ import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -106,73 +106,50 @@ fun EmailListScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
-    val database = remember { MailDatabase.getInstance(context) }
-    val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
     val hapticScreen = LocalHapticFeedback.current
+    val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
 
-    val isFavorites = folderId == "favorites"
-    val isTodayAll = folderId == "TODAY_ALL"
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
+    val viewModel: EmailListViewModel = viewModel(
+        factory = EmailListViewModel.provideFactory(
+            context.applicationContext as android.app.Application,
+            folderId,
+            initialFilter,
+            initialDateFilter
+        )
+    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    // Подписываемся на Flow напрямую - Room автоматически обновляет при изменении данных
-    val emails by remember(folderId, activeAccount?.id, isFavorites, isTodayAll) {
-        when {
-            isFavorites -> flowOf(emptyList<EmailEntity>())
-            isTodayAll -> {
-                // Кросс-папочный список: Inbox + пользовательские папки за сегодня
-                mailRepo.getTodayEmailsAcrossFolders(activeAccount?.id ?: 0)
-            }
-            else -> mailRepo.getEmails(folderId)
-        }
-    }.collectAsState(initial = emptyList())
+    // Производные значения состояния (только чтение из VM).
+    val isFavorites = viewModel.isFavorites
+    val isTodayAll = viewModel.isTodayAll
+    val folder = uiState.folder
+    val folders = uiState.folders
+    val displayEmails = uiState.emails
+    val mailFilter = uiState.mailFilter
+    val dateFilter = uiState.dateFilter
+    val showFilters = uiState.showFilters
+    val selectedIds = uiState.selectedIds
+    val isSelectionMode = uiState.isSelectionMode
+    val isRefreshing = uiState.isRefreshing
+    val errorMessage = uiState.errorMessage
 
-    val favoriteEmails by remember(activeAccount?.id, isFavorites) {
-        if (isFavorites) {
-            mailRepo.getFlaggedEmails(activeAccount?.id ?: 0)
-        } else {
-            flowOf(emptyList<EmailEntity>())
-        }
-    }.collectAsState(initial = emptyList())
-
-    var folder by remember(folderId, activeAccount?.id) { mutableStateOf<FolderEntity?>(null) }
-    var isRefreshing by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    // Определяем тип папки
+    // Тип папки
     val isSpamFolder = folder?.type == FolderType.JUNK_EMAIL
     val isTrashFolder = folder?.type == FolderType.DELETED_ITEMS
     val isDraftsFolder = folder?.type == FolderType.DRAFTS
     val isSentFolder = folder?.type == FolderType.SENT_ITEMS
-    val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
 
-    // Фильтры - используем initialFilter / initialDateFilter как начальные значения
-    var showFilters by rememberSaveable { mutableStateOf(initialFilter != MailFilter.ALL || initialDateFilter != EmailDateFilter.ALL) }
-    var mailFilter by rememberSaveable { mutableStateOf(initialFilter) }
-    var dateFilter by rememberSaveable { mutableStateOf(initialDateFilter) }
+    val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
 
-    // Режим выбора
-    var selectedIds by rememberSaveable(folderId, activeAccount?.id,
-        saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
-    ) { mutableStateOf(setOf<String>()) }
-    val isSelectionMode = selectedIds.isNotEmpty()
+    // UI-состояние диалогов/меню (не относится к данным) — переживает поворот.
     var showMoveDialog by rememberSaveable { mutableStateOf(false) }
     var showMoreMenu by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
-    var folders by remember(activeAccount?.id) { mutableStateOf<List<FolderEntity>>(emptyList()) }
     val deletingSelectedMessage = Strings.deletingEmails(selectedIds.size)
-
-    val displayEmails = remember(isFavorites, isTodayAll, favoriteEmails, emails) {
-        when {
-            isFavorites -> favoriteEmails
-            isTodayAll -> emails
-            else -> emails
-        }
-    }
 
     // Применяем фильтры
     // PERF: вычисляем cutoff-дату ОДИН раз, а не на каждое письмо
@@ -209,223 +186,101 @@ fun EmailListScreen(
             }
     }
 
-    // Количество активных фильтров
-    val activeFiltersCount by remember { derivedStateOf {
-        listOf(mailFilter != MailFilter.ALL, dateFilter != EmailDateFilter.ALL).count { it }
-    } }
+    // Количество активных фильтров (рекомпозиция при изменении uiState).
+    val activeFiltersCount = listOf(mailFilter != MailFilter.ALL, dateFilter != EmailDateFilter.ALL).count { it }
 
-    // Загружаем папки для перемещения
-    LaunchedEffect(activeAccount?.id) {
-        val accountId = activeAccount?.id ?: return@LaunchedEffect
-        folders = withContext(Dispatchers.IO) {
-            database.folderDao().getFoldersByAccountList(accountId)
-        }
-    }
-
-    // Флаг: начальная синхронизация черновиков уже выполнена.
-    // rememberSaveable — переживает поворот экрана и process death.
-    // Без этого: LaunchedEffect перезапускается при повороте (recomposition
-    // переоценивает activeAccount?.id), запуская sync для Drafts каждый раз.
-    // Повторный sync при повороте: (1) лишняя нагрузка на сервер,
-    // (2) потенциальная гонка с PushService → INVALID_SYNCKEY → full resync → потеря данных.
-    var draftsSynced by rememberSaveable(folderId, activeAccount?.id) { mutableStateOf(false) }
-
-    // Загружаем папку + отменяем уведомление при входе во Входящие
-    LaunchedEffect(folderId, activeAccount?.id) {
-        if (!isFavorites && !isTodayAll) {
-            val loadedFolder = withContext(Dispatchers.IO) { database.folderDao().getFolder(folderId) }
-            folder = loadedFolder
-
-            // Отменяем уведомление о новых письмах при входе в папку Входящие
-            val accId = activeAccount?.id
-            if (accId != null && loadedFolder?.type == FolderType.INBOX) {
-                val nm = context.getSystemService(android.app.NotificationManager::class.java)
-                nm?.cancel(com.dedovmosol.iwomail.sync.NotificationHelper.notificationIdForAccount(accId))
-            }
-
-            // Автоматическая синхронизация для черновиков при входе в папку
-            // (только один раз — не при повороте экрана)
-            if (!draftsSynced && loadedFolder?.type == FolderType.DRAFTS && loadedFolder.accountId > 0) {
-                draftsSynced = true
-                isRefreshing = true
-                try {
-                    withContext(Dispatchers.IO) {
-                        mailRepo.syncEmails(loadedFolder.accountId, folderId)
-                    }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    // Ошибка синхронизации — не блокируем UI
-                } finally {
-                    isRefreshing = false
-                }
+    // Одноразовые события из VM → локализованные тосты (VM эмитит семантические события).
+    // LaunchedEffect(Unit) живёт дольше рекомпозиции, а язык (LocalLanguage) может смениться в
+    // рантайме без пересоздания Activity, поэтому читаем актуальный флаг через rememberUpdatedState.
+    val currentIsRussian by rememberUpdatedState(isRussian)
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            val ru = currentIsRussian
+            val nothingDeleted = if (ru) "Ничего не удалено" else "Nothing deleted"
+            when (event) {
+                is EmailListEvent.MovedToTrash -> com.dedovmosol.iwomail.util.SafeToast.short(
+                    context,
+                    if (event.count > 0) NotificationStrings.getMovedToTrash(ru) else nothingDeleted
+                )
+                is EmailListEvent.DeletedPermanently -> com.dedovmosol.iwomail.util.SafeToast.short(
+                    context,
+                    if (event.count > 0) NotificationStrings.getDeletedPermanently(ru) else nothingDeleted
+                )
+                is EmailListEvent.Moved -> com.dedovmosol.iwomail.util.SafeToast.short(
+                    context, NotificationStrings.getMoved(ru) + ": ${event.count}"
+                )
+                is EmailListEvent.Restored -> com.dedovmosol.iwomail.util.SafeToast.short(
+                    context, NotificationStrings.getRestored(ru) + ": ${event.count}"
+                )
+                is EmailListEvent.MovedToSpam -> com.dedovmosol.iwomail.util.SafeToast.short(
+                    context, NotificationStrings.getMovedToSpam(ru) + ": ${event.count}"
+                )
+                is EmailListEvent.Error -> com.dedovmosol.iwomail.util.SafeToast.long(
+                    context, NotificationStrings.localizeError(event.message, ru)
+                )
             }
         }
     }
 
+    // Отмена уведомления о новых письмах при входе в папку «Входящие» — Android side-effect, в UI.
+    LaunchedEffect(folder?.type, folder?.accountId) {
+        val f = folder
+        if (f != null && f.type == FolderType.INBOX && f.accountId > 0L) {
+            val nm = context.getSystemService(android.app.NotificationManager::class.java)
+            nm?.cancel(com.dedovmosol.iwomail.sync.NotificationHelper.notificationIdForAccount(f.accountId))
+        }
+    }
+
+    // Тонкие обёртки UI-концернов (сеть/звук/контроллер удаления); сами операции — в ViewModel
+    // (viewModelScope), поэтому переживают поворот экрана.
     fun refresh() {
         if (isFavorites || isTodayAll) return
-
-        // Защита от повторного запуска (быстрые свайпы / двойные нажатия)
         if (isRefreshing) return
-
-        // Проверяем сеть перед синхронизацией
+        // Проверка сети требует Context → остаётся в UI.
         if (!NetworkMonitor.isNetworkAvailable(context)) {
-            val isRussian = currentLanguage == AppLanguage.RUSSIAN
-            val message = if (isRussian) "Нет сети" else "No network"
-            com.dedovmosol.iwomail.util.SafeToast.short(context, message)
+            com.dedovmosol.iwomail.util.SafeToast.short(context, if (isRussian) "Нет сети" else "No network")
             return
         }
-
-        // Используем folder.accountId если есть, иначе activeAccount.id
-        val accountId = folder?.accountId ?: activeAccount?.id ?: return
-        scope.launch {
-            isRefreshing = true
-            errorMessage = null
-
-            try {
-                // Синхронизируем папку (для Черновиков вызовется syncDrafts)
-                // Используем инкрементальную синхронизацию (forceFullSync=false).
-                // При невалидном SyncKey сервер вернёт status 3/12,
-                // и syncEmailsEas автоматически выполнит полный ресинк.
-                // Это критично для больших ящиков (3000+ писем) — избегаем
-                // ненужной полной ресинхронизации при каждом pull-to-refresh.
-                val result = withContext(Dispatchers.IO) {
-                    mailRepo.syncEmails(accountId, folderId, forceFullSync = false)
-                }
-                when (result) {
-                    is EasResult.Success -> {}
-                    is EasResult.Error -> errorMessage = result.message
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                // Ошибка синхронизации — не блокируем UI
-            } finally {
-                isRefreshing = false
-            }
-        }
+        viewModel.refresh()
     }
 
     fun deleteSelected() {
-        val isRussian = currentLanguage == AppLanguage.RUSSIAN
-        val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
-
-        scope.launch {
-            com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-            val result = withContext(Dispatchers.IO) {
-                mailRepo.moveToTrash(selectedIds.toList())
-            }
-            when (result) {
-                is EasResult.Success -> {
-                    if (result.data > 0) {
-                        com.dedovmosol.iwomail.util.SafeToast.short(context, NotificationStrings.getMovedToTrash(isRussian))
-                    } else {
-                        com.dedovmosol.iwomail.util.SafeToast.short(context, nothingDeletedMsg)
-                    }
-                }
-                is EasResult.Error -> {
-                    val localizedMessage = NotificationStrings.localizeError(result.message, isRussian)
-                    com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMessage)
-                }
-            }
-            selectedIds = emptySet()
-        }
+        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+        viewModel.deleteSelectedToTrash()
     }
 
     fun deleteSelectedPermanently() {
-        val isRussian = currentLanguage == AppLanguage.RUSSIAN
-        val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
-
         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
         val emailIds = selectedIds.toList()
         if (emailIds.isEmpty()) {
-            selectedIds = emptySet()
+            viewModel.clearSelection()
             return
         }
 
-        // Для черновиков используем специализированный deleteDrafts (удаляет с сервера через EWS)
+        // Для черновиков — окончательное удаление с сервера без прогресс-бара (через EWS deleteDraft).
         if (isDraftsFolder) {
-            scope.launch {
-                val result = withContext(Dispatchers.IO) {
-                    mailRepo.deleteDrafts(emailIds)
-                }
-                when (result) {
-                    is EasResult.Success -> {
-                        if (result.data > 0) {
-                            com.dedovmosol.iwomail.util.SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
-                        } else {
-                            com.dedovmosol.iwomail.util.SafeToast.short(context, nothingDeletedMsg)
-                        }
-                    }
-                    is EasResult.Error -> {
-                        val localizedMessage = NotificationStrings.localizeError(result.message, isRussian)
-                        com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMessage)
-                    }
-                }
-                selectedIds = emptySet()
-            }
+            viewModel.deleteSelectedDrafts()
             return
         }
 
-        // Для корзины/спама используем ту же логику, что и при очистке корзины
+        // Для корзины/спама — удаление с реальным прогрессом через DeletionController (собственный
+        // scope контроллера → переживает выход с экрана). Выделение снимаем сразу.
+        viewModel.clearSelection()
         deletionController.startDeletion(
             emailIds = emailIds,
             message = deletingSelectedMessage,
             scope = scope
         ) { ids, onProgress ->
-            val result = withContext(Dispatchers.IO) {
-                mailRepo.deleteEmailsPermanentlyWithProgress(ids) { deleted, total ->
-                    onProgress(deleted, total)
-                }
-            }
-            when (result) {
-                is EasResult.Success -> {
-                    if (result.data > 0) {
-                        com.dedovmosol.iwomail.util.SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
-                    } else {
-                        com.dedovmosol.iwomail.util.SafeToast.short(context, nothingDeletedMsg)
-                    }
-                }
-                is EasResult.Error -> {
-                    val localizedMessage = NotificationStrings.localizeError(result.message, isRussian)
-                    com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMessage)
-                }
-            }
-            selectedIds = emptySet()
-        }
-    }
-
-    fun markSelectedAsRead(read: Boolean) {
-        scope.launch {
-            val ids = selectedIds.toList()
-            selectedIds = emptySet()
-            when (val result = mailRepo.markAsReadBatch(ids, read)) {
-                is EasResult.Success -> { /* OK */ }
-                is EasResult.Error -> {
-                    com.dedovmosol.iwomail.util.SafeToast.short(context, result.message)
-                }
+            when (val result = viewModel.deleteEmailsPermanently(ids) { deleted, total -> onProgress(deleted, total) }) {
+                is EasResult.Success -> com.dedovmosol.iwomail.util.SafeToast.short(
+                    context,
+                    if (result.data > 0) NotificationStrings.getDeletedPermanently(isRussian) else nothingDeletedMsg
+                )
+                is EasResult.Error -> com.dedovmosol.iwomail.util.SafeToast.long(
+                    context, NotificationStrings.localizeError(result.message, isRussian)
+                )
             }
         }
-    }
-
-    fun starSelected() {
-        scope.launch {
-            try {
-                selectedIds.forEach { id ->
-                    try {
-                        mailRepo.toggleFlag(id)
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-            } finally { selectedIds = emptySet() }
-        }
-    }
-
-    fun clearFilters() {
-        mailFilter = MailFilter.ALL
-        dateFilter = EmailDateFilter.ALL
     }
 
     // Диалог подтверждения удаления (в корзину)
@@ -512,21 +367,13 @@ fun EmailListScreen(
                                 emailIds = allEmailIds,
                                 message = deletingMessage,
                                 scope = scope
-                            ) { emailIds, onProgress ->
-                                // Удаление с реальным прогрессом
-                                val result = withContext(Dispatchers.IO) {
-                                    mailRepo.deleteEmailsPermanentlyWithProgress(emailIds) { deleted, total ->
-                                        onProgress(deleted, total)
-                                    }
-                                }
-                                when (result) {
-                                    is EasResult.Success -> {
-                                        com.dedovmosol.iwomail.util.SafeToast.short(context, trashEmptiedMsg)
-                                    }
-                                    is EasResult.Error -> {
-                                        val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                        com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMsg)
-                                    }
+                            ) { ids, onProgress ->
+                                // Удаление с реальным прогрессом (репозиторий инкапсулирован в VM)
+                                when (val result = viewModel.deleteEmailsPermanently(ids) { deleted, total -> onProgress(deleted, total) }) {
+                                    is EasResult.Success -> com.dedovmosol.iwomail.util.SafeToast.short(context, trashEmptiedMsg)
+                                    is EasResult.Error -> com.dedovmosol.iwomail.util.SafeToast.long(
+                                        context, NotificationStrings.localizeError(result.message, isRussian)
+                                    )
                                 }
                             }
                         }
@@ -545,8 +392,6 @@ fun EmailListScreen(
 
     // Диалог перемещения
     if (showMoveDialog) {
-        var isMoving by remember { mutableStateOf(false) }
-
         // Типы папок НЕ для писем — скрыты в навигации, не должны появляться в диалоге переноса.
         // КРИТИЧНО: Должны совпадать с фильтром в EmailDetailScreen!
         // 7=Tasks, 8=Calendar, 9=Contacts, 10=Notes,
@@ -572,7 +417,7 @@ fun EmailListScreen(
         }
 
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = { if (!isMoving) showMoveDialog = false },
+            onDismissRequest = { showMoveDialog = false },
             title = { Text(Strings.moveTo) },
             text = {
                 if (availableFolders.isEmpty()) {
@@ -591,45 +436,24 @@ fun EmailListScreen(
                                     leadingContent = {
                                         Icon(getFolderIcon(targetFolder.type), null)
                                     },
-                                    modifier = Modifier.clickable(enabled = !isMoving) {
-                                        if (isMoving) return@clickable
-                                        scope.launch {
-                                            isMoving = true
-                                            val result = withContext(Dispatchers.IO) {
-                                                mailRepo.moveEmails(selectedIds.toList(), targetFolder.id)
-                                            }
-                                            isMoving = false
-                                            showMoveDialog = false
-
-                                            when (result) {
-                                                is EasResult.Success -> {
-                                                    val msg = NotificationStrings.getMoved(isRussian) + ": ${result.data}"
-                                                    com.dedovmosol.iwomail.util.SafeToast.short(context, msg)
-                                            }
-                                            is EasResult.Error -> {
-                                                val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMsg)
-                                            }
-                                        }
-                                        selectedIds = emptySet()
+                                    modifier = Modifier.clickable {
+                                        // Перемещение выполняется в viewModelScope (переживает поворот);
+                                        // диалог закрываем сразу, результат — тостом через канал событий.
+                                        viewModel.moveSelectedTo(targetFolder.id)
+                                        showMoveDialog = false
                                     }
-                                }
-                            )
+                                )
+                            }
                         }
-                    }
                         LazyColumnScrollbar(lazyListState)
                     }
                 }
             },
             confirmButton = {
-                if (isMoving) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                } else {
-                    com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                        onClick = { showMoveDialog = false },
-                        text = Strings.cancel
-                    )
-                }
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showMoveDialog = false },
+                    text = Strings.cancel
+                )
             }
         )
     }
@@ -639,26 +463,9 @@ fun EmailListScreen(
             if (isSelectionMode) {
                 SelectionTopBar(
                     selectedCount = selectedIds.size,
-                    onClearSelection = { selectedIds = emptySet() },
+                    onClearSelection = { viewModel.clearSelection() },
                     onMove = { showMoveDialog = true },
-                    onRestore = {
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                mailRepo.restoreFromTrash(selectedIds.toList())
-                            }
-                            when (result) {
-                                is EasResult.Success -> {
-                                    val msg = NotificationStrings.getRestored(isRussian) + ": ${result.data}"
-                                    com.dedovmosol.iwomail.util.SafeToast.short(context, msg)
-                                }
-                                is EasResult.Error -> {
-                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                    com.dedovmosol.iwomail.util.SafeToast.long(context, localizedMsg)
-                                }
-                            }
-                            selectedIds = emptySet()
-                        }
-                    },
+                    onRestore = { viewModel.restoreSelected() },
                     onDelete = {
                         // Для черновиков и удалённых - окончательное удаление
                         if (isDraftsFolder || isTrashFolder) {
@@ -667,28 +474,12 @@ fun EmailListScreen(
                             showDeleteDialog = true
                         }
                     },
-                    onMarkRead = { markSelectedAsRead(true) },
-                    onStar = { starSelected() },
-                    onUnstar = { starSelected() },
-                    onMarkUnread = { markSelectedAsRead(false) },
+                    onMarkRead = { viewModel.markSelectedAsRead(true) },
+                    onStar = { viewModel.starSelected() },
+                    onUnstar = { viewModel.starSelected() },
+                    onMarkUnread = { viewModel.markSelectedAsRead(false) },
                     isFavorites = isFavorites,
-                    onSpam = {
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                mailRepo.moveToSpam(selectedIds.toList())
-                            }
-                            when (result) {
-                                is EasResult.Success -> {
-                                    val msg = NotificationStrings.getMovedToSpam(isRussian) + ": ${result.data}"
-                                    com.dedovmosol.iwomail.util.SafeToast.short(context, msg)
-                                }
-                                is EasResult.Error -> {
-                                    com.dedovmosol.iwomail.util.SafeToast.long(context, result.message)
-                                }
-                            }
-                            selectedIds = emptySet()
-                        }
-                    },
+                    onSpam = { viewModel.moveSelectedToSpam() },
                     onDeletePermanently = {
                         showDeletePermanentlyDialog = true
                     },
@@ -775,13 +566,13 @@ fun EmailListScreen(
             // Панель фильтров
             FilterPanel(
                 showFilters = showFilters,
-                onToggleFilters = { showFilters = !showFilters },
+                onToggleFilters = { viewModel.toggleFilters() },
                 mailFilter = mailFilter,
-                onMailFilterChange = { mailFilter = it },
+                onMailFilterChange = { viewModel.setMailFilter(it) },
                 dateFilter = dateFilter,
-                onDateFilterChange = { dateFilter = it },
+                onDateFilterChange = { viewModel.setDateFilter(it) },
                 activeFiltersCount = activeFiltersCount,
-                onClearFilters = { clearFilters() },
+                onClearFilters = { viewModel.clearFilters() },
                 totalCount = displayEmails.size,
                 filteredCount = filteredEmails.size
             )
@@ -801,7 +592,7 @@ fun EmailListScreen(
                 onEmailClick = { email ->
                     if (isSelectionMode) {
                         hapticScreen.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        selectedIds = if (email.id in selectedIds) selectedIds - email.id else selectedIds + email.id
+                        viewModel.toggleSelection(email.id)
                     } else {
                         // Для черновиков открываем ComposeScreen, для остальных - EmailDetailScreen
                         if (isDraftsFolder) {
@@ -812,13 +603,13 @@ fun EmailListScreen(
                     }
                 },
                 onLongClick = { email ->
-                    selectedIds = selectedIds + email.id
+                    viewModel.addToSelection(email.id)
                 },
-                onStarClick = { email -> scope.launch { mailRepo.toggleFlag(email.id) } },
-                onSelectAll = { selectedIds = if (selectedIds.size == filteredEmails.size) emptySet() else filteredEmails.map { it.id }.toSet() },
+                onStarClick = { email -> viewModel.toggleFlag(email.id) },
+                onSelectAll = { viewModel.selectAll(filteredEmails.map { it.id }) },
                 onRetry = { refresh() },
-                onDismissError = { errorMessage = null },
-                onDragSelect = { newIds -> selectedIds = newIds }
+                onDismissError = { viewModel.dismissError() },
+                onDragSelect = { newIds -> viewModel.setSelection(newIds) }
             )
         }
     }

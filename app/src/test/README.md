@@ -23,6 +23,7 @@ test/
         ├── NotesViewModelTest.kt           # MVVM: заметки/корзина/выделение + прогресс-обёртки
         ├── TasksViewModelTest.kt           # MVVM: задачи/корзина/фильтр + пакетные прогресс-обёртки
         ├── UserFoldersViewModelTest.kt     # MVVM: папки/фильтр/выделение + пакетное удаление с прогрессом
+        ├── EmailListViewModelTest.kt       # MVVM: письма/фильтры/выделение + пакетные операции и синк
         └── compose/
             └── ComposeTextUtilsTest.kt     # Подпись/цитата, cid→data:, извлечение email
 ```
@@ -135,6 +136,18 @@ VM без Robolectric: `MailRepository` + `AccountRepository` — MockK-моки
 - ✅ пакетное удаление: цикл по выбранным + прогресс в state (синхронная инициализация `0 to N`), `FoldersDeleted(count)` + первая `Error`, сброс выделения; пустой выбор → no-op
 - ✅ выделение: toggle/set/clear/selectAll; сброс устаревших id при изменении списка папок
 
+### EmailListViewModel (MVVM-слой)
+VM без Robolectric: `MailRepository` + `AccountRepository` — MockK-моки, IO-диспетчер тестовый, `folderId`/`initialFilter`/`initialDateFilter` в конструкторе.
+- ✅ init: письма/папки/текущая папка/`accountId` из единого реактивного потока; `showFilters` при начальном фильтре
+- ✅ спец-папки: «Избранное» → `getFlaggedEmails` (folder=null), «Сегодня» → `getTodayEmailsAcrossFolders`
+- ✅ авто-синк «Черновиков» ровно один раз; обычная папка не синкается
+- ✅ refresh: `isRefreshing` toggle, `Error`+`dismissError`, no-op в «Избранном»
+- ✅ фильтры: setMailFilter/setDateFilter/toggleFilters/clearFilters
+- ✅ выделение: toggle/set/clear/selectAll (выбрать все ↔ снять)
+- ✅ пакетные операции: `MovedToTrash`/`DeletedPermanently`/`Moved`/`Restored`/`MovedToSpam` + сброс выделения; пустой выбор → no-op
+- ✅ markSelectedAsRead/starSelected/toggleFlag — делегирование репозиторию; `Error` для batch
+- ✅ `deleteEmailsPermanently` — делегирование прогресс-обёртки репозиторию
+
 ### EasClient (делегирование заметок)
 - ✅ syncNotes → notesService
 - ✅ createNote → notesService
@@ -231,6 +244,8 @@ fun `syncNotes delegates to notesService`() = runTest {
 13. ✅ SyncCleanupViewModel — MVVM-слой (настройки синхронизации/очистки), side-effects за интерфейсом `SyncEffects`
 14. ✅ NotesViewModel — MVVM-слой (заметки/корзина/выделение + прогресс-обёртки)
 15. ✅ TasksViewModel — MVVM-слой (задачи/корзина/фильтр + пакетные прогресс-обёртки)
+16. ✅ UserFoldersViewModel — MVVM-слой (папки/фильтр/выделение + пакетное удаление с прогрессом)
+17. ✅ EmailListViewModel — MVVM-слой (письма/фильтры/выделение + пакетные операции и синк)
 
 > **Паттерн тестирования ViewModel:** принимай зависимости (репозитории + `CoroutineDispatcher`) через конструктор. Фабрика берёт реальные из `RepositoryProvider`, тест — моки. Андроид-конструктор репозиториев не запускается (MockK через Objenesis), поэтому Robolectric не нужен.
 
