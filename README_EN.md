@@ -4,7 +4,7 @@
 
 Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Exchange ActiveSync and EWS. IMAP and POP3 are available as beta mail-only paths.
 
-**Version:** 1.6.3
+**Version:** 1.6.3b
 **Developer:** DedovMosol
 **Telegram:** [@i_wantout](https://t.me/i_wantout)
 **Email:** andreyid@outlook.com

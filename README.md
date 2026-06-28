@@ -4,7 +4,7 @@
 
 Почтовый клиент для Android с основным фокусом на Microsoft Exchange Server 2007 SP1+ через Exchange ActiveSync и EWS. IMAP/POP3 присутствуют как beta-направление с ограниченной функциональностью.
 
-**Версия:** 1.6.3
+**Версия:** 1.6.3b
 **Пакет:** `com.dedovmosol.iwomail`
 **Разработчик:** DedovMosol
 **Telegram:** [@i_wantout](https://t.me/i_wantout)

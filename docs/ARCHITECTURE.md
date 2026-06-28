@@ -2,19 +2,19 @@
 
 **iwo Mail Client** — Android-клиент для Microsoft Exchange (EAS/EWS) с beta-поддержкой IMAP/POP3.
 
-**Версия:** 1.6.3
+**Версия:** 1.6.3b
 **Пакет:** `com.dedovmosol.iwomail`
 **Gradle root:** `IwoMailClient`
 **Android module:** `:app`
 
 ---
 
-## 1. Состояние проекта v1.6.3
+## 1. Состояние проекта v1.6.3b
 
 | Область | Значение |
 |---------|----------|
 | Application ID / namespace | `com.dedovmosol.iwomail` |
-| Version | `versionName = 1.6.3`, `versionCode = 26` |
+| Version | `versionName = 1.6.3b`, `versionCode = 26` |
 | SDK | `minSdk = 26`, `compileSdk = 36`, `targetSdk = 36` |
 | JVM target | Java/Kotlin `17` |
 | Kotlin | `1.9.22` |

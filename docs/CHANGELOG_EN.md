@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.6.3
+## v1.6.3b
 
 ### Architecture — MVVM adoption (incremental)
 - Introduced a `ViewModel` + immutable `UiState` + `StateFlow` layer to eliminate state-loss bugs on configuration changes (rotation)
