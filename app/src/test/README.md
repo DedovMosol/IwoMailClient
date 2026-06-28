@@ -24,6 +24,7 @@ test/
         ├── TasksViewModelTest.kt           # MVVM: задачи/корзина/фильтр + пакетные прогресс-обёртки
         ├── UserFoldersViewModelTest.kt     # MVVM: папки/фильтр/выделение + пакетное удаление с прогрессом
         ├── EmailListViewModelTest.kt       # MVVM: письма/фильтры/выделение + пакетные операции и синк
+        ├── EmailDetailViewModelTest.kt     # MVVM: письмо/тело/inline-картинки + операции (удаление/перенос/MDN)
         └── compose/
             └── ComposeTextUtilsTest.kt     # Подпись/цитата, cid→data:, извлечение email
 ```
@@ -148,6 +149,16 @@ VM без Robolectric: `MailRepository` + `AccountRepository` — MockK-моки
 - ✅ markSelectedAsRead/starSelected/toggleFlag — делегирование репозиторию; `Error` для batch
 - ✅ `deleteEmailsPermanently` — делегирование прогресс-обёртки репозиторию
 
+### EmailDetailViewModel (MVVM-слой, ядро экрана)
+VM без Robolectric: `EmailDetailActions` + `MailRepository` + `AccountRepository` — MockK-моки, IO-диспетчер тестовый, `emailId` в конструкторе.
+- ✅ init: письмо/вложения/папки из единого реактивного потока; derive флагов корзина/отправленные/черновики по типу папки
+- ✅ openEmail: непрочитанное → markAsRead; пустое тело → loadEmailBody; отсутствует → `BodyLoadError.NotFound`
+- ✅ OBJECT_NOT_FOUND и письма больше нет → `DeletedOnServer` + `NavigateBack`
+- ✅ inline-картинки загружаются в состояние
+- ✅ refresh: `Refreshed` / `NoBodyFromServer` / `Error` + соответствующий `bodyLoadError`
+- ✅ операции: deleteToTrash (`MovedToTrash`/`DeletedPermanently`+`NavigateBack`), move (`Moved`), restore (`Restored`), markUnread/sendMdn `Error`
+- ✅ toggleFlag/dismissMdn — делегирование; `deleteEmailPermanently` — прогресс-обёртка репозиторию
+
 ### EasClient (делегирование заметок)
 - ✅ syncNotes → notesService
 - ✅ createNote → notesService
@@ -246,6 +257,7 @@ fun `syncNotes delegates to notesService`() = runTest {
 15. ✅ TasksViewModel — MVVM-слой (задачи/корзина/фильтр + пакетные прогресс-обёртки)
 16. ✅ UserFoldersViewModel — MVVM-слой (папки/фильтр/выделение + пакетное удаление с прогрессом)
 17. ✅ EmailListViewModel — MVVM-слой (письма/фильтры/выделение + пакетные операции и синк)
+18. ✅ EmailDetailViewModel — MVVM-слой, ядро экрана (письмо/тело/inline-картинки + операции удаление/перенос/восстановление/MDN)
 
 > **Паттерн тестирования ViewModel:** принимай зависимости (репозитории + `CoroutineDispatcher`) через конструктор. Фабрика берёт реальные из `RepositoryProvider`, тест — моки. Андроид-конструктор репозиториев не запускается (MockK через Objenesis), поэтому Robolectric не нужен.
 

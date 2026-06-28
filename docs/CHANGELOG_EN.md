@@ -10,11 +10,12 @@
 - `TasksScreen` → `TasksViewModel`: tasks/trash/filter/selection/search and auto-sync live in the ViewModel; removed the `dataLoaded` flag; batch restore and permanent-delete (with progress bar) moved out of the Composable into ViewModel suspend wrappers
 - `UserFoldersScreen` → `UserFoldersViewModel`: user folder list (filter/sort), selection, create/rename/delete and batch-delete with progress live in the ViewModel; long-running operations moved out of `rememberSyncScope` (which was cancelled on rotation) into `viewModelScope` — they now survive rotation
 - `EmailListScreen` → `EmailListViewModel`: email list (folder/favorites/"Today"), filters, selection, sync and batch operations (to trash/spam, move, restore, read/unread, flags) live in the ViewModel; operations moved out of `rememberCoroutineScope` (which was cancelled on rotation) into `viewModelScope` — they are no longer interrupted by rotation; Drafts auto-sync now runs exactly once (no redundant sync or races on rotation); the current folder and the move-dialog folder list are derived from a single reactive stream
+- `EmailDetailScreen` → `EmailDetailViewModel` (screen core): the email/attachments/folders, body and inline-image loading, and operations (refresh, delete to trash, move, restore, read/unread, flag, MDN) live in the ViewModel; operations moved out of `rememberCoroutineScope` (which was cancelled on rotation — aborting delete/move) into `viewModelScope`; inline images are cached in state — eliminating their repeated network reload on every rotation; UI-only concerns (WebView, attachments, iCal/tasks, meeting invitations) remain in the Composable
 - One-shot UI events (toasts, sound, easter egg) moved to an event channel (`Channel` + `receiveAsFlow`) — the ViewModel stays independent of localization/resources
 - Dependencies are constructor-injected (DIP): system push/sync side-effects are hidden behind a `SyncEffects` interface
 
 ### Tests
-- Added ViewModel unit tests (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`, `EmailListViewModelTest`) on plain JUnit + MockK, no Robolectric
+- Added ViewModel unit tests (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`, `EmailListViewModelTest`, `EmailDetailViewModelTest`) on plain JUnit + MockK, no Robolectric
 
 
 ## v1.6.2 (27.02.2026)

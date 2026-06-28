@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.view.View
-import com.dedovmosol.iwomail.BuildConfig
 import android.webkit.WebView
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.background
@@ -23,6 +22,8 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -102,6 +103,14 @@ fun EmailDetailScreen(
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
 
+    val viewModel: EmailDetailViewModel = viewModel(
+        factory = EmailDetailViewModel.provideFactory(
+            context.applicationContext as android.app.Application,
+            emailId
+        )
+    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
     suspend fun fetchAttachmentBytes(att: AttachmentEntity): ByteArray? {
         if (!NetworkMonitor.isNetworkAvailable(context) && !(att.downloaded && att.localPath != null)) {
             SafeToast.short(context, if (isRussian) "Нет сети" else "No network")
@@ -116,25 +125,33 @@ fun EmailDetailScreen(
         }
     }
 
-    val email by mailRepo.getEmail(emailId).collectAsState(initial = null)
+    // Производные значения состояния (только чтение из VM); живут в ViewModel и переживают поворот.
+    val email = uiState.email
+    val attachments = uiState.attachments
+    val folders = uiState.folders
+    val isInTrash = uiState.isInTrash
+    val isInSent = uiState.isInSent
+    val isInDrafts = uiState.isInDrafts
+    val isLoadingBody = uiState.isLoadingBody
+    val inlineImages = uiState.inlineImages
+    val isMoving = uiState.isMoving
+    val isRestoring = uiState.isRestoring
+    val isDeleting = uiState.isDeleting
+    val isSendingMdn = uiState.isSendingMdn
 
-    // Вложения - используем Flow напрямую, сохраняем ID для восстановления после поворота
-    var attachmentIds by rememberSaveable { mutableStateOf<List<Long>>(emptyList()) }
-    val attachmentsFlow by mailRepo.getAttachments(emailId).collectAsState(initial = emptyList())
-
-    // Синхронизируем ID при получении данных из Flow
-    LaunchedEffect(attachmentsFlow) {
-        if (attachmentsFlow.isNotEmpty()) {
-            attachmentIds = attachmentsFlow.map { it.id }
+    // VM хранит семантическую ошибку тела; локализуем её в UI (VM независима от языка/ресурсов).
+    val bodyLoadErrorText: String? = uiState.bodyLoadError?.let { err ->
+        when (err) {
+            BodyLoadError.NotFound -> if (isRussian) "Письмо не найдено. Попробуйте обновить входящие." else "Email not found. Try refreshing inbox."
+            BodyLoadError.NoBodyFromServer -> if (isRussian) "Сервер не вернул текст письма. Попробуйте обновить письмо или открыть его через Outlook Web Access." else "Server returned no message body. Try refreshing this email or opening it in Outlook Web Access."
+            BodyLoadError.LoadFailed -> if (isRussian) "Не удалось загрузить тело письма" else "Failed to load email body"
+            BodyLoadError.Timeout -> if (isRussian) "Таймаут загрузки" else "Loading timeout"
+            is BodyLoadError.Raw -> NotificationStrings.localizeError(err.message, isRussian)
         }
     }
 
-    // Используем Flow напрямую - он автоматически обновится после поворота
-    val attachments = attachmentsFlow
-
+    // downloadingId — UI-состояние загрузки вложения (launcher'ы/файловый I/O), остаётся в UI.
     var downloadingId by rememberSaveable { mutableStateOf<Long?>(null) }
-    var isLoadingBody by remember { mutableStateOf(false) } // НЕ saveable - сбрасывается при входе
-    var bodyLoadError by remember { mutableStateOf<String?>(null) } // НЕ saveable
 
     // Save As: запоминаем вложение для сохранения через системный файл-пикер
     var pendingSaveAsAttachment by remember { mutableStateOf<AttachmentEntity?>(null) }
@@ -194,161 +211,18 @@ fun EmailDetailScreen(
         }
     }
 
-    // Диалог выбора папки для перемещения
+    // UI-состояние диалога переноса (список папок и флаги trash/sent/drafts живут в VM).
     var showMoveDialog by rememberSaveable { mutableStateOf(false) }
-    var folders by remember { mutableStateOf<List<com.dedovmosol.iwomail.data.database.FolderEntity>>(emptyList()) }
-    var isMoving by remember { mutableStateOf(false) }
-    var isRestoring by remember { mutableStateOf(false) }
 
-    // Загружаем папки для диалога перемещения
+    // activeAccount остаётся в UI: цвет аватара + UI-операции встреч/задач (accountRepo.getAccount).
     val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
-    LaunchedEffect(activeAccount?.id) {
-        activeAccount?.let { account ->
-            mailRepo.getFolders(account.id).collect { folders = it }
-        }
-    }
 
-    // Определяем, находится ли письмо в папке Удалённые (тип 4) или Отправленные (тип 5) или Черновики (тип 3)
-    val currentFolder = folders.find { it.id == email?.folderId }
-    val isInTrash = currentFolder?.type == FolderType.DELETED_ITEMS
-    val isInSent = currentFolder?.type == FolderType.SENT_ITEMS
-    val isInDrafts = currentFolder?.type == FolderType.DRAFTS
-
-    // Кэш inline изображений: contentId -> base64 data URL
-    var inlineImages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var isLoadingInlineImages by remember { mutableStateOf(false) }
-
-    // Загружаем inline изображения ПАРАЛЛЕЛЬНО
-    LaunchedEffect(email?.body, attachments, email?.folderId, email?.bodyType) {
-        val body = email?.body ?: return@LaunchedEffect
-        val currentEmail = email ?: return@LaunchedEffect
-        if (body.isEmpty()) return@LaunchedEffect
-        // КРИТИЧНО: НЕ проверяем isLoadingInlineImages в guard!
-        // При отмене LaunchedEffect (смена ключей, напр. attachments Flow) isLoadingInlineImages
-        // мог остаться = true от предыдущего выполнения → повторный LaunchedEffect навсегда
-        // блокировался, inline-картинки не загружались при повторном входе в письмо.
-        isLoadingInlineImages = false
-
-        if (BuildConfig.DEBUG) {
-            android.util.Log.d("InlineImages", "=== START: emailId=${currentEmail.id}, subject='${currentEmail.subject.take(30)}', bodyType=${currentEmail.bodyType}")
-            android.util.Log.d("InlineImages", "Attachments count: ${attachments.size}")
-        }
-
-        isLoadingInlineImages = true
-        try {
-            val loaded = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
-                actions.loadInlineImages(
-                    emailBody = body,
-                    bodyType = currentEmail.bodyType,
-                    emailServerId = currentEmail.serverId,
-                    folderId = currentEmail.folderId,
-                    accountId = currentEmail.accountId,
-                    attachments = attachments
-                )
-            } ?: emptyMap()
-            if (BuildConfig.DEBUG) {
-                android.util.Log.d("InlineImages", "=== FINISH: Total ${loaded.size} images loaded")
-            }
-            inlineImages = loaded
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            android.util.Log.w("InlineImages", "Failed to load inline images: ${e.message}")
-            inlineImages = emptyMap()
-        } finally {
-            isLoadingInlineImages = false
-        }
-    }
-
-    LaunchedEffect(emailId) {
-        val currentEmail = withContext(Dispatchers.IO) {
-            actions.getEmailSync(emailId)
-        }
-
-        if (currentEmail == null) {
-            bodyLoadError = if (isRussian) "Письмо не найдено. Попробуйте обновить входящие." else "Email not found. Try refreshing inbox."
-            return@LaunchedEffect
-        }
-
-        if (!currentEmail.read) {
-            launch(Dispatchers.IO) {
-                when (val result = actions.markAsRead(emailId, true)) {
-                    is EasResult.Success -> { }
-                    is EasResult.Error -> {
-                        withContext(Dispatchers.Main) {
-                            SafeToast.long(context, result.message)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Тело подгружается только если локально пусто. После поворота экрана
-        // тело уже в БД, LaunchedEffect не запускает повторную сетевую загрузку.
-        // Для ручного обновления используется кнопка refresh в TopAppBar
-        // (syncAndReloadBody → forceReload=true). Это исключает лишние запросы
-        // при рекомпозициях и config changes (best practice для Compose).
-        if (currentEmail.body.isEmpty() && !isLoadingBody) {
-            isLoadingBody = true
-            bodyLoadError = null
-            try {
-                val result = kotlinx.coroutines.withTimeoutOrNull(30_000L) {
-                    actions.loadEmailBody(emailId)
-                }
-                when (result) {
-                    is EasResult.Success -> {
-                        if (result.data.isBlank() && currentEmail.preview.isNotBlank()) {
-                            val fresh = withContext(Dispatchers.IO) { actions.getEmailSync(emailId) }
-                            if (fresh?.body.isNullOrBlank()) {
-                                bodyLoadError = if (isRussian)
-                                    "Сервер не вернул текст письма. Попробуйте обновить письмо или открыть его через Outlook Web Access."
-                                else
-                                    "Server returned no message body. Try refreshing this email or opening it in Outlook Web Access."
-                            }
-                        } else {
-                            launch(Dispatchers.IO) {
-                                try { actions.refreshAttachmentMetadata(emailId) } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                }
-                            }
-                        }
-                    }
-                    is EasResult.Error -> {
-                        if (result.message == "OBJECT_NOT_FOUND") {
-                            // Проверяем, было ли письмо действительно удалено из локальной БД.
-                            // Для Sent Items и Drafts loadEmailBody НЕ удаляет при OBJECT_NOT_FOUND.
-                            val stillExists = withContext(Dispatchers.IO) { actions.getEmailSync(emailId) } != null
-                            if (!stillExists) {
-                                SafeToast.short(context, if (isRussian) "Письмо удалено на сервере" else "Email deleted on server")
-                                onBackClick()
-                            } else {
-                                // Письмо не удалено — показываем preview если есть
-                                bodyLoadError = if (isRussian) "Не удалось загрузить тело письма" else "Failed to load email body"
-                            }
-                        } else {
-                            bodyLoadError = result.message
-                        }
-                    }
-                    null -> bodyLoadError = if (isRussian) "Таймаут загрузки" else "Loading timeout"
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                bodyLoadError = e.message
-            } finally {
-                isLoadingBody = false
-            }
-        }
-    }
-
-    // Диалог подтверждения удаления
+    // Диалог подтверждения удаления / MDN (isDeleting/isSendingMdn живут в VM).
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
-    var isDeleting by remember { mutableStateOf(false) }
+    var showMdnDialog by rememberSaveable { mutableStateOf(false) }
     val deletingSingleEmailMessage = Strings.deletingEmails(1)
 
-    // Диалог отчёта о прочтении (MDN)
-    var showMdnDialog by rememberSaveable { mutableStateOf(false) }
-    var isSendingMdn by remember { mutableStateOf(false) }
-
-    // Показываем диалог MDN если есть запрос и ещё не отправлен
+    // Показываем диалог MDN если есть запрос и ещё не отправлен.
     LaunchedEffect(email?.mdnRequestedBy, email?.mdnSent) {
         val e = email ?: return@LaunchedEffect
         if (!e.mdnRequestedBy.isNullOrBlank() && !e.mdnSent && !showMdnDialog) {
@@ -356,17 +230,39 @@ fun EmailDetailScreen(
         }
     }
 
+    // Одноразовые события VM → локализованные тосты + навигация назад.
+    // LaunchedEffect(Unit) живёт дольше рекомпозиции; язык может смениться в рантайме без
+    // пересоздания Activity, поэтому читаем актуальные значения через rememberUpdatedState.
+    val currentIsRussian by rememberUpdatedState(isRussian)
+    val onBackLatest by rememberUpdatedState(onBackClick)
+    val readReceiptSentText by rememberUpdatedState(Strings.readReceiptSent)
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            val ru = currentIsRussian
+            when (event) {
+                EmailDetailEvent.NavigateBack -> onBackLatest()
+                EmailDetailEvent.MovedToTrash -> SafeToast.short(context, NotificationStrings.getMovedToTrash(ru))
+                EmailDetailEvent.DeletedPermanently -> SafeToast.short(context, NotificationStrings.getDeletedPermanently(ru))
+                EmailDetailEvent.Moved -> SafeToast.short(context, NotificationStrings.getMoved(ru))
+                EmailDetailEvent.Restored -> SafeToast.short(context, NotificationStrings.getRestored(ru))
+                EmailDetailEvent.Refreshed -> SafeToast.short(context, if (ru) "Письмо обновлено" else "Email refreshed")
+                EmailDetailEvent.ReadReceiptSent -> SafeToast.short(context, readReceiptSentText)
+                EmailDetailEvent.DeletedOnServer -> SafeToast.short(context, if (ru) "Письмо удалено на сервере" else "Email deleted on server")
+                EmailDetailEvent.NoBodyFromServer -> SafeToast.long(context, if (ru) "Сервер не вернул текст письма. Откройте его через Outlook Web Access." else "Server returned no message body. Try opening this email in Outlook Web Access.")
+                is EmailDetailEvent.Error -> SafeToast.long(context, NotificationStrings.localizeError(event.message, ru))
+            }
+        }
+    }
+
     // Диалог MDN
     // КРИТИЧНО: используем локальную переменную вместо !! чтобы избежать NPE при race condition в recomposition
     val currentEmail = email
     if (showMdnDialog && currentEmail != null && !currentEmail.mdnRequestedBy.isNullOrBlank()) {
-        val mdnEmail = currentEmail
-        val readReceiptSentText = Strings.readReceiptSent
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = {
                 showMdnDialog = false
                 // Помечаем что пользователь отказался (чтобы не показывать снова)
-                scope.launch { actions.markMdnSent(emailId) }
+                viewModel.dismissMdn()
             },
             icon = { Icon(AppIcons.MarkEmailRead, null, tint = MaterialTheme.colorScheme.primary) },
             title = { Text(Strings.readReceiptRequest) },
@@ -374,19 +270,9 @@ fun EmailDetailScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        scope.launch {
-                            isSendingMdn = true
-                            when (val result = actions.sendMdn(emailId)) {
-                                is EasResult.Success -> {
-                                    SafeToast.short(context, readReceiptSentText)
-                                }
-                                is EasResult.Error -> {
-                                    SafeToast.long(context, result.message)
-                                }
-                            }
-                            isSendingMdn = false
-                            showMdnDialog = false
-                        }
+                        // Тост об отправке отчёта приходит через событие ReadReceiptSent.
+                        viewModel.sendMdn()
+                        showMdnDialog = false
                     },
                     enabled = !isSendingMdn
                 ) {
@@ -401,7 +287,7 @@ fun EmailDetailScreen(
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = {
                         showMdnDialog = false
-                        scope.launch { actions.markMdnSent(emailId) }
+                        viewModel.dismissMdn()
                     },
                     text = Strings.no,
                     enabled = !isSendingMdn
@@ -423,15 +309,15 @@ fun EmailDetailScreen(
                         showDeleteDialog = false
                         com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                         if (isInTrash) {
+                            // Окончательное удаление с прогресс-баром: контроллер вызывает
+                            // suspend-обёртку VM (её scope переживает выход с экрана — 1:1 с исходником).
                             deletionController.startDeletion(
                                 emailIds = listOf(emailId),
                                 message = deletingSingleEmailMessage,
                                 scope = scope
                             ) { ids, onProgress ->
-                                val result = withContext(Dispatchers.IO) {
-                                    mailRepo.deleteEmailsPermanentlyWithProgress(ids) { deleted, total ->
-                                        onProgress(deleted, total)
-                                    }
+                                val result = viewModel.deleteEmailPermanently(ids) { deleted, total ->
+                                    onProgress(deleted, total)
                                 }
                                 when (result) {
                                     is EasResult.Success -> SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
@@ -439,26 +325,8 @@ fun EmailDetailScreen(
                                 }
                             }
                         } else {
-                            scope.launch {
-                                isDeleting = true
-                                val result = actions.deleteEmails(listOf(emailId), false)
-                                isDeleting = false
-                                when (result) {
-                                    is EasResult.Success -> {
-                                        val message = if ((result.data as? Int ?: 0) > 0) {
-                                            NotificationStrings.getMovedToTrash(isRussian)
-                                        } else {
-                                            NotificationStrings.getDeletedPermanently(isRussian)
-                                        }
-                                        SafeToast.short(context, message)
-                                        onBackClick()
-                                    }
-                                    is EasResult.Error -> {
-                                        val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                        SafeToast.long(context, localizedMsg)
-                                    }
-                                }
-                            }
+                            // Мягкое удаление: тост (в корзину/удалено) и навигация назад — через события VM.
+                            viewModel.deleteToTrash()
                         }
                     },
                     text = Strings.yes,
@@ -513,22 +381,8 @@ fun EmailDetailScreen(
                                     },
                                     modifier = Modifier.clickable(enabled = !isMoving) {
                                         if (isMoving) return@clickable
-                                        scope.launch {
-                                            isMoving = true
-                                            val result = actions.moveEmails(listOf(emailId), folder.id)
-                                            when (result) {
-                                                is EasResult.Success -> {
-                                                    SafeToast.short(context, NotificationStrings.getMoved(isRussian))
-                                                    showMoveDialog = false
-                                                    onBackClick()
-                                                }
-                                                is EasResult.Error -> {
-                                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                    SafeToast.long(context, localizedMsg)
-                                                }
-                                            }
-                                            isMoving = false
-                                        }
+                                        // Тост о переносе и навигация назад — через события VM.
+                                        viewModel.move(folder.id)
                                     }
                                 )
                             }
@@ -559,45 +413,8 @@ fun EmailDetailScreen(
                 actions = {
                     // Обновить письмо (sync папки + перезагрузка тела)
                     IconButton(
-                        onClick = {
-                            val currentEmail = email ?: return@IconButton
-                            scope.launch {
-                                isLoadingBody = true
-                                bodyLoadError = null
-                                try {
-                                    val result = actions.syncAndReloadBody(emailId, currentEmail.accountId, currentEmail.folderId)
-                                    when (result) {
-                                        is EasResult.Success -> {
-                                            // Проверяем, удалось ли действительно подтянуть тело.
-                                            // Exchange 2007 SP1 может вернуть пустое тело для части
-                                            // Sent Items (ItemOperations Status=8 + нет EWS-кандидатов).
-                                            // В этом случае сообщаем пользователю, а не делаем вид,
-                                            // что всё обновилось.
-                                            val fresh = withContext(Dispatchers.IO) { actions.getEmailSync(emailId) }
-                                            if (fresh?.body.isNullOrEmpty()) {
-                                                val msg = if (isRussian)
-                                                    "Сервер не вернул текст письма. Откройте его через Outlook Web Access."
-                                                else
-                                                    "Server returned no message body. Try opening this email in Outlook Web Access."
-                                                bodyLoadError = msg
-                                                SafeToast.long(context, msg)
-                                            } else {
-                                                SafeToast.short(context, if (isRussian) "Письмо обновлено" else "Email refreshed")
-                                            }
-                                        }
-                                        is EasResult.Error -> {
-                                            bodyLoadError = result.message
-                                            SafeToast.long(context, result.message)
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    bodyLoadError = e.message
-                                } finally {
-                                    isLoadingBody = false
-                                }
-                            }
-                        },
+                        // Обновление (sync папки + перезагрузка тела) — в VM; тосты через события.
+                        onClick = { viewModel.refresh() },
                         enabled = !isLoadingBody
                     ) {
                         Icon(AppIcons.Refresh, Strings.refresh, tint = Color.White)
@@ -625,21 +442,8 @@ fun EmailDetailScreen(
                                     text = { Text(Strings.restore) },
                                     onClick = {
                                         showOverflowMenu = false
-                                        scope.launch {
-                                            isRestoring = true
-                                            val result = actions.restoreFromTrash(listOf(emailId))
-                                            when (result) {
-                                                is EasResult.Success -> {
-                                                    SafeToast.short(context, NotificationStrings.getRestored(isRussian))
-                                                    onBackClick()
-                                                }
-                                                is EasResult.Error -> {
-                                                    val localizedMsg = NotificationStrings.localizeError(result.message, isRussian)
-                                                    SafeToast.long(context, localizedMsg)
-                                                }
-                                            }
-                                            isRestoring = false
-                                        }
+                                        // Тост о восстановлении и навигация назад — через события VM.
+                                        viewModel.restore()
                                     },
                                     leadingIcon = { Icon(AppIcons.Restore, null) },
                                     enabled = !isRestoring
@@ -656,14 +460,7 @@ fun EmailDetailScreen(
                                     text = { Text(Strings.markUnread) },
                                     onClick = {
                                         showOverflowMenu = false
-                                        scope.launch {
-                                            when (val result = actions.markAsRead(emailId, false)) {
-                                                is EasResult.Success -> { /* OK */ }
-                                                is EasResult.Error -> {
-                                                    SafeToast.long(context, result.message)
-                                                }
-                                            }
-                                        }
+                                        viewModel.markUnread()
                                     },
                                     leadingIcon = { Icon(AppIcons.MarkEmailUnread, null) }
                                 )
@@ -808,7 +605,7 @@ fun EmailDetailScreen(
                     // Звёздочка избранного только если НЕ в корзине и НЕ черновик
                     if (!isInTrash && !isInDrafts) {
                         IconButton(onClick = {
-                            scope.launch { actions.toggleFlag(emailId) }
+                            viewModel.toggleFlag()
                         }) {
                             Icon(
                                 imageVector = if (currentEmail.flagged) AppIcons.Star else AppIcons.StarOutline,
@@ -1660,7 +1457,7 @@ fun EmailDetailScreen(
                             Text(Strings.loadingEmail, style = MaterialTheme.typography.bodySmall)
                         }
                     }
-                } else if (bodyLoadError != null) {
+                } else if (bodyLoadErrorText != null) {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1670,7 +1467,7 @@ fun EmailDetailScreen(
                         )
                     ) {
                         Text(
-                            text = "${Strings.loadError}: $bodyLoadError",
+                            text = "${Strings.loadError}: $bodyLoadErrorText",
                             modifier = Modifier.padding(16.dp),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
