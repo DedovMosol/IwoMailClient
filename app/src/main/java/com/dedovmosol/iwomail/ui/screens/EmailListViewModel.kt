@@ -267,11 +267,18 @@ class EmailListViewModel(
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) { mailRepo.moveToTrash(ids) }
-            clearSelection()
-            when (result) {
-                is EasResult.Success -> sendEvent(EmailListEvent.MovedToTrash(result.data))
-                is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+            try {
+                val result = withContext(ioDispatcher) { mailRepo.moveToTrash(ids) }
+                when (result) {
+                    is EasResult.Success -> sendEvent(EmailListEvent.MovedToTrash(result.data))
+                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                clearSelection()
             }
         }
     }
@@ -284,11 +291,18 @@ class EmailListViewModel(
             return
         }
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) { mailRepo.deleteDrafts(ids) }
-            clearSelection()
-            when (result) {
-                is EasResult.Success -> sendEvent(EmailListEvent.DeletedPermanently(result.data))
-                is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+            try {
+                val result = withContext(ioDispatcher) { mailRepo.deleteDrafts(ids) }
+                when (result) {
+                    is EasResult.Success -> sendEvent(EmailListEvent.DeletedPermanently(result.data))
+                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                clearSelection()
             }
         }
     }
@@ -298,9 +312,15 @@ class EmailListViewModel(
         clearSelection()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            when (val result = withContext(ioDispatcher) { mailRepo.markAsReadBatch(ids, read) }) {
-                is EasResult.Success -> {}
-                is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+            try {
+                when (val result = withContext(ioDispatcher) { mailRepo.markAsReadBatch(ids, read) }) {
+                    is EasResult.Success -> {}
+                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -340,11 +360,18 @@ class EmailListViewModel(
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) { mailRepo.moveEmails(ids, targetFolderId) }
-            clearSelection()
-            when (result) {
-                is EasResult.Success -> sendEvent(EmailListEvent.Moved(result.data))
-                is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+            try {
+                val result = withContext(ioDispatcher) { mailRepo.moveEmails(ids, targetFolderId) }
+                when (result) {
+                    is EasResult.Success -> sendEvent(EmailListEvent.Moved(result.data))
+                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                clearSelection()
             }
         }
     }
@@ -353,11 +380,18 @@ class EmailListViewModel(
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) { mailRepo.restoreFromTrash(ids) }
-            clearSelection()
-            when (result) {
-                is EasResult.Success -> sendEvent(EmailListEvent.Restored(result.data))
-                is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+            try {
+                val result = withContext(ioDispatcher) { mailRepo.restoreFromTrash(ids) }
+                when (result) {
+                    is EasResult.Success -> sendEvent(EmailListEvent.Restored(result.data))
+                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                clearSelection()
             }
         }
     }
@@ -366,11 +400,18 @@ class EmailListViewModel(
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) { mailRepo.moveToSpam(ids) }
-            clearSelection()
-            when (result) {
-                is EasResult.Success -> sendEvent(EmailListEvent.MovedToSpam(result.data))
-                is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+            try {
+                val result = withContext(ioDispatcher) { mailRepo.moveToSpam(ids) }
+                when (result) {
+                    is EasResult.Success -> sendEvent(EmailListEvent.MovedToSpam(result.data))
+                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                clearSelection()
             }
         }
     }

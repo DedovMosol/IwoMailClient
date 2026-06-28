@@ -13,6 +13,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -336,6 +337,94 @@ class EmailDetailViewModelTest {
         advanceUntilIdle()
 
         coVerify { actions.markMdnSent(EMAIL_ID) }
+    }
+
+    // ===================== crash resistance (exception handling) =====================
+
+    @Test
+    fun `openEmail does not crash when markAsRead throws exception`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email(read = false)
+        coEvery { actions.markAsRead(EMAIL_ID, true) } throws RuntimeException("EAS protocol error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.bodyLoadError).isNull()
+    }
+
+    @Test
+    fun `openEmail does not crash when getEmailSync throws SQLiteException`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } throws RuntimeException("database corruption")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.bodyLoadError).isEqualTo(BodyLoadError.LoadFailed)
+    }
+
+    @Test
+    fun `deleteToTrash does not crash when actions throws exception`() = runTest(dispatcher) {
+        coEvery { actions.deleteEmails(listOf(EMAIL_ID), false) } throws RuntimeException("network failure")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.deleteToTrash()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(vm.uiState.value.isDeleting).isFalse()
+    }
+
+    @Test
+    fun `move does not crash when actions throws exception`() = runTest(dispatcher) {
+        coEvery { actions.moveEmails(listOf(EMAIL_ID), "target") } throws RuntimeException("EAS sync error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.move("target")
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(vm.uiState.value.isMoving).isFalse()
+    }
+
+    @Test
+    fun `restore does not crash when actions throws exception`() = runTest(dispatcher) {
+        coEvery { actions.restoreFromTrash(listOf(EMAIL_ID)) } throws RuntimeException("server error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.restore()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(vm.uiState.value.isRestoring).isFalse()
+    }
+
+    @Test
+    fun `sendMdn does not crash when actions throws exception`() = runTest(dispatcher) {
+        coEvery { actions.sendMdn(EMAIL_ID) } throws RuntimeException("MDN send failed")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.sendMdn()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(vm.uiState.value.isSendingMdn).isFalse()
+    }
+
+    @Test
+    fun `markUnread does not crash when actions throws exception`() = runTest(dispatcher) {
+        coEvery { actions.markAsRead(EMAIL_ID, false) } throws RuntimeException("db error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.markUnread()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
     }
 
     // ===================== permanent delete wrapper =====================

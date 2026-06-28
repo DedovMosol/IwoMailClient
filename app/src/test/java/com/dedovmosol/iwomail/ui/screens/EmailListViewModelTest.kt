@@ -373,6 +373,97 @@ class EmailListViewModelTest {
         assertThat(events).contains(EmailListEvent.Error("move-fail"))
     }
 
+    // ===================== crash resistance (exception handling) =====================
+
+    @Test
+    fun `deleteSelectedToTrash does not crash when repository throws exception`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToTrash(any()) } throws RuntimeException("network failure")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("a"))
+
+        vm.deleteSelectedToTrash()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
+    @Test
+    fun `deleteSelectedDrafts does not crash when repository throws exception`() = runTest(dispatcher) {
+        coEvery { mailRepo.deleteDrafts(any()) } throws RuntimeException("EWS error")
+        val vm = createViewModel(folderId = DRAFTS_ID)
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("a"))
+
+        vm.deleteSelectedDrafts()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
+    @Test
+    fun `moveSelectedTo does not crash when repository throws exception`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveEmails(any(), any()) } throws RuntimeException("sync error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("a"))
+
+        vm.moveSelectedTo("target")
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
+    @Test
+    fun `restoreSelected does not crash when repository throws exception`() = runTest(dispatcher) {
+        coEvery { mailRepo.restoreFromTrash(any()) } throws RuntimeException("server error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("a"))
+
+        vm.restoreSelected()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
+    @Test
+    fun `moveSelectedToSpam does not crash when repository throws exception`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToSpam(any()) } throws RuntimeException("spam filter error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("a"))
+
+        vm.moveSelectedToSpam()
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
+    @Test
+    fun `markSelectedAsRead does not crash when repository throws exception`() = runTest(dispatcher) {
+        coEvery { mailRepo.markAsReadBatch(any(), any()) } throws RuntimeException("db error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("a"))
+
+        vm.markSelectedAsRead(true)
+        advanceUntilIdle()
+
+        assertThat(events).anyMatch { it is EmailListEvent.Error }
+    }
+
     // ===================== progress-bar wrapper (вызывается из DeletionController) =====================
 
     @Test

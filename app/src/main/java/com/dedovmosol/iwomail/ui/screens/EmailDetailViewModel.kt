@@ -216,21 +216,34 @@ class EmailDetailViewModel(
      */
     private fun openEmail() {
         viewModelScope.launch {
-            val current = withContext(ioDispatcher) { actions.getEmailSync(emailId) }
-            if (current == null) {
-                _uiState.update { it.copy(bodyLoadError = BodyLoadError.NotFound) }
-                return@launch
-            }
-            if (!current.read) {
-                launch {
-                    when (val result = actions.markAsRead(emailId, true)) {
-                        is EasResult.Success -> {}
-                        is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+            try {
+                val current = withContext(ioDispatcher) { actions.getEmailSync(emailId) }
+                if (current == null) {
+                    _uiState.update { it.copy(bodyLoadError = BodyLoadError.NotFound) }
+                    return@launch
+                }
+                if (!current.read) {
+                    launch {
+                        try {
+                            when (val result = actions.markAsRead(emailId, true)) {
+                                is EasResult.Success -> {}
+                                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.e("EmailDetailViewModel", "markAsRead failed on open", e)
+                        }
                     }
                 }
-            }
-            if (current.body.isEmpty() && !_uiState.value.isLoadingBody) {
-                loadBodyInitial(current)
+                if (current.body.isEmpty() && !_uiState.value.isLoadingBody) {
+                    loadBodyInitial(current)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("EmailDetailViewModel", "openEmail failed for $emailId", e)
+                _uiState.update { it.copy(bodyLoadError = BodyLoadError.LoadFailed) }
             }
         }
     }
@@ -321,15 +334,22 @@ class EmailDetailViewModel(
         if (_uiState.value.isDeleting) return
         viewModelScope.launch {
             _uiState.update { it.copy(isDeleting = true) }
-            val result = actions.deleteEmails(listOf(emailId), isInTrash = false)
-            _uiState.update { it.copy(isDeleting = false) }
-            when (result) {
-                is EasResult.Success -> {
-                    val count = (result.data as? Int) ?: 0
-                    sendEvent(if (count > 0) EmailDetailEvent.MovedToTrash else EmailDetailEvent.DeletedPermanently)
-                    sendEvent(EmailDetailEvent.NavigateBack)
+            try {
+                val result = actions.deleteEmails(listOf(emailId), isInTrash = false)
+                when (result) {
+                    is EasResult.Success -> {
+                        val count = (result.data as? Int) ?: 0
+                        sendEvent(if (count > 0) EmailDetailEvent.MovedToTrash else EmailDetailEvent.DeletedPermanently)
+                        sendEvent(EmailDetailEvent.NavigateBack)
+                    }
+                    is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
                 }
-                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isDeleting = false) }
             }
         }
     }
@@ -338,14 +358,21 @@ class EmailDetailViewModel(
         if (_uiState.value.isMoving) return
         viewModelScope.launch {
             _uiState.update { it.copy(isMoving = true) }
-            val result = actions.moveEmails(listOf(emailId), targetFolderId)
-            _uiState.update { it.copy(isMoving = false) }
-            when (result) {
-                is EasResult.Success -> {
-                    sendEvent(EmailDetailEvent.Moved)
-                    sendEvent(EmailDetailEvent.NavigateBack)
+            try {
+                val result = actions.moveEmails(listOf(emailId), targetFolderId)
+                when (result) {
+                    is EasResult.Success -> {
+                        sendEvent(EmailDetailEvent.Moved)
+                        sendEvent(EmailDetailEvent.NavigateBack)
+                    }
+                    is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
                 }
-                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isMoving = false) }
             }
         }
     }
@@ -354,23 +381,36 @@ class EmailDetailViewModel(
         if (_uiState.value.isRestoring) return
         viewModelScope.launch {
             _uiState.update { it.copy(isRestoring = true) }
-            val result = actions.restoreFromTrash(listOf(emailId))
-            _uiState.update { it.copy(isRestoring = false) }
-            when (result) {
-                is EasResult.Success -> {
-                    sendEvent(EmailDetailEvent.Restored)
-                    sendEvent(EmailDetailEvent.NavigateBack)
+            try {
+                val result = actions.restoreFromTrash(listOf(emailId))
+                when (result) {
+                    is EasResult.Success -> {
+                        sendEvent(EmailDetailEvent.Restored)
+                        sendEvent(EmailDetailEvent.NavigateBack)
+                    }
+                    is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
                 }
-                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isRestoring = false) }
             }
         }
     }
 
     fun markUnread() {
         viewModelScope.launch {
-            when (val result = actions.markAsRead(emailId, false)) {
-                is EasResult.Success -> {}
-                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+            try {
+                when (val result = actions.markAsRead(emailId, false)) {
+                    is EasResult.Success -> {}
+                    is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -391,11 +431,18 @@ class EmailDetailViewModel(
         if (_uiState.value.isSendingMdn) return
         viewModelScope.launch {
             _uiState.update { it.copy(isSendingMdn = true) }
-            val result = actions.sendMdn(emailId)
-            _uiState.update { it.copy(isSendingMdn = false) }
-            when (result) {
-                is EasResult.Success -> sendEvent(EmailDetailEvent.ReadReceiptSent)
-                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+            try {
+                val result = actions.sendMdn(emailId)
+                when (result) {
+                    is EasResult.Success -> sendEvent(EmailDetailEvent.ReadReceiptSent)
+                    is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isSendingMdn = false) }
             }
         }
     }
