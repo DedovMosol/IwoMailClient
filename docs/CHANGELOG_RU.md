@@ -18,6 +18,8 @@
 - Добавлена тактильная отдача (haptic) при тапе на звёздочку (флаг) в списке писем и на экране просмотра письма — единообразно с long-press/выделением
 - Динамические accessibility-лейблы для звёздочки: «Добавить в избранное» / «Убрать из избранного» в зависимости от состояния (раньше статичное «Избранные письма»)
 - Accessibility-лейбл для иконки вложения в строке списка (раньше `null` — TalkBack не озвучивал)
+- Исправлен accessibility-лейбл кнопки «пометить выбранные» на экране поиска: `Strings.star` («Пометить») вместо `Strings.favorites` («Избранные письма»)
+- DRY: удалён дубликат `Strings.unstar` (идентичен `Strings.removeFromFavorites`); единственное использование заменено на `Strings.removeFromFavorites`
 
 ### Тесты
 - Добавлены юнит-тесты ViewModel (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`, `EmailListViewModelTest`, `EmailDetailViewModelTest`) на чистом JUnit + MockK, без Robolectric

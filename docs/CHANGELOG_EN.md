@@ -18,6 +18,8 @@
 - Added haptic feedback when tapping the star (flag) in the email list and on the email detail screen — consistent with long-press/selection
 - Dynamic accessibility labels for the star: "Add to favorites" / "Remove from favorites" depending on state (previously a static "Favorites" label)
 - Accessibility label for the attachment icon in the list row (previously `null` — TalkBack did not announce it)
+- Fixed accessibility label for the "star selected" button in SearchScreen: `Strings.star` ("Star") instead of `Strings.favorites` ("Favorites")
+- DRY: removed duplicate `Strings.unstar` (identical to `Strings.removeFromFavorites`); sole usage replaced with `Strings.removeFromFavorites`
 
 ### Tests
 - Added ViewModel unit tests (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`, `EmailListViewModelTest`, `EmailDetailViewModelTest`) on plain JUnit + MockK, no Robolectric

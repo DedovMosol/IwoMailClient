@@ -741,7 +741,7 @@ private fun SelectionTopBar(
         actions = {
             // В избранном - кнопка "Убрать из избранного"
             if (isFavorites) {
-                IconButton(onClick = onUnstar) { Icon(AppIcons.StarOutline, Strings.unstar, tint = Color.White) }
+                IconButton(onClick = onUnstar) { Icon(AppIcons.StarOutline, Strings.removeFromFavorites, tint = Color.White) }
             }
             // В корзине - кнопка Восстановить, иначе - Переместить
             if (isTrashFolder) {

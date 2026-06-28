@@ -184,7 +184,7 @@ fun SearchScreen(
                             Icon(AppIcons.MarkEmailRead, Strings.markRead)
                         }
                         IconButton(onClick = { viewModel.starSelected() }) {
-                            Icon(AppIcons.Star, Strings.favorites)
+                            Icon(AppIcons.Star, Strings.star)
                         }
                         IconButton(onClick = { showDeleteDialog = true }) {
                             Icon(AppIcons.Delete, Strings.delete)

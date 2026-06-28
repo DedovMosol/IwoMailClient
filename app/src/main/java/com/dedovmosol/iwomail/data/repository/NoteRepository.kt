@@ -118,7 +118,7 @@ class NoteRepository(private val context: Context) {
                         } else {
                             android.util.Log.d("NotesDebug", "Server didn't return new ID - syncNotes will create proper entry")
                         }
-                        // Если сервер не вернул новый ID - syncNotes создаст правильную запись
+                        // Если сервер не вернул реальный ID — ищем в БД после синхронизации или создаём локально
 
                         // КРИТИЧНО: Синхронизация получит актуальный serverId с сервера
                         // Это гарантирует что БД будет содержать правильный serverId
@@ -547,7 +547,7 @@ class NoteRepository(private val context: Context) {
                             android.util.Log.d("NotesDebug", "Server returned newServerId: $newServerId (old was ${note.serverId})")
                             if (newServerId != note.serverId) {
                                 android.util.Log.d("NotesDebug", "ServerId changed - deleting old locally, creating new")
-                                // КРИТИЧНО: Сервер создал новую копию, нужно удалить старую из корзины на сервере
+                                // КРИТИЧНО: Сервер переместил заметку (новый serverId), удаляем старую запись из локальной БД и на сервере
                                 android.util.Log.d("NotesDebug", "Hard-deleting old serverId from server trash: ${note.serverId}")
                                 easClient.deleteNotePermanently(note.serverId) // Не проверяем результат
 
