@@ -29,7 +29,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -95,6 +97,7 @@ fun EmailDetailScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val view = LocalView.current
+    val haptic = LocalHapticFeedback.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
@@ -605,11 +608,12 @@ fun EmailDetailScreen(
                     // Звёздочка избранного только если НЕ в корзине и НЕ черновик
                     if (!isInTrash && !isInDrafts) {
                         IconButton(onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             viewModel.toggleFlag()
                         }) {
                             Icon(
                                 imageVector = if (currentEmail.flagged) AppIcons.Star else AppIcons.StarOutline,
-                                contentDescription = Strings.favorites,
+                                contentDescription = if (currentEmail.flagged) Strings.removeFromFavorites else Strings.addToFavorites,
                                 tint = if (currentEmail.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites
                                        else MaterialTheme.colorScheme.onSurfaceVariant
                             )

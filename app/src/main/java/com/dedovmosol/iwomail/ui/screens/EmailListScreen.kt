@@ -1293,7 +1293,7 @@ private fun EmailListItem(
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     if (email.hasAttachments) {
-                        Icon(AppIcons.Attachment, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(AppIcons.Attachment, Strings.attachments, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     if (isDrafts) {
@@ -1358,10 +1358,16 @@ private fun EmailListItem(
             Spacer(modifier = Modifier.width(8.dp))
 
             if (showStar) {
-                IconButton(onClick = onStarClick, modifier = Modifier.size(40.dp)) {
+                IconButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onStarClick()
+                    },
+                    modifier = Modifier.size(40.dp)
+                ) {
                     Icon(
                         imageVector = if (email.flagged) AppIcons.Star else AppIcons.StarOutline,
-                        contentDescription = Strings.favorites,
+                        contentDescription = if (email.flagged) Strings.removeFromFavorites else Strings.addToFavorites,
                         tint = if (email.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp)
                     )

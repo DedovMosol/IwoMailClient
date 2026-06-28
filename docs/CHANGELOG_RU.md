@@ -14,6 +14,11 @@
 - Одноразовые UI-события (тосты, звук, пасхалка) вынесены в канал событий (`Channel` + `receiveAsFlow`) — ViewModel не зависит от локализации/ресурсов
 - Зависимости передаются через конструктор (DIP): системные эффекты push/синхронизации скрыты за интерфейсом `SyncEffects`
 
+### UX — тактильная отдача и доступность
+- Добавлена тактильная отдача (haptic) при тапе на звёздочку (флаг) в списке писем и на экране просмотра письма — единообразно с long-press/выделением
+- Динамические accessibility-лейблы для звёздочки: «Добавить в избранное» / «Убрать из избранного» в зависимости от состояния (раньше статичное «Избранные письма»)
+- Accessibility-лейбл для иконки вложения в строке списка (раньше `null` — TalkBack не озвучивал)
+
 ### Тесты
 - Добавлены юнит-тесты ViewModel (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`, `EmailListViewModelTest`, `EmailDetailViewModelTest`) на чистом JUnit + MockK, без Robolectric
 
