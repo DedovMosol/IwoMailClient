@@ -247,7 +247,7 @@ class EmailDetailViewModel(
                         }
                     } else {
                         // Метаданные вложений обновляем фоном, не блокируя показ тела.
-                        launch {
+                        viewModelScope.launch {
                             try {
                                 actions.refreshAttachmentMetadata(emailId)
                             } catch (e: CancellationException) {
