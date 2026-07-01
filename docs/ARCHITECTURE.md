@@ -236,7 +236,7 @@ EWS requests use SOAP and `RequestServerVersion="Exchange2007_SP1"` by default. 
 2. `EmailSyncService` syncs system folders and user folders with full/incremental strategies.
 3. `MailRepository` exposes UI-facing methods and delegates heavy logic.
 4. `EmailOperationsService` handles move, delete, permanent delete, mark read, flag and MDN flows.
-5. `OutboxWorker` retries offline outgoing messages when network returns.
+5. `OutboxWorker` retries offline outgoing messages when network returns. Each queued message carries a stable `ClientId`/`Message-ID` reused across retries, so a retry after a lost response is deduplicated by the server on EAS 14+ (MS-ASCMD `SendMail` ClientId) instead of being delivered twice; on Exchange 2007 (EAS 12.1, raw-MIME `SendMail` without ClientId) the stable Message-ID is a best-effort identity (N-11).
 
 Orphan detection after full resync uses lightweight DAO projections to avoid loading full `EmailEntity` for large folders:
 

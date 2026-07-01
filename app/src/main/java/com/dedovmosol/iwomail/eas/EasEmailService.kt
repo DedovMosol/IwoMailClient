@@ -188,7 +188,7 @@ class EasEmailService internal constructor(
                 // N-11: единый стабильный идентификатор для дедупликации при retry — используется
                 // и как WBXML ClientId (EAS 14+: сервер отбрасывает дубликат по ClientId), и как
                 // основа MIME Message-ID. Если не задан (обычная отправка) — уникальный millis.nano.
-                val clientId = stableClientId ?: "${System.currentTimeMillis()}.${System.nanoTime()}"
+                val clientId = stableClientId ?: freshSendToken()
                 val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
 
                 val easVersion = deps.getEasVersion()
@@ -1277,6 +1277,10 @@ $deleteCommands
 
     // ==================== Private methods ====================
 
+    // N-11 (DRY): единый источник уникального токена отправки — используется как fallback, когда
+    // стабильный ClientId не задан (обычная отправка / SmartForward без дедупликации).
+    private fun freshSendToken(): String = "${System.currentTimeMillis()}.${System.nanoTime()}"
+
     private fun buildMimeMessageBytes(
         to: String,
         subject: String,
@@ -1292,7 +1296,7 @@ $deleteCommands
         val deviceId = deps.getDeviceId()
         // N-11: стабильный Message-ID из clientId (если задан), иначе уникальный millis.nano —
         // чтобы повторная отправка одной записи очереди не порождала новый Message-ID.
-        val messageId = "<${clientId ?: "${System.currentTimeMillis()}.${System.nanoTime()}"}@$deviceId>"
+        val messageId = "<${clientId ?: freshSendToken()}@$deviceId>"
 
         val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
         val date = dateFormat.format(java.util.Date())
