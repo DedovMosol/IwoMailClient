@@ -30,6 +30,7 @@
 - Battery: all screens switched to lifecycle-aware state collection (`collectAsStateWithLifecycle`) — flow collection pauses while a screen is not visible, cutting background CPU/battery use (N-8)
 - Crash resilience: screen operations (deleting accounts/contacts/events, settings, etc.) can no longer crash the app on a DB/I-O error — the failure is isolated and logged (UI-1)
 - Account setup: the selected certificate (server/client) is no longer deleted when rotating the screen mid-setup — self-signed Exchange now sets up correctly (SET-1)
+- Account verification: the entered password is no longer reset when rotating the screen during verification — fixes a false "verification session expired, re-enter password" (SET-2)
 - Attachments: removed a faulty fallback that saved the entire email instead of the attachment when the direct download failed (corrupt file) (PB-1)
 - Stability: opening heavy emails with large attachments/images no longer crashes the app on low memory — the email is shown without inline images (PB-2)
 - Crash resilience (cont.): background app, push/sync, alarm and receiver operations can no longer crash the process on an uncaught error — a single crash-safe scope isolates and logs the failure

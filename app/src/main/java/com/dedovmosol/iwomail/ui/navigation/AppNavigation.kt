@@ -26,6 +26,7 @@ import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.MainScreen
 import com.dedovmosol.iwomail.ui.screens.*
+import com.dedovmosol.iwomail.ui.utils.findActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -850,8 +851,10 @@ fun AppNavigation(
             val activityContext = LocalContext.current
             DisposableEffect(backStackEntry.id) {
                 onDispose {
-                    val isConfigChange = (activityContext as? android.app.Activity)
-                        ?.isChangingConfigurations == true
+                    // findActivity() раскручивает ContextThemeWrapper: прямой `as? Activity` дал бы null
+                    // (LocalContext.current — обычно wrapper, не сама Activity), тогда isConfigChange=false
+                    // → секреты чистились бы при повороте → «session expired». Как в SetupScreen (SET-1).
+                    val isConfigChange = activityContext.findActivity()?.isChangingConfigurations == true
                     if (!isConfigChange) {
                         VerificationSecrets.clear()
                     }
