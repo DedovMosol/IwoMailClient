@@ -6,9 +6,7 @@ import android.content.Intent
 import com.dedovmosol.iwomail.util.SafeToast
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.network.NetworkMonitor
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
@@ -85,7 +83,7 @@ class SyncAlarmReceiver : BroadcastReceiver() {
             // Делегируем всю тяжёлую работу в SyncWorker через WorkManager.
 
             val pendingResult = goAsync()
-            val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val localScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
 
             localScope.launch {
                 try {

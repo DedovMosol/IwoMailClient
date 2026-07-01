@@ -24,7 +24,7 @@ object InitialSyncController {
     private val syncingAccounts = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private val syncedAccounts = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private val syncJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
-    @Volatile private var syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    @Volatile private var syncScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main)
 
     private val syncAttempts = java.util.concurrent.ConcurrentHashMap<Long, Int>()
     private const val MAX_SYNC_ATTEMPTS = 3
@@ -86,7 +86,7 @@ object InitialSyncController {
         syncJobs.entries.removeIf { !it.value.isActive }
 
         if (!syncScope.isActive) {
-            syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            syncScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main)
         }
 
         syncJobs[accountId] = syncScope.launch {
@@ -294,7 +294,7 @@ object InitialSyncController {
 
     fun reset() {
         syncScope.cancel()
-        syncScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        syncScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main)
         syncJobs.clear()
         syncedAccounts.clear()
         syncingAccounts.clear()

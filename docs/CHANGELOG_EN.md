@@ -31,6 +31,7 @@
 - Crash resilience: screen operations (deleting accounts/contacts/events, settings, etc.) can no longer crash the app on a DB/I-O error — the failure is isolated and logged (UI-1)
 - Attachments: removed a faulty fallback that saved the entire email instead of the attachment when the direct download failed (corrupt file) (PB-1)
 - Stability: opening heavy emails with large attachments/images no longer crashes the app on low memory — the email is shown without inline images (PB-2)
+- Crash resilience (cont.): background app, push/sync, alarm and receiver operations can no longer crash the process on an uncaught error — a single crash-safe scope isolates and logs the failure
 - Fixed a potential race/`ConcurrentModificationException` in the Push service's EAS-client cache — switched to `ConcurrentHashMap` with atomic operations (N-15)
 - Dead-code cleanup and DRY: removed unused `clearAllEasClientCache`/`RepositoryProvider.clear`/`getEmailsByFolder`; `ContactRepository` is now always obtained via the provider (L-1, L-2, N-9, M-2)
 

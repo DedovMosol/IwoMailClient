@@ -6,9 +6,7 @@ import android.content.Intent
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.SyncMode
 import com.dedovmosol.iwomail.data.database.MailDatabase
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
@@ -26,7 +24,7 @@ class BootReceiver : BroadcastReceiver() {
             intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             
             val pendingResult = goAsync()
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val scope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
             scope.launch {
                 try {
                     val database = MailDatabase.getInstance(context)

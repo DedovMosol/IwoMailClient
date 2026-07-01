@@ -75,7 +75,7 @@ class SendController {
     private var onCancelCallback: (() -> Unit)? = null
 
     // Собственный scope для отправки (не зависит от UI)
-    private val sendScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val sendScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main)
 
     /**
      * Запускает отправку с обратным отсчётом

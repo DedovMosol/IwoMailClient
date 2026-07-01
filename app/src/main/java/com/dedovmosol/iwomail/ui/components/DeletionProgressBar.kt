@@ -42,7 +42,7 @@ class DeletionController {
     private val isCancelled = AtomicBoolean(false)
     
     // Собственный scope для удаления (не зависит от UI)
-    private val deletionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val deletionScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main)
     
     /**
      * Запускает удаление с обратным отсчётом

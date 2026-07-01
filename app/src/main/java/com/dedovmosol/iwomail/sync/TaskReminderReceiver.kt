@@ -14,9 +14,7 @@ import com.dedovmosol.iwomail.R
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.database.TaskEntity
 import com.dedovmosol.iwomail.data.database.TaskImportance
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -45,7 +43,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
             }
             ACTION_TASK_REMINDER -> {
                 val pendingResult = goAsync()
-                val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                val localScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
                 localScope.launch {
                     try {
                         withTimeoutOrNull(8_000) {

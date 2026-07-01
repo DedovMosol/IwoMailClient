@@ -13,9 +13,7 @@ import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.R
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
 import com.dedovmosol.iwomail.data.database.MailDatabase
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -39,7 +37,7 @@ class CalendarReminderReceiver : BroadcastReceiver() {
 
         val eventId = intent.getStringExtra(EXTRA_EVENT_ID) ?: return
         val pendingResult = goAsync()
-        val localScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val localScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
 
         localScope.launch {
             try {

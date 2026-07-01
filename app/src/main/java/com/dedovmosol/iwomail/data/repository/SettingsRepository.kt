@@ -8,9 +8,7 @@ import android.os.PowerManager
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -42,7 +40,7 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Scope для фоновых операций кэширования
-    private val cacheScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val cacheScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
     
     // Кэшированные значения для часто используемых настроек UI (thread-safe)
     private val cachedFontSize = AtomicReference<FontSize?>(null)

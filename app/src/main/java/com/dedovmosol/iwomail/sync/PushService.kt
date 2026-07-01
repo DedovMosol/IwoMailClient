@@ -42,7 +42,7 @@ import kotlinx.coroutines.sync.withLock
  */
 class PushService : Service() {
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val serviceScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
     private var pushJob: Job? = null
     private var heartbeatJob: Job? = null  // Job для периодического обновления статуса
 

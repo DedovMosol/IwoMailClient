@@ -456,6 +456,8 @@ All are covered by crash-resistance unit tests (`*ViewModelTest`) that verify a 
 
 **Legacy (non-MVVM) screens** that still launch work from a `rememberCoroutineScope()` in the Composable use `rememberSafeScope()` (`ComposableUtils`) instead — a crash-safe scope built on `SupervisorJob` (a failing operation does not cancel siblings) + a `CoroutineExceptionHandler` (an uncaught exception from a throwing suspend/DAO call is logged, not propagated to the process). Its lifecycle matches `rememberCoroutineScope` (the supervisor is a child of the base scope's `Job`, cancelled when the Composable leaves composition), and the `launch` bodies are unchanged. The `rememberSyncScope()` helper gained the same handler. This closes the M-1 crash class for screens not yet migrated to MVVM (UI-1, 2026-07-01).
 
+The same guarantee applies to long-lived **non-UI** scopes: `MailApplication`, the push/sync services, alarm/boot receivers and repositories build their scopes via `supervisedScope(dispatcher, tag)` (`util/AppCoroutines.kt`) — `SupervisorJob` + a `CoroutineExceptionHandler` — instead of a bare `CoroutineScope(SupervisorJob() + dispatcher)`, so an uncaught error in one background task (including `OutOfMemoryError`, which `catch(Exception)` does not catch) is logged rather than crashing the process. There is no `GlobalScope`/`runBlocking` in the codebase.
+
 ---
 
 ## 11. Current constraints

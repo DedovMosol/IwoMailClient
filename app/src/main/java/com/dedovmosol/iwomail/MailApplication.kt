@@ -11,9 +11,7 @@ import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.sync.PushService
 import com.dedovmosol.iwomail.sync.SyncWorker
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -40,7 +38,7 @@ class MailApplication : Application() {
         const val CHANNEL_UPDATE = "app_update"
     }
     
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val applicationScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main)
     lateinit var settingsRepository: SettingsRepository
         private set
     
