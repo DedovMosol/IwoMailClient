@@ -401,6 +401,26 @@ Glance `Row` → горизонтальный `LinearLayout` **без перен
 
 ---
 
+## Аудит экранов настройки/онбординга/верификации (2026-07-01)
+
+Свип 7 экранов критического пути настройки аккаунта (~8800 строк): `SetupScreen`, `VerificationScreen`, `AccountSettingsScreen`, `SettingsScreen`, `PersonalizationScreen`, `OnboardingScreen`, `UpdatesScreen`. Методология UI-1/UI-2 (крах-безопасные scope, гонки двойного submit, утечки, валидация, переживание поворота). Найден **1 предметный баг (SET-1)** — исправлен; остальное — устойчиво.
+
+**SET-1 (Medium, потеря данных при повороте). `SetupScreen` удалял выбранные cert-файлы при повороте экрана.**
+`SetupScreen.kt` `DisposableEffect(Unit){ onDispose { if(!accountSaved) createdCertFiles.forEach{delete} } }` чистит сиротские cert-файлы при уходе без сохранения. Но MainActivity **без** `android:configChanges` (проверено по манифесту) → поворот пересоздаёт Activity → `onDispose` срабатывает И при повороте. При этом `certificatePath`/`certificateFileName`/`createdCertFiles`/`accountSaved` — все `rememberSaveable` (переживают поворот). Итог: **выбрал серверный/клиентский сертификат → повернул экран → cert-файл удалён с диска, а UI и `certificatePath` (restored) указывают на удалённый файл → верификация/сохранение падает с ошибкой загрузки серта.** Критично для self-signed Exchange 2007 (частый корп-кейс).
+**✅ ИСПРАВЛЕНО:** `onDispose` пропускает удаление при повороте — `context.findActivity()?.isChangingConfigurations == true`. Паттерн УЖЕ применялся в `AboutScreen`/`SearchScreen`/`AppNavigation` (SetupScreen был единственным исключением — нарушение единообразия). Дублировавшийся приватный `ContextWrapper.findActivity()` (2 идентичные копии в About/Search — нарушение DRY) вынесен в общий `ui/utils/ContextExtensions.kt` (`fun Context.findActivity()`, `tailrec`) и переиспользован в 3 местах. Тест `ContextExtensionsTest` (MockK: цепочка wrapper'ов → Activity, null-случаи).
+
+**Проверено и БЕЗОПАСНО (не находки — для протокола):**
+- **Крах-безопасность:** все 7 экранов используют `rememberSafeScope()` (UI-1: `SupervisorJob`+`CoroutineExceptionHandler`) — нет сырых `rememberCoroutineScope`/`GlobalScope`/`runBlocking`. `scope.launch(Dispatchers.IO)` наследует handler из контекста scope → тоже крах-безопасно.
+- **Двойной submit защищён:** `SetupScreen` (`if(isLoading) return@Button` + `enabled=!isLoading&&canSave`), `SettingsScreen` (`if(isSaving) return` + `enabled`), `AccountSettingsScreen`/`VerificationScreen` (`enabled=!isLoading`/`!isCheckingAccess`), `UpdatesScreen` (`if(downloadJob!=null) return@clickable`).
+- **N-8/OOM/receiver-leak:** в этих экранах нет `collectAsState` (все lifecycle-aware), нет `readBytes` (OOM не тут), нет `registerReceiver` (нет receiver-leak).
+- **`VerificationScreen` savedData — НЕ баг (разобрано):** `createSavedData` и `createSavedDataForEmailMismatch` намеренно имеют РАЗНЫЙ порядок полей 11-13, т.к. парсятся РАЗНЫМИ путями `SetupScreen`: обычный (`11=clientCertPath,12=domain,13=username`, стр. 362-394) и CLEAR_EMAIL (`11=domain,12=username,13=clientCertPath`, стр. 308-341). Каждый сериализатор согласован со своим парсером. (Фрагильность `|`-формата без URL-encode в этом пути — латентная; поля на практике не содержат `|`; вне scope.)
+- **Секреты не в Bundle:** `password`/`clientCertificatePassword` — `remember` (НЕ `rememberSaveable`) → не попадают в saved instance state (best-practice). Не-секретная форма — `rememberSaveable` (переживает поворот, + восстановление фокуса).
+- **`AccountSettingsScreen` cert-файлы:** чистятся по ЯВНЫМ cancel/dismiss (317/417/502/559/581), НЕ в `onDispose` → нет SET-1-подобного бага при повороте.
+- **`VerificationScreen`:** авто-старт через `LaunchedEffect(Unit)` → при повороте перезапуск (немигрированный экран; возможен повторный тестовый email — минорно, не краш/потеря данных); `VerificationSecrets` чистится с `isChangingConfigurations`-guard (AppNavigation 851-859).
+- **`ComposeScreen` onDispose (единственный другой screen-level):** отменяет suggestion-job + чистит state — файлы не удаляет (не SET-1-класс).
+
+---
+
 ## Опровергнутые находки прошлой сессии (ложные тревоги)
 
 ### F-1. «CRITICAL: NTLM `performNtlmHandshake()` возвращает stub `""`» — НЕВЕРНО

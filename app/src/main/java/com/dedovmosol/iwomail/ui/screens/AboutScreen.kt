@@ -1,7 +1,6 @@
 ﻿package com.dedovmosol.iwomail.ui.screens
 
-import android.app.Activity
-import android.content.ContextWrapper
+import com.dedovmosol.iwomail.ui.utils.findActivity
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -37,15 +36,6 @@ import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
-
-private fun ContextWrapper.findActivity(): Activity? {
-    var current: android.content.Context? = this
-    while (current is ContextWrapper) {
-        if (current is Activity) return current
-        current = current.baseContext
-    }
-    return null
-}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -207,7 +197,7 @@ fun AboutScreen(
     // Останавливаем музыку при уходе с экрана (свайп назад / навигация)
     DisposableEffect(Unit) {
         onDispose {
-            val activity = (context as? ContextWrapper)?.findActivity()
+            val activity = context.findActivity()
             val isChanging = activity?.isChangingConfigurations == true
             // Если activity недоступен — безопаснее считать это поворотом, чем ложно остановить музыку
             val isRotation = isChanging || activity == null || EasterEggPlayer.isRecentConfigChange()

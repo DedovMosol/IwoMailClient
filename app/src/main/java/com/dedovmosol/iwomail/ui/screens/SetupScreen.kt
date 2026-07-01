@@ -48,6 +48,7 @@ import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.ui.theme.ThemeButton
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
+import com.dedovmosol.iwomail.ui.utils.findActivity
 import com.dedovmosol.iwomail.ui.utils.rememberPulseScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -154,10 +155,15 @@ fun SetupScreen(
     var createdCertFiles by rememberSaveable { mutableStateOf(listOf<String>()) }
     var accountSaved by rememberSaveable { mutableStateOf(false) }
 
-    // Очистка сиротских cert-файлов при выходе из SetupScreen без сохранения
+    // Очистка сиротских cert-файлов при выходе из SetupScreen без сохранения — но НЕ при повороте.
+    // MainActivity без android:configChanges → поворот пересоздаёт Activity → onDispose сработал бы
+    // и удалил выбранные cert-файлы, тогда как certificatePath/createdCertFiles (rememberSaveable)
+    // переживают поворот и указывали бы на удалённый файл → верификация/сохранение падает с ошибкой
+    // загрузки серта. isChangingConfigurations различает реальный уход и поворот (паттерн About/Search).
     DisposableEffect(Unit) {
         onDispose {
-            if (!accountSaved) {
+            val isConfigChange = context.findActivity()?.isChangingConfigurations == true
+            if (!accountSaved && !isConfigChange) {
                 createdCertFiles.forEach { path ->
                     try { File(path).delete() } catch (_: Exception) {}
                 }
