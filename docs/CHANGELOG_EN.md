@@ -39,10 +39,10 @@
 - Dead-code cleanup and DRY: removed unused `clearAllEasClientCache`/`RepositoryProvider.clear`/`getEmailsByFolder`; `ContactRepository` is now always obtained via the provider (L-1, L-2, N-9, M-2)
 
 ### Widget (home screen)
-- Fixed bottom-row clipping on a narrow widget: the sync button and avatars no longer run off the edge — avatar count and size adapt to width, and the last-sync label is shown on the wide widget (W-1)
-- The last-sync time no longer looks like "today" for older syncs: a date is added for non-today syncs (W-2)
+- Fixed bottom-row clipping on a narrow widget: the compose/sync buttons and avatars no longer run off the edge — avatar count and size adapt to width; on the wide widget the last-sync label is truncated to fit instead of pushing the buttons out (for any locale, including 12-hour time) (W-1)
+- The last-sync time no longer looks like "today" for older syncs: a date is shown for non-today syncs (W-2)
 - Recent emails in the widget: today's mail now shows the time (previously always the full date); minor render optimization — the date formatter is no longer recreated inside the loop (W-3)
-- Internal widget cleanup (KISS): removed unused event fields that were computed on every render (W-4)
+- Internal widget cleanup (KISS): removed unused event fields and a variable that were computed on every render (W-4)
 
 ### UX — haptic feedback and accessibility
 - Added haptic feedback when tapping the star (flag) in the email list and on the email detail screen — consistent with long-press/selection

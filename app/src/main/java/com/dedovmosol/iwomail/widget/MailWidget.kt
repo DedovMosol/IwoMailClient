@@ -185,12 +185,12 @@ class MailWidget : GlanceAppWidget() {
         val diff = now - lastSyncMillis
         if (diff < 0 || diff < 60_000) return context.getString(R.string.widget_synced_just_now)
         val locale = context.resources.configuration.locales[0]
-        val timeStr = DateFormat.getTimeFormat(context).format(Date(lastSyncMillis))
-        // Не сегодня → показываем дату: иначе «14:30» от вчерашнего синка выглядит как сегодняшний.
+        // Не сегодня → только дата: «14:30» от вчерашнего синка иначе выглядит как сегодняшний, а
+        // короткая «dd.MM» (короче «в HH:MM») точно не вытолкнет кнопки на широком виджете.
         if (!isSameLocalDay(lastSyncMillis, now)) {
-            val dateStr = java.text.SimpleDateFormat("dd.MM", locale).format(Date(lastSyncMillis))
-            return "$dateStr, $timeStr"
+            return java.text.SimpleDateFormat("dd.MM", locale).format(Date(lastSyncMillis))
         }
+        val timeStr = DateFormat.getTimeFormat(context).format(Date(lastSyncMillis))
         return if (locale.language == "ru") "в $timeStr" else "at $timeStr"
     }
     
@@ -583,20 +583,24 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     Spacer(modifier = GlanceModifier.width(4.dp))
                 }
 
-                // Время последней синхронизации — только на широком виджете (иначе вытесняет кнопки).
+                // Время синка (только на широком) — ГИБКИЙ элемент: забирает свободное место между
+                // аватарами и кнопками и усекается по ширине (maxLines=1), а НЕ выталкивает кнопки за
+                // край при любой локали/длине метки (Row → LinearLayout без переноса). Иначе — распорка.
                 if (isWide && data.lastSyncStr.isNotBlank()) {
                     Spacer(modifier = GlanceModifier.width(4.dp))
                     Text(
                         text = data.lastSyncStr,
+                        modifier = GlanceModifier.defaultWeight(),
+                        maxLines = 1,
                         style = TextStyle(
                             color = ColorProvider(textDimmed),
                             fontSize = secondaryFontSize
                         )
                     )
+                } else {
+                    Spacer(modifier = GlanceModifier.defaultWeight())
                 }
-                
-                Spacer(modifier = GlanceModifier.defaultWeight())
-                
+
                 // Кнопка "Написать письмо" (иконка)
                 val iconBtnSize = (32 * scale).dp
                 Box(
