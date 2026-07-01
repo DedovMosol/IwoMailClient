@@ -21,6 +21,8 @@ test/
     │   ├── DateUtilsTest.kt                 # Границы дня, диапазон (TZ-pinned)
     │   ├── ICalParserTest.kt                # iCalendar/задачи (TZ-pinned)
     │   └── MimeHtmlProcessorInlineImageTest.kt # Единое извлечение inline-картинок MIME + guard рекурсии (N-5)
+    ├── widget/
+    │   └── MailWidgetFormatTest.kt          # isSameLocalDay: «сегодня → время, иначе → дата» (W-2/W-3)
     └── ui/
         ├── components/
         │   └── RichTextEditorSanitizeTest.kt   # Санитайзер редактора: on*/javascript:/base/link (L-3)
@@ -272,6 +274,7 @@ fun `syncNotes delegates to notesService`() = runTest {
 22. ✅ EasMimeHeaderSanitize — stripHeaderCrlf: нейтрализация CRLF-инъекции адресных/Message-ID заголовков (N-1)
 23. ✅ EasMimeSubjectEncoding — chunkByUtf8Bytes (UTF-8/суррогаты) + RFC 2047 folding Subject (N-3)
 24. ✅ MimeHtmlProcessorInlineImage — единое извлечение CID→data:URL, вложенные multipart, guard рекурсии (N-5)
+25. ✅ MailWidgetFormat — `isSameLocalDay` (граница суток, разные годы с одним днём года, симметрия) для метки синка/дат писем виджета (W-2/W-3)
 
 > **Паттерн тестирования ViewModel:** принимай зависимости (репозитории + `CoroutineDispatcher`) через конструктор. Фабрика берёт реальные из `RepositoryProvider`, тест — моки. Андроид-конструктор репозиториев не запускается (MockK через Objenesis), поэтому Robolectric не нужен.
 

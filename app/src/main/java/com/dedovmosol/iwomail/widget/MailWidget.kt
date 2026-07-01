@@ -100,10 +100,8 @@ class MailWidget : GlanceAppWidget() {
             if (e is kotlinx.coroutines.CancellationException) throw e; null
         }
         val eventInfo = nextEvent?.let {
-            val timeFormat = DateFormat.getTimeFormat(context)
-            val startStr = timeFormat.format(Date(it.startTime))
-            val endStr = if (it.endTime > it.startTime) timeFormat.format(Date(it.endTime)) else ""
-            EventInfo(it.subject, startStr, endStr, it.location)
+            val startStr = DateFormat.getTimeFormat(context).format(Date(it.startTime))
+            EventInfo(it.subject, startStr)
         }
 
         val dateStr = try { formatTodayDate(context) } catch (_: Exception) { "" }
@@ -183,14 +181,17 @@ class MailWidget : GlanceAppWidget() {
     
     private fun formatSyncAgo(context: Context, lastSyncMillis: Long): String {
         if (lastSyncMillis == 0L) return ""
-        val diff = System.currentTimeMillis() - lastSyncMillis
+        val now = System.currentTimeMillis()
+        val diff = now - lastSyncMillis
         if (diff < 0 || diff < 60_000) return context.getString(R.string.widget_synced_just_now)
-        // Для всех остальных случаев — точное время синхронизации
-        val timeFormat = DateFormat.getTimeFormat(context)
-        val timeStr = timeFormat.format(Date(lastSyncMillis))
         val locale = context.resources.configuration.locales[0]
-        val isRu = locale.language == "ru"
-        return if (isRu) "в $timeStr" else "at $timeStr"
+        val timeStr = DateFormat.getTimeFormat(context).format(Date(lastSyncMillis))
+        // Не сегодня → показываем дату: иначе «14:30» от вчерашнего синка выглядит как сегодняшний.
+        if (!isSameLocalDay(lastSyncMillis, now)) {
+            val dateStr = java.text.SimpleDateFormat("dd.MM", locale).format(Date(lastSyncMillis))
+            return "$dateStr, $timeStr"
+        }
+        return if (locale.language == "ru") "в $timeStr" else "at $timeStr"
     }
     
     private fun formatTodayDate(context: Context): String {
@@ -204,7 +205,7 @@ class MailWidget : GlanceAppWidget() {
 }
 
 data class AccountUnread(val id: Long, val name: String, val color: Int, val unreadCount: Int)
-data class EventInfo(val title: String, val time: String, val endTime: String = "", val location: String = "")
+data class EventInfo(val title: String, val time: String)
 data class RecentEmail(val id: String, val sender: String, val preview: String, val folderId: String = "", val dateReceived: Long = 0L)
 data class WidgetData(
     val accounts: List<AccountUnread>,
@@ -221,6 +222,18 @@ data class WidgetData(
     val nextTaskTitle: String = "",
     val themeColor: Int = 0xFF5C00D4.toInt()
 )
+
+/**
+ * true, если оба момента приходятся на один и тот же календарный день в текущей таймзоне.
+ * Вынесено top-level `internal` — чистая функция (только [Calendar]), покрыта юнит-тестом.
+ * Используется для «сегодня → время, иначе → дата» в метке синка и списке последних писем.
+ */
+internal fun isSameLocalDay(a: Long, b: Long): Boolean {
+    val ca = Calendar.getInstance().apply { timeInMillis = a }
+    val cb = Calendar.getInstance().apply { timeInMillis = b }
+    return ca.get(Calendar.YEAR) == cb.get(Calendar.YEAR) &&
+        ca.get(Calendar.DAY_OF_YEAR) == cb.get(Calendar.DAY_OF_YEAR)
+}
 
 private val searchBg = Color.White
 private val searchHint = Color(0xFF757575)
@@ -491,7 +504,6 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                 .padding(horizontal = 16.dp, vertical = 10.dp)
         ) {
             // Последние письма (при большом виджете)
-            val emailSenderSize = (12 * scale).sp
             val emailPreviewSize = (11 * scale).sp
             if (isLarge && data.recentEmails.isNotEmpty()) {
                 Column(
@@ -502,11 +514,18 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                 ) {
                     val evenRowBg = Color(0x30FFFFFF)
                     val oddRowBg = Color(0x1AFFFFFF)
+                    // Форматтеры создаём один раз вне цикла (было — до 3× на рендер).
+                    val nowMillis = System.currentTimeMillis()
+                    val emailTimeFmt = DateFormat.getTimeFormat(context)
+                    val emailDayFmt = java.text.SimpleDateFormat("dd.MM", Locale.getDefault())
                     data.recentEmails.forEachIndexed { index, email ->
                         val rowBg = if (index % 2 == 0) evenRowBg else oddRowBg
-                        val emailDateStr = if (email.dateReceived > 0) {
-                            java.text.SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date(email.dateReceived))
-                        } else ""
+                        // Сегодняшнее письмо → время (полезнее для свежей почты), старое → дата.
+                        val emailDateStr = when {
+                            email.dateReceived <= 0 -> ""
+                            isSameLocalDay(email.dateReceived, nowMillis) -> emailTimeFmt.format(Date(email.dateReceived))
+                            else -> emailDayFmt.format(Date(email.dateReceived))
+                        }
                         Row(
                             modifier = GlanceModifier
                                 .fillMaxWidth()
@@ -553,14 +572,19 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                 modifier = GlanceModifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Аватары аккаунтов (слева)
-                data.accounts.take(4).forEach { acc ->
-                    AccountAvatar(acc, context)
+                // Аватары аккаунтов (слева). Glance Row → горизонтальный LinearLayout без переноса:
+                // на узком виджете 4 аватара + текст синка + 2 кнопки не влезают по ширине и обрезаются
+                // (кнопка синка уходит за край). Поэтому на узких размерах — меньше аватаров и без метки
+                // синхронизации; сами аватары масштабируем вместе с остальным UI (было — фикс. 48dp).
+                val isWide = size.width >= 300.dp
+                val maxAvatars = if (isWide) 4 else 2
+                data.accounts.take(maxAvatars).forEach { acc ->
+                    AccountAvatar(acc, context, scale)
                     Spacer(modifier = GlanceModifier.width(4.dp))
                 }
-                
-                // Время последней синхронизации
-                if (data.lastSyncStr.isNotBlank()) {
+
+                // Время последней синхронизации — только на широком виджете (иначе вытесняет кнопки).
+                if (isWide && data.lastSyncStr.isNotBlank()) {
                     Spacer(modifier = GlanceModifier.width(4.dp))
                     Text(
                         text = data.lastSyncStr,
@@ -625,16 +649,21 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
 }
 
 @Composable
-private fun AccountAvatar(account: AccountUnread, context: Context) {
+private fun AccountAvatar(account: AccountUnread, context: Context, scale: Float) {
     val accountColor = try {
         Color(account.color)
     } catch (_: Exception) {
         Color(0xFF6200EE)
     }
-    
+    // Масштабируем вместе с остальным UI (было — фикс. 48/40dp): на узком виджете аватары
+    // ужимаются, чтобы 2 аватара + 2 кнопки гарантированно влезали в ширину без обрезки.
+    val boxSize = (40 * scale).dp
+    val circleSize = (34 * scale).dp
+    val letterSize = (15 * scale).sp
+
     Box(
         modifier = GlanceModifier
-            .size(48.dp)
+            .size(boxSize)
             .clickable(actionStartActivity(
                 Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -648,11 +677,11 @@ private fun AccountAvatar(account: AccountUnread, context: Context) {
             )),
         contentAlignment = Alignment.TopStart
     ) {
-        // Аватар (круг) 40x40
+        // Аватар (круг) — размер масштабируется вместе с виджетом
         Box(
             modifier = GlanceModifier
-                .size(40.dp)
-                .cornerRadius(20.dp)
+                .size(circleSize)
+                .cornerRadius(circleSize / 2)
                 .background(ColorProvider(accountColor)),
             contentAlignment = Alignment.Center
         ) {
@@ -660,7 +689,7 @@ private fun AccountAvatar(account: AccountUnread, context: Context) {
                 text = account.name.firstOrNull()?.uppercase() ?: "?",
                 style = TextStyle(
                     color = ColorProvider(Color.White),
-                    fontSize = 17.sp,
+                    fontSize = letterSize,
                     fontWeight = FontWeight.Bold
                 )
             )

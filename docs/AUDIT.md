@@ -206,7 +206,9 @@
 
 **Свипнуты (crash-паттерны), не деталь-читаны:** `EasContactsService`/`EasNotesService`/`EasCalendarSyncService`/`CalendarExceptionService`/`CalendarAttachmentService`/`CalendarXmlParser`, `MailRepository` (делегация), `FolderSyncService`, `ImapClient`/`Pop3Client` (beta).
 
-**Не читаны (низкий риск — presentation/строки):** UI-экраны настроек/контактов/онбординга (`SetupScreen`/`AccountSettingsScreen`/`SettingsScreen`/`PersonalizationScreen`/`OnboardingScreen`/`VerificationScreen`/`UpdatesScreen`), `Localization` (ресурсы строк), widget config. Рекомендуется отдельный UX/перф-проход по рекомпозиции этих экранов при желании.
+**Прочитан (2026-07-01):** наэкранный виджет — `widget/MailWidget.kt` (Glance, 706 строк), `WidgetConfigActivity.kt`, `res/xml/mail_widget_info.xml`, манифест-регистрация. См. раздел «Аудит наэкранного виджета» (W-1…W-4 + проверенное).
+
+**Не читаны (низкий риск — presentation/строки):** UI-экраны настроек/контактов/онбординга (`SetupScreen`/`AccountSettingsScreen`/`SettingsScreen`/`PersonalizationScreen`/`OnboardingScreen`/`VerificationScreen`/`UpdatesScreen`), `Localization` (ресурсы строк). Рекомендуется отдельный UX/перф-проход по рекомпозиции этих экранов при желании.
 
 ---
 
@@ -362,6 +364,35 @@
 **Найдено:** путь открытия (`EmailDetailViewModel`/`EmailDetailActions`) образцово защищён от `Exception`, но **`OutOfMemoryError` — это `Error`, а не `Exception`** → `catch(Exception)` его не ловит. Загрузка inline-картинок обрабатывает MIME до 20 МБ и строит `data:`-URL в памяти → на «тяжёлых» письмах OOM → некошенный краш процесса. **✅ Смягчено:** в `observeInlineImages` добавлен `catch(Throwable)` — при OOM/Error письмо показывается без inline-картинок вместо краша. **Нужен logcat stack trace** для точного подтверждения: краш на «удалении» отдельного письма этой гипотезой не объясняется (возможен второй путь — синхронный рендер конкретного контента).
 
 **✅ PREVENTION-фикс (2026-07-01):** по бест-практик (OOM **предотвращают**, а не ловят — интернет-верифицировано, [InnovationM](https://www.innovationm.com/blog/android-out-of-memory-error-causes-solution-and-best-practices/)) в `MimeHtmlProcessor.extractInlineImagesFromMime` добавлен лимит `MAX_INLINE_MIME_CHARS = 8 МиБ`: MIME больше — не обрабатываем (письмо показывается без inline-картинок). Единая точка (N-5) → защищает и UI-, и протокольный путь. Attachment-путь `loadInlineImages` уже был с лимитами (2 МБ/картинка, 5 МБ суммарно). `catch(Throwable)` в `observeInlineImages` оставлен как backstop (prevention + net). Тест `MimeHtmlProcessorInlineImageTest`. (Точная локализация краша всё ещё требует logcat.)
+
+---
+
+## Аудит наэкранного виджета (2026-07-01)
+
+Детальный разбор `widget/MailWidget.kt` (706 строк, Glance) + `WidgetConfigActivity.kt` + `res/xml/mail_widget_info.xml` + манифест-регистрация. Ранее числился «не читан, низкий риск» (см. «Покрытие»). Виджет в целом написан **очень защитно** (per-DB-call try/catch, `SizeMode.Responsive`, distinct data-URI). Найдены 4 предметных дефекта — все исправлены.
+
+**W-1 (Low-Medium, layout — обрезка кнопок). Нижний ряд переполняет ширину на узком виджете.**
+Glance `Row` → горизонтальный `LinearLayout` **без переноса**: переполнение по ширине молча обрезается (интернет-верифицировано: [Android «Build UI with Glance»](https://developer.android.com/develop/ui/compose/glance/build-ui) / [«Provide flexible widget layouts»](https://developer.android.com/develop/ui/views/appwidgets/layouts) — рекомендация «на узких размерах отдавать меньше детей / усечённый текст через `SizeMode.Responsive`+`LocalSize`»). Нижний ряд = аватары (фикс. 48dp, `take(4)`) + текст синка + `defaultWeight` + 2 кнопки. На наименьшем Responsive-размере 180×140 (внутр. ширина ~148dp) уже 2 аватара (96) + текст (~45) + 2 кнопки (~51) = 192 > 148 → **кнопка синка уходит за край и недоступна**. Аватары к тому же не масштабировались `scale`, в отличие от всего остального UI.
+**✅ ИСПРАВЛЕНО:** `isWide = size.width >= 300.dp`; аватары `take(if (isWide) 4 else 2)`; аватар масштабируется (`AccountAvatar(…, scale)` — box `40*scale`, круг `34*scale`, буква `15*scale`); текст времени синка показывается только на широком (иначе вытесняет кнопки). Расчёт: узкий 180 → 2×32 + 2 кнопки 51 = 123 < 148 ✓; широкий 320 (внутр. 288) → 4×37 + текст 45 + 2 кнопки 60 = 269 < 288 ✓. Соответствует официальной рекомендации «fewer children / truncated text on small».
+
+**W-2 (Low, логика/UX). `formatSyncAgo` неоднозначен для не-сегодняшних синков.**
+Синк «вчера в 14:30» рендерился как «в 14:30»/«at 14:30» — выглядит как сегодняшний (сравнения дня не было). **✅ ИСПРАВЛЕНО:** извлечена чистая `internal fun isSameLocalDay(a,b)` (только `Calendar`, default-TZ); не сегодня → префикс даты `dd.MM, HH:MM`. Тест `MailWidgetFormatTest` (граница суток, разные годы с одним днём года).
+
+**W-3 (Low, перф + UX). `SimpleDateFormat` в цикле + всегда полная дата для писем.**
+`SimpleDateFormat("dd.MM.yyyy")` создавался **внутри** `forEachIndexed` (до 3× на рендер) и показывал полную дату даже для сегодняшней почты. **✅ ИСПРАВЛЕНО:** форматтеры (`DateFormat.getTimeFormat` + `SimpleDateFormat("dd.MM")`) вынесены из цикла; сегодняшнее письмо → время (полезнее для свежей почты), старое → `dd.MM` (через `isSameLocalDay`, DRY с W-2). `SimpleDateFormat` — локальный `val` на рендер (не shared) → потокобезопасно.
+
+**W-4 (Low, KISS/DRY). Мёртвые поля `EventInfo.endTime`/`location`.**
+Вычислялись в `loadWidgetData` каждый рендер (`endStr`+`location`), но UI показывает только `.time`/`.title`. **✅ ИСПРАВЛЕНО:** `data class EventInfo(title, time)` — лишние поля и их вычисление удалены.
+
+**Проверено и БЕЗОПАСНО (не находки — для протокола):**
+- **PendingIntent-коллизии нет:** каждый clickable несёт distinct `data`-URI (`iwomail://widget/search|calendar|tasks|notes|compose`, `iwomail://email/{id}`, `iwomail://account/{id}`). `filterEquals` учитывает `data` → интенты различимы (иначе Glance слил бы клики).
+- **Краш лаунчера обойдён осознанно:** `SizeMode.Responsive` (не `Exact` — краш HyperOS 2.0 на size-map), фон через `ColorProvider` (не `ImageProvider` — краш HyperOS), `WidgetConfigActivity` всегда `RESULT_OK` (RESULT_CANCELED ломает MIUI). Комментарии в коде это фиксируют.
+- **Крах-устойчивость данных:** `MailDatabase.getInstance` и КАЖДЫЙ DAO-вызов в `loadWidgetData` в собственном try/catch (rethrow `CancellationException`, иначе дефолт); внешний `provideGlance` try/catch → пустой `WidgetData`. `updateMailWidget` сериализован `widgetUpdateMutex` + try/catch.
+- **Нет перф-бага при batch:** `updateMailWidget` в `EmailOperationsService` вызывается ОДИН раз на batch-операцию (`markAsReadBatch:144`, не по-элементно); зовётся из sync/EmailOps/Boot/Personalization → свежесть данных после изменений обеспечена.
+- **Sync-кнопка доставляет бродкаст:** `actionSendBroadcast(Intent(ACTION_SYNC_NOW).setClass(…, SyncAlarmReceiver))` — явный интент из процесса приложения (PendingIntent от app-UID) → доставка в `exported=false` собственный ресивер работает (тот же путь, что `MainActivity:238`). `updatePeriodMillis=1800000` = системный минимум (30 мин).
+- **`minWidth/minHeight=180×140`** в `mail_widget_info.xml` совпадает с наименьшим Responsive-бакетом.
+
+**Замечание (не фикс — пользовательский выбор):** `minResizeWidth/Height=110×100` в `mail_widget_info.xml` позволяют ужать виджет НИЖЕ наименьшего Responsive-размера (180×140) → на экстремальном сжатии контент всё равно частично обрежется (Glance рендерит layout наименьшего бакета в меньшем пространстве). Штатные размеры (2×2 ≈ 140–180dp) фиксом W-1 покрыты. При желании — поднять `minResizeWidth` до ~150dp; не менял без визуальной проверки (сборку/просмотр делает разработчик).
 
 ---
 

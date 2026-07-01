@@ -94,6 +94,7 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 - **Lightweight DAO projections** — the widget reads only displayed fields for recent unread emails, the next task and the next calendar event.
 - **Correct unread logic** — the widget's new-mail list is limited to Inbox and `read = 0`.
 - **Race protection** — `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
+- **Width-adaptive layout** — the bottom action row adapts to widget width (a Glance `Row` never wraps its content): narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped; avatars scale with the widget.
 - **Room v42** — hot widget paths are indexed for unread Inbox, folder type lookup, active tasks, current calendar events and upcoming calendar events.
 
 ## 💡 Known Limitations

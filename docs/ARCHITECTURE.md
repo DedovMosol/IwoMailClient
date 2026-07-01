@@ -273,7 +273,8 @@ Drafts-specific reconcile keeps full `EmailEntity` because body/bodyType migrati
 2. Widget data is loaded on `Dispatchers.IO` from Room and DataStore using `applicationContext`.
 3. Recent mail, next task and calendar event queries use widget-specific projections and indexes to avoid loading heavy email bodies, task bodies, attendees or calendar attachment JSON.
 4. `updateMailWidget(context)` serializes `MailWidget().updateAll()` through a process-level mutex so sync, notification, account and personalization paths cannot run concurrent widget updates.
-5. Widget clicks route through `MainActivity` deep links/extras; manual sync uses `SyncAlarmReceiver.ACTION_SYNC_NOW` and is delegated to `SyncWorker`.
+5. Widget clicks route through `MainActivity` deep links/extras; manual sync uses `SyncAlarmReceiver.ACTION_SYNC_NOW` and is delegated to `SyncWorker`. Each clickable carries a **distinct `data` URI** (`iwomail://widget/…`, `iwomail://email/{id}`, `iwomail://account/{id}`) because `PendingIntent.filterEquals` ignores extras — same-shaped intents would otherwise collide and share a single click target.
+6. **Width-adaptive content, not just scaling.** Glance `Row` maps to a non-wrapping horizontal `LinearLayout`, so any content wider than the widget is silently clipped (there is no flow/wrap in RemoteViews). The bottom action row therefore renders **fewer children on narrow sizes** (`size.width >= 300.dp` gate: 4 vs 2 account avatars, last-sync label only when wide) and the avatars scale with the shared `scale` factor, so the compose/sync buttons stay on-screen at the smallest `180×140` breakpoint. Timestamps use a shared `isSameLocalDay` helper: today → time, otherwise → date (widget last-sync label and recent-mail rows).
 
 ### Updates and rollback
 
