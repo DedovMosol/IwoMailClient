@@ -160,26 +160,6 @@ object EasXmlTemplates {
 </ItemOperations>""".trimIndent()
     }
 
-    /**
-     * ItemOperations Fetch для скачивания целого письма (MIME) по CollectionId + ServerId.
-     * Используется как fallback для извлечения вложения из MIME тела.
-     * MS-ASCMD 2.2.3.67.1: airsync:CollectionId + airsync:ServerId — EAS 12.0+.
-     */
-    fun itemOperationsFetchEmail(collectionId: String, serverId: String): String = """<?xml version="1.0" encoding="UTF-8"?>
-<ItemOperations xmlns="ItemOperations">
-    <Fetch>
-        <Store>Mailbox</Store>
-        <CollectionId xmlns="AirSync">${XmlUtils.escape(collectionId)}</CollectionId>
-        <ServerId xmlns="AirSync">${XmlUtils.escape(serverId)}</ServerId>
-        <Options>
-            <MIMESupport xmlns="AirSync">2</MIMESupport>
-            <BodyPreference xmlns="AirSyncBase">
-                <Type>4</Type>
-            </BodyPreference>
-        </Options>
-    </Fetch>
-</ItemOperations>""".trimIndent()
-
     // ==================== Search шаблоны ====================
     
     /**

@@ -202,6 +202,12 @@ class EmailDetailViewModel(
                 } catch (e: Exception) {
                     Log.w("EmailDetailViewModel", "Failed to load inline images: ${e.message}")
                     _uiState.update { it.copy(inlineImages = emptyMap()) }
+                } catch (e: Throwable) {
+                    // OOM / StackOverflow и прочие Error на «тяжёлых» письмах (большой MIME/картинки,
+                    // до 20 МБ): catch(Exception) их НЕ ловит → иначе краш всего процесса при открытии.
+                    // Деградируем без inline-картинок; тело письма показывается.
+                    Log.e("EmailDetailViewModel", "Inline images: fatal error (likely OOM) — degrading", e)
+                    _uiState.update { it.copy(inlineImages = emptyMap()) }
                 } finally {
                     _uiState.update { it.copy(isLoadingInlineImages = false) }
                 }

@@ -454,11 +454,11 @@ class EasAttachmentService internal constructor(
         val itemOpsResult = downloadViaItemOperations(fileReference)
         if (itemOpsResult is EasResult.Success) return itemOpsResult
 
-        if (collectionId != null && serverId != null) {
-            val fetchResult = downloadViaItemOperationsFetchEmail(collectionId, serverId, fileReference)
-            if (fetchResult is EasResult.Success) return fetchResult
-        }
-
+        // Убран broken-fallback «ItemOperations Fetch целого письма»: он возвращал ВЕСЬ MIME письма
+        // как «вложение» (TODO извлечения вложения по FileReference из MIME не был реализован) →
+        // пользователь получал повреждённый файл (всё письмо). Корректные пути — Fetch по
+        // FileReference (выше) и GetAttachment (ниже). collectionId/serverId сохранены для
+        // будущей корректной реализации извлечения вложения из MIME.
         val getAttResult = downloadViaGetAttachment(fileReference)
         if (getAttResult is EasResult.Success) return getAttResult
 
@@ -481,13 +481,7 @@ class EasAttachmentService internal constructor(
             return writeToFile(itemOpsResult.data, destFile)
         }
 
-        if (collectionId != null && serverId != null) {
-            val fetchResult = downloadViaItemOperationsFetchEmail(collectionId, serverId, fileReference)
-            if (fetchResult is EasResult.Success && fetchResult.data.isNotEmpty()) {
-                return writeToFile(fetchResult.data, destFile)
-            }
-        }
-
+        // Убран broken-fallback целого письма (возвращал весь MIME как вложение) — см. downloadAttachment.
         val streamResult = streamViaGetAttachment(fileReference, destFile)
         if (streamResult is EasResult.Success) return streamResult
 
@@ -595,23 +589,6 @@ class EasAttachmentService internal constructor(
         }
 
         return ByteArray(0)
-    }
-
-    private suspend fun downloadViaItemOperationsFetchEmail(
-        collectionId: String,
-        serverId: String,
-        fileReference: String
-    ): EasResult<ByteArray> {
-        val xml = EasXmlTemplates.itemOperationsFetchEmail(collectionId, serverId)
-
-        val result = doItemOperationsFetch(xml)
-
-        if (result is EasResult.Success && result.data.isNotEmpty()) {
-            // TODO: Парсить MIME и извлекать вложение по индексу
-            return result
-        }
-
-        return result
     }
 
     private suspend fun downloadViaGetAttachment(fileReference: String): EasResult<ByteArray> {

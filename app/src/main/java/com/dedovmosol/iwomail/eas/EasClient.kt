@@ -1126,7 +1126,6 @@ class EasClient(
     // tryGetAttachment) перенесены в EasAttachmentService
 
     // Методы загрузки вложений (~250 строк) перенесены в EasAttachmentService:
-    // - downloadViaItemOperationsFetchEmail
     // - downloadViaItemOperations
     // - tryItemOperations
     // - doItemOperationsFetch
