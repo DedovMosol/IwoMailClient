@@ -90,13 +90,14 @@ import kotlin.coroutines.resume
  * (N-2 в docs/AUDIT.md). EAS-слой дополнительно ограничивает total 7 МБ / MIME 10 МБ на стороне
  * протокола, но там проверка происходит уже ПОСЛЕ загрузки байт.
  */
-private const val MAX_TOTAL_ATTACHMENT_BYTES = 10L * 1024 * 1024
+internal const val MAX_TOTAL_ATTACHMENT_BYTES = 10L * 1024 * 1024
 
 /**
  * Суммарный размер вложений в байтах. Предпочитает известный [AttachmentInfo.size] (заполняется из
  * `OpenableColumns.SIZE` при выборе файла), иначе запрашивает у ContentResolver. Содержимое НЕ читает.
+ * `internal` (не `private`) — чтобы покрыть логику суммирования юнит-тестом (N-2).
  */
-private fun totalAttachmentBytes(
+internal fun totalAttachmentBytes(
     context: android.content.Context,
     attachments: List<AttachmentInfo>
 ): Long = attachments.sumOf { att ->

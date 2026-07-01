@@ -295,7 +295,7 @@ Drafts-specific reconcile keeps full `EmailEntity` because body/bodyType migrati
 | `PushRestartWorker` | Push restart after failures |
 | `BootReceiver` | Start sync/push after reboot or package replacement |
 | `SyncAlarmReceiver` | AlarmManager fallback for aggressive OEM ROMs |
-| `ServiceWatchdogReceiver` | PushService watchdog on screen/user/power events |
+| `ServiceWatchdogReceiver` | PushService watchdog on screen/user/power events. **Registered dynamically in `MailApplication`** (`ContextCompat.registerReceiver` + `RECEIVER_NOT_EXPORTED`) — `SCREEN_ON`/`USER_PRESENT`/`POWER_CONNECTED` are implicit broadcasts not delivered to manifest receivers on API 26+. Restart goes through the exemption-safe `PushService.requestRestart` (exact-alarm `getForegroundService` + WorkManager). |
 | `MailNotificationActionReceiver` | Notification action handling for mail |
 | `CalendarReminderReceiver` | Calendar reminder actions |
 | `TaskReminderReceiver` | Task reminder actions |
@@ -438,7 +438,12 @@ Rules:
 - **Loading flags are reset in `finally`** — `isDeleting`, `isMoving`, `isRestoring`, `isSendingMdn`, `isLoadingBody` — ensuring the UI never gets stuck in a loading state, regardless of success or failure.
 - **Selection is cleared in `finally`** (batch operations in `EmailListViewModel`) — DRY: single call point instead of duplicating in both `try` and `catch`.
 
-Covered ViewModels: `EmailDetailViewModel` (7 functions: `openEmail`, `deleteToTrash`, `move`, `restore`, `markUnread`, `sendMdn`, `dismissMdn`), `EmailListViewModel` (6 batch functions: `deleteSelectedToTrash`, `deleteSelectedDrafts`, `markSelectedAsRead`, `moveSelectedTo`, `restoreSelected`, `moveSelectedToSpam`). Both are covered by crash-resistance unit tests (`EmailDetailViewModelTest`, `EmailListViewModelTest`) that verify exceptions from repository/actions calls produce `Error` events instead of propagating.
+Covered ViewModels: **all migrated ViewModels** (Stage-1 fix M-1, 2026-07-01).
+- `EmailDetailViewModel` (7 functions), `EmailListViewModel` (6 batch functions) — inline pattern.
+- `NotesViewModel`, `SearchViewModel`, `TasksViewModel`, `UserFoldersViewModel` — the same inline pattern applied to **every** mutation function (`saveNote`/`deleteNoteToTrash`/`deleteSelectedToTrash`, `deleteSelected`/`markSelectedAsRead`/`starSelected`, `saveTask`/`toggleComplete`/`deleteToTrash`/`deleteSelectedToTrash`, `createFolder`/`renameFolder`/`deleteFolder`/`deleteSelectedFolders`). Loading/selection flags reset in `finally`.
+- `SyncCleanupViewModel` — its `set*` operations are uniform fire-and-forget with **no Error channel**, so instead of duplicating `try/catch` 13× it uses a single private `launchSafe { }` helper (DRY/KISS) that wraps every `viewModelScope.launch` in the same `catch(CancellationException){throw}` / `catch(Exception){ Log.e }` guard.
+
+All are covered by crash-resistance unit tests (`*ViewModelTest`) that verify a repository/settings exception produces an `Error` event (or is safely swallowed for `SyncCleanup`) instead of propagating and crashing the process.
 
 ---
 
