@@ -458,6 +458,8 @@ All are covered by crash-resistance unit tests (`*ViewModelTest`) that verify a 
 
 The same guarantee applies to long-lived **non-UI** scopes: `MailApplication`, the push/sync services, alarm/boot receivers and repositories build their scopes via `supervisedScope(dispatcher, tag)` (`util/AppCoroutines.kt`) — `SupervisorJob` + a `CoroutineExceptionHandler` — instead of a bare `CoroutineScope(SupervisorJob() + dispatcher)`, so an uncaught error in one background task (including `OutOfMemoryError`, which `catch(Exception)` does not catch) is logged rather than crashing the process. There is no `GlobalScope`/`runBlocking` in the codebase.
 
+`viewModelScope` itself carries a `SupervisorJob` but no `CoroutineExceptionHandler`, so migrated ViewModels guard every one-shot mutation with the inline `try/catch` pattern above; their long-lived reactive **observe** launches (which `collect` account/folder/email Room flows) additionally pass `loggingExceptionHandler(tag)` to `viewModelScope.launch(handler) { … }`, so a Room-flow error in the collector is logged instead of crashing the process (CR-2).
+
 ---
 
 ## 11. Current constraints

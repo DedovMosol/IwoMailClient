@@ -112,7 +112,7 @@ class TasksViewModel(
      * без наложения данных от разных аккаунтов.
      */
     private fun observeAccountAndTasks() {
-        viewModelScope.launch {
+        viewModelScope.launch(com.dedovmosol.iwomail.util.loggingExceptionHandler("TasksVM")) {
             accountRepo.activeAccount
                 .map { (it?.id ?: 0L) to (it?.email ?: "") }
                 .distinctUntilChanged()

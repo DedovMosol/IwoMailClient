@@ -100,7 +100,7 @@ class NotesViewModel(
      * без наложения данных от разных аккаунтов.
      */
     private fun observeAccountAndNotes() {
-        viewModelScope.launch {
+        viewModelScope.launch(com.dedovmosol.iwomail.util.loggingExceptionHandler("NotesVM")) {
             accountRepo.activeAccount
                 .map { it?.id ?: 0L }
                 .distinctUntilChanged()

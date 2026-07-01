@@ -100,7 +100,7 @@ class UserFoldersViewModel(
      * сортировка по имени выполняются здесь, чтобы UI получал готовый список.
      */
     private fun observeAccountAndFolders() {
-        viewModelScope.launch {
+        viewModelScope.launch(com.dedovmosol.iwomail.util.loggingExceptionHandler("UserFoldersVM")) {
             accountRepo.activeAccount
                 .map { it?.id ?: 0L }
                 .distinctUntilChanged()

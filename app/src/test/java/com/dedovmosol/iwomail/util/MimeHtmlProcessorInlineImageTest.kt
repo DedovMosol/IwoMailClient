@@ -69,4 +69,11 @@ class MimeHtmlProcessorInlineImageTest {
     fun `non-mime input yields empty map`() {
         assertThat(MimeHtmlProcessor.extractInlineImagesFromMime("just plain text, no headers")).isEmpty()
     }
+
+    @Test
+    fun `oversized MIME is skipped without processing (PB-2 OOM prevention)`() {
+        // > 8 MiB → не строим data:URL из огромного MIME (иначе base64-копии картинок → OOM).
+        val huge = "Content-Type: image/png\r\nContent-ID: <x@y>\r\n\r\n" + "A".repeat(9_000_000)
+        assertThat(MimeHtmlProcessor.extractInlineImagesFromMime(huge)).isEmpty()
+    }
 }

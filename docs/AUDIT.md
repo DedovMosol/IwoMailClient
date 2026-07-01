@@ -39,7 +39,7 @@
 | N-13 | ✅ NSC `cleartext=false` vs опция `useHttps=false` — исправлено | Low | S | Низ. | ✅ |
 | N-1 | ✅ Протокол не валидирует cc/bcc (UI митигирует) — исправлено | Low | Trivial | Низ. | ✅ |
 | N-3 | ✅ Subject — один encoded-word без сворачивания (RFC 5322) — исправлено | Low | S | Низ. | ✅ |
-| N-4 | `parseEwsDateTime` теряет смещение таймзоны | Low | S | Низ. | 3 |
+| N-4 | ✅ `parseEwsDateTime` теряет смещение таймзоны — исправлено | Low | S | Низ. | ✅ |
 | N-5 | ✅ Дублированное извлечение inline-картинок MIME (DRY) — исправлено | Low | M | Низ. | ✅ |
 | N-6 | `EasClient` God-object (SRP) | Low | L | Низ. | 3 |
 | N-8 | ✅ `collectAsState` в legacy-экранах (энергопотребление) — исправлено | Low | S | Низ. | ✅ |
@@ -126,6 +126,8 @@
 
 **N-4 (Low, корректность времени). `parseEwsDateTime` отбрасывает смещение таймзоны.**
 `CalendarDateUtils.kt:85-98` regex'ом удаляет `[+-]\d{2}:\d{2}$` и парсит как UTC. Если EWS вернёт время со смещением (а не `Z`), смещение теряется → сдвиг времени. Для Exchange 2007 SP1 EWS отдаёт UTC с `Z`, поэтому почти не триггерится. Рекомендация: учитывать смещение при парсинге.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** смещение больше не выбрасывается — при наличии `Z` или `±HH:MM` парсим паттерном `XXX` (Java 7+, парсит и `Z`→UTC, и `±HH:MM`; интернет-верифицировано по [Oracle SimpleDateFormat](https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html)). Без зоны — трактуем как UTC (поведение EWS по умолчанию). Доли секунды по-прежнему убираются. Тест `CalendarDateUtilsTest` (регрессия: `13:30+03:00` == `10:30Z`).
 
 **N-5 (Low, DRY/SOLID). Дублированное извлечение inline-картинок из MIME.**
 Две живые почти идентичные рекурсивные реализации: `EasEmailService.extractInlineImagesFromMime`+`extractImagesRecursive` (`EasEmailService.kt:631/651`, протокольный путь, зовётся из `EasClient.kt:1003/1025`) и `MimeHtmlProcessor.extractInlineImagesFromMime`+`extractImagesRecursive` (`MimeHtmlProcessor.kt:67/201`, UI-путь, зовётся из `EmailDetailActions.kt:154`). Алгоритм (обход вложенных multipart, `BOUNDARY`-regex, CID→data:URL) продублирован и **уже разошёлся** (`MimeHtmlProcessor` сначала зовёт `decodeMimeWrapper`, `EasEmailService` — нет) → правка в одном не попадёт в другой. Примечательно: `extractHtmlFromMime` централизован в `MimeHtmlProcessor` (зовётся из обоих) — а извлечение картинок не довели. Рекомендация: единый источник в `MimeHtmlProcessor`.
@@ -332,6 +334,8 @@
 
 **Схожая проблема (тот же класс, вне UI) — ✅ ИСПРАВЛЕНО (2026-07-01):** те же ручные `CoroutineScope(SupervisorJob() + dispatcher)` **без `CoroutineExceptionHandler`** обнаружены в долгоживущих не-UI scope'ах — `MailApplication.applicationScope` (реально некошеные launch: `cleanupOldAttachments`, `initCacheFromDb`), `PushService.serviceScope` (`language.collect → updateForegroundNotification`), `SettingsRepository.cacheScope`, `InitialSyncController.syncScope`, ресиверы `Boot`/`SyncAlarm`/`TaskReminder`/`CalendarReminder`/`ServiceWatchdog`, прогресс-бары `Send`/`Deletion`. Все переведены на единый `supervisedScope(dispatcher, tag)` (`util/AppCoroutines.kt`): `SupervisorJob` (изоляция соседей) + `CoroutineExceptionHandler` (ловит `Exception` И `OutOfMemoryError` → лог вместо краша процесса/сервиса; интернет-верифицировано — нужны ОБА). `GlobalScope`/`runBlocking` в проекте нет. Тест `AppCoroutinesTest` (сбой не отменяет соседей и не пробрасывается).
 
+**CR-2 (тот же класс — `viewModelScope`, вне UI) — ✅ ИСПРАВЛЕНО (2026-07-01):** `viewModelScope` = `SupervisorJob() + Dispatchers.Main.immediate` **без handler'а** (интернет-верифицировано, androidx lifecycle) → некошеное исключение в `launch` крашит процесс. Мигрированные VM полагаются на inline `try/catch` в mutation-функциях (M-1), но **реактивные observe-launch'и** (`accountRepo.activeAccount…collectLatest { … .collect { … } }` в `EmailDetail`/`UserFolders`/`EmailList`/`Notes`/`Tasks`) были без обёртки → ошибка Room-Flow в `collect` = краш. Фикс: `viewModelScope.launch(loggingExceptionHandler("…")) { … }` (`util/AppCoroutines.kt`) — handler ловит все некошеные исключения этого launch (прямой child SupervisorJob-scope; интернет-верифицировано). Вложенные `launch { runSync/maybeAutoSync }` уже с внутренним `try`. Тест в `AppCoroutinesTest`.
+
 ### UI-2 (Low, перф/идентичность). LazyColumn `items()` без `key`.
 `ContactsScreen:1143`, `ContactListViews:112` (группы), `EmailListScreen:433` (папки переноса) — `items(list) {}` без `key` → при изменении списка Compose не отслеживает идентичность (неверная рекомпозиция item-local state/анимаций). **✅ ИСПРАВЛЕНО:** добавлен `key = { it.id }` (как в остальных списках проекта).
 
@@ -356,6 +360,8 @@
 ### PB-2. Краш при открытии «тяжёлых» писем (гипотеза OOM).
 **Симптом (репорт):** краш при попытке открыть/удалить некоторые письма во входящих.
 **Найдено:** путь открытия (`EmailDetailViewModel`/`EmailDetailActions`) образцово защищён от `Exception`, но **`OutOfMemoryError` — это `Error`, а не `Exception`** → `catch(Exception)` его не ловит. Загрузка inline-картинок обрабатывает MIME до 20 МБ и строит `data:`-URL в памяти → на «тяжёлых» письмах OOM → некошенный краш процесса. **✅ Смягчено:** в `observeInlineImages` добавлен `catch(Throwable)` — при OOM/Error письмо показывается без inline-картинок вместо краша. **Нужен logcat stack trace** для точного подтверждения: краш на «удалении» отдельного письма этой гипотезой не объясняется (возможен второй путь — синхронный рендер конкретного контента).
+
+**✅ PREVENTION-фикс (2026-07-01):** по бест-практик (OOM **предотвращают**, а не ловят — интернет-верифицировано, [InnovationM](https://www.innovationm.com/blog/android-out-of-memory-error-causes-solution-and-best-practices/)) в `MimeHtmlProcessor.extractInlineImagesFromMime` добавлен лимит `MAX_INLINE_MIME_CHARS = 8 МиБ`: MIME больше — не обрабатываем (письмо показывается без inline-картинок). Единая точка (N-5) → защищает и UI-, и протокольный путь. Attachment-путь `loadInlineImages` уже был с лимитами (2 МБ/картинка, 5 МБ суммарно). `catch(Throwable)` в `observeInlineImages` оставлен как backstop (prevention + net). Тест `MimeHtmlProcessorInlineImageTest`. (Точная локализация краша всё ещё требует logcat.)
 
 ---
 

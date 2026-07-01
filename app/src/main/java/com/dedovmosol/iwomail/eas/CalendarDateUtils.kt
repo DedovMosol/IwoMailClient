@@ -85,12 +85,19 @@ object CalendarDateUtils {
     fun parseEwsDateTime(dateStr: String?): Long? {
         if (dateStr.isNullOrEmpty()) return null
         return try {
-            val cleaned = dateStr
-                .replace(Regex("\\.\\d+"), "")
-                .replace("Z", "")
-                .replace(Regex("[+-]\\d{2}:\\d{2}$"), "")
-            val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
-            format.timeZone = TimeZone.getTimeZone("UTC")
+            // N-4: доли секунды SimpleDateFormat парсит нестабильно — убираем. Но смещение таймзоны
+            // ('Z' или ±HH:MM) НЕ выбрасываем: паттерн XXX (Java 7+) парсит и 'Z' (→ UTC), и '±HH:MM'.
+            // Раньше смещение вырезалось и время трактовалось как UTC → сдвиг при ненулевом offset.
+            // Exchange 2007 SP1 EWS обычно отдаёт 'Z', но теперь и со смещением корректно.
+            val cleaned = dateStr.replace(Regex("\\.\\d+"), "")
+            val hasTimeZone = cleaned.endsWith("Z") ||
+                Regex("[+-]\\d{2}:\\d{2}$").containsMatchIn(cleaned)
+            val format = if (hasTimeZone) {
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+            } else {
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+                    .apply { timeZone = TimeZone.getTimeZone("UTC") }
+            }
             format.parse(cleaned)?.time
         } catch (_: Exception) {
             null

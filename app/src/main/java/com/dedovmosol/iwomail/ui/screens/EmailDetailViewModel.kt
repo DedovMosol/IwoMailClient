@@ -138,7 +138,7 @@ class EmailDetailViewModel(
      * Тип текущей папки (корзина/отправленные/черновики) derive'ится из единого источника папок.
      */
     private fun observeData() {
-        viewModelScope.launch {
+        viewModelScope.launch(com.dedovmosol.iwomail.util.loggingExceptionHandler("EmailDetailVM")) {
             accountRepo.activeAccount
                 .map { it?.id ?: 0L }
                 .distinctUntilChanged()

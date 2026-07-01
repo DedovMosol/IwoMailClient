@@ -33,6 +33,13 @@ object MimeHtmlProcessor {
     private val IMAGE_TYPE = "Content-Type:\\s*(image/[^;\\r\\n]+)".toRegex(RegexOption.IGNORE_CASE)
 
     /**
+     * PB-2: порог размера MIME для извлечения inline-картинок. Больше — не строим `data:`-URL
+     * (иначе base64-копии картинок держатся в памяти → риск `OutOfMemoryError`, который
+     * `catch(Exception)` не ловит). ≈ лимиту 5 МБ суммарных вложений + overhead base64/MIME.
+     */
+    private const val MAX_INLINE_MIME_CHARS = 8_388_608 // 8 MiB
+
+    /**
      * Extracts HTML from MIME data (bodyType=4).
      * Falls back to text/plain → HTML conversion if no HTML part found.
      */
@@ -66,6 +73,11 @@ object MimeHtmlProcessor {
      */
     fun extractInlineImagesFromMime(mimeData: String): Map<String, String> {
         val images = mutableMapOf<String, String>()
+
+        // PB-2: гигантский MIME не обрабатываем — построение data:URL держит в памяти base64-копии
+        // картинок (OutOfMemoryError, который catch(Exception) не ловит). Предотвращение важнее
+        // ловли: очень большое письмо показывается БЕЗ inline-картинок (тело письма отображается).
+        if (mimeData.length > MAX_INLINE_MIME_CHARS) return images
 
         val decoded = try {
             decodeMimeWrapper(mimeData)

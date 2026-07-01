@@ -3,7 +3,9 @@ package com.dedovmosol.iwomail.util
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,6 +43,17 @@ class AppCoroutinesTest {
     fun `scope carries a CoroutineExceptionHandler`() {
         val scope = supervisedScope(Dispatchers.Unconfined, "test")
         assertThat(scope.coroutineContext[CoroutineExceptionHandler]).isNotNull()
+        scope.cancel()
+    }
+
+    @Test
+    fun `loggingExceptionHandler on a supervisor-scope launch swallows an uncaught error (CR-2)`() = runBlocking {
+        // Паттерн CR-2: launch(handler) на scope с SupervisorJob (как viewModelScope).
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val siblingDone = CompletableDeferred<Boolean>()
+        scope.launch(loggingExceptionHandler("test")) { throw RuntimeException("boom") }
+        scope.launch { delay(50); siblingDone.complete(true) }
+        assertThat(withTimeoutOrNull(2_000) { siblingDone.await() }).isTrue()
         scope.cancel()
     }
 }

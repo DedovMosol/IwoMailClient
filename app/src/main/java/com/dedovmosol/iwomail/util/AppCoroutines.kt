@@ -24,3 +24,15 @@ fun supervisedScope(dispatcher: CoroutineDispatcher, tag: String = "AppScope"): 
         SupervisorJob() + dispatcher +
             CoroutineExceptionHandler { _, e -> Log.e(tag, "Unhandled coroutine error", e) }
     )
+
+/**
+ * [CoroutineExceptionHandler] для `viewModelScope.launch(handler) { … }`.
+ *
+ * `viewModelScope` = `SupervisorJob() + Dispatchers.Main.immediate` **без** handler'а (проверено —
+ * androidx lifecycle): непойманное исключение из `launch` (напр. ошибка Room-Flow в реактивном
+ * `collect`) иначе уронит процесс. Передаём этот handler в наблюдающие (`collect`) launch'и, где
+ * inline `try/catch` неудобен (вложенные потоки) — CR-2. Одноразовые mutation-launch'и остаются
+ * на паттерне `try/catch(CancellationException){throw}` (M-1).
+ */
+fun loggingExceptionHandler(tag: String): CoroutineExceptionHandler =
+    CoroutineExceptionHandler { _, e -> Log.e(tag, "Unhandled coroutine error", e) }

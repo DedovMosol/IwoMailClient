@@ -127,7 +127,7 @@ class EmailListViewModel(
      * derive'ятся из единого реактивного источника [MailRepository.getFolders].
      */
     private fun observeAccountAndEmails() {
-        viewModelScope.launch {
+        viewModelScope.launch(com.dedovmosol.iwomail.util.loggingExceptionHandler("EmailListVM")) {
             accountRepo.activeAccount
                 .map { it?.id ?: 0L }
                 .distinctUntilChanged()
