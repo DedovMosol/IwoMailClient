@@ -65,19 +65,4 @@ object RepositoryProvider {
     fun getSettingsRepository(context: Context): SettingsRepository {
         return SettingsRepository.getInstance(context.applicationContext)
     }
-    
-    /**
-     * Очистка всех кэшированных репозиториев
-     * Вызывается при выходе из приложения или смене пользователя
-     */
-    fun clear() {
-        synchronized(this) {
-            accountRepo = null
-            mailRepo = null
-            contactRepo = null
-            noteRepo = null
-            calendarRepo = null
-            taskRepo = null
-        }
-    }
 }

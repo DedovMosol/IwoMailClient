@@ -14,6 +14,16 @@
 - One-shot UI events (toasts, sound, easter egg) moved to an event channel (`Channel` + `receiveAsFlow`) — the ViewModel stays independent of localization/resources
 - Dependencies are constructor-injected (DIP): system push/sync side-effects are hidden behind a `SyncEffects` interface
 
+### Stability & security (code audit)
+- Fixed crashes when changing sync/cleanup settings and in notes/tasks/folders/search mutations: mandatory exception handling with proper loading/selection flag reset (M-1)
+- Fixed a Push service crash on Android 12+ (`ForegroundServiceStartNotAllowedException`): safe foreground start + graceful stop (N-10)
+- Restored the Push watchdog on Android 8+: the screen/unlock/charging receiver is now registered dynamically (a manifest receiver never fired → Push degradation) (N-12)
+- Prevented OOM when sending large attachments: total size is checked BEFORE reading into memory (10 MB limit + notification) (N-2)
+- Email editor: Content-Security-Policy + a single HTML sanitizer strip inline `on*`/`javascript:` handlers (including on paste) (L-3)
+- Fixed an EAS-client cache race during failover to an alternate server (N-7)
+- Outgoing de-duplication: a stable `ClientId`/`Message-ID` prevents duplicate sends on queue retry (N-11)
+- Dead-code cleanup and DRY: removed unused `clearAllEasClientCache`/`RepositoryProvider.clear`/`getEmailsByFolder`; `ContactRepository` is now always obtained via the provider (L-1, L-2, N-9, M-2)
+
 ### UX — haptic feedback and accessibility
 - Added haptic feedback when tapping the star (flag) in the email list and on the email detail screen — consistent with long-press/selection
 - Dynamic accessibility labels for the star: "Add to favorites" / "Remove from favorites" depending on state (previously a static "Favorites" label)

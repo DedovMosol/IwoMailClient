@@ -319,7 +319,7 @@ object InitialSyncController {
                 launch {
                     try {
                         withTimeoutOrNull(120_000L) {
-                            val contactRepo = com.dedovmosol.iwomail.data.repository.ContactRepository(context)
+                            val contactRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getContactRepository(context)
                             contactRepo.syncExchangeContacts(accountId)
                             if (includeGal) contactRepo.syncGalContactsToDb(accountId)
                         }

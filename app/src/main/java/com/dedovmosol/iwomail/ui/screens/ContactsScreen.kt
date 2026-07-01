@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.ContactEntity
 import com.dedovmosol.iwomail.data.database.ContactGroupEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
-import com.dedovmosol.iwomail.data.repository.ContactRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
@@ -71,7 +70,7 @@ fun ContactsScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val contactRepo = remember { ContactRepository(context) }
+    val contactRepo = remember { RepositoryProvider.getContactRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val clipboardManager = LocalClipboardManager.current
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN

@@ -602,14 +602,6 @@ class AccountRepository(private val context: Context) {
         clientInvalidationTimestamps[accountId] ?: 0L
 
     /**
-     * Очищает весь кэш клиентов
-     */
-    fun clearAllEasClientCache() {
-        easClientCache.clear()
-        easClientLocks.clear()
-    }
-    
-    /**
      * Сохраняет PolicyKey для аккаунта
      */
     suspend fun savePolicyKey(accountId: Long, policyKey: String?) {

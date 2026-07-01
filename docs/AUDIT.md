@@ -43,14 +43,14 @@
 | N-5 | Дублированное извлечение inline-картинок MIME (DRY) | Low | M | Низ. | 3 |
 | N-6 | `EasClient` God-object (SRP) | Low | L | Низ. | 3 |
 | N-8 | `collectAsState` в legacy-экранах (энергопотребление) | Low | S | Низ. | 3 (по мере MVVM-миграции) |
-| N-9 | Мёртвый `getEmailsByFolder` | Low | Trivial | Низ. | 3 |
+| N-9 | ✅ Мёртвый `getEmailsByFolder` — удалён | Low | Trivial | Низ. | ✅ |
 | N-14 | user-CA trust / FileProvider `path="/"` / alpha-крипто | Low | S | Низ. | 3 |
-| L-1 | Мёртвый `clearAllEasClientCache` | Low | Trivial | Низ. | 3 |
-| L-2 | Мёртвый `RepositoryProvider.clear` | Low | Trivial | Низ. | 3 |
+| L-1 | ✅ Мёртвый `clearAllEasClientCache` — удалён | Low | Trivial | Низ. | ✅ |
+| L-2 | ✅ Мёртвый `RepositoryProvider.clear` — удалён | Low | Trivial | Низ. | ✅ |
 | L-4 | `deleteDuplicateEmails` — коллизия ключа группировки | Low | S | Низ. | 3 |
 | L-6 | TLS 1.0/слабые шифры глобально (by-design Exchange 2007) | Low | M | Низ. | 3 / wontfix |
 | L-7 | XOR-fallback паролей (fail-closed / уведомление) | Low | M | Низ. | 3 |
-| M-2 | `ContactRepository` в обход провайдера (DRY) | Low | Trivial | Низ. | 3 |
+| M-2 | ✅ `ContactRepository` в обход провайдера (DRY) — исправлено | Low | Trivial | Низ. | ✅ |
 | M-3 | EWS NTLM `synchronized`+blocking (per-account) | Low | M | Низ. | 3 |
 | H-1 | ~~WebView XSS~~ — пересмотрено (CSP есть) → инфо | Low | — | — | — |
 
@@ -68,8 +68,13 @@
 - **N-7** — `clearEasClientCache` больше не удаляет `Mutex` из `easClientLocks`; `tryFallbackToAlternate` мутирует кэш под тем же per-account `Mutex`, что и `createEasClient`. Гонка «двух корутин в критической секции» закрыта. (Проверено ревью — юнит-тест гонки непрактичен без Robolectric.) **Новая находка при ревью:** у `PushService` — ОТДЕЛЬНЫЙ `easClientCache` (synchronizedMap) с рассинхроном: `keys.toList()` (стр. ~517) без `synchronized` → возможен `ConcurrentModificationException`; `remove+put` в fallback без атомарности. Это НЕ N-7 (другой кэш) — кандидат в Этап 3.
 - **N-11** — стабильный `ClientId` на запись `outbox.json` (`OutboxWorker`), переиспользуется при retry; протянут в `EasClient.sendMail`→`EasEmailService.sendMail`→`buildMimeMessageBytes` (MIME `Message-ID`) и `generateSendMail` (WBXML `ClientId`). **EAS 14+**: сервер отбрасывает дубль по `ClientId` — полное решение. **Exchange 2007 (12.1)**: интернет-верифицировано (MS-ASCMD) — `SendMail` = raw MIME без `ClientId`, серверной дедупликации нет → стабильный `Message-ID` это best-effort; полный клиентский Sent-check вынесен в follow-up (риск потери письма — делать осторожно). Обратно-совместимо (старые записи без `clientId` → прежнее поведение).
 
-**Этап 3 — DRY/SOLID/best-practice/чистка (при рефакторинге):**
-остальные N/L/M — мёртвый код, конфиги, DRY, энергопотребление, God-object.
+**Этап 3 — DRY/SOLID/best-practice/чистка (при рефакторинге): частично ✅ СДЕЛАНО (2026-07-01).**
+- **L-1** — удалён мёртвый `AccountRepository.clearAllEasClientCache()` (0 вызовов).
+- **L-2** — удалён мёртвый `RepositoryProvider.clear()` (0 вызовов; репозитории — app-wide singletons на `applicationContext`, чистка при смене аккаунта не требуется).
+- **N-9** — удалён мёртвый `EmailDao.getEmailsByFolder` (Flow, без `LIMIT`, 0 вызовов; список читает body-less `getEmailSummariesByFolder`). Живые `getEmailsByFolderList`/`getEmailsByFolderPaged` сохранены.
+- **M-2** — 3 прямых `ContactRepository(context)` → `RepositoryProvider.getContactRepository(context)` (`InitialSyncController`, `ContactsScreen`, `ComposeScreen`); неиспользуемые импорты `ContactRepository` удалены. DRY-единообразие с `getAccountRepository`/`getMailRepository`.
+
+Остаются (Этап 3): `N-15` (гонка кэша PushService), `N-1` (валидация cc/bcc), `N-3` (сворачивание Subject), `L-4` (ключ дедупликации), `N-13` (cleartext-EAS/NSC), `N-5` (DRY извлечения картинок), `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
 
 > Правки НЕ внесены (по запросу — только аудит). Этот план — дорожная карта для последующих коммитов.
 
@@ -123,6 +128,8 @@
 
 **N-9 (Low, мёртвый код). `EmailDao.getEmailsByFolder` не используется.**
 `Daos.kt:204-205` — `SELECT * FROM emails WHERE folderId … ORDER BY dateReceived DESC` (полный `body`, без `LIMIT`), `Flow<List<EmailEntity>>`. 0 вызовов (grep): список писем использует body-less `getEmailSummariesByFolder`. Мёртвый код в духе L-1/L-2. Опасность лишь потенциальная — если его когда-нибудь подключат к UI, он загрузит все тела без лимита. Удалить.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** метод удалён. `getEmailsByFolderList` (suspend, 5 вызовов из `EmailSyncService`) и `getEmailsByFolderPaged` — сохранены (живые).
 
 **N-10 (Low, robustness Android 12+). `startForeground` в `PushService` без try/catch.**
 `PushService.kt:325-328` (`onStartCommand`) вызывает `startForeground(…, FOREGROUND_SERVICE_TYPE_DATA_SYNC)` без обёртки. На Android 12+ это может бросить `ForegroundServiceStartNotAllowedException`, если сервис доставлен в состоянии без валидного FGS-исключения (истёк exact-alarm exemption, нестандартная доставка `START_STICKY` с null-intent). Вероятность низкая (все штатные вызовы — под исключениями: BootReceiver/exact-alarm/foreground), но краш реален и `START_STICKY` может дать рестарт-churn. Документация Android явно рекомендует ловить это исключение. **Несогласованность:** соседний `SyncWorker.kt:59-64` уже оборачивает `setForeground` в try/catch («Игнорируем ошибку — продолжаем в фоне») — тот же паттерн просто не применён к `PushService`. Рекомендация: обернуть `startForeground` в try/catch, при неудаче — `stopSelf()`.
@@ -235,6 +242,8 @@
 
 **Рекомендация:** заменить на `RepositoryProvider.getContactRepository(context)`.
 
+**✅ ИСПРАВЛЕНО (2026-07-01):** все 3 вызова переведены на `RepositoryProvider.getContactRepository(context)`; неиспользуемые импорты `ContactRepository` удалены из `ContactsScreen`/`ComposeScreen`. Поведение идентично (тот же singleton на `applicationContext`).
+
 ### M-3. EWS NTLM-хендшейк сериализуется глобальным `synchronized` с блокирующей сетью
 
 **Где:** `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/eas/EwsClient.kt` — `executeNtlmHandshake` (`synchronized(ntlmLock)` + блокирующий `call.execute()`).
@@ -252,8 +261,12 @@
 ### L-1. Мёртвый код: `clearAllEasClientCache()`
 `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/data/repository/AccountRepository.kt` — метод нигде не вызывается (grep по проекту). Замечание прошлой сессии про «не чистит `fallbackTimestamps`» формально верно, но не достижимо. Удалить либо использовать.
 
+**✅ ИСПРАВЛЕНО (2026-07-01):** метод удалён.
+
 ### L-2. Мёртвый код: `RepositoryProvider.clear()`
 `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/data/repository/RepositoryProvider.kt` — 0 вызовов. Удалить либо задействовать при смене аккаунта/logout.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** метод удалён. Репозитории — app-wide singletons на `applicationContext` (не per-account), поэтому очистка при смене аккаунта/logout не требуется.
 
 ### L-3. Вторичный WebView с JS в `RichTextEditor`
 `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/ui/components/RichTextEditor.kt:1072` — `javaScriptEnabled = true` и `addJavascriptInterface(jsInterface, "Android")`. При Reply/Forward в редактор попадает цитируемый недоверенный HTML.
@@ -292,7 +305,7 @@
 `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/eas/EasClient.kt:407` `generateStableDeviceId` всегда возвращает `"androidc" + 10 цифр`. `takeLast(15)/takeLast(8)` дают чисто буквенно-цифровую строку — `<`, `>`, `&`, кавычки невозможны.
 
 ### F-3. «Утечка памяти в `clearAllEasClientCache`» — переоценка
-Метод мёртвый (см. L-1), «утечка» недостижима. Даже при вызове — это несколько `Long` по `accountId`, не leak.
+Метод мёртвый (см. L-1), «утечка» недостижима. Даже при вызове — это несколько `Long` по `accountId`, не leak. **(2026-07-01: метод удалён в рамках L-1 — вопрос закрыт.)**
 
 ---
 

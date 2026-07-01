@@ -201,9 +201,6 @@ interface FolderDao {
 
 @Dao
 interface EmailDao {
-    @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC")
-    fun getEmailsByFolder(folderId: String): Flow<List<EmailEntity>>
-
     @Query("""
         SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
                subject, preview, '' AS body, bodyType, dateReceived, read,

@@ -37,7 +37,6 @@ import androidx.compose.ui.window.PopupProperties
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.database.SignatureEntity
-import com.dedovmosol.iwomail.data.repository.ContactRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
@@ -340,7 +339,7 @@ fun ComposeScreen(
     var contactPickerTarget by rememberSaveable { mutableStateOf("to") } // "to", "cc", "bcc"
 
     // Автодополнение email
-    val contactRepo = remember { ContactRepository(context) }
+    val contactRepo = remember { RepositoryProvider.getContactRepository(context) }
     var toSuggestions by remember { mutableStateOf<List<EmailSuggestion>>(emptyList()) }
     var showToSuggestions by remember { mutableStateOf(false) }
     var toFieldFocused by remember { mutableStateOf(false) }
