@@ -79,7 +79,7 @@ fun VerificationScreen(
     onError: (String, String?) -> Unit // error, savedData
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
     

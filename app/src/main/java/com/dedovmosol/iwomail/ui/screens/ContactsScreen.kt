@@ -70,7 +70,7 @@ fun ContactsScreen(
     onComposeClick: (String) -> Unit // email для нового письма
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val contactRepo = remember { RepositoryProvider.getContactRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val clipboardManager = LocalClipboardManager.current
@@ -1140,7 +1140,7 @@ fun ContactsScreen(
                         )
                     }
                     // Группы
-                    items(groups) { group ->
+                    items(groups, key = { it.id }) { group ->
                         val groupColor = try { Color(group.color) } catch (_: Exception) { MaterialTheme.colorScheme.primary }
                         ListItem(
                             headlineContent = { Text(group.name) },

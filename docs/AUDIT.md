@@ -319,6 +319,31 @@
 
 ---
 
+## UI-аудит (2026-07-01) — баги/краши/гонки/утечки/перф в интерфейсе
+
+Свип всего UI-кода (`ui/**`) на footgun-паттерны. Кодовая база защитная — большинство паттернов проверено безопасными; найдены 2 находки, обе исправлены.
+
+### UI-1 (Medium→High для zero-crash). Некошенные краши в legacy (не-MVVM) экранах.
+**Суть:** немигрированные экраны запускают операции через `rememberCoroutineScope().launch { … }` **без try/catch**, вызывая бросающие suspend-функции (сырой Room/DAO, файловый I/O). Некошенное исключение в scope → отмена родителя → **краш приложения** (блокировка/повреждение БД, ошибка I/O). Тот же класс, что M-1, но для legacy-экранов вне MVVM. Дополнительно: `rememberSyncScope` имел `SupervisorJob` **без** `CoroutineExceptionHandler` → соседи изолированы, но сам краш не ловится (интернет-верифицировано: нужны ОБА — [Kotlin docs](https://kotlinlang.org/docs/exception-handling.html)).
+
+**Подтверждённые точки:** `ContactsScreen` (`deleteContact`/`updateContact` → `contactDao.delete/update`), `SettingsScreen` (`accountRepo.deleteAccount`, `signatureDao().delete`), `CalendarScreen` (`deleteEvent/deleteEvents/emptyCalendarTrash`), `MainScreen`, `AccountSettingsScreen` и др. Масштаб: 27 `val scope = rememberCoroutineScope()` в 17 файлах.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** введён крах-безопасный `rememberSafeScope()` (`ComposableUtils`) — `SupervisorJob(base.Job)` (изоляция соседей + жизненный цикл композиции) + `CoroutineExceptionHandler` (не крашит, логирует). Handler срабатывает, т.к. `launch` — прямой child SupervisorJob-scope (это НЕ ловушка `launch(SupervisorJob())`; интернет-верифицировано). Все 27 экранных `rememberCoroutineScope()` → `rememberSafeScope()`; `rememberSyncScope` получил `CoroutineExceptionHandler`. Тела `scope.launch{}` не менялись (нет проблемы `return@launch`). Drag-scroll scope в `ComposableUtils` (чисто UI, не бросает) оставлен.
+
+### UI-2 (Low, перф/идентичность). LazyColumn `items()` без `key`.
+`ContactsScreen:1143`, `ContactListViews:112` (группы), `EmailListScreen:433` (папки переноса) — `items(list) {}` без `key` → при изменении списка Compose не отслеживает идентичность (неверная рекомпозиция item-local state/анимаций). **✅ ИСПРАВЛЕНО:** добавлен `key = { it.id }` (как в остальных списках проекта).
+
+### Проверено и БЕЗОПАСНО (не находки)
+- **Крах-парсинг:** цвет RichTextEditor (`try` + гарды `values.size`), `ComposeModels.fromSaveableString` (`parts.size!=4` + try), прогресс-бары (`steps`=const, в `try`) — защищены.
+- **Коллекции:** `.first()`/`.first{}` в Compose/Tasks/MainScreen/AgendaView гардированы (`isNotEmpty`/`size==1`/`groupBy` → непустые группы).
+- **WebView:** EmailDetailScreen и RichTextEditor — образцовое уничтожение (`stopLoading`→`about:blank`→`removeAllViews`→`destroy` + обнуление `controller.webView`; обход RenderThread-краша). Утечек нет.
+- **Потокобезопасность:** `SimpleDateFormat` — `remember{}` (Main-thread) / `ThreadLocal` / per-call функции. `GlobalScope`/`runBlocking` в UI — НЕТ. `DisposableEffect` (9) — все с `onDispose`.
+
+### Не покрыто (рекомендуется отдельным проходом)
+Тонкие логические гонки (двойной submit при быстрых тапах — частично митигируется флагами `isLoading`/`rememberSaveable`) и перф-рекомпозиция (стабильность лямбд, уровень чтения state). Не крэш-класс; ниже приоритетом.
+
+---
+
 ## Опровергнутые находки прошлой сессии (ложные тревоги)
 
 ### F-1. «CRITICAL: NTLM `performNtlmHandshake()` возвращает stub `""`» — НЕВЕРНО

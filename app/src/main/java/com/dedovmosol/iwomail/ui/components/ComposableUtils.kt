@@ -20,6 +20,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,11 +36,38 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun rememberSyncScope(): CoroutineScope {
-    val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
+    // UI-1: + CoroutineExceptionHandler. SupervisorJob изолирует соседей, но САМ не ловит краш —
+    // без handler исключение из launch (напр. из репозитория) уронит приложение.
+    val scope = remember {
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.Main +
+                CoroutineExceptionHandler { _, e -> android.util.Log.e("SyncScope", "Coroutine failed", e) }
+        )
+    }
     DisposableEffect(Unit) {
         onDispose { scope.cancel() }
     }
     return scope
+}
+
+/**
+ * Крах-безопасный аналог `rememberCoroutineScope` (UI-1): `SupervisorJob` (сбой одного `launch`
+ * не отменяет соседей) + `CoroutineExceptionHandler` (не крашит приложение — логирует). Handler
+ * работает, т.к. `launch` — прямой child этого SupervisorJob-scope. Жизненный цикл — как у
+ * `rememberCoroutineScope` (supervisor — дочерний Job базового scope → отменяется при выходе из
+ * композиции). Замена для legacy-экранов, чьи `scope.launch{}` зовут бросающие suspend-функции
+ * (сырой Room/DAO/файловый I/O) без try/catch.
+ */
+@Composable
+fun rememberSafeScope(tag: String = "UI"): CoroutineScope {
+    val base = rememberCoroutineScope()
+    return remember(base) {
+        CoroutineScope(
+            base.coroutineContext +
+                SupervisorJob(base.coroutineContext[Job]) +
+                CoroutineExceptionHandler { _, e -> android.util.Log.e(tag, "Unhandled coroutine error", e) }
+        )
+    }
 }
 
 /**

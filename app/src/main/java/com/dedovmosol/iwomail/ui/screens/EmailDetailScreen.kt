@@ -95,7 +95,7 @@ fun EmailDetailScreen(
     onComposeToEmail: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val view = LocalView.current
     val haptic = LocalHapticFeedback.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }

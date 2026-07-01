@@ -54,7 +54,7 @@ fun SettingsScreen(
     onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val isRu = isRussian()
 
@@ -707,7 +707,7 @@ fun SignaturesManagementDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val database = remember { com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context) }
 
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
@@ -924,7 +924,7 @@ private fun SignatureEditDialog(
     var isDefault by rememberSaveable { mutableStateOf(if (forceDefault) true else (signature?.isDefault ?: false)) }
     var isHtml by rememberSaveable { mutableStateOf(signature?.isHtml ?: false) }
     val richTextController = com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController()
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     var isSaving by remember { mutableStateOf(false) }
 
     fun saveSignature() {

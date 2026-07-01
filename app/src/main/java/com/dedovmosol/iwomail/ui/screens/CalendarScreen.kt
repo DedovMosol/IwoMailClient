@@ -113,7 +113,7 @@ fun CalendarScreen(
     initialDateFilter: CalendarDateFilter = CalendarDateFilter.ALL
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val calendarRepo = remember { RepositoryProvider.getCalendarRepository(context) }
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current

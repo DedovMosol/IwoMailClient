@@ -52,7 +52,7 @@ fun AccountSettingsScreen(
     onNavigateToSyncCleanup: (Long) -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val database = remember { MailDatabase.getInstance(context) }
     val isRu = isRussian()
@@ -912,7 +912,7 @@ fun CertificatePinningCard(
     isRu: Boolean,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     var isLoading by remember { mutableStateOf(false) }
 
     // Проверяем наличие изменения сертификата (ключ pinnedCertificateHash гарантирует
@@ -1040,7 +1040,7 @@ private fun CertificateChangeWarning(
     hasDualUrl: Boolean = false,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
 
     Text(
         text = if (isRu) "⚠️ Обнаружен новый сертификат!" else "⚠️ New certificate detected!",
@@ -1165,7 +1165,7 @@ private fun CertificatePinnedInfo(
     onLoadingChange: (Boolean) -> Unit,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
 
     Text(
         text = if (isRu) "✅ Защита включена" else "✅ Protection enabled",
@@ -1296,7 +1296,7 @@ private fun CertificatePinningDisabled(
     onLoadingChange: (Boolean) -> Unit,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
 
     Text(
         text = if (isRu) "⚠️ Защита отключена" else "⚠️ Protection disabled",

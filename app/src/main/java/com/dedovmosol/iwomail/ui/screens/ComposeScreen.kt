@@ -121,7 +121,7 @@ fun ComposeScreen(
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val currentLanguage = LocalLanguage.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }

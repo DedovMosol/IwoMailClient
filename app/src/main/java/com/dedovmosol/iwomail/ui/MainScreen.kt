@@ -92,7 +92,7 @@ fun MainScreen(
     onNavigateToTasksToday: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
 
     // Получаем репозитории из RepositoryProvider (ленивые singletons)
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
@@ -2184,7 +2184,7 @@ private fun AutoUpdateDialog(
     onDismiss: () -> Unit,
     onLater: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
 

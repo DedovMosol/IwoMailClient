@@ -109,7 +109,7 @@ internal fun PersonalContactsList(
                         )
                     }
                     // Группы
-                    items(groups) { group ->
+                    items(groups, key = { it.id }) { group ->
                         val groupColor = try { Color(group.color) } catch (_: Exception) { MaterialTheme.colorScheme.primary }
                         val count = groupCounts[group.id] ?: 0
                         Box {

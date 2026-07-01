@@ -46,7 +46,7 @@ fun UpdatesScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val updateChecker = remember { UpdateChecker(context) }
     val isRu = isRussian()
@@ -509,7 +509,7 @@ private fun UpdateDownloadDialog(
     updateChecker: UpdateChecker,
     onDismiss: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val isRu = isRussian()
     val colorTheme = LocalColorTheme.current
     val configuration = LocalConfiguration.current
@@ -820,7 +820,7 @@ private fun RollbackDialog(
     onDismiss: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val colorTheme = LocalColorTheme.current
     val isRu = isRussian()
     val configuration = LocalConfiguration.current

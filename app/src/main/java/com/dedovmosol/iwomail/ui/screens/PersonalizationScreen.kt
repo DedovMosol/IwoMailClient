@@ -223,7 +223,7 @@ fun PersonalizationScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val isRu = isRussian()
     

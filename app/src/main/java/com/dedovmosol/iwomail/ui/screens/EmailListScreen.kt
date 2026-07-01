@@ -105,7 +105,7 @@ fun EmailListScreen(
     initialDateFilter: EmailDateFilter = EmailDateFilter.ALL
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
     val hapticScreen = LocalHapticFeedback.current
@@ -430,7 +430,7 @@ fun EmailListScreen(
                     // Ограничиваем высоту LazyColumn чтобы избежать вложенного скролла
                     Box(modifier = Modifier.heightIn(max = 300.dp)) {
                         LazyColumn(state = lazyListState) {
-                            items(availableFolders) { targetFolder ->
+                            items(availableFolders, key = { it.id }) { targetFolder ->
                                 ListItem(
                                     headlineContent = { Text(Strings.getFolderName(targetFolder.type, targetFolder.displayName)) },
                                     leadingContent = {
@@ -819,7 +819,7 @@ private fun EmailList(
     onDragSelect: (Set<String>) -> Unit = {}
 ) {
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val isAtTop by remember { derivedStateOf { listState.firstVisibleItemIndex < 3 } }
     val showScrollButton = emails.size > 5
     val pullRefreshState = rememberPullRefreshState(isRefreshing, onRetry)

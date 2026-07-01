@@ -71,7 +71,7 @@ fun TasksScreen(
     initialFilter: TaskFilter = TaskFilter.ALL
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
     val haptic = LocalHapticFeedback.current
 

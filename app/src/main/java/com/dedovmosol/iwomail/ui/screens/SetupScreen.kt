@@ -82,7 +82,7 @@ fun SetupScreen(
     onBackClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     val currentLanguage = LocalLanguage.current

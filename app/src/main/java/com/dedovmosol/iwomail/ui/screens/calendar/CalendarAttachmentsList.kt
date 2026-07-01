@@ -40,7 +40,7 @@ internal fun CalendarAttachmentsList(
 ) {
     val context = LocalContext.current
     val accountRepo = remember { com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context) }
-    val scope = rememberCoroutineScope()
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
 
     val attachments = remember(attachmentsJson) {

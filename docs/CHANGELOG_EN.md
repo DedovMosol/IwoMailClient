@@ -28,6 +28,7 @@
 - Exchange over HTTPS only: removed the non-functional plaintext-HTTP option when setting up an Exchange account (cleartext was blocked by the system security policy); SSL is now forced for Exchange; IMAP/POP3 unaffected (N-13)
 - Unified inline-image parsing: removed duplicated MIME extraction logic (single source) and added protection against maliciously deep-nested MIME (N-5)
 - Battery: all screens switched to lifecycle-aware state collection (`collectAsStateWithLifecycle`) — flow collection pauses while a screen is not visible, cutting background CPU/battery use (N-8)
+- Crash resilience: screen operations (deleting accounts/contacts/events, settings, etc.) can no longer crash the app on a DB/I-O error — the failure is isolated and logged (UI-1)
 - Fixed a potential race/`ConcurrentModificationException` in the Push service's EAS-client cache — switched to `ConcurrentHashMap` with atomic operations (N-15)
 - Dead-code cleanup and DRY: removed unused `clearAllEasClientCache`/`RepositoryProvider.clear`/`getEmailsByFolder`; `ContactRepository` is now always obtained via the provider (L-1, L-2, N-9, M-2)
 

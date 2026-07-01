@@ -454,6 +454,8 @@ Covered ViewModels: **all migrated ViewModels** (Stage-1 fix M-1, 2026-07-01).
 
 All are covered by crash-resistance unit tests (`*ViewModelTest`) that verify a repository/settings exception produces an `Error` event (or is safely swallowed for `SyncCleanup`) instead of propagating and crashing the process.
 
+**Legacy (non-MVVM) screens** that still launch work from a `rememberCoroutineScope()` in the Composable use `rememberSafeScope()` (`ComposableUtils`) instead — a crash-safe scope built on `SupervisorJob` (a failing operation does not cancel siblings) + a `CoroutineExceptionHandler` (an uncaught exception from a throwing suspend/DAO call is logged, not propagated to the process). Its lifecycle matches `rememberCoroutineScope` (the supervisor is a child of the base scope's `Job`, cancelled when the Composable leaves composition), and the `launch` bodies are unchanged. The `rememberSyncScope()` helper gained the same handler. This closes the M-1 crash class for screens not yet migrated to MVVM (UI-1, 2026-07-01).
+
 ---
 
 ## 11. Current constraints
