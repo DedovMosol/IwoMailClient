@@ -172,7 +172,8 @@ class EasEmailService internal constructor(
         bcc: String = "",
         importance: Int = 1,
         requestReadReceipt: Boolean = false,
-        requestDeliveryReceipt: Boolean = false
+        requestDeliveryReceipt: Boolean = false,
+        stableClientId: String? = null
     ): EasResult<Boolean> {
         if (to.isBlank() || !isValidEmailAddress(to)) {
             return EasResult.Error("Неверный адрес получателя: $to")
@@ -184,7 +185,11 @@ class EasEmailService internal constructor(
 
         return withContext(Dispatchers.IO) {
             try {
-                val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance)
+                // N-11: единый стабильный идентификатор для дедупликации при retry — используется
+                // и как WBXML ClientId (EAS 14+: сервер отбрасывает дубликат по ClientId), и как
+                // основа MIME Message-ID. Если не задан (обычная отправка) — уникальный millis.nano.
+                val clientId = stableClientId ?: "${System.currentTimeMillis()}.${System.nanoTime()}"
+                val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
 
                 val easVersion = deps.getEasVersion()
                 val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
@@ -192,7 +197,6 @@ class EasEmailService internal constructor(
                     if (majorVersion < 14) "&SaveInSent=T" else ""
 
                 val (requestBody, contentType) = if (majorVersion >= 14) {
-                    val clientId = System.currentTimeMillis().toString()
                     val wbxml = deps.wbxmlParser.generateSendMail(clientId, mimeBytes)
                     Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
                 } else {
@@ -1281,11 +1285,14 @@ $deleteCommands
         bcc: String,
         requestReadReceipt: Boolean,
         requestDeliveryReceipt: Boolean,
-        importance: Int
+        importance: Int,
+        clientId: String? = null
     ): ByteArray {
         val fromEmail = deps.getFromEmail()
         val deviceId = deps.getDeviceId()
-        val messageId = "<${System.currentTimeMillis()}.${System.nanoTime()}@$deviceId>"
+        // N-11: стабильный Message-ID из clientId (если задан), иначе уникальный millis.nano —
+        // чтобы повторная отправка одной записи очереди не порождала новый Message-ID.
+        val messageId = "<${clientId ?: "${System.currentTimeMillis()}.${System.nanoTime()}"}@$deviceId>"
 
         val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
         val date = dateFormat.format(java.util.Date())

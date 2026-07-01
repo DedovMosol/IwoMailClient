@@ -332,6 +332,7 @@ Email HTML bodies are sanitized before being loaded into `WebView`:
   - `javascript:` and `data:text/html` URIs in `href`/`src`/`action`/`formaction`/`xlink:href` attributes.
 - All regexes are idempotent and ReDoS-safe (no catastrophic backtracking).
 - `EmailDetailScreen` loads sanitized HTML with `loadDataWithBaseURL(null, ...)`. Null-baseURL blocks cross-origin requests, cookie/localStorage exfiltration and service workers, complementing the tag-level blocklist.
+- **CSP (defense-in-depth).** Both WebViews inject a per-load `Content-Security-Policy` meta with `script-src 'nonce-<random>'` (no `'unsafe-inline'`): the viewer (`EmailDetailScreen`) and — since Stage-2 fix L-3 — the rich-text editor (`RichTextEditor`, whose own script is nonce-tagged; `evaluateJavascript`/`@JavascriptInterface` calls run outside CSP). This blocks injected inline event handlers (`onerror`/`onload`) and `javascript:` URIs even if a regex bypass slips through — including the editor **paste** path. The editor additionally sanitizes injected HTML twice: Kotlin `stripDangerousTags` (delegates to `sanitizeEmailHtml`, DRY) before `evaluateJavascript`, and a JS-side `sanitizeHtml` (detached-`div`, strips `on*`/`javascript:`) before `innerHTML`.
 
 ### Password storage
 

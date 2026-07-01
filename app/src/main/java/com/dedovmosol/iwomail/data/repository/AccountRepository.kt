@@ -537,7 +537,6 @@ class AccountRepository(private val context: Context) {
 
         if (!EasClient.probeAlternateUrl(altUrl, account.incomingPort)) return null
 
-        clearEasClientCache(accountId)
         val password = getPassword(accountId) ?: return null
         val clientCertPassword = getClientCertPassword(accountId)
         val pinnedCertInfo = if (account.pinnedCertificateHash != null &&
@@ -551,32 +550,38 @@ class AccountRepository(private val context: Context) {
             )
         } else null
 
-        val client = try {
-            EasClient(
-                serverUrl = altUrl,
-                alternateServerUrl = account.serverUrl,
-                username = account.username,
-                password = password,
-                domain = account.domain,
-                acceptAllCerts = account.acceptAllCerts,
-                port = account.incomingPort,
-                useHttps = account.useSSL,
-                deviceIdSuffix = account.email,
-                initialPolicyKey = account.policyKey,
-                certificatePath = account.certificatePath,
-                clientCertificatePath = account.clientCertificatePath,
-                clientCertificatePassword = clientCertPassword,
-                pinnedCertInfo = pinnedCertInfo,
-                accountId = accountId
-            )
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            return null
+        // N-7: все мутации кэша — под тем же per-account Mutex, что и в createEasClient (иначе
+        // конкурентная запись кэша primary vs fallback без взаимного исключения). Сеть (probe)
+        // и чтение БД/паролей — выше, вне лока.
+        val mutex = easClientLocks.computeIfAbsent(accountId) { Mutex() }
+        return mutex.withLock {
+            clearEasClientCache(accountId)
+            val client = try {
+                EasClient(
+                    serverUrl = altUrl,
+                    alternateServerUrl = account.serverUrl,
+                    username = account.username,
+                    password = password,
+                    domain = account.domain,
+                    acceptAllCerts = account.acceptAllCerts,
+                    port = account.incomingPort,
+                    useHttps = account.useSSL,
+                    deviceIdSuffix = account.email,
+                    initialPolicyKey = account.policyKey,
+                    certificatePath = account.certificatePath,
+                    clientCertificatePath = account.clientCertificatePath,
+                    clientCertificatePassword = clientCertPassword,
+                    pinnedCertInfo = pinnedCertInfo,
+                    accountId = accountId
+                )
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                return@withLock null
+            }
+            easClientCache[accountId] = client
+            fallbackTimestamps[accountId] = System.currentTimeMillis()
+            client
         }
-
-        easClientCache[accountId] = client
-        fallbackTimestamps[accountId] = System.currentTimeMillis()
-        return client
     }
 
     /**
@@ -585,7 +590,10 @@ class AccountRepository(private val context: Context) {
      */
     fun clearEasClientCache(accountId: Long) {
         easClientCache.remove(accountId)
-        easClientLocks.remove(accountId)
+        // N-7: НЕ удаляем per-account Mutex из easClientLocks. Иначе, если он сейчас удерживается
+        // внутри createEasClient/tryFallbackToAlternate, следующий computeIfAbsent создаст ДРУГОЙ
+        // экземпляр Mutex → взаимное исключение нарушается (две корутины в критической секции).
+        // Мьютексы per-account, их немного (по числу аккаунтов) — держать их безопасно и без утечки.
         fallbackTimestamps.remove(accountId)
         clientInvalidationTimestamps[accountId] = System.currentTimeMillis()
     }

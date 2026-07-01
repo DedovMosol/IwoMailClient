@@ -32,10 +32,10 @@
 | N-12 | `ServiceWatchdogReceiver` мёртв на API 26+ (push-watchdog не работает) | Medium | S | Выс. | 1 ✅ |
 | N-2 | OOM: все вложения в память до проверки лимита | Low-Med | S–M | Сред.–Выс. | 1 ✅ |
 | N-10 | `PushService.startForeground` без try/catch (краш Android 12+) | Low | Trivial | Сред. | 1 ✅ |
-| N-11 | Дубль-отправка `OutboxWorker` при retry (нет стабильного ClientId) | Low-Med | M | Выс. | 2 |
-| L-3 | Редактор `RichTextEditor`: JS без CSP, `stripDangerousTags` не режет `on*=` | Low | S | Сред. | 2 |
+| N-11 | Дубль-отправка `OutboxWorker` при retry (нет стабильного ClientId) | Low-Med | M | Выс. | 2 ✅ |
+| L-3 | Редактор `RichTextEditor`: JS без CSP, `stripDangerousTags` не режет `on*=` | Low | S | Сред. | 2 ✅ |
 | L-5 | Кастомный серт: hostname off + system-fallback (MITM opt-in) | Low | M | Сред. | 2 |
-| N-7 | Гонка lifecycle `Mutex` в кэше `EasClient` | Low | S | Низ. | 2 |
+| N-7 | Гонка lifecycle `Mutex` в кэше `EasClient` | Low | S | Низ. | 2 ✅ |
 | N-13 | NSC `cleartext=false` vs опция `useHttps=false` | Low | S | Низ. | 3 |
 | N-1 | Протокол не валидирует cc/bcc (UI митигирует) | Low | Trivial | Низ. | 3 |
 | N-3 | Subject — один encoded-word без сворачивания (RFC 5322) | Low | S | Низ. | 3 |
@@ -63,8 +63,10 @@
 - **N-2** — пред-проверка суммарного размера вложений (`ContentResolver`, лимит 10 МБ = строка `attachmentLimitExceeded`) ДО `readBytes`; тост при превышении.
 - Тесты: `testOptions.unitTests.isReturnDefaultValues = true` (best-practice для `android.util.Log` в юнит-тестах). Сборку выполняет разработчик в Android Studio.
 
-**Этап 2 — надёжность/безопасность, средняя цена:**
-`N-11` (дубль письма), `L-3` (CSP в редакторе), `L-5` (строгий пиннинг), `N-7` (гонка кэша).
+**Этап 2 — надёжность/безопасность, средняя цена. `L-3`+`N-7`+`N-11` ✅ СДЕЛАНО (2026-07-01); `L-5` отложен (высокий риск, отдельно).**
+- **L-3** — `stripDangerousTags` теперь делегирует в `sanitizeEmailHtml` (DRY: убрана дублировавшая script/iframe/… regex-логика; добавлено вырезание `on*=`/`javascript:` на Kotlin-стороне) + `<base>`/`<link>`; в `editorHtml` добавлен CSP `script-src 'nonce-…'` (nonce на собственном скрипте редактора; блокирует внедрённые обработчики, в т.ч. на пути **вставки/paste**, который JS-санитайзер не покрывал). **Важно:** JS-side `sanitizeHtml` в редакторе УЖЕ резал `on*=`/`javascript:` через detached-div (аудит это упустил) — XSS был закрыт; фикс — DRY + defense-in-depth (CSP). Юнит-тест `RichTextEditorSanitizeTest`.
+- **N-7** — `clearEasClientCache` больше не удаляет `Mutex` из `easClientLocks`; `tryFallbackToAlternate` мутирует кэш под тем же per-account `Mutex`, что и `createEasClient`. Гонка «двух корутин в критической секции» закрыта. (Проверено ревью — юнит-тест гонки непрактичен без Robolectric.) **Новая находка при ревью:** у `PushService` — ОТДЕЛЬНЫЙ `easClientCache` (synchronizedMap) с рассинхроном: `keys.toList()` (стр. ~517) без `synchronized` → возможен `ConcurrentModificationException`; `remove+put` в fallback без атомарности. Это НЕ N-7 (другой кэш) — кандидат в Этап 3.
+- **N-11** — стабильный `ClientId` на запись `outbox.json` (`OutboxWorker`), переиспользуется при retry; протянут в `EasClient.sendMail`→`EasEmailService.sendMail`→`buildMimeMessageBytes` (MIME `Message-ID`) и `generateSendMail` (WBXML `ClientId`). **EAS 14+**: сервер отбрасывает дубль по `ClientId` — полное решение. **Exchange 2007 (12.1)**: интернет-верифицировано (MS-ASCMD) — `SendMail` = raw MIME без `ClientId`, серверной дедупликации нет → стабильный `Message-ID` это best-effort; полный клиентский Sent-check вынесен в follow-up (риск потери письма — делать осторожно). Обратно-совместимо (старые записи без `clientId` → прежнее поведение).
 
 **Этап 3 — DRY/SOLID/best-practice/чистка (при рефакторинге):**
 остальные N/L/M — мёртвый код, конфиги, DRY, энергопотребление, God-object.
@@ -136,6 +138,9 @@
 
 **N-14 (Low, best-practice конфиг). Ослабленные конфиги: user-CA trust, широкий FileProvider, alpha-крипто.**
 (а) `network_security_config.xml:8` `<certificates src="user"/>` — доверие пользовательским CA глобально для всех соединений (со времён Android 7 best-practice — НЕ доверять user-CA; расширяет MITM-поверхность). Осознанный компромисс ради self-signed Exchange, но шире необходимого (см. L-5). (б) `file_paths.xml:8` `<cache-path name="cache" path="/"/>` — весь cache-каталог доступен через FileProvider (over-broad; лучше скоупить конкретные подпапки). (в) `build.gradle.kts:145` `androidx.security:security-crypto:1.1.0-alpha06` — **alpha**-зависимость на пути шифрования паролей в проде (риск стабильности/поддержки). Все три — низкий приоритет, но best-practice.
+
+**N-15 (Low, гонка — найдено при ревью N-7). Рассинхрон отдельного кэша `easClientCache` в `PushService`.**
+`PushService.kt` имеет СВОЙ `easClientCache = Collections.synchronizedMap(...)` (стр. 56), отдельный от `AccountRepository`. Часть доступов синхронизирована (`synchronized(easClientCache) { getOrPut }`, стр. 835-839), часть — нет: `easClientCache.keys.toList()` (стр. ~517) без внешней синхронизации → при конкурентной модификации возможен `ConcurrentModificationException` (краш); `remove`+`put` в `tryPushFallback` (769-770) — неатомарный compound (смягчено сериализацией ping-петли per-account). Не входит в N-7 (тот про `AccountRepository`). Рекомендация: обернуть итерацию `keys` в `synchronized(easClientCache)`; compound-мутации — тоже. Этап 3.
 
 ### C. Проверено и признано устойчивым (НЕ находки — для протокола)
 

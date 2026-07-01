@@ -59,6 +59,10 @@ class OutboxWorker(
                     put("body", body)
                     put("requestReadReceipt", requestReadReceipt)
                     put("timestamp", System.currentTimeMillis())
+                    // N-11: стабильный ClientId/Message-ID на запись очереди. Переиспользуется при
+                    // каждой (повторной) отправке → сервер (EAS 14+) отбрасывает дубликат по ClientId,
+                    // а retry после потери ответа не порождает второй Message-ID.
+                    put("clientId", java.util.UUID.randomUUID().toString().replace("-", ""))
                 }
                 outbox.put(email)
                 while (outbox.length() > MAX_QUEUE_SIZE) outbox.remove(0)
@@ -192,7 +196,9 @@ class OutboxWorker(
                     bcc = email.optString("bcc", ""),
                     subject = email.getString("subject"),
                     body = email.getString("body"),
-                    requestReadReceipt = email.optBoolean("requestReadReceipt", false)
+                    requestReadReceipt = email.optBoolean("requestReadReceipt", false),
+                    // N-11: стабильный id (null для старых записей без него → прежнее поведение).
+                    stableClientId = email.optString("clientId").takeIf { it.isNotBlank() }
                 )
                 
                 when (result) {

@@ -26,8 +26,14 @@ import androidx.compose.ui.window.PopupProperties
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.util.escapeHtml
+import com.dedovmosol.iwomail.util.sanitizeEmailHtml
 
 internal const val RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS = 2_000L
+
+// L-3: `<base>`/`<link>` не покрываются `sanitizeEmailHtml`, но опасны в contenteditable-редакторе
+// (перебазирование относительных URL / внешние стили). Предкомпилированы для производительности.
+private val EDITOR_BASE_TAG_REGEX = Regex("<base[^>]*/?>", RegexOption.IGNORE_CASE)
+private val EDITOR_LINK_TAG_REGEX = Regex("<link[^>]*/?>", RegexOption.IGNORE_CASE)
 
 /**
  * Парсит цвет из разных форматов (hex, rgb(), rgba(), название)
@@ -192,16 +198,15 @@ class RichTextEditorController {
     }
 
     internal fun stripDangerousTags(html: String): String {
-        return html
-            .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<script[^>]*/>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<iframe[^>]*>[\\s\\S]*?</iframe>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<iframe[^>]*/>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<object[^>]*>[\\s\\S]*?</object>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<embed[^>]*/?>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<applet[^>]*>[\\s\\S]*?</applet>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<base[^>]*/?>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<link[^>]*/?>", RegexOption.IGNORE_CASE), "")
+        // L-3 (DRY): переиспользуем комплексный `sanitizeEmailHtml` — он вырезает
+        // script/iframe/object/embed/applet, **inline-обработчики `on*=`**, `javascript:`/
+        // `data:text/html`-URI и meta-refresh (раньше здесь резались только теги, но не обработчики).
+        // Дополнительно убираем `<base>`/`<link>`, которых нет в `sanitizeEmailHtml`.
+        // Это защита на Kotlin-стороне ДО evaluateJavascript; JS-side `sanitizeHtml` (в editorHtml)
+        // остаётся вторым барьером перед `innerHTML`.
+        return sanitizeEmailHtml(html)
+            .replace(EDITOR_BASE_TAG_REGEX, "")
+            .replace(EDITOR_LINK_TAG_REGEX, "")
     }
     fun focus() = execJs("focusEditor()")
     fun checkFormatState() = execJs("checkFormatState()")
@@ -282,11 +287,16 @@ fun RichTextEditor(
 
     // HTML шаблон редактора
     val editorHtml = remember(escapedPlaceholder, minHeight, bgColor, textColor, placeholderColor, quoteColor, borderColor) {
+        // L-3: CSP (как в просмотрщике письма). `script-src 'nonce-…'` без `'unsafe-inline'`
+        // блокирует внедрённые inline-обработчики/`javascript:`; собственный скрипт редактора помечен
+        // этим nonce, а вызовы через `evaluateJavascript` (setHtml/формат) исполняются вне CSP.
+        val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
         """
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src data: https:; connect-src 'none';">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 * { box-sizing: border-box; }
@@ -344,7 +354,7 @@ fun RichTextEditor(
         </head>
         <body>
             <div id="editor" contenteditable="true" data-placeholder="$escapedPlaceholder"></div>
-            <script>
+            <script nonce="$nonce">
                 var editor = document.getElementById('editor');
                 var lastSelectionRange = null;
                 var ignoreNextFormatCheck = false; // Флаг для игнорирования checkFormatState после removeHighlight

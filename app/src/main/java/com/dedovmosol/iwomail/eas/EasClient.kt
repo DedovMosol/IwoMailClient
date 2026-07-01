@@ -689,8 +689,9 @@ class EasClient(
         bcc: String = "",
         importance: Int = 1,
         requestReadReceipt: Boolean = false,
-        requestDeliveryReceipt: Boolean = false
-    ): EasResult<Boolean> = emailService.sendMail(to, subject, body, cc, bcc, importance, requestReadReceipt, requestDeliveryReceipt)
+        requestDeliveryReceipt: Boolean = false,
+        stableClientId: String? = null
+    ): EasResult<Boolean> = emailService.sendMail(to, subject, body, cc, bcc, importance, requestReadReceipt, requestDeliveryReceipt, stableClientId)
 
     // buildMimeWithAttachments перенесён в EasAttachmentService
 
