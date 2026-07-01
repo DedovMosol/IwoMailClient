@@ -327,7 +327,7 @@ class EasAttachmentService internal constructor(
         // Файловые вложения
         for ((name, mimeType, data) in attachments) {
             sb.append("--$boundary\r\n")
-            val encodedName = "=?UTF-8?B?${Base64.encodeToString(name.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
+            val encodedName = mimeEncodedWord(name)
             sb.append("Content-Type: $mimeType; name=\"$encodedName\"\r\n")
             sb.append("Content-Transfer-Encoding: base64\r\n")
             sb.append("Content-Disposition: attachment; filename=\"$encodedName\"\r\n")
@@ -408,7 +408,7 @@ class EasAttachmentService internal constructor(
             sb.append("In-Reply-To: $safeOriginalId\r\n")
             sb.append("References: $safeOriginalId\r\n")
         }
-        val encodedSubject = "=?UTF-8?B?${Base64.encodeToString("Read: $originalSubject".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
+        val encodedSubject = encodeMimeHeaderText("Read: $originalSubject")
         sb.append("Subject: $encodedSubject\r\n")
         sb.append("MIME-Version: 1.0\r\n")
         sb.append("Content-Type: multipart/report; report-type=disposition-notification; boundary=\"$boundary\"\r\n")

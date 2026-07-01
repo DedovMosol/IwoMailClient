@@ -571,6 +571,62 @@ internal fun String.stripHeaderCrlf(): String =
     else replace("\r", "").replace("\n", "")
 
 /**
+ * Один RFC 2047 encoded-word (UTF-8 Base64), без сворачивания. Для коротких значений и имён
+ * вложений (encoded-word в quoted-параметре `name=`/`filename=` — прагматичный хак под
+ * Exchange/Outlook; RFC 2047 §5 сворачивание/quoted-string там формально запрещает).
+ */
+internal fun mimeEncodedWord(text: String): String =
+    "=?UTF-8?B?${Base64.encodeToString(text.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
+
+/**
+ * N-3: делит строку на куски ≤ `maxBytes` октетов в UTF-8, НЕ разрывая символы (много-октетные /
+ * суррогатные пары) — RFC 2047 §5: каждый encoded-word должен представлять целое число символов.
+ * Пустая строка → пустой список. Чистая функция (без Android) — тестируется в JVM.
+ */
+internal fun chunkByUtf8Bytes(text: String, maxBytes: Int): List<String> {
+    require(maxBytes >= 4) { "maxBytes must fit the largest UTF-8 char (4 bytes)" }
+    if (text.isEmpty()) return emptyList()
+    val chunks = ArrayList<String>()
+    val current = StringBuilder()
+    var currentBytes = 0
+    var i = 0
+    while (i < text.length) {
+        val cp = text.codePointAt(i)
+        val count = Character.charCount(cp)
+        val bytes = when {
+            cp < 0x80 -> 1
+            cp < 0x800 -> 2
+            cp < 0x10000 -> 3
+            else -> 4
+        }
+        if (currentBytes + bytes > maxBytes && current.isNotEmpty()) {
+            chunks.add(current.toString())
+            current.setLength(0)
+            currentBytes = 0
+        }
+        current.append(text, i, i + count)
+        currentBytes += bytes
+        i += count
+    }
+    if (current.isNotEmpty()) chunks.add(current.toString())
+    return chunks
+}
+
+/**
+ * N-3: кодирует текст заголовка (Subject) в RFC 2047 (UTF-8 Base64) со сворачиванием.
+ * Каждый encoded-word ≤ 75 октетов (RFC 2047 §2); при длинном тексте — несколько encoded-word'ов
+ * через CRLF+SPACE (декодер склеивает обратно, §8), целые UTF-8 символы не разрываются.
+ * `maxBytes=36` → base64 48 → encoded-word 60 → строка «Subject: …» ≤ 69 октетов (в пределах
+ * лимита 76 на строку с encoded-word'ами и 998 MUST по RFC 5322 §2.1.1). Короткая тема → один
+ * encoded-word (поведение не меняется). Пустая → «=?UTF-8?B??=» (как прежде).
+ */
+internal fun encodeMimeHeaderText(text: String): String {
+    val chunks = chunkByUtf8Bytes(text, 36)
+    if (chunks.isEmpty()) return mimeEncodedWord("")
+    return chunks.joinToString("\r\n ") { mimeEncodedWord(it) }
+}
+
+/**
  * Добавляет стандартные MIME-заголовки письма (RFC 2822 / MS-OXCMAIL) в StringBuilder.
  * DRY: единое место для buildMimeMessageBytes (без вложений) и buildMimeWithAttachments (с вложениями).
  *
@@ -608,10 +664,7 @@ internal fun StringBuilder.appendMimeHeaders(
     if (safeCc.isNotEmpty()) append("Cc: $safeCc\r\n")
     if (safeBcc.isNotEmpty()) append("Bcc: $safeBcc\r\n")
     append("Message-ID: $messageId\r\n")
-    val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(
-        subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
-    )}?="
-    append("Subject: $encodedSubject\r\n")
+    append("Subject: ${encodeMimeHeaderText(subject)}\r\n")
     // Приоритет — RFC 2156 / MS-OXCMAIL (importance: 0=low, 1=normal, 2=high)
     when (importance) {
         0 -> {

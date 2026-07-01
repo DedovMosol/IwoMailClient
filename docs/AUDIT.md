@@ -38,7 +38,7 @@
 | N-7 | Гонка lifecycle `Mutex` в кэше `EasClient` | Low | S | Низ. | 2 ✅ |
 | N-13 | NSC `cleartext=false` vs опция `useHttps=false` | Low | S | Низ. | 3 |
 | N-1 | ✅ Протокол не валидирует cc/bcc (UI митигирует) — исправлено | Low | Trivial | Низ. | ✅ |
-| N-3 | Subject — один encoded-word без сворачивания (RFC 5322) | Low | S | Низ. | 3 |
+| N-3 | ✅ Subject — один encoded-word без сворачивания (RFC 5322) — исправлено | Low | S | Низ. | ✅ |
 | N-4 | `parseEwsDateTime` теряет смещение таймзоны | Low | S | Низ. | 3 |
 | N-5 | Дублированное извлечение inline-картинок MIME (DRY) | Low | M | Низ. | 3 |
 | N-6 | `EasClient` God-object (SRP) | Low | L | Низ. | 3 |
@@ -47,7 +47,7 @@
 | N-14 | user-CA trust / FileProvider `path="/"` / alpha-крипто | Low | S | Низ. | 3 |
 | L-1 | ✅ Мёртвый `clearAllEasClientCache` — удалён | Low | Trivial | Низ. | ✅ |
 | L-2 | ✅ Мёртвый `RepositoryProvider.clear` — удалён | Low | Trivial | Низ. | ✅ |
-| L-4 | `deleteDuplicateEmails` — коллизия ключа группировки | Low | S | Низ. | 3 |
+| L-4 | ✅ `deleteDuplicateEmails` — коллизия ключа группировки — исправлено | Low | S | Низ. | ✅ |
 | L-6 | TLS 1.0/слабые шифры глобально (by-design Exchange 2007) | Low | M | Низ. | 3 / wontfix |
 | L-7 | XOR-fallback паролей (fail-closed / уведомление) | Low | M | Низ. | 3 |
 | M-2 | ✅ `ContactRepository` в обход провайдера (DRY) — исправлено | Low | Trivial | Низ. | ✅ |
@@ -75,8 +75,10 @@
 - **M-2** — 3 прямых `ContactRepository(context)` → `RepositoryProvider.getContactRepository(context)` (`InitialSyncController`, `ContactsScreen`, `ComposeScreen`); неиспользуемые импорты `ContactRepository` удалены. DRY-единообразие с `getAccountRepository`/`getMailRepository`.
 - **N-15** — `PushService.easClientCache` → `ConcurrentHashMap` (weakly-consistent итерация без `ConcurrentModificationException`, атомарные `get`/`computeIfAbsent`, снят ручной `synchronized` и лишний `remove` перед `put`).
 - **N-1** — общий `stripHeaderCrlf` вырезает CR/LF из адресных/Message-ID заголовков во всех трёх путях MIME-сборки (`appendMimeHeaders`, meeting-invite, `buildMdnMessage`). Закрывает инъекцию заголовков MDN недоверенными данными входящего письма. Тест `EasMimeHeaderSanitizeTest`.
+- **N-3** — Subject кодируется через новый `encodeMimeHeaderText` (RFC 2047 folding: encoded-word'ы ≤75 октетов, CRLF+SPACE, целые UTF-8 символы, строка ≤76). Единый источник `mimeEncodedWord`/`chunkByUtf8Bytes` для всех 4 мест `=?UTF-8?B?…?=` (3 Subject + имя вложения; имя — без folding, encoded-word в quoted-параметре по RFC 2047 §5). Короткая тема → один encoded-word (без изменений). Тест `EasMimeSubjectEncodingTest`.
+- **L-4** — ключ дедупликации `deleteDuplicateEmails` переведён на канонический `internetMessageId` (RFC 5322 Message-ID глобально уникален → удаляются только настоящие дубли); письма без Message-ID не трогаются. Флаг `duplicates_cleaned_v35` не бампался (правка убирает латентный дефект дремлющего запроса, повторный прогон не нужен).
 
-Остаются (Этап 3): `N-3` (сворачивание Subject), `L-4` (ключ дедупликации), `N-13` (cleartext-EAS/NSC), `N-5` (DRY извлечения картинок), `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
+Остаются (Этап 3): `N-13` (cleartext-EAS/NSC), `N-5` (DRY извлечения картинок), `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
 
 > Правки НЕ внесены (по запросу — только аудит). Этот план — дорожная карта для последующих коммитов.
 
@@ -114,6 +116,8 @@
 
 **N-3 (Low, robustness). Subject — один RFC 2047 encoded-word без сворачивания.**
 `appendMimeHeaders` (`EasXmlTemplates.kt:594-597`): `Subject: =?UTF-8?B?<base64>?=` одной строкой. Очень длинная тема → строка заголовка > 998 октетов (RFC 5322 §2.1.1), что строгие шлюзы могут отклонять (Exchange обычно толерантен). Рекомендация: сворачивать длинные encoded-words на несколько строк.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** введён `encodeMimeHeaderText` (`EasXmlTemplates.kt`) — RFC 2047 folding через `chunkByUtf8Bytes(text, 36)` + `mimeEncodedWord`: encoded-word'ы ≤75 октетов, разделитель CRLF+SPACE (декодер склеивает, §8), UTF-8 символы не разрываются (§5), строка `Subject: …` ≤76. Применён во всех 3 Subject-путях (`appendMimeHeaders`, meeting-invite `EasClient`, MDN `EasAttachmentService`); имя вложения переведено на `mimeEncodedWord` (DRY, БЕЗ folding — encoded-word в quoted-параметре, §5 запрещает многословность/quoted-string). Короткая тема → один encoded-word (без изменений). Интернет-верифицировано ([RFC 2047](https://www.rfc-editor.org/rfc/rfc2047)). Тест `EasMimeSubjectEncodingTest`.
 
 **N-4 (Low, корректность времени). `parseEwsDateTime` отбрасывает смещение таймзоны.**
 `CalendarDateUtils.kt:85-98` regex'ом удаляет `[+-]\d{2}:\d{2}$` и парсит как UTC. Если EWS вернёт время со смещением (а не `Z`), смещение теряется → сдвиг времени. Для Exchange 2007 SP1 EWS отдаёт UTC с `Z`, поэтому почти не триггерится. Рекомендация: учитывать смещение при парсинге.
@@ -280,6 +284,8 @@
 
 ### L-4. `deleteDuplicateEmails` — потенциальное удаление легитимных писем
 `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/data/database/Daos.kt:592` — `DELETE … WHERE id NOT IN (SELECT MIN(id) … GROUP BY folderId, subject, from, dateReceived)`. Два разных письма с совпадающими subject+from+dateReceived(секунда) в одной папке → одно удалится. Риск низкий: запуск однократный под флагом `duplicates_cleaned_v35`. При повторном использовании добавить в ключ группировки серверный `id`/`internetMessageId`.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** ключ переведён на `GROUP BY folderId, internetMessageId` (канонический RFC 5322 Message-ID — глобально уникален, распознаёт только настоящие дубли). Письма с `internetMessageId` NULL/пусто исключены из группировки И из удаления (`WHERE internetMessageId IS NOT NULL AND != ''`) — не трогаются вовсе. Флаг `duplicates_cleaned_v35` НЕ бампался: на существующих установках очистка уже отработала, правка лишь устраняет латентный дефект логики дремлющего запроса (повторный прогон не нужен и не запускается).
 
 ### L-5. Кастомный серверный сертификат: отключение hostname-проверки + fallback на системный trust
 **Где:** `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt:360` (hostnameVerifier off при `certificatePath != null`) и `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt:444` (`checkServerTrusted` → fallback на `certTm`/`systemTm`).

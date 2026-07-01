@@ -338,6 +338,8 @@ Email HTML bodies are sanitized before being loaded into `WebView`:
 
 When building raw MIME for `SendMail`/`SmartForward`, meeting invitations and MDN (read) receipts, all address- and identity-header values pass through `stripHeaderCrlf` (a single helper — DRY) which strips bare CR/LF. An injected CR/LF in a header body (RFC 5322 §2.2) would otherwise let a crafted value append arbitrary headers (`\r\nBcc: …`). This matters most for `buildMdnMessage`, where `To`/`In-Reply-To`/`References`/`Original-Message-ID` are copied from the **incoming** (untrusted) message. The compose UI already normalizes recipients, but the protocol layer no longer relies on that (defense-in-depth / DIP). Covered by `EasMimeHeaderSanitizeTest`.
 
+`Subject` headers are RFC 2047 encoded-words and, when long, folded across multiple CRLF-space-separated words (`encodeMimeHeaderText`, sharing `mimeEncodedWord`/`chunkByUtf8Bytes` — a single encoder reused by all three send paths and the attachment-name parameter) so no header line exceeds the RFC 5322 998-octet limit; multi-octet UTF-8 characters are never split across words. Covered by `EasMimeSubjectEncodingTest` (N-3).
+
 ### Password storage
 
 Passwords are persisted via `EncryptedSharedPreferences` (AES256-GCM / AES256-SIV with a master key stored in Android Keystore). When Keystore is unavailable or corrupted, `AccountRepository` falls back to an obfuscated `SharedPreferences` store instead of plaintext, and password char arrays are zeroed (`fill('\u0000')`) after use in `HttpClientProvider`.

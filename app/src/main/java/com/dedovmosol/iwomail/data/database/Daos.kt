@@ -583,14 +583,23 @@ interface EmailDao {
     fun getEmailsForPeriodAcrossFolders(accountId: Long, startTime: Long, endTime: Long): Flow<List<EmailEntity>>
 
     /**
-     * Удаляет дубликаты писем (оставляет только одно письмо с уникальной комбинацией subject+from+dateReceived)
-     * Сохраняет письмо с наименьшим id (первое добавленное)
+     * Удаляет дубликаты писем в пределах папки по каноническому RFC 5322 Message-ID
+     * (`internetMessageId`); оставляет письмо с наименьшим `id` (первое добавленное).
+     *
+     * L-4: прежний ключ `subject+from+dateReceived` мог удалить ДВА РАЗНЫХ письма с совпавшими
+     * темой/отправителем/секундой (напр. два одинаковых уведомления). Message-ID глобально
+     * уникален → удаляются только настоящие дубликаты. Письма без Message-ID (NULL/пусто)
+     * не участвуют ни в группировке, ни в удалении — не трогаются вовсе (безопасность).
+     * Разовая очистка под флагом `duplicates_cleaned_v35` (`MailApplication`).
      */
     @Query("""
-        DELETE FROM emails WHERE id NOT IN (
+        DELETE FROM emails
+        WHERE internetMessageId IS NOT NULL AND internetMessageId != ''
+          AND id NOT IN (
             SELECT MIN(id) FROM emails
-            GROUP BY folderId, subject, `from`, dateReceived
-        )
+            WHERE internetMessageId IS NOT NULL AND internetMessageId != ''
+            GROUP BY folderId, internetMessageId
+          )
     """)
     suspend fun deleteDuplicateEmails()
 

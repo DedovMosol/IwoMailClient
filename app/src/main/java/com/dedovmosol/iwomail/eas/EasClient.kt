@@ -2157,7 +2157,7 @@ $foldersXml
             val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
             val date = dateFormat.format(java.util.Date())
 
-            val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
+            val encodedSubject = encodeMimeHeaderText(subject)
 
             // Формируем MIME multipart сообщение с text/calendar
             val mimeMessage = buildString {
