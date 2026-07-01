@@ -2162,8 +2162,9 @@ $foldersXml
             // Формируем MIME multipart сообщение с text/calendar
             val mimeMessage = buildString {
                 append("Date: $date\r\n")
-                append("From: $fromEmail\r\n")
-                append("To: $to\r\n")
+                // N-1: вырезаем CR/LF из адресных заголовков (header injection, RFC 5322 §2.2)
+                append("From: ${fromEmail.stripHeaderCrlf()}\r\n")
+                append("To: ${to.stripHeaderCrlf()}\r\n")
                 append("Message-ID: $messageId\r\n")
                 append("Subject: $encodedSubject\r\n")
                 append("MIME-Version: 1.0\r\n")

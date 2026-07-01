@@ -37,7 +37,7 @@
 | L-5 | Кастомный серт: hostname off + system-fallback (MITM opt-in) | Low | M | Сред. | 2 |
 | N-7 | Гонка lifecycle `Mutex` в кэше `EasClient` | Low | S | Низ. | 2 ✅ |
 | N-13 | NSC `cleartext=false` vs опция `useHttps=false` | Low | S | Низ. | 3 |
-| N-1 | Протокол не валидирует cc/bcc (UI митигирует) | Low | Trivial | Низ. | 3 |
+| N-1 | ✅ Протокол не валидирует cc/bcc (UI митигирует) — исправлено | Low | Trivial | Низ. | ✅ |
 | N-3 | Subject — один encoded-word без сворачивания (RFC 5322) | Low | S | Низ. | 3 |
 | N-4 | `parseEwsDateTime` теряет смещение таймзоны | Low | S | Низ. | 3 |
 | N-5 | Дублированное извлечение inline-картинок MIME (DRY) | Low | M | Низ. | 3 |
@@ -73,8 +73,10 @@
 - **L-2** — удалён мёртвый `RepositoryProvider.clear()` (0 вызовов; репозитории — app-wide singletons на `applicationContext`, чистка при смене аккаунта не требуется).
 - **N-9** — удалён мёртвый `EmailDao.getEmailsByFolder` (Flow, без `LIMIT`, 0 вызовов; список читает body-less `getEmailSummariesByFolder`). Живые `getEmailsByFolderList`/`getEmailsByFolderPaged` сохранены.
 - **M-2** — 3 прямых `ContactRepository(context)` → `RepositoryProvider.getContactRepository(context)` (`InitialSyncController`, `ContactsScreen`, `ComposeScreen`); неиспользуемые импорты `ContactRepository` удалены. DRY-единообразие с `getAccountRepository`/`getMailRepository`.
+- **N-15** — `PushService.easClientCache` → `ConcurrentHashMap` (weakly-consistent итерация без `ConcurrentModificationException`, атомарные `get`/`computeIfAbsent`, снят ручной `synchronized` и лишний `remove` перед `put`).
+- **N-1** — общий `stripHeaderCrlf` вырезает CR/LF из адресных/Message-ID заголовков во всех трёх путях MIME-сборки (`appendMimeHeaders`, meeting-invite, `buildMdnMessage`). Закрывает инъекцию заголовков MDN недоверенными данными входящего письма. Тест `EasMimeHeaderSanitizeTest`.
 
-Остаются (Этап 3): `N-15` (гонка кэша PushService), `N-1` (валидация cc/bcc), `N-3` (сворачивание Subject), `L-4` (ключ дедупликации), `N-13` (cleartext-EAS/NSC), `N-5` (DRY извлечения картинок), `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
+Остаются (Этап 3): `N-3` (сворачивание Subject), `L-4` (ключ дедупликации), `N-13` (cleartext-EAS/NSC), `N-5` (DRY извлечения картинок), `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
 
 > Правки НЕ внесены (по запросу — только аудит). Этот план — дорожная карта для последующих коммитов.
 
@@ -104,6 +106,8 @@
 
 **N-1 (Low, defense-in-depth). Протокольный `sendMail`/`smartForward` валидируют только `to`, не `cc`/`bcc`.**
 `EasEmailService.kt:177` проверяет `isValidEmailAddress(to)`, но `cc`/`bcc` идут в `appendMimeHeaders` (`EasXmlTemplates.kt:590-592`) сырыми: `append("Cc: $cc\r\n")`. CRLF в `cc`/`bcc` → инъекция MIME-заголовков. **На практике НЕ достижимо:** UI `normalizeRecipients` (`ComposeScreen.kt:207-223`) извлекает только email-подстроку через `emailRegex.find().value`, отбрасывая `\r\n`. Но протокольный слой полагается на санитайзинг UI — несогласованная валидация (нарушение DIP/SOLID). Рекомендация: валидировать `cc`/`bcc` как `to` и/или вырезать CR/LF в `appendMimeHeaders`. `subject` безопасен (Base64-кодируется, стр. 594-597).
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** введён общий `internal fun String.stripHeaderCrlf()` (`EasXmlTemplates.kt`) — вырезает CR/LF из значений заголовков. Применён во ВСЕХ трёх путях сборки MIME-заголовков (DRY): `appendMimeHeaders` (From/To/Cc/Bcc + `Return-Receipt-To`/`Disposition-Notification-To`/`X-Confirm-Reading-To`), meeting-invite MIME (`EasClient.kt`), и — важнее всего — `buildMdnMessage` (`EasAttachmentService.kt`), где `To`/`In-Reply-To`/`References`/`Original-Message-ID`/`Final-Recipient` берутся из **входящего** письма (недоверенные). Юнит-тест `EasMimeHeaderSanitizeTest`. iCal `ORGANIZER`/`ATTENDEE` (`EasClient.kt:2082/2084`) — самоавторские (отправитель вводит своих участников), однострочный UI-ввод, другой RFC (5545) → вне scope N-1.
 
 **N-2 (Low-Medium, перф/OOM). Чтение вложений целиком в память + лимит проверяется СЛИШКОМ ПОЗДНО.**
 11 мест `readBytes()`: `ComposeScreen.kt:720/889/1079/1238/1476/1503`, `EmailDetailActions.kt:52`, `EmailSyncService.kt:1790`, `ScheduledEmailWorker.kt:83`, `ComposeUtils.kt:238`, `CreateEventDialog.kt:164`. При отправке `ComposeScreen.sendEmail` (стр. 1500-1510) читает **ВСЕ** вложения в память одновременно (`attachments.mapNotNull { …readBytes()… }` → `List<AttachmentData>`, каждый держит полный `ByteArray`), затем MIME Base64 (+33%) и WBXML opaque → пик ≈ 2–3× суммы размеров, всё резидентно. **Лимит 7 МБ существует** (`EasAttachmentService.kt:68-71`), но проверяется в протокольном слое ПОСЛЕ загрузки всех байт — вложения хранятся как URI до отправки, поэтому файл 200 МБ уронит процесс на `readBytes()` ещё ДО срабатывания лимита. Рекомендация: проверять суммарный `estimatedSize`/метаданные URI ДО чтения (при добавлении или в начале `sendEmail`); потоковая обработка.
@@ -148,6 +152,8 @@
 
 **N-15 (Low, гонка — найдено при ревью N-7). Рассинхрон отдельного кэша `easClientCache` в `PushService`.**
 `PushService.kt` имеет СВОЙ `easClientCache = Collections.synchronizedMap(...)` (стр. 56), отдельный от `AccountRepository`. Часть доступов синхронизирована (`synchronized(easClientCache) { getOrPut }`, стр. 835-839), часть — нет: `easClientCache.keys.toList()` (стр. ~517) без внешней синхронизации → при конкурентной модификации возможен `ConcurrentModificationException` (краш); `remove`+`put` в `tryPushFallback` (769-770) — неатомарный compound (смягчено сериализацией ping-петли per-account). Не входит в N-7 (тот про `AccountRepository`). Рекомендация: обернуть итерацию `keys` в `synchronized(easClientCache)`; compound-мутации — тоже. Этап 3.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** `easClientCache` переведён на `ConcurrentHashMap` (единообразно с `AccountRepository` и соседним `accountPingJobs`): `keys.toList()` теперь weakly-consistent (нет `ConcurrentModificationException`), `get`/`computeIfAbsent` атомарны (ручные `synchronized` сняты), лишний `remove` перед `put` в `tryPushFallback` убран (`put` атомарен). `accountHeartbeats`/`maxPingFoldersPerAccount` — только точечный доступ (не итерируются) → оставлены под `synchronizedMap`.
 
 ### C. Проверено и признано устойчивым (НЕ находки — для протокола)
 

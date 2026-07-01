@@ -388,6 +388,12 @@ class EasAttachmentService internal constructor(
         val fromEmail = deps.getFromEmail()
         val deviceId = deps.getDeviceId()
 
+        // N-1: to и originalMessageId — из входящего письма (недоверенные); fromEmail — свой адрес.
+        // Вырезаем CR/LF из всех значений, попадающих в заголовки/поля MDN (header injection, RFC 5322 §2.2).
+        val safeFrom = fromEmail.stripHeaderCrlf()
+        val safeTo = to.stripHeaderCrlf()
+        val safeOriginalId = originalMessageId?.stripHeaderCrlf()
+
         val messageId = "<mdn.${System.currentTimeMillis()}.${System.nanoTime()}@$deviceId>"
         val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
         val date = dateFormat.format(java.util.Date())
@@ -395,12 +401,12 @@ class EasAttachmentService internal constructor(
 
         val sb = StringBuilder()
         sb.append("Date: $date\r\n")
-        sb.append("From: $fromEmail\r\n")
-        sb.append("To: $to\r\n")
+        sb.append("From: $safeFrom\r\n")
+        sb.append("To: $safeTo\r\n")
         sb.append("Message-ID: $messageId\r\n")
-        if (originalMessageId != null) {
-            sb.append("In-Reply-To: $originalMessageId\r\n")
-            sb.append("References: $originalMessageId\r\n")
+        if (safeOriginalId != null) {
+            sb.append("In-Reply-To: $safeOriginalId\r\n")
+            sb.append("References: $safeOriginalId\r\n")
         }
         val encodedSubject = "=?UTF-8?B?${Base64.encodeToString("Read: $originalSubject".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)}?="
         sb.append("Subject: $encodedSubject\r\n")
@@ -422,9 +428,9 @@ class EasAttachmentService internal constructor(
         sb.append("Content-Type: message/disposition-notification\r\n")
         sb.append("\r\n")
         sb.append("Reporting-UA: iwo Mail Client; Android\r\n")
-        sb.append("Final-Recipient: rfc822;$fromEmail\r\n")
-        if (originalMessageId != null) {
-            sb.append("Original-Message-ID: $originalMessageId\r\n")
+        sb.append("Final-Recipient: rfc822;$safeFrom\r\n")
+        if (safeOriginalId != null) {
+            sb.append("Original-Message-ID: $safeOriginalId\r\n")
         }
         sb.append("Disposition: manual-action/MDN-sent-manually; displayed\r\n")
         sb.append("\r\n")

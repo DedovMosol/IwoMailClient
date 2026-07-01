@@ -334,6 +334,10 @@ Email HTML bodies are sanitized before being loaded into `WebView`:
 - `EmailDetailScreen` loads sanitized HTML with `loadDataWithBaseURL(null, ...)`. Null-baseURL blocks cross-origin requests, cookie/localStorage exfiltration and service workers, complementing the tag-level blocklist.
 - **CSP (defense-in-depth).** Both WebViews inject a per-load `Content-Security-Policy` meta with `script-src 'nonce-<random>'` (no `'unsafe-inline'`): the viewer (`EmailDetailScreen`) and — since Stage-2 fix L-3 — the rich-text editor (`RichTextEditor`, whose own script is nonce-tagged; `evaluateJavascript`/`@JavascriptInterface` calls run outside CSP). This blocks injected inline event handlers (`onerror`/`onload`) and `javascript:` URIs even if a regex bypass slips through — including the editor **paste** path. The editor additionally sanitizes injected HTML twice: Kotlin `stripDangerousTags` (delegates to `sanitizeEmailHtml`, DRY) before `evaluateJavascript`, and a JS-side `sanitizeHtml` (detached-`div`, strips `on*`/`javascript:`) before `innerHTML`.
 
+### Outbound MIME header sanitization
+
+When building raw MIME for `SendMail`/`SmartForward`, meeting invitations and MDN (read) receipts, all address- and identity-header values pass through `stripHeaderCrlf` (a single helper — DRY) which strips bare CR/LF. An injected CR/LF in a header body (RFC 5322 §2.2) would otherwise let a crafted value append arbitrary headers (`\r\nBcc: …`). This matters most for `buildMdnMessage`, where `To`/`In-Reply-To`/`References`/`Original-Message-ID` are copied from the **incoming** (untrusted) message. The compose UI already normalizes recipients, but the protocol layer no longer relies on that (defense-in-depth / DIP). Covered by `EasMimeHeaderSanitizeTest`.
+
 ### Password storage
 
 Passwords are persisted via `EncryptedSharedPreferences` (AES256-GCM / AES256-SIV with a master key stored in Android Keystore). When Keystore is unavailable or corrupted, `AccountRepository` falls back to an obfuscated `SharedPreferences` store instead of plaintext, and password char arrays are zeroed (`fill('\u0000')`) after use in `HttpClientProvider`.

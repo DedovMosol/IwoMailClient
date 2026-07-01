@@ -52,8 +52,9 @@ class PushService : Service() {
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var accountRepo: AccountRepository
 
-    //исправляем race condition при одновременном доступе из разных корутин
-    private val easClientCache = java.util.Collections.synchronizedMap(mutableMapOf<Long, com.dedovmosol.iwomail.eas.EasClient>())
+    // N-15: ConcurrentHashMap — атомарные операции + weakly-consistent итерация
+    // (keys.toList() без ConcurrentModificationException). Единообразно с accountPingJobs ниже.
+    private val easClientCache = java.util.concurrent.ConcurrentHashMap<Long, com.dedovmosol.iwomail.eas.EasClient>()
 
     private val accountPingJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
 
@@ -766,7 +767,8 @@ class PushService : Service() {
             if (e is kotlinx.coroutines.CancellationException) throw e
             null
         } ?: return false
-        easClientCache.remove(accountId)
+        // ConcurrentHashMap: put атомарно перезаписывает — отдельный remove не нужен
+        // (устраняет окно отсутствия ключа между remove и put).
         easClientCache[accountId] = fallbackClient
         android.util.Log.i(TAG, "Ping: switched to alternate server for account $accountId")
         return true
@@ -832,12 +834,13 @@ class PushService : Service() {
         }
 
         val folderIds = folders.map { it.serverId }
-        val cached = synchronized(easClientCache) { easClientCache[account.id] }
-        val client = cached ?: run {
+        // N-15: get/computeIfAbsent на ConcurrentHashMap атомарны — ручной synchronized не нужен.
+        // createEasClient — suspend, поэтому создаём вне computeIfAbsent (лямбда не suspend);
+        // при гонке двух Ping-циклов computeIfAbsent вернёт уже закэшированный клиент,
+        // лишний экземпляр отбрасывается (first-writer-wins, как прежний getOrPut).
+        val client = easClientCache[account.id] ?: run {
             val created = accountRepo.createEasClient(account.id) ?: return STATUS_SERVER_ERROR
-            synchronized(easClientCache) {
-                easClientCache.getOrPut(account.id) { created }
-            }
+            easClientCache.computeIfAbsent(account.id) { created }
         }
 
         return when (val result = client.ping(folderIds, heartbeat)) {

@@ -22,6 +22,8 @@
 - Email editor: Content-Security-Policy + a single HTML sanitizer strip inline `on*`/`javascript:` handlers (including on paste) (L-3)
 - Fixed an EAS-client cache race during failover to an alternate server (N-7)
 - Outgoing de-duplication: a stable `ClientId`/`Message-ID` prevents duplicate sends on queue retry (N-11)
+- MIME header-injection protection: addresses and Message-IDs across all message-building paths (send, meeting invitations, MDN read receipts) are stripped of CR/LF via a single sanitizer — most important for MDN, whose values come from the incoming message (N-1)
+- Fixed a potential race/`ConcurrentModificationException` in the Push service's EAS-client cache — switched to `ConcurrentHashMap` with atomic operations (N-15)
 - Dead-code cleanup and DRY: removed unused `clearAllEasClientCache`/`RepositoryProvider.clear`/`getEmailsByFolder`; `ContactRepository` is now always obtained via the provider (L-1, L-2, N-9, M-2)
 
 ### UX — haptic feedback and accessibility

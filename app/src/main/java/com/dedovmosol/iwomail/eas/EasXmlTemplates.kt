@@ -559,6 +559,18 @@ $SOAP_ENVELOPE_END"""
 }
 
 /**
+ * N-1: вырезает «голые» CR/LF из значения MIME-заголовка — защита от header injection.
+ * RFC 5322 §2.2: тело поля заголовка не может содержать CR/LF вне folding'а (CRLF+WSP).
+ * Критично для недоверенных значений: адрес отправителя и Message-ID входящего письма
+ * попадают в заголовки MDN (`buildMdnMessage`), адреса получателей — в To/Cc/Bcc.
+ * UI нормализует адреса (`ComposeScreen.normalizeRecipients`), но протокольный слой не должен
+ * полагаться на санитайзинг вызывающего (DIP / defense-in-depth). Обычно это no-op (возвращает `this`).
+ */
+internal fun String.stripHeaderCrlf(): String =
+    if (indexOf('\r') < 0 && indexOf('\n') < 0) this
+    else replace("\r", "").replace("\n", "")
+
+/**
  * Добавляет стандартные MIME-заголовки письма (RFC 2822 / MS-OXCMAIL) в StringBuilder.
  * DRY: единое место для buildMimeMessageBytes (без вложений) и buildMimeWithAttachments (с вложениями).
  *
@@ -585,11 +597,16 @@ internal fun StringBuilder.appendMimeHeaders(
     requestReadReceipt: Boolean,
     requestDeliveryReceipt: Boolean
 ) {
+    // N-1: вырезаем CR/LF из адресных заголовков (защита от header injection, RFC 5322 §2.2).
+    // safeCc/safeBcc считаем один раз — их же используем в isNotEmpty-проверке.
+    val safeFrom = fromEmail.stripHeaderCrlf()
+    val safeCc = cc.stripHeaderCrlf()
+    val safeBcc = bcc.stripHeaderCrlf()
     append("Date: $date\r\n")
-    append("From: $fromEmail\r\n")
-    append("To: $to\r\n")
-    if (cc.isNotEmpty()) append("Cc: $cc\r\n")
-    if (bcc.isNotEmpty()) append("Bcc: $bcc\r\n")
+    append("From: $safeFrom\r\n")
+    append("To: ${to.stripHeaderCrlf()}\r\n")
+    if (safeCc.isNotEmpty()) append("Cc: $safeCc\r\n")
+    if (safeBcc.isNotEmpty()) append("Bcc: $safeBcc\r\n")
     append("Message-ID: $messageId\r\n")
     val encodedSubject = "=?UTF-8?B?${Base64.encodeToString(
         subject.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
@@ -615,14 +632,14 @@ internal fun StringBuilder.appendMimeHeaders(
     }
     // Запрос отчёта о прочтении (MDN) — RFC 2298
     if (requestReadReceipt) {
-        append("Disposition-Notification-To: $fromEmail\r\n")
-        append("X-Confirm-Reading-To: $fromEmail\r\n")
+        append("Disposition-Notification-To: $safeFrom\r\n")
+        append("X-Confirm-Reading-To: $safeFrom\r\n")
     }
     // Запрос отчёта о доставке — MS-OXCMAIL 2.2.3.1.8:
     // Return-Receipt-To устанавливает PidTagOriginatorDeliveryReportRequested=TRUE.
     // Exchange читает этот заголовок и генерирует DSN; значение заголовка игнорируется.
     if (requestDeliveryReceipt) {
-        append("Return-Receipt-To: $fromEmail\r\n")
+        append("Return-Receipt-To: $safeFrom\r\n")
     }
     append("MIME-Version: 1.0\r\n")
 }
