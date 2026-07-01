@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -106,8 +107,8 @@ fun UpdatesScreen(
     var showRollbackDialog by rememberSaveable { mutableStateOf(false) }
     var previousVersionInfo by remember { mutableStateOf<PreviousVersionInfo?>(null) }
 
-    val updateCheckInterval by settingsRepo.updateCheckInterval.collectAsState(
-        initial = SettingsRepository.UpdateCheckInterval.DAILY
+    val updateCheckInterval by settingsRepo.updateCheckInterval.collectAsStateWithLifecycle(
+        initialValue = SettingsRepository.UpdateCheckInterval.DAILY
     )
 
     // Диалог обновления

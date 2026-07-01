@@ -19,6 +19,7 @@ import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -75,20 +76,20 @@ fun ContactsScreen(
     val clipboardManager = LocalClipboardManager.current
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
 
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
+    val activeAccount by accountRepo.activeAccount.collectAsStateWithLifecycle(initialValue = null)
     val accountId = activeAccount?.id ?: 0L
 
     // Вкладки: Личные | Exchange (папка Contacts) | GAL (адресная книга)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     // Личные контакты - используем key чтобы пересоздавать Flow при смене accountId
-    val localContacts by remember(accountId) { contactRepo.getLocalContacts(accountId) }.collectAsState(initial = emptyList())
+    val localContacts by remember(accountId) { contactRepo.getLocalContacts(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedLocalSearch by rememberDebouncedState(localSearchQuery)
     // filteredLocalContacts вычисляется ниже через remember с ключами
 
     // Группы контактов - используем key чтобы пересоздавать Flow при смене accountId
-    val groups by remember(accountId) { contactRepo.getGroups(accountId) }.collectAsState(initial = emptyList())
+    val groups by remember(accountId) { contactRepo.getGroups(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     var selectedGroupId by rememberSaveable { mutableStateOf<String?>(null) } // null = все контакты
     var showCreateGroupDialog by rememberSaveable { mutableStateOf(false) }
     var groupToRenameId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -99,17 +100,17 @@ fun ContactsScreen(
     val showMoveToGroupDialog = moveToGroupContactId?.let { id -> localContacts.find { it.id == id } }
 
     // Избранные контакты
-    val favoriteContacts by remember(accountId) { contactRepo.getFavoriteContacts(accountId) }.collectAsState(initial = emptyList())
+    val favoriteContacts by remember(accountId) { contactRepo.getFavoriteContacts(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Tab 1: Exchange Folder контакты (папка Contacts на сервере)
-    val exchangeFolderContacts by remember(accountId) { contactRepo.getExchangeFolderContacts(accountId) }.collectAsState(initial = emptyList())
+    val exchangeFolderContacts by remember(accountId) { contactRepo.getExchangeFolderContacts(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     var exchangeSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedExchangeSearch by rememberDebouncedState(exchangeSearchQuery)
     var isExchangeSyncing by remember { mutableStateOf(false) }
     var exchangeSyncError by remember(accountId) { mutableStateOf<String?>(null) }
 
     // Tab 2: GAL контакты (глобальная адресная книга)
-    val galContacts by remember(accountId) { contactRepo.getGalContacts(accountId) }.collectAsState(initial = emptyList())
+    val galContacts by remember(accountId) { contactRepo.getGalContacts(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     var galSearchQuery by rememberSaveable { mutableStateOf("") }
     val debouncedGalSearch by rememberDebouncedState(galSearchQuery)
     var isGalSyncing by remember { mutableStateOf(false) }

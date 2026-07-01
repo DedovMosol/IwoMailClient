@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import com.dedovmosol.iwomail.ui.components.rememberDebouncedState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -120,11 +121,11 @@ fun CalendarScreen(
     // Отдельный scope для синхронизации, чтобы не отменялась при навигации
     val syncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
 
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
+    val activeAccount by accountRepo.activeAccount.collectAsStateWithLifecycle(initialValue = null)
     val accountId = activeAccount?.id ?: 0L
 
-    val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsState(initial = emptyList())
-    val deletedEvents by remember(accountId) { calendarRepo.getDeletedEvents(accountId) }.collectAsState(initial = emptyList())
+    val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val deletedEvents by remember(accountId) { calendarRepo.getDeletedEvents(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
 
     // ID аккаунта, для которого уже был запущен автосинк.
     // rememberSaveable: сохраняется при повороте → не запускает повторный синк для того же аккаунта.

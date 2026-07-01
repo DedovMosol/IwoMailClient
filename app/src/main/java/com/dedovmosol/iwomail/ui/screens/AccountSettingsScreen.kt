@@ -16,6 +16,7 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1513,7 +1514,7 @@ private fun ConnectionStatusBlock(
     port: Int
 ) {
     val health by com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
-        .healthFlow(accountId).collectAsState()
+        .healthFlow(accountId).collectAsStateWithLifecycle()
 
     val isRu = isRussian()
     val statusText: String

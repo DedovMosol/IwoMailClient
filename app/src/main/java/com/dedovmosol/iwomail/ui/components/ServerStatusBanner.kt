@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -27,7 +28,7 @@ fun ServerStatusBanner(
     if (accountId == null) return
 
     val health by AccountServerHealthRepository.healthFlow(accountId)
-        .collectAsState()
+        .collectAsStateWithLifecycle()
 
     AnimatedVisibility(
         visible = health.showBanner,

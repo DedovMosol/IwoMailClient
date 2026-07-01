@@ -14,6 +14,7 @@ import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +58,7 @@ fun SettingsScreen(
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val isRu = isRussian()
 
-    val accounts by accountRepo.accounts.collectAsState(initial = emptyList())
+    val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
     var accountToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
     val accountToDelete = accountToDeleteId?.let { id -> accounts.find { it.id == id } }
 

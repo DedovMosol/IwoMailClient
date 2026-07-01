@@ -13,7 +13,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -500,7 +500,7 @@ fun AccountItem(
     } ?: MaterialTheme.colorScheme.primary
 
     val health by AccountServerHealthRepository.healthFlow(account.id)
-        .collectAsState()
+        .collectAsStateWithLifecycle()
     val dotColor = when (health.problemType) {
         ServerProblemType.None -> null
         ServerProblemType.PrimaryDownUsingFallback -> Color(0xFFFFA000)

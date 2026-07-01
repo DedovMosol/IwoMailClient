@@ -218,7 +218,7 @@ fun EmailDetailScreen(
     var showMoveDialog by rememberSaveable { mutableStateOf(false) }
 
     // activeAccount остаётся в UI: цвет аватара + UI-операции встреч/задач (accountRepo.getAccount).
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
+    val activeAccount by accountRepo.activeAccount.collectAsStateWithLifecycle(initialValue = null)
 
     // Диалог подтверждения удаления / MDN (isDeleting/isSendingMdn живут в VM).
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }

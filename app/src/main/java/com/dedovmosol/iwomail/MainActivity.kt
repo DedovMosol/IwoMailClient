@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -253,18 +254,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settingsRepo = remember { SettingsRepository.getInstance(this) }
             val initialLanguage = remember { settingsRepo.getLanguageSync() }
-            val languageCode by settingsRepo.language.collectAsState(initial = initialLanguage)
+            val languageCode by settingsRepo.language.collectAsStateWithLifecycle(initialValue = initialLanguage)
             val initialFontSize = remember { settingsRepo.getFontSizeSync() }
-            val fontSize by settingsRepo.fontSize.collectAsState(initial = initialFontSize)
+            val fontSize by settingsRepo.fontSize.collectAsStateWithLifecycle(initialValue = initialFontSize)
             
             // Цветовая тема с учётом расписания по дням
             val initialColorTheme = remember { settingsRepo.getCurrentThemeSync() }
-            val colorThemeCode by settingsRepo.colorTheme.collectAsState(initial = initialColorTheme)
-            val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsState(initial = false)
+            val colorThemeCode by settingsRepo.colorTheme.collectAsStateWithLifecycle(initialValue = initialColorTheme)
+            val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsStateWithLifecycle(initialValue = false)
             
             // Получаем тему для текущего дня если включено расписание
             val currentDayOfWeek = remember { java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK) }
-            val dayThemeCode by settingsRepo.getDayTheme(currentDayOfWeek).collectAsState(initial = "purple")
+            val dayThemeCode by settingsRepo.getDayTheme(currentDayOfWeek).collectAsStateWithLifecycle(initialValue = "purple")
             
             val effectiveThemeCode = if (dailyThemesEnabled) dayThemeCode else colorThemeCode
             val colorTheme = remember(effectiveThemeCode) {
@@ -273,15 +274,15 @@ class MainActivity : ComponentActivity() {
             
             // Цвет скроллбара с учётом расписания по дням
             val initialScrollbarColor = remember { settingsRepo.getCurrentScrollbarColorSync() }
-            val scrollbarColorCode by settingsRepo.scrollbarColor.collectAsState(initial = initialScrollbarColor)
-            val dayScrollbarCode by settingsRepo.getDayScrollbarColor(currentDayOfWeek).collectAsState(initial = "blue")
+            val scrollbarColorCode by settingsRepo.scrollbarColor.collectAsStateWithLifecycle(initialValue = initialScrollbarColor)
+            val dayScrollbarCode by settingsRepo.getDayScrollbarColor(currentDayOfWeek).collectAsStateWithLifecycle(initialValue = "blue")
             val effectiveScrollbarCode = if (dailyThemesEnabled) dayScrollbarCode else scrollbarColorCode
             val scrollbarColor = remember(effectiveScrollbarCode) {
                 com.dedovmosol.iwomail.ui.components.ScrollbarColor.fromCode(effectiveScrollbarCode)
             }
             
             // Анимации
-            val animationsEnabled by settingsRepo.animationsEnabled.collectAsState(initial = true)
+            val animationsEnabled by settingsRepo.animationsEnabled.collectAsStateWithLifecycle(initialValue = true)
             
             val currentLanguage = remember(languageCode) {
                 AppLanguage.entries.find { it.code == languageCode } ?: AppLanguage.RUSSIAN

@@ -42,7 +42,7 @@
 | N-4 | `parseEwsDateTime` теряет смещение таймзоны | Low | S | Низ. | 3 |
 | N-5 | ✅ Дублированное извлечение inline-картинок MIME (DRY) — исправлено | Low | M | Низ. | ✅ |
 | N-6 | `EasClient` God-object (SRP) | Low | L | Низ. | 3 |
-| N-8 | `collectAsState` в legacy-экранах (энергопотребление) | Low | S | Низ. | 3 (по мере MVVM-миграции) |
+| N-8 | ✅ `collectAsState` в legacy-экранах (энергопотребление) — исправлено | Low | S | Низ. | ✅ |
 | N-9 | ✅ Мёртвый `getEmailsByFolder` — удалён | Low | Trivial | Низ. | ✅ |
 | N-14 | user-CA trust / FileProvider `path="/"` / alpha-крипто | Low | S | Низ. | 3 |
 | L-1 | ✅ Мёртвый `clearAllEasClientCache` — удалён | Low | Trivial | Низ. | ✅ |
@@ -81,7 +81,9 @@
 - **N-13** — для Exchange-аккаунтов форсируется HTTPS: убрана нерабочая HTTP-опция в `SetupScreen` (cleartext-EAS блокируется NSC), `useSSL` форсируется на save-путях (правка и новый Exchange). IMAP/POP3 (cleartext через JavaMail, мимо NSC) не тронуты.
 - **N-5** — единый источник извлечения inline-картинок: `EasEmailService.extractInlineImagesFromMime` делегирует в `MimeHtmlProcessor`; дублировавшая рекурсия и регексы удалены. В `MimeHtmlProcessor` добавлен guard глубины рекурсии (устраняет и латентную бесконечную рекурсию на части-преамбуле). Тест `MimeHtmlProcessorInlineImageTest`.
 
-Остаются (Этап 3): `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
+- **N-8** — все legacy-экраны переведены с `collectAsState` на `collectAsStateWithLifecycle` (сбор Flow ставится на паузу в STOPPED — экономия CPU/батареи в фоне/бэкстеке): `MainActivity`, `MainScreen`, `MainScreenDrawer`, `ServerStatusBanner`, `Personalization`/`Settings`/`Contacts`/`Calendar`/`AccountSettings`/`Updates`/`ContactDetailsDialog` + остаточный `activeAccount` в `EmailDetailScreen`. Плоских `collectAsState` в проекте не осталось.
+
+Остаются (Этап 3): `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
 
 > Правки НЕ внесены (по запросу — только аудит). Этот план — дорожная карта для последующих коммитов.
 
@@ -138,6 +140,8 @@
 
 **N-8 (Low/информационно, энергопотребление). Legacy-экраны используют `collectAsState` вместо `collectAsStateWithLifecycle`.**
 7 мигрированных ViewModel-экранов (EmailDetail/EmailList/Tasks/Notes/Search/UserFolders/SyncCleanup) используют `collectAsStateWithLifecycle` (пауза сбора в STOPPED — верно). Немигрированные (`MainScreen` ×5, `MainActivity` ×8, `Calendar/Contacts/Settings/AccountSettings/Personalization`) — плейн `collectAsState`, поэтому Flow'ы (accounts/activeAccount/lastSyncTime/settings) продолжают собираться в фоне/бэкстеке → мелкая трата CPU/батареи (важно для приложения с акцентом на энергосбережение). Импакт низкий (эмиссии редки). Устраняется по мере инкрементальной MVVM-миграции (`ARCHITECTURE.md §2.1`).
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** все legacy-экраны переведены на `collectAsStateWithLifecycle` (импорт `androidx.lifecycle.compose`, зависимость `lifecycle-runtime-compose:2.7.0` уже была). `initial =` → `initialValue =`. Плоских `.collectAsState(` в проекте не осталось (grep). Семантика сохранена: тот же initial, последнее значение удерживается в фоне, StateFlow/Room переиздают при возврате в STARTED.
 
 **N-9 (Low, мёртвый код). `EmailDao.getEmailsByFolder` не используется.**
 `Daos.kt:204-205` — `SELECT * FROM emails WHERE folderId … ORDER BY dateReceived DESC` (полный `body`, без `LIMIT`), `Flow<List<EmailEntity>>`. 0 вызовов (grep): список писем использует body-less `getEmailSummariesByFolder`. Мёртвый код в духе L-1/L-2. Опасность лишь потенциальная — если его когда-нибудь подключат к UI, он загрузит все тела без лимита. Удалить.

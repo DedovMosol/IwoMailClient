@@ -25,6 +25,7 @@ import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -102,8 +103,8 @@ fun MainScreen(
     val taskRepo = remember { RepositoryProvider.getTaskRepository(context) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
-    val accounts by accountRepo.accounts.collectAsState(initial = emptyList())
-    val activeAccount by accountRepo.activeAccount.collectAsState(initial = null)
+    val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
+    val activeAccount by accountRepo.activeAccount.collectAsStateWithLifecycle(initialValue = null)
 
     // Если все аккаунты удалены — переходим на экран авторизации
     var accountsInitialized by remember { mutableStateOf(false) }
@@ -133,7 +134,7 @@ fun MainScreen(
     val initialSyncDone = InitialSyncController.syncDone
 
     // Время последней синхронизации (для обновления статистики)
-    val lastSyncTime by settingsRepo.lastSyncTime.collectAsState(initial = 0L)
+    val lastSyncTime by settingsRepo.lastSyncTime.collectAsStateWithLifecycle(initialValue = 0L)
 
     // Диалог создания папки
     var showCreateFolderDialog by rememberSaveable { mutableStateOf(false) }
@@ -851,10 +852,10 @@ private fun HomeContent(
 
     // Подписка на время последней синхронизации
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
-    val lastSyncTime by settingsRepo.lastSyncTime.collectAsState(initial = 0L)
+    val lastSyncTime by settingsRepo.lastSyncTime.collectAsStateWithLifecycle(initialValue = 0L)
 
     // Отслеживаем Battery Saver через настройки (BroadcastReceiver)
-    val isBatterySaverActive by settingsRepo.batterySaverState.collectAsState(initial = settingsRepo.isBatterySaverActive())
+    val isBatterySaverActive by settingsRepo.batterySaverState.collectAsStateWithLifecycle(initialValue = settingsRepo.isBatterySaverActive())
     // Per-account: показываем предупреждение если активный аккаунт не игнорирует Battery Saver
     val showBatterySaverWarning = isBatterySaverActive && (activeAccount?.ignoreBatterySaver != true)
 

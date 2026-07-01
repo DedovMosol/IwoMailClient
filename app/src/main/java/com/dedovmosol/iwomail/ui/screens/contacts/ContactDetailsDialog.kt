@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,7 +48,7 @@ internal fun ContactDetailsDialog(
 ) {
     val context = LocalContext.current
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
-    val animationsEnabled by settingsRepo.animationsEnabled.collectAsState(initial = true)
+    val animationsEnabled by settingsRepo.animationsEnabled.collectAsStateWithLifecycle(initialValue = true)
 
     val isLocal = contact.source == ContactSource.LOCAL
     val name = contact.displayName

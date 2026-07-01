@@ -11,6 +11,7 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -231,37 +232,37 @@ fun PersonalizationScreen(
     var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
     
     // Настройки размера шрифта
-    val fontSize by settingsRepo.fontSize.collectAsState(initial = SettingsRepository.FontSize.MEDIUM)
+    val fontSize by settingsRepo.fontSize.collectAsStateWithLifecycle(initialValue = SettingsRepository.FontSize.MEDIUM)
     var showFontSizeDialog by rememberSaveable { mutableStateOf(false) }
     
     // Настройки цветовой темы
-    val colorThemeCode by settingsRepo.colorTheme.collectAsState(initial = "purple")
-    val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsState(initial = false)
-    val animationsEnabled by settingsRepo.animationsEnabled.collectAsState(initial = true)
+    val colorThemeCode by settingsRepo.colorTheme.collectAsStateWithLifecycle(initialValue = "purple")
+    val dailyThemesEnabled by settingsRepo.dailyThemesEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val animationsEnabled by settingsRepo.animationsEnabled.collectAsStateWithLifecycle(initialValue = true)
     var showColorThemeDialog by rememberSaveable { mutableStateOf(false) }
     var showScrollbarColorDialog by rememberSaveable { mutableStateOf(false) }
     var showDailyThemesDialog by rememberSaveable { mutableStateOf(false) }
 
     // Темы по дням недели
-    val mondayTheme by settingsRepo.getDayTheme(java.util.Calendar.MONDAY).collectAsState(initial = "purple")
-    val tuesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.TUESDAY).collectAsState(initial = "blue")
-    val wednesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.WEDNESDAY).collectAsState(initial = "green")
-    val thursdayTheme by settingsRepo.getDayTheme(java.util.Calendar.THURSDAY).collectAsState(initial = "yellow")
-    val fridayTheme by settingsRepo.getDayTheme(java.util.Calendar.FRIDAY).collectAsState(initial = "purple")
-    val saturdayTheme by settingsRepo.getDayTheme(java.util.Calendar.SATURDAY).collectAsState(initial = "blue")
-    val sundayTheme by settingsRepo.getDayTheme(java.util.Calendar.SUNDAY).collectAsState(initial = "yellow")
+    val mondayTheme by settingsRepo.getDayTheme(java.util.Calendar.MONDAY).collectAsStateWithLifecycle(initialValue = "purple")
+    val tuesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.TUESDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val wednesdayTheme by settingsRepo.getDayTheme(java.util.Calendar.WEDNESDAY).collectAsStateWithLifecycle(initialValue = "green")
+    val thursdayTheme by settingsRepo.getDayTheme(java.util.Calendar.THURSDAY).collectAsStateWithLifecycle(initialValue = "yellow")
+    val fridayTheme by settingsRepo.getDayTheme(java.util.Calendar.FRIDAY).collectAsStateWithLifecycle(initialValue = "purple")
+    val saturdayTheme by settingsRepo.getDayTheme(java.util.Calendar.SATURDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val sundayTheme by settingsRepo.getDayTheme(java.util.Calendar.SUNDAY).collectAsStateWithLifecycle(initialValue = "yellow")
     
     // Цвет скроллбара
-    val scrollbarColorCode by settingsRepo.scrollbarColor.collectAsState(initial = "blue")
+    val scrollbarColorCode by settingsRepo.scrollbarColor.collectAsStateWithLifecycle(initialValue = "blue")
     
     // Цвета скроллбара по дням недели
-    val monScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.MONDAY).collectAsState(initial = "blue")
-    val tueScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.TUESDAY).collectAsState(initial = "blue")
-    val wedScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.WEDNESDAY).collectAsState(initial = "blue")
-    val thuScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.THURSDAY).collectAsState(initial = "blue")
-    val friScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.FRIDAY).collectAsState(initial = "blue")
-    val satScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.SATURDAY).collectAsState(initial = "blue")
-    val sunScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.SUNDAY).collectAsState(initial = "blue")
+    val monScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.MONDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val tueScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.TUESDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val wedScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.WEDNESDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val thuScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.THURSDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val friScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.FRIDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val satScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.SATURDAY).collectAsStateWithLifecycle(initialValue = "blue")
+    val sunScrollbar by settingsRepo.getDayScrollbarColor(java.util.Calendar.SUNDAY).collectAsStateWithLifecycle(initialValue = "blue")
     
     // Диалог выбора размера шрифта
     if (showFontSizeDialog) {
