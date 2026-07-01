@@ -36,11 +36,11 @@
 | L-3 | Редактор `RichTextEditor`: JS без CSP, `stripDangerousTags` не режет `on*=` | Low | S | Сред. | 2 ✅ |
 | L-5 | Кастомный серт: hostname off + system-fallback (MITM opt-in) | Low | M | Сред. | 2 |
 | N-7 | Гонка lifecycle `Mutex` в кэше `EasClient` | Low | S | Низ. | 2 ✅ |
-| N-13 | NSC `cleartext=false` vs опция `useHttps=false` | Low | S | Низ. | 3 |
+| N-13 | ✅ NSC `cleartext=false` vs опция `useHttps=false` — исправлено | Low | S | Низ. | ✅ |
 | N-1 | ✅ Протокол не валидирует cc/bcc (UI митигирует) — исправлено | Low | Trivial | Низ. | ✅ |
 | N-3 | ✅ Subject — один encoded-word без сворачивания (RFC 5322) — исправлено | Low | S | Низ. | ✅ |
 | N-4 | `parseEwsDateTime` теряет смещение таймзоны | Low | S | Низ. | 3 |
-| N-5 | Дублированное извлечение inline-картинок MIME (DRY) | Low | M | Низ. | 3 |
+| N-5 | ✅ Дублированное извлечение inline-картинок MIME (DRY) — исправлено | Low | M | Низ. | ✅ |
 | N-6 | `EasClient` God-object (SRP) | Low | L | Низ. | 3 |
 | N-8 | `collectAsState` в legacy-экранах (энергопотребление) | Low | S | Низ. | 3 (по мере MVVM-миграции) |
 | N-9 | ✅ Мёртвый `getEmailsByFolder` — удалён | Low | Trivial | Низ. | ✅ |
@@ -78,7 +78,10 @@
 - **N-3** — Subject кодируется через новый `encodeMimeHeaderText` (RFC 2047 folding: encoded-word'ы ≤75 октетов, CRLF+SPACE, целые UTF-8 символы, строка ≤76). Единый источник `mimeEncodedWord`/`chunkByUtf8Bytes` для всех 4 мест `=?UTF-8?B?…?=` (3 Subject + имя вложения; имя — без folding, encoded-word в quoted-параметре по RFC 2047 §5). Короткая тема → один encoded-word (без изменений). Тест `EasMimeSubjectEncodingTest`.
 - **L-4** — ключ дедупликации `deleteDuplicateEmails` переведён на канонический `internetMessageId` (RFC 5322 Message-ID глобально уникален → удаляются только настоящие дубли); письма без Message-ID не трогаются. Флаг `duplicates_cleaned_v35` не бампался (правка убирает латентный дефект дремлющего запроса, повторный прогон не нужен).
 
-Остаются (Этап 3): `N-13` (cleartext-EAS/NSC), `N-5` (DRY извлечения картинок), `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
+- **N-13** — для Exchange-аккаунтов форсируется HTTPS: убрана нерабочая HTTP-опция в `SetupScreen` (cleartext-EAS блокируется NSC), `useSSL` форсируется на save-путях (правка и новый Exchange). IMAP/POP3 (cleartext через JavaMail, мимо NSC) не тронуты.
+- **N-5** — единый источник извлечения inline-картинок: `EasEmailService.extractInlineImagesFromMime` делегирует в `MimeHtmlProcessor`; дублировавшая рекурсия и регексы удалены. В `MimeHtmlProcessor` добавлен guard глубины рекурсии (устраняет и латентную бесконечную рекурсию на части-преамбуле). Тест `MimeHtmlProcessorInlineImageTest`.
+
+Остаются (Этап 3): `N-8` (энергопотребление legacy-экранов), а также `N-4`/`N-6`/`L-5`/`L-6`/`L-7`/`M-3` — по мере рефакторинга.
 
 > Правки НЕ внесены (по запросу — только аудит). Этот план — дорожная карта для последующих коммитов.
 
@@ -125,6 +128,8 @@
 **N-5 (Low, DRY/SOLID). Дублированное извлечение inline-картинок из MIME.**
 Две живые почти идентичные рекурсивные реализации: `EasEmailService.extractInlineImagesFromMime`+`extractImagesRecursive` (`EasEmailService.kt:631/651`, протокольный путь, зовётся из `EasClient.kt:1003/1025`) и `MimeHtmlProcessor.extractInlineImagesFromMime`+`extractImagesRecursive` (`MimeHtmlProcessor.kt:67/201`, UI-путь, зовётся из `EmailDetailActions.kt:154`). Алгоритм (обход вложенных multipart, `BOUNDARY`-regex, CID→data:URL) продублирован и **уже разошёлся** (`MimeHtmlProcessor` сначала зовёт `decodeMimeWrapper`, `EasEmailService` — нет) → правка в одном не попадёт в другой. Примечательно: `extractHtmlFromMime` централизован в `MimeHtmlProcessor` (зовётся из обоих) — а извлечение картинок не довели. Рекомендация: единый источник в `MimeHtmlProcessor`.
 
+**✅ ИСПРАВЛЕНО (2026-07-01):** `EasEmailService.extractInlineImagesFromMime` теперь делегирует в `MimeHtmlProcessor.extractInlineImagesFromMime` (единый источник, как `extractHtmlFromMime`); дублировавшие `extractImagesRecursive` и регексы (`BOUNDARY_REGEX`/`CONTENT_ID_PATTERN`/`CONTENT_TYPE_IMAGE_PATTERN`) удалены. Регексы были верифицированы идентичными (`EasPatterns.BOUNDARY` == MimeHtmlProcessor.BOUNDARY и т.д.) → поведение сохранено; `decodeMimeWrapper` — безопасный no-op для сырого MIME. В `MimeHtmlProcessor.extractImagesRecursive` добавлен guard `depth>10` (у EAS-версии он был, у UI-версии — нет → латентная бесконечная рекурсия на части-преамбуле, содержащей `boundary=`/`multipart/` без разделителя). Тест `MimeHtmlProcessorInlineImageTest`.
+
 **N-6 (Low, SOLID/архитектура). `EasClient` (2713 строк, ~80 публичных методов) — частичный God-object.**
 Большинство методов — тонкая делегация в feature-сервисы (`= emailService.X`/`= transport.X`), но часть несёт существенную inline-логику (`fetchEmailBodyViaEws` ~774-1000, `parseEmail` 1331-1404, EWS/MIME-парсинг), которая по SRP должна жить в сервисах. Это осознанный facade (`ARCHITECTURE.md §10`), но смешение «делегация + логика» — реальный SRP-запах и широкая поверхность. Низкий приоритет (не баг).
 
@@ -150,6 +155,8 @@
 
 **N-13 (Low, несогласованность конфига). NSC `cleartextTrafficPermitted="false"` конфликтует с опцией `useHttps=false`.**
 `network_security_config.xml:3` запрещает cleartext, но `EasClient.buildUrl` строит `http://` при `useHttps=false` (`scheme = if (useHttps) "https" else "http"`). Для EAS через OkHttp такое соединение будет заблокировано `CleartextNotPermittedException`. То есть опция «без SSL» для Exchange фактически нерабочая (для IMAP/POP3 через JavaMail NSC не применяется — там cleartext пройдёт, что тоже несогласованно). Рекомендация: либо убрать/задизейблить не-SSL для Exchange, либо разрешить cleartext точечно для сконфигурированного хоста через `domain-config`.
+
+**✅ ИСПРАВЛЕНО (2026-07-01):** выбран первый вариант (NSC — осознанная security-политика, HTTP-EAS на практике не встречается). HTTP-опция протокола убрана из `SetupScreen` для Exchange (была нерабочей); `useSSL` форсируется в `true` для `AccountType.EXCHANGE` на обоих save-путях (правка существующего аккаунта и новый Exchange → `VerificationScreen`). Так конфиг и UI согласованы (Exchange = HTTPS-only). IMAP/POP3 не тронуты — там не-SSL работает через JavaMail (мимо NSC) и остаётся легитимной опцией. `domain-config` для динамического пользовательского хоста статическим XML невозможен, поэтому не применялся.
 
 **N-14 (Low, best-practice конфиг). Ослабленные конфиги: user-CA trust, широкий FileProvider, alpha-крипто.**
 (а) `network_security_config.xml:8` `<certificates src="user"/>` — доверие пользовательским CA глобально для всех соединений (со времён Android 7 best-practice — НЕ доверять user-CA; расширяет MITM-поверхность). Осознанный компромисс ради self-signed Exchange, но шире необходимого (см. L-5). (б) `file_paths.xml:8` `<cache-path name="cache" path="/"/>` — весь cache-каталог доступен через FileProvider (over-broad; лучше скоупить конкретные подпапки). (в) `build.gradle.kts:145` `androidx.security:security-crypto:1.1.0-alpha06` — **alpha**-зависимость на пути шифрования паролей в проде (риск стабильности/поддержки). Все три — низкий приоритет, но best-practice.

@@ -198,7 +198,8 @@ object MimeHtmlProcessor {
         null
     }
 
-    private fun extractImagesRecursive(mimeSection: String, images: MutableMap<String, String>) {
+    private fun extractImagesRecursive(mimeSection: String, images: MutableMap<String, String>, depth: Int = 0) {
+        if (depth > 10) return // guard от глубоко-вложенного/зловредного MIME (переполнение стека)
         val boundaryMatch = BOUNDARY.find(mimeSection) ?: return
         val boundary = boundaryMatch.groupValues[1]
         val parts = mimeSection.split("--$boundary")
@@ -207,7 +208,7 @@ object MimeHtmlProcessor {
             val isNestedMultipart = part.contains("Content-Type: multipart/", ignoreCase = true) ||
                     part.contains("Content-Type:multipart/", ignoreCase = true)
             if (isNestedMultipart) {
-                extractImagesRecursive(part, images)
+                extractImagesRecursive(part, images, depth + 1)
                 continue
             }
 

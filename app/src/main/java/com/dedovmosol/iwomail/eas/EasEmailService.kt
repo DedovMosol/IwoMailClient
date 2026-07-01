@@ -74,12 +74,9 @@ class EasEmailService internal constructor(
         private val MDN_CONFIRM_READING_REGEX get() = EasPatterns.MDN_CONFIRM_READING
         private val MIME_MESSAGE_ID_REGEX get() = EasPatterns.MIME_MESSAGE_ID
         private val EMAIL_BRACKET_REGEX get() = EasPatterns.EMAIL_BRACKET
-        private val BOUNDARY_REGEX get() = EasPatterns.BOUNDARY
         private val AIRSYNC_DATA_REGEX = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val HEADER_FOLDING_REGEX = "\r?\n[ \t]+".toRegex()
 
-        private val CONTENT_ID_PATTERN = "Content-ID:\\s*<([^>]+)>".toRegex(RegexOption.IGNORE_CASE)
-        private val CONTENT_TYPE_IMAGE_PATTERN = "Content-Type:\\s*(image/[^;\\r\\n]+)".toRegex(RegexOption.IGNORE_CASE)
         private val DATA_PATTERN = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val DATA_IMAGE_SRC_REGEX = Regex("""src="data:image/[^;]+;base64,[^"]+"""")
     }
@@ -629,70 +626,14 @@ class EasEmailService internal constructor(
     }
 
     /**
-     * Извлекает inline изображения из MIME данных
-     * Возвращает Map<contentId, base64DataUrl>
+     * Извлекает inline изображения из MIME данных (Map<contentId, base64 data:URL>).
+     * N-5 (DRY): делегирует в единый `MimeHtmlProcessor` — та же рекурсивная логика, что и на
+     * UI-пути (`EmailDetailActions`). `MimeHtmlProcessor` дополнительно декодирует base64-wrapper
+     * (безопасный no-op для уже сырого MIME: он не проходит BASE64_DETECT из-за `:`/`;`/`<`)
+     * и имеет guard глубины рекурсии.
      */
-    fun extractInlineImagesFromMime(mimeData: String): Map<String, String> {
-        val images = mutableMapOf<String, String>()
-
-        if (!mimeData.contains("Content-Type:", ignoreCase = true)) {
-            return images
-        }
-
-        // КРИТИЧНО: Рекурсивно обрабатываем вложенные multipart-структуры.
-        // При наличии файловых вложений MIME имеет вид:
-        //   multipart/mixed { multipart/related { text/html + image(s) } + attachment(s) }
-        // Старая версия разбивала только по внешнему boundary и не находила
-        // inline-картинки во вложенном multipart/related.
-        extractImagesRecursive(mimeData, images)
-
-        return images
-    }
-
-    /**
-     * Рекурсивно извлекает inline-картинки из вложенных multipart-структур MIME
-     */
-    private fun extractImagesRecursive(mimeSection: String, images: MutableMap<String, String>, depth: Int = 0) {
-        if (depth > 10) return
-        val boundaryMatch = BOUNDARY_REGEX.find(mimeSection) ?: return
-        val boundary = boundaryMatch.groupValues[1]
-        val parts = mimeSection.split("--$boundary")
-
-        for (part in parts) {
-            // Если часть содержит вложенный multipart — рекурсивно обрабатываем
-            val isNestedMultipart = part.contains("Content-Type: multipart/", ignoreCase = true) ||
-                                   part.contains("Content-Type:multipart/", ignoreCase = true)
-            if (isNestedMultipart) {
-                extractImagesRecursive(part, images, depth + 1)
-                continue
-            }
-
-            val isImage = part.contains("Content-Type: image/", ignoreCase = true) ||
-                         part.contains("Content-Type:image/", ignoreCase = true)
-
-            if (!isImage) continue
-
-            val cidMatch = CONTENT_ID_PATTERN.find(part)
-            val contentId = cidMatch?.groupValues?.get(1) ?: continue
-
-            val typeMatch = CONTENT_TYPE_IMAGE_PATTERN.find(part)
-            val contentType = typeMatch?.groupValues?.get(1)?.trim() ?: "image/png"
-
-            val contentStart = part.indexOf("\r\n\r\n")
-            if (contentStart == -1) continue
-
-            var content = part.substring(contentStart + 4).trim()
-            if (content.endsWith("--")) {
-                content = content.dropLast(2).trim()
-            }
-            content = content.replace("\r\n", "").replace("\n", "").replace(" ", "")
-
-            if (content.isNotBlank()) {
-                val dataUrl = "data:$contentType;base64,$content"
-                images[contentId] = dataUrl
-            }
-        }
-    }
+    fun extractInlineImagesFromMime(mimeData: String): Map<String, String> =
+        com.dedovmosol.iwomail.util.MimeHtmlProcessor.extractInlineImagesFromMime(mimeData)
 
     /**
      * Загружает полный MIME письма и извлекает inline изображения

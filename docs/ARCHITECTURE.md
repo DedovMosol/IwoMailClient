@@ -318,6 +318,8 @@ Supported network/security paths:
 - certificate pinning with saved SHA-256 and metadata;
 - Conscrypt provider for legacy TLS compatibility.
 
+Cleartext traffic is disabled globally (`network_security_config`, `cleartextTrafficPermitted="false"`); Exchange (EAS over OkHttp) is therefore HTTPS-only and the setup screen no longer offers a plaintext-HTTP option for Exchange accounts, forcing `useSSL=true` on save (N-13). IMAP/POP3 run through JavaMail (outside the network-security-config) and may still use a plaintext port.
+
 `AccountRepository` caches `EasClient` per account and invalidates cache when certificate/server settings change. Alternate Exchange URL fallback is supported for connection-level errors, with later probe/switchback to primary.
 
 ### Email body rendering (WebView)

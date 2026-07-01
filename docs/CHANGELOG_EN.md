@@ -25,6 +25,8 @@
 - MIME header-injection protection: addresses and Message-IDs across all message-building paths (send, meeting invitations, MDN read receipts) are stripped of CR/LF via a single sanitizer — most important for MDN, whose values come from the incoming message (N-1)
 - Correct sending of long subjects: the Subject is folded per RFC 2047 (multiple encoded-words) so the header line stays within limits and isn't rejected by strict gateways; a single encoder is shared across all message-building paths (N-3)
 - Safer email de-duplication: the duplicate-cleanup key now uses the canonical Message-ID — distinct emails that share subject/sender/timestamp are no longer deleted (L-4)
+- Exchange over HTTPS only: removed the non-functional plaintext-HTTP option when setting up an Exchange account (cleartext was blocked by the system security policy); SSL is now forced for Exchange; IMAP/POP3 unaffected (N-13)
+- Unified inline-image parsing: removed duplicated MIME extraction logic (single source) and added protection against maliciously deep-nested MIME (N-5)
 - Fixed a potential race/`ConcurrentModificationException` in the Push service's EAS-client cache — switched to `ConcurrentHashMap` with atomic operations (N-15)
 - Dead-code cleanup and DRY: removed unused `clearAllEasClientCache`/`RepositoryProvider.clear`/`getEmailsByFolder`; `ContactRepository` is now always obtained via the provider (L-1, L-2, N-9, M-2)
 

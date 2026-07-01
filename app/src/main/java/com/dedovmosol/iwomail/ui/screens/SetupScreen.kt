@@ -866,59 +866,15 @@ fun SetupScreen(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
 
-                // Выбор HTTP/HTTPS
+                // N-13: Exchange EAS работает только по HTTPS — cleartext заблокирован
+                // network-security-config (targetSdk 28+), а не-SSL EAS на практике не встречается.
+                // HTTP-опция убрана (создавала неработающий аккаунт); useSSL форсируется при сохранении.
                 Text(
-                    if (isRussian()) "Протокол" else "Protocol",
-                    style = MaterialTheme.typography.labelLarge
+                    if (isRussian()) "Протокол: HTTPS (обязательно для Exchange)"
+                    else "Protocol: HTTPS (required for Exchange)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                val protocolTheme = LocalColorTheme.current
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (useSSL) {
-                        Button(
-                            onClick = { },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = protocolTheme.gradientStart,
-                                contentColor = Color.White
-                            )
-                        ) {
-                            Text("HTTPS", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                        }
-                    } else {
-                        OutlinedButton(
-                            onClick = { useSSL = true; incomingPort = "443" },
-                            modifier = Modifier.weight(1f),
-                            border = BorderStroke(1.dp, protocolTheme.gradientStart),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = protocolTheme.gradientStart)
-                        ) {
-                            Text("HTTPS")
-                        }
-                    }
-                    if (!useSSL) {
-                        Button(
-                            onClick = { },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = protocolTheme.gradientStart,
-                                contentColor = Color.White
-                            )
-                        ) {
-                            Text("HTTP", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                        }
-                    } else {
-                        OutlinedButton(
-                            onClick = { useSSL = false; incomingPort = "80" },
-                            modifier = Modifier.weight(1f),
-                            border = BorderStroke(1.dp, protocolTheme.gradientStart),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = protocolTheme.gradientStart)
-                        ) {
-                            Text("HTTP")
-                        }
-                    }
-                }
             }
 
             // Порт и SSL для IMAP/POP3
@@ -1418,7 +1374,7 @@ fun SetupScreen(
                                             incomingPort = incomingPort.toIntOrNull() ?: 993,
                                             outgoingServer = outgoingServer,
                                             outgoingPort = outgoingPort.toIntOrNull() ?: 587,
-                                            useSSL = useSSL,
+                                            useSSL = if (accountType == AccountType.EXCHANGE) true else useSSL, // N-13: Exchange EAS = HTTPS-only (NSC блокирует cleartext)
                                             syncMode = syncMode.name,
                                             certificatePath = certificatePath,
                                             clientCertificatePath = clientCertificatePath
@@ -1454,7 +1410,7 @@ fun SetupScreen(
                                     incomingPort.toIntOrNull() ?: 443,
                                     outgoingServer,
                                     outgoingPort.toIntOrNull() ?: 587,
-                                    useSSL, syncMode.name,
+                                    (if (accountType == AccountType.EXCHANGE) true else useSSL), syncMode.name, // N-13: Exchange EAS = HTTPS-only (NSC блокирует cleartext)
                                     certificatePath,
                                     clientCertificatePath,
                                     clientCertificatePassword.ifBlank { null },
