@@ -80,6 +80,10 @@ android {
     }
 
     testOptions {
+        // Best practice (developer.android.com/training/testing/local-tests#mocking-dependencies):
+        // возвращать дефолты для незамоканных методов android.jar (напр. android.util.Log) вместо
+        // выброса "not mocked" — нужно для юнит-тестов crash-resistance, где catch логирует через Log.
+        unitTests.isReturnDefaultValues = true
         unitTests.all { }
     }
 }

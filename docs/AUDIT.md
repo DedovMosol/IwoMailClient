@@ -28,10 +28,10 @@
 
 | ID | Проблема | Sev | Сложность | Важность | Этап |
 |---|---|---|---|---|---|
-| M-1 | Краш в mutation-функциях 5 ViewModel (нет try/catch §10) | Medium | S | Выс. | 1 |
-| N-12 | `ServiceWatchdogReceiver` мёртв на API 26+ (push-watchdog не работает) | Medium | S | Выс. | 1 |
-| N-2 | OOM: все вложения в память до проверки лимита | Low-Med | S–M | Сред.–Выс. | 1 |
-| N-10 | `PushService.startForeground` без try/catch (краш Android 12+) | Low | Trivial | Сред. | 1 |
+| M-1 | Краш в mutation-функциях 5 ViewModel (нет try/catch §10) | Medium | S | Выс. | 1 ✅ |
+| N-12 | `ServiceWatchdogReceiver` мёртв на API 26+ (push-watchdog не работает) | Medium | S | Выс. | 1 ✅ |
+| N-2 | OOM: все вложения в память до проверки лимита | Low-Med | S–M | Сред.–Выс. | 1 ✅ |
+| N-10 | `PushService.startForeground` без try/catch (краш Android 12+) | Low | Trivial | Сред. | 1 ✅ |
 | N-11 | Дубль-отправка `OutboxWorker` при retry (нет стабильного ClientId) | Low-Med | M | Выс. | 2 |
 | L-3 | Редактор `RichTextEditor`: JS без CSP, `stripDangerousTags` не режет `on*=` | Low | S | Сред. | 2 |
 | L-5 | Кастомный серт: hostname off + system-fallback (MITM opt-in) | Low | M | Сред. | 2 |
@@ -54,8 +54,14 @@
 | M-3 | EWS NTLM `synchronized`+blocking (per-account) | Low | M | Низ. | 3 |
 | H-1 | ~~WebView XSS~~ — пересмотрено (CSP есть) → инфо | Low | — | — | — |
 
-**Этап 1 — реальные пользовательские дефекты, дёшево (сделать первыми):**
-`M-1` (краш), `N-12` (мёртвый watchdog → деградация Push), `N-2` (OOM на вложениях), `N-10` (краш FGS Android 12+). Все — S/Trivial, высокий эффект.
+**Этап 1 — реальные пользовательские дефекты, дёшево (сделать первыми): ✅ СДЕЛАНО (2026-07-01).**
+`M-1` (краш), `N-12` (мёртвый watchdog → деградация Push), `N-2` (OOM на вложениях), `N-10` (краш FGS Android 12+).
+Реализация (best-practice, интернет-верифицировано):
+- **M-1** — паттерн §10 (`try/catch(CancellationException){throw}/catch(Exception){Error}`) во всех mutation-функциях Notes/Search/Tasks/UserFolders; в SyncCleanup — DRY-хелпер `launchSafe`. Loading/selection-флаги сброшены в `finally`. Покрыто 15 юнит-тестами crash-resistance.
+- **N-10** — `androidx.core.app.ServiceCompat.startForeground` в try/catch, при неудаче `stopSelf()`+`START_NOT_STICKY`.
+- **N-12** — ресивер зарегистрирован ДИНАМИЧЕСКИ в `MailApplication` (`ContextCompat.registerReceiver`, `RECEIVER_NOT_EXPORTED`), мёртвый manifest-`<receiver>` удалён; рестарт через exemption-safe `PushService.requestRestart` (exact-alarm + `getForegroundService` + WorkManager), вынесен в static (DRY с `scheduleRestart`).
+- **N-2** — пред-проверка суммарного размера вложений (`ContentResolver`, лимит 10 МБ = строка `attachmentLimitExceeded`) ДО `readBytes`; тост при превышении.
+- Тесты: `testOptions.unitTests.isReturnDefaultValues = true` (best-practice для `android.util.Log` в юнит-тестах). Сборку выполняет разработчик в Android Studio.
 
 **Этап 2 — надёжность/безопасность, средняя цена:**
 `N-11` (дубль письма), `L-3` (CSP в редакторе), `L-5` (строгий пиннинг), `N-7` (гонка кэша).

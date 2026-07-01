@@ -48,6 +48,7 @@ class MailApplication : Application() {
         super.onCreate()
         initConscrypt()
         registerForegroundTracker()
+        registerServiceWatchdog()
         settingsRepository = SettingsRepository.getInstance(this)
         createNotificationChannels()
         cleanupStaleTempFiles()
@@ -80,6 +81,35 @@ class MailApplication : Application() {
             override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
             override fun onActivityDestroyed(a: Activity) {}
         })
+    }
+
+    // Держим ссылку на процесс-lifetime ресивер watchdog'а PushService.
+    private val serviceWatchdogReceiver = com.dedovmosol.iwomail.sync.ServiceWatchdogReceiver()
+
+    /**
+     * ВАЖНО (N-12): `SCREEN_ON`/`USER_PRESENT`/`POWER_CONNECTED` — implicit-бродкасты, которые
+     * при targetSdk 26+ НЕ доставляются manifest-ресиверам (developer.android.com «Implicit
+     * broadcast exceptions»; `SCREEN_ON` вообще нельзя объявить в манифесте). Поэтому регистрируем
+     * динамически на уровне Application (живёт весь процесс → переживает смерть PushService, что
+     * и нужно watchdog'у). `RECEIVER_NOT_EXPORTED` — безопасно для protected system broadcasts
+     * (Android 14 требует явный флаг). Не отменяем — процесс-lifetime, чистится при смерти процесса.
+     */
+    private fun registerServiceWatchdog() {
+        try {
+            val filter = android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_SCREEN_ON)
+                addAction(android.content.Intent.ACTION_USER_PRESENT)
+                addAction(android.content.Intent.ACTION_POWER_CONNECTED)
+            }
+            androidx.core.content.ContextCompat.registerReceiver(
+                this,
+                serviceWatchdogReceiver,
+                filter,
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to register service watchdog", e)
+        }
     }
     
     private fun cleanupStaleTempFiles() {

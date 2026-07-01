@@ -79,7 +79,10 @@ class ServiceWatchdogReceiver : BroadcastReceiver() {
                 }
                 
                 android.util.Log.i(TAG, "PushService stale or dead (last update ${timeSinceUpdate / 1000}s ago) - restarting")
-                PushService.start(context)
+                // Watchdog может срабатывать из фона (screen-on / unlock), где прямой
+                // startForegroundService() запрещён на Android 12+. Используем exemption-safe
+                // рестарт (exact alarm + getForegroundService + WorkManager fallback).
+                PushService.requestRestart(context, delaySeconds = 2)
                 
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e

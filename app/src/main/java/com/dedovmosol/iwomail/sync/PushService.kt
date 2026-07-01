@@ -163,6 +163,58 @@ class PushService : Service() {
         }
 
         /**
+         * Exemption-safe перезапуск PushService. Static — можно звать даже когда сервис МЁРТВ
+         * (из ServiceWatchdogReceiver). На Android 12+ прямой startForegroundService() из фона
+         * запрещён, поэтому используем exact alarm + getForegroundService() (разрешённое исключение
+         * при SCHEDULE_EXACT_ALARM) + WorkManager fallback. DRY: единая точка рестарта.
+         */
+        fun requestRestart(context: Context, delaySeconds: Long = 60) {
+            val appContext = context.applicationContext
+            // Стратегия 1: AlarmManager + getForegroundService()
+            try {
+                val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                val intent = Intent(appContext, PushService::class.java)
+                val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    PendingIntent.getForegroundService(
+                        appContext, RESTART_REQUEST_CODE, intent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                } else {
+                    PendingIntent.getService(
+                        appContext, RESTART_REQUEST_CODE, intent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                }
+                val triggerTime = System.currentTimeMillis() + delaySeconds * 1000L
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                } else {
+                    alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Failed to schedule restart alarm", e)
+            }
+
+            // Стратегия 2: WorkManager fallback (работает без SCHEDULE_EXACT_ALARM)
+            try {
+                val restartWork = androidx.work.OneTimeWorkRequestBuilder<PushRestartWorker>()
+                    .setInitialDelay(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .setConstraints(
+                        androidx.work.Constraints.Builder()
+                            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                            .build()
+                    )
+                    .build()
+                androidx.work.WorkManager.getInstance(appContext)
+                    .enqueueUniqueWork("push_restart", androidx.work.ExistingWorkPolicy.REPLACE, restartWork)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Failed to schedule WorkManager restart", e)
+            }
+        }
+
+        /**
          * Очищает кэш EasClient для указанного аккаунта
          * Вызывается при удалении аккаунта
          */
@@ -321,11 +373,25 @@ class PushService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, createNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, createNotification())
+        // Best-practice (developer.android.com/develop/background-work/services/fgs/troubleshooting):
+        // ServiceCompat.startForeground + try/catch. Android 12+ может бросить
+        // ForegroundServiceStartNotAllowedException при старте из фона без валидного исключения;
+        // Android 14+ — SecurityException / типовые исключения. НЕ крашим сервис — деградируем.
+        try {
+            androidx.core.app.ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                createNotification(),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                else 0
+            )
+        } catch (e: Exception) {
+            // START_NOT_STICKY, а не STICKY: иначе система будет циклически рестартовать
+            // сервис, который снова не сможет уйти в foreground.
+            android.util.Log.w(TAG, "startForeground failed — stopping service to avoid crash", e)
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         // Проверяем наличие PUSH аккаунтов в фоне
@@ -389,67 +455,9 @@ class PushService : Service() {
 
     private fun scheduleRestart() {
         android.util.Log.i(TAG, "Scheduling service restart")
-
-        // Стратегия 1: AlarmManager + PendingIntent.getForegroundService()
-        // На Android 12+ (API 31) startForegroundService() из фона запрещён,
-        // но exact alarm с getForegroundService() — разрешённое исключение
-        // (при наличии SCHEDULE_EXACT_ALARM)
-        try {
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-            val intent = Intent(applicationContext, PushService::class.java)
-            // getForegroundService (API 26+) вместо getService — иначе Android не стартует FG service
-            val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                PendingIntent.getForegroundService(
-                    applicationContext, RESTART_REQUEST_CODE, intent,
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                )
-            } else {
-                PendingIntent.getService(
-                    applicationContext, RESTART_REQUEST_CODE, intent,
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                )
-            }
-
-            // 60 секунд — перезапуск с разумной задержкой (экономия батареи)
-            val triggerTime = System.currentTimeMillis() + 60_000
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
-                alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent
-                )
-            } else {
-                alarmManager.setExact(
-                    android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent
-                )
-            }
-            android.util.Log.i(TAG, "AlarmManager restart scheduled via getForegroundService")
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to schedule restart alarm", e)
-        }
-
-        // Стратегия 2: WorkManager fallback (работает даже без SCHEDULE_EXACT_ALARM)
-        // WorkManager запускает PushService при появлении подходящих условий
-        try {
-            val restartWork = androidx.work.OneTimeWorkRequestBuilder<PushRestartWorker>()
-                .setInitialDelay(15, java.util.concurrent.TimeUnit.SECONDS)
-                .setConstraints(
-                    androidx.work.Constraints.Builder()
-                        .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
-                        .build()
-                )
-                .build()
-            androidx.work.WorkManager.getInstance(applicationContext)
-                .enqueueUniqueWork(
-                    "push_restart",
-                    androidx.work.ExistingWorkPolicy.REPLACE,
-                    restartWork
-                )
-            android.util.Log.i(TAG, "WorkManager restart fallback scheduled")
-        } catch (e: Exception) {
-            android.util.Log.w(TAG, "Failed to schedule WorkManager restart", e)
-        }
+        // DRY: единая exemption-safe точка рестарта (см. companion requestRestart).
+        // 60 c — перезапуск с разумной задержкой (экономия батареи).
+        requestRestart(applicationContext, 60)
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

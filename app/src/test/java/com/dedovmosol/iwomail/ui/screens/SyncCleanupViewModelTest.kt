@@ -241,6 +241,36 @@ class SyncCleanupViewModelTest {
         assertThat(vm.uiState.value.rollbackDays).isEqualTo(9)
     }
 
+    // ===================== crash resistance (exception handling, M-1) =====================
+    // У SyncCleanupViewModel нет Error-канала: launchSafe ловит всё, кроме CancellationException,
+    // и логирует. Если бы не ловил, непойманный throw в viewModelScope.launch (SupervisorJob) уронил
+    // бы тест через runTest (uncaught exception) — как уронил бы процесс.
+
+    @Test
+    fun `setSyncMode does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { accountRepo.updateSyncMode(ACCOUNT_ID, SyncMode.PUSH) } throws RuntimeException("db write failed")
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.setSyncMode(SyncMode.PUSH)
+        advanceUntilIdle()
+
+        // Дошли сюда без падения runTest → исключение поймано launchSafe.
+        coVerify { accountRepo.updateSyncMode(ACCOUNT_ID, SyncMode.PUSH) }
+    }
+
+    @Test
+    fun `setDownloadsDays does not crash when settings throws`() = runTest(dispatcher) {
+        coEvery { settingsRepo.setAutoCleanupDownloadsDays(any()) } throws RuntimeException("datastore io error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.setDownloadsDays(5)
+        advanceUntilIdle()
+
+        coVerify { settingsRepo.setAutoCleanupDownloadsDays(5) }
+    }
+
     // ===================== helpers =====================
 
     private fun accountMock(): AccountEntity = mockk(relaxed = true)

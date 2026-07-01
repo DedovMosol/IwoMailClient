@@ -336,6 +336,53 @@ class NotesViewModelTest {
         coVerify { noteRepo.restoreNotesWithProgress(notes, any()) }
     }
 
+    // ===================== crash resistance (exception handling, M-1) =====================
+    // Если бы mutation-функции не ловили исключение, непойманный throw в viewModelScope.launch
+    // (SupervisorJob) уронил бы тест через runTest (uncaught exception) — как уронил бы процесс.
+
+    @Test
+    fun `saveNote does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { noteRepo.createNote(any(), any(), any()) } throws RuntimeException("db error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.saveNote(null, "s", "b")
+        advanceUntilIdle()
+
+        assertThat(events.any { it is NotesEvent.Error }).isTrue()
+        assertThat(vm.uiState.value.isCreating).isFalse()
+    }
+
+    @Test
+    fun `deleteNoteToTrash does not crash when repository throws`() = runTest(dispatcher) {
+        val target = note("a")
+        coEvery { noteRepo.deleteNote(target) } throws RuntimeException("network failure")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.deleteNoteToTrash(target)
+        advanceUntilIdle()
+
+        assertThat(events.any { it is NotesEvent.Error }).isTrue()
+    }
+
+    @Test
+    fun `deleteSelectedToTrash does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { noteRepo.deleteNotes(any()) } throws RuntimeException("EWS error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("a"))
+
+        vm.deleteSelectedToTrash()
+        advanceUntilIdle()
+
+        assertThat(events.any { it is NotesEvent.Error }).isTrue()
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
     // ===================== helpers =====================
 
     private fun TestScope.collectEvents(vm: NotesViewModel): List<NotesEvent> {

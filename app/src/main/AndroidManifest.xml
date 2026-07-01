@@ -183,18 +183,10 @@
             </intent-filter>
         </receiver>
         
-        <!-- Сторожевой пёс для проверки работы сервиса -->
-        <receiver
-            android:name=".sync.ServiceWatchdogReceiver"
-            android:enabled="true"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.USER_PRESENT" />
-                <action android:name="android.intent.action.SCREEN_ON" />
-                <action android:name="android.intent.action.POWER_CONNECTED" />
-            </intent-filter>
-        </receiver>
-        
+        <!-- Сторожевой пёс PushService (ServiceWatchdogReceiver) регистрируется ДИНАМИЧЕСКИ в
+             MailApplication: SCREEN_ON/USER_PRESENT/POWER_CONNECTED — implicit-бродкасты, которые
+             при targetSdk 26+ не доставляются manifest-ресиверам. См. N-12 в docs/AUDIT.md. -->
+
         <!-- Виджет почты -->
         <receiver
             android:name=".widget.MailWidgetReceiver"

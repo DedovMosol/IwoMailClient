@@ -281,38 +281,45 @@ class TasksViewModel(
         if (existing == null && id <= 0L) return
         _uiState.update { it.copy(isCreating = true) }
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) {
-                if (existing != null) {
-                    taskRepo.updateTask(
-                        task = existing,
-                        subject = subject,
-                        body = body,
-                        startDate = startDate,
-                        dueDate = dueDate,
-                        complete = existing.complete,
-                        importance = importance,
-                        reminderSet = reminderSet,
-                        reminderTime = reminderTime,
-                        assignTo = assignTo
-                    )
-                } else {
-                    taskRepo.createTask(
-                        accountId = id,
-                        subject = subject,
-                        body = body,
-                        startDate = startDate,
-                        dueDate = dueDate,
-                        importance = importance,
-                        reminderSet = reminderSet,
-                        reminderTime = reminderTime,
-                        assignTo = assignTo
-                    )
+            try {
+                val result = withContext(ioDispatcher) {
+                    if (existing != null) {
+                        taskRepo.updateTask(
+                            task = existing,
+                            subject = subject,
+                            body = body,
+                            startDate = startDate,
+                            dueDate = dueDate,
+                            complete = existing.complete,
+                            importance = importance,
+                            reminderSet = reminderSet,
+                            reminderTime = reminderTime,
+                            assignTo = assignTo
+                        )
+                    } else {
+                        taskRepo.createTask(
+                            accountId = id,
+                            subject = subject,
+                            body = body,
+                            startDate = startDate,
+                            dueDate = dueDate,
+                            importance = importance,
+                            reminderSet = reminderSet,
+                            reminderTime = reminderTime,
+                            assignTo = assignTo
+                        )
+                    }
                 }
-            }
-            _uiState.update { it.copy(isCreating = false) }
-            when (result) {
-                is EasResult.Success -> sendEvent(if (existing != null) TasksEvent.TaskUpdated else TasksEvent.TaskCreated)
-                is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+                when (result) {
+                    is EasResult.Success -> sendEvent(if (existing != null) TasksEvent.TaskUpdated else TasksEvent.TaskCreated)
+                    is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(TasksEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isCreating = false) }
             }
         }
     }
@@ -320,9 +327,15 @@ class TasksViewModel(
     /** Переключает статус выполнения задачи. */
     fun toggleComplete(task: TaskEntity) {
         viewModelScope.launch {
-            when (val result = withContext(ioDispatcher) { taskRepo.toggleTaskComplete(task) }) {
-                is EasResult.Success -> sendEvent(TasksEvent.CompleteToggled(result.data.complete))
-                is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+            try {
+                when (val result = withContext(ioDispatcher) { taskRepo.toggleTaskComplete(task) }) {
+                    is EasResult.Success -> sendEvent(TasksEvent.CompleteToggled(result.data.complete))
+                    is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(TasksEvent.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -332,9 +345,15 @@ class TasksViewModel(
     /** Мягкое удаление одной задачи (из диалога просмотра). */
     fun deleteToTrash(task: TaskEntity) {
         viewModelScope.launch {
-            when (val result = withContext(ioDispatcher) { taskRepo.deleteTask(task) }) {
-                is EasResult.Success -> sendEvent(TasksEvent.MovedToTrash(1))
-                is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+            try {
+                when (val result = withContext(ioDispatcher) { taskRepo.deleteTask(task) }) {
+                    is EasResult.Success -> sendEvent(TasksEvent.MovedToTrash(1))
+                    is EasResult.Error -> sendEvent(TasksEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(TasksEvent.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -347,14 +366,20 @@ class TasksViewModel(
         if (tasks.isEmpty()) return
         removeFromSelection(tasks.map { it.id }.toSet())
         viewModelScope.launch {
-            val deleted = withContext(ioDispatcher) {
-                var count = 0
-                for (task in tasks) {
-                    if (taskRepo.deleteTask(task) is EasResult.Success) count++
+            try {
+                val deleted = withContext(ioDispatcher) {
+                    var count = 0
+                    for (task in tasks) {
+                        if (taskRepo.deleteTask(task) is EasResult.Success) count++
+                    }
+                    count
                 }
-                count
+                if (deleted > 0) sendEvent(TasksEvent.MovedToTrash(deleted))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(TasksEvent.Error(e.message ?: "Unknown error"))
             }
-            if (deleted > 0) sendEvent(TasksEvent.MovedToTrash(deleted))
         }
     }
 

@@ -214,11 +214,18 @@ class UserFoldersViewModel(
         if (id <= 0L || trimmed.isBlank()) return
         _uiState.update { it.copy(isCreatingFolder = true) }
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) { mailRepo.createFolder(id, trimmed) }
-            _uiState.update { it.copy(isCreatingFolder = false) }
-            when (result) {
-                is EasResult.Success -> sendEvent(UserFoldersEvent.FolderCreated)
-                is EasResult.Error -> sendEvent(UserFoldersEvent.Error(result.message))
+            try {
+                val result = withContext(ioDispatcher) { mailRepo.createFolder(id, trimmed) }
+                when (result) {
+                    is EasResult.Success -> sendEvent(UserFoldersEvent.FolderCreated)
+                    is EasResult.Error -> sendEvent(UserFoldersEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(UserFoldersEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isCreatingFolder = false) }
             }
         }
     }
@@ -230,9 +237,15 @@ class UserFoldersViewModel(
         val trimmed = newName.trim()
         if (id <= 0L || trimmed.isBlank()) return
         viewModelScope.launch {
-            when (val result = withContext(ioDispatcher) { mailRepo.renameFolder(id, folderId, trimmed) }) {
-                is EasResult.Success -> sendEvent(UserFoldersEvent.FolderRenamed)
-                is EasResult.Error -> sendEvent(UserFoldersEvent.Error(result.message))
+            try {
+                when (val result = withContext(ioDispatcher) { mailRepo.renameFolder(id, folderId, trimmed) }) {
+                    is EasResult.Success -> sendEvent(UserFoldersEvent.FolderRenamed)
+                    is EasResult.Error -> sendEvent(UserFoldersEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(UserFoldersEvent.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -244,9 +257,15 @@ class UserFoldersViewModel(
         val id = _uiState.value.accountId
         if (id <= 0L) return
         viewModelScope.launch {
-            when (val result = withContext(ioDispatcher) { mailRepo.deleteFolder(id, folderId) }) {
-                is EasResult.Success -> sendEvent(UserFoldersEvent.FolderDeleted)
-                is EasResult.Error -> sendEvent(UserFoldersEvent.Error(result.message))
+            try {
+                when (val result = withContext(ioDispatcher) { mailRepo.deleteFolder(id, folderId) }) {
+                    is EasResult.Success -> sendEvent(UserFoldersEvent.FolderDeleted)
+                    is EasResult.Error -> sendEvent(UserFoldersEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(UserFoldersEvent.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -278,6 +297,10 @@ class UserFoldersViewModel(
                     processed++
                     _uiState.update { it.copy(batchDeleteProgress = processed to ids.size) }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (failedMsg == null) failedMsg = e.message ?: "Unknown error"
             } finally {
                 _uiState.update { it.copy(batchDeleteProgress = null) }
             }

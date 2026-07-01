@@ -234,17 +234,24 @@ class NotesViewModel(
         if (existing == null && id <= 0L) return
         _uiState.update { it.copy(isCreating = true) }
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) {
-                if (existing != null) noteRepo.updateNote(existing, subject, body)
-                else noteRepo.createNote(id, subject, body)
-            }
-            _uiState.update { it.copy(isCreating = false) }
-            when (result) {
-                is EasResult.Success -> {
-                    sendEvent(if (existing != null) NotesEvent.NoteUpdated else NotesEvent.NoteCreated)
-                    if (existing == null) sendEvent(NotesEvent.ScrollToTop)
+            try {
+                val result = withContext(ioDispatcher) {
+                    if (existing != null) noteRepo.updateNote(existing, subject, body)
+                    else noteRepo.createNote(id, subject, body)
                 }
-                is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+                when (result) {
+                    is EasResult.Success -> {
+                        sendEvent(if (existing != null) NotesEvent.NoteUpdated else NotesEvent.NoteCreated)
+                        if (existing == null) sendEvent(NotesEvent.ScrollToTop)
+                    }
+                    is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(NotesEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isCreating = false) }
             }
         }
     }
@@ -253,9 +260,15 @@ class NotesViewModel(
 
     fun deleteNoteToTrash(note: NoteEntity) {
         viewModelScope.launch {
-            when (val result = withContext(ioDispatcher) { noteRepo.deleteNote(note) }) {
-                is EasResult.Success -> sendEvent(NotesEvent.MovedToTrash(1))
-                is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+            try {
+                when (val result = withContext(ioDispatcher) { noteRepo.deleteNote(note) }) {
+                    is EasResult.Success -> sendEvent(NotesEvent.MovedToTrash(1))
+                    is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(NotesEvent.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -269,11 +282,18 @@ class NotesViewModel(
             return
         }
         viewModelScope.launch {
-            val result = withContext(ioDispatcher) { noteRepo.deleteNotes(toDelete) }
-            _uiState.update { it.copy(selectedIds = emptySet()) }
-            when (result) {
-                is EasResult.Success -> sendEvent(NotesEvent.MovedToTrash(toDelete.size))
-                is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+            try {
+                val result = withContext(ioDispatcher) { noteRepo.deleteNotes(toDelete) }
+                when (result) {
+                    is EasResult.Success -> sendEvent(NotesEvent.MovedToTrash(toDelete.size))
+                    is EasResult.Error -> sendEvent(NotesEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(NotesEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(selectedIds = emptySet()) }
             }
         }
     }

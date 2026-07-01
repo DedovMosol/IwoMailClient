@@ -433,6 +433,67 @@ class TasksViewModelTest {
         coVerify { taskRepo.emptyTasksTrash(ACCOUNT_ID) }
     }
 
+    // ===================== crash resistance (exception handling, M-1) =====================
+    // Репозиторий бросает исключение (не EasResult.Error). Без try/catch непойманный throw в
+    // viewModelScope.launch (SupervisorJob) уронил бы тест через runTest — как уронил бы процесс.
+
+    @Test
+    fun `saveTask does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery {
+            taskRepo.createTask(any(), any(), any(), any(), any(), any(), any(), any(), any())
+        } throws RuntimeException("db error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.saveTask(null, "s", "b", 0L, 0L, 1, false, 0L, null)
+        advanceUntilIdle()
+
+        assertThat(events.any { it is TasksEvent.Error }).isTrue()
+        assertThat(vm.uiState.value.isCreating).isFalse()
+    }
+
+    @Test
+    fun `toggleComplete does not crash when repository throws`() = runTest(dispatcher) {
+        val t = task("a")
+        coEvery { taskRepo.toggleTaskComplete(t) } throws RuntimeException("network failure")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.toggleComplete(t)
+        advanceUntilIdle()
+
+        assertThat(events.any { it is TasksEvent.Error }).isTrue()
+    }
+
+    @Test
+    fun `deleteToTrash does not crash when repository throws`() = runTest(dispatcher) {
+        val t = task("a")
+        coEvery { taskRepo.deleteTask(t) } throws RuntimeException("EWS error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.deleteToTrash(t)
+        advanceUntilIdle()
+
+        assertThat(events.any { it is TasksEvent.Error }).isTrue()
+    }
+
+    @Test
+    fun `deleteSelectedToTrash does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { taskRepo.deleteTask(any()) } throws RuntimeException("server error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.deleteSelectedToTrash(listOf(task("a")))
+        advanceUntilIdle()
+
+        assertThat(events.any { it is TasksEvent.Error }).isTrue()
+    }
+
     // ===================== helpers =====================
 
     private fun TestScope.collectEvents(vm: TasksViewModel): List<TasksEvent> {

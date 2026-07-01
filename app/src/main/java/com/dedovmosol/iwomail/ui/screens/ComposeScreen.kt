@@ -84,6 +84,28 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
+/**
+ * Максимальный суммарный размер вложений (совпадает со строкой `attachmentLimitExceeded` «10 МБ»).
+ * Проверяется ДО чтения байт в память, чтобы большие вложения не вызвали OutOfMemoryError
+ * (N-2 в docs/AUDIT.md). EAS-слой дополнительно ограничивает total 7 МБ / MIME 10 МБ на стороне
+ * протокола, но там проверка происходит уже ПОСЛЕ загрузки байт.
+ */
+private const val MAX_TOTAL_ATTACHMENT_BYTES = 10L * 1024 * 1024
+
+/**
+ * Суммарный размер вложений в байтах. Предпочитает известный [AttachmentInfo.size] (заполняется из
+ * `OpenableColumns.SIZE` при выборе файла), иначе запрашивает у ContentResolver. Содержимое НЕ читает.
+ */
+private fun totalAttachmentBytes(
+    context: android.content.Context,
+    attachments: List<AttachmentInfo>
+): Long = attachments.sumOf { att ->
+    if (att.size > 0) att.size
+    else runCatching {
+        context.contentResolver.openAssetFileDescriptor(att.uri, "r")?.use { it.length.coerceAtLeast(0L) } ?: 0L
+    }.getOrDefault(0L)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ComposeScreen(
@@ -1209,6 +1231,7 @@ fun ComposeScreen(
 
     // Локализованные строки для Toast (нужно получить до launch)
     val accountNotFoundMsg = Strings.accountNotFound
+    val attachmentLimitExceededMsg = Strings.attachmentLimitExceeded
     val authErrorMsg = Strings.authError
     val sendScheduledMsg = Strings.sendScheduled
     val draftSavedMsg = Strings.draftSaved
@@ -1464,6 +1487,15 @@ fun ComposeScreen(
                 if (account == null) {
                     isSending = false
                     SafeToast.short(context, accountNotFoundMsg)
+                    return@launch
+                }
+
+                // N-2: проверяем суммарный размер вложений ДО чтения байт в память (иначе большое
+                // вложение вызовет OutOfMemoryError на readBytes раньше серверного лимита EAS).
+                val totalAttachmentSize = withContext(Dispatchers.IO) { totalAttachmentBytes(context, attachments) }
+                if (totalAttachmentSize > MAX_TOTAL_ATTACHMENT_BYTES) {
+                    isSending = false
+                    SafeToast.short(context, attachmentLimitExceededMsg)
                     return@launch
                 }
 

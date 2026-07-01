@@ -15,6 +15,7 @@ import com.dedovmosol.iwomail.sync.SyncWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -84,7 +85,7 @@ class SyncCleanupViewModel(
     val uiState: StateFlow<SyncCleanupUiState> = _uiState.asStateFlow()
 
     init {
-        viewModelScope.launch {
+        launchSafe {
             val account = accountRepo.getAccount(accountId)
             val downloads = settingsRepo.getAutoCleanupDownloadsDays()
             val rollback = settingsRepo.getAutoCleanupRollbackDays()
@@ -99,8 +100,26 @@ class SyncCleanupViewModel(
         _uiState.update { it.copy(account = account) }
     }
 
-    fun setSyncMode(mode: SyncMode) {
+    /**
+     * DRY crash-resistance для fire-and-forget set*-операций (в отличие от других VM здесь нет
+     * Error-канала). Ловим всё, кроме [CancellationException], чтобы непойманное исключение
+     * (SQLiteException при записи настроек, ошибка планировщика WorkManager) не уронило процесс
+     * через SupervisorJob у viewModelScope. См. ARCHITECTURE.md §10.
+     */
+    private fun launchSafe(block: suspend () -> Unit) {
         viewModelScope.launch {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("SyncCleanupVM", "Operation failed", e)
+            }
+        }
+    }
+
+    fun setSyncMode(mode: SyncMode) {
+        launchSafe {
             accountRepo.updateSyncMode(accountId, mode)
             effects.setPushEnabled(mode == SyncMode.PUSH)
             effects.rescheduleSync()
@@ -109,7 +128,7 @@ class SyncCleanupViewModel(
     }
 
     fun setSyncInterval(minutes: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateSyncInterval(accountId, minutes)
             effects.rescheduleSync()
             refreshAccount()
@@ -117,7 +136,7 @@ class SyncCleanupViewModel(
     }
 
     fun setNightModeEnabled(enabled: Boolean) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateNightModeEnabled(accountId, enabled)
             effects.rescheduleSync()
             refreshAccount()
@@ -125,7 +144,7 @@ class SyncCleanupViewModel(
     }
 
     fun setIgnoreBatterySaver(ignore: Boolean) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateIgnoreBatterySaver(accountId, ignore)
             effects.rescheduleSync()
             refreshAccount()
@@ -133,63 +152,63 @@ class SyncCleanupViewModel(
     }
 
     fun setContactsSyncInterval(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateContactsSyncInterval(accountId, days)
             refreshAccount()
         }
     }
 
     fun setNotesSyncInterval(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateNotesSyncInterval(accountId, days)
             refreshAccount()
         }
     }
 
     fun setCalendarSyncInterval(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateCalendarSyncInterval(accountId, days)
             refreshAccount()
         }
     }
 
     fun setTasksSyncInterval(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateTasksSyncInterval(accountId, days)
             refreshAccount()
         }
     }
 
     fun setAutoCleanupTrashDays(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateAutoCleanupTrashDays(accountId, days)
             refreshAccount()
         }
     }
 
     fun setAutoCleanupDraftsDays(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateAutoCleanupDraftsDays(accountId, days)
             refreshAccount()
         }
     }
 
     fun setAutoCleanupSpamDays(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             accountRepo.updateAutoCleanupSpamDays(accountId, days)
             refreshAccount()
         }
     }
 
     fun setDownloadsDays(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             settingsRepo.setAutoCleanupDownloadsDays(days)
             _uiState.update { it.copy(downloadsDays = days) }
         }
     }
 
     fun setRollbackDays(days: Int) {
-        viewModelScope.launch {
+        launchSafe {
             settingsRepo.setAutoCleanupRollbackDays(days)
             _uiState.update { it.copy(rollbackDays = days) }
         }

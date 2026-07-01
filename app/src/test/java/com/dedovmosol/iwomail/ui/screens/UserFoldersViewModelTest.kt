@@ -380,6 +380,65 @@ class UserFoldersViewModelTest {
         assertThat(vm.uiState.value.selectedIds).containsExactly("u1")
     }
 
+    // ===================== crash resistance (exception handling, M-1) =====================
+    // Репозиторий бросает исключение (не EasResult.Error). Без try/catch непойманный throw в
+    // viewModelScope.launch (SupervisorJob) уронил бы тест через runTest — как уронил бы процесс.
+
+    @Test
+    fun `createFolder does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { mailRepo.createFolder(any(), any()) } throws RuntimeException("db error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.createFolder("New")
+        advanceUntilIdle()
+
+        assertThat(events.any { it is UserFoldersEvent.Error }).isTrue()
+        assertThat(vm.uiState.value.isCreatingFolder).isFalse()
+    }
+
+    @Test
+    fun `renameFolder does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { mailRepo.renameFolder(any(), any(), any()) } throws RuntimeException("network failure")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.renameFolder("u1", "Renamed")
+        advanceUntilIdle()
+
+        assertThat(events.any { it is UserFoldersEvent.Error }).isTrue()
+    }
+
+    @Test
+    fun `deleteFolder does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { mailRepo.deleteFolder(any(), any()) } throws RuntimeException("EWS error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.deleteFolder("u1")
+        advanceUntilIdle()
+
+        assertThat(events.any { it is UserFoldersEvent.Error }).isTrue()
+    }
+
+    @Test
+    fun `deleteSelectedFolders does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { mailRepo.deleteFolder(any(), any()) } throws RuntimeException("server error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.setSelection(setOf("u1"))
+
+        vm.deleteSelectedFolders()
+        advanceUntilIdle()
+
+        assertThat(events.any { it is UserFoldersEvent.Error }).isTrue()
+        assertThat(vm.uiState.value.batchDeleteProgress).isNull()
+    }
+
     // ===================== helpers =====================
 
     private fun TestScope.collectEvents(vm: UserFoldersViewModel): List<UserFoldersEvent> {

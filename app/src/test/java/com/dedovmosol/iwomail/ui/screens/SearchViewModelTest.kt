@@ -248,6 +248,54 @@ class SearchViewModelTest {
         coVerify { mailRepo.toggleFlag("1") }
     }
 
+    // ===================== crash resistance (exception handling, M-1) =====================
+    // Репозиторий бросает исключение (не EasResult.Error). Без try/catch непойманный throw в
+    // viewModelScope.launch (SupervisorJob) уронил бы тест через runTest — как уронил бы процесс.
+
+    @Test
+    fun `deleteSelected does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToTrash(any()) } throws RuntimeException("network failure")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.addToSelection("1")
+
+        vm.deleteSelected()
+        advanceUntilIdle()
+
+        assertThat(events.any { it is SearchEvent.ShowError }).isTrue()
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
+    @Test
+    fun `markSelectedAsRead does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { mailRepo.markAsReadBatch(any(), any()) } throws RuntimeException("db error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.addToSelection("1")
+
+        vm.markSelectedAsRead(true)
+        advanceUntilIdle()
+
+        assertThat(events.any { it is SearchEvent.ShowError }).isTrue()
+    }
+
+    @Test
+    fun `starSelected does not crash when repository throws`() = runTest(dispatcher) {
+        coEvery { mailRepo.toggleFlag(any()) } throws RuntimeException("server error")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+        vm.addToSelection("1")
+
+        vm.starSelected()
+        advanceUntilIdle()
+
+        assertThat(events.any { it is SearchEvent.ShowError }).isTrue()
+        assertThat(vm.uiState.value.selectedIds).isEmpty()
+    }
+
     // ===================== helpers =====================
 
     /** Подписывается на one-shot события VM в фоне; список наполняется по мере прихода событий. */

@@ -148,21 +148,28 @@ class SearchViewModel(
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            sendEvent(SearchEvent.PlayDeleteSound)
-            when (val result = withContext(ioDispatcher) { mailRepo.moveToTrash(ids) }) {
-                is EasResult.Success -> {
-                    sendEvent(if (result.data > 0) SearchEvent.MovedToTrash else SearchEvent.DeletedPermanently)
-                    _uiState.update { state ->
-                        state.copy(
-                            allResults = state.allResults.filter { it.id !in ids },
-                            selectedIds = emptySet()
-                        )
+            try {
+                sendEvent(SearchEvent.PlayDeleteSound)
+                when (val result = withContext(ioDispatcher) { mailRepo.moveToTrash(ids) }) {
+                    is EasResult.Success -> {
+                        sendEvent(if (result.data > 0) SearchEvent.MovedToTrash else SearchEvent.DeletedPermanently)
+                        _uiState.update { state ->
+                            state.copy(
+                                allResults = state.allResults.filter { it.id !in ids },
+                                selectedIds = emptySet()
+                            )
+                        }
+                    }
+                    is EasResult.Error -> {
+                        sendEvent(SearchEvent.ShowError(result.message))
+                        _uiState.update { it.copy(selectedIds = emptySet()) }
                     }
                 }
-                is EasResult.Error -> {
-                    sendEvent(SearchEvent.ShowError(result.message))
-                    _uiState.update { it.copy(selectedIds = emptySet()) }
-                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(SearchEvent.ShowError(e.message ?: "Unknown error"))
+                _uiState.update { it.copy(selectedIds = emptySet()) }
             }
         }
     }
@@ -172,15 +179,21 @@ class SearchViewModel(
         if (ids.isEmpty()) return
         _uiState.update { it.copy(selectedIds = emptySet()) }
         viewModelScope.launch {
-            when (val result = mailRepo.markAsReadBatch(ids, read)) {
-                is EasResult.Success -> {
-                    _uiState.update { state ->
-                        state.copy(allResults = state.allResults.map { e ->
-                            if (e.id in ids) e.copy(read = read) else e
-                        })
+            try {
+                when (val result = mailRepo.markAsReadBatch(ids, read)) {
+                    is EasResult.Success -> {
+                        _uiState.update { state ->
+                            state.copy(allResults = state.allResults.map { e ->
+                                if (e.id in ids) e.copy(read = read) else e
+                            })
+                        }
                     }
+                    is EasResult.Error -> sendEvent(SearchEvent.ShowError(result.message))
                 }
-                is EasResult.Error -> sendEvent(SearchEvent.ShowError(result.message))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(SearchEvent.ShowError(e.message ?: "Unknown error"))
             }
         }
     }
@@ -189,14 +202,21 @@ class SearchViewModel(
         val ids = _uiState.value.selectedIds
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            ids.forEach { id -> mailRepo.toggleFlag(id) }
-            _uiState.update { state ->
-                state.copy(
-                    allResults = state.allResults.map { e ->
-                        if (e.id in ids) e.copy(flagged = !e.flagged) else e
-                    },
-                    selectedIds = emptySet()
-                )
+            try {
+                ids.forEach { id -> mailRepo.toggleFlag(id) }
+                _uiState.update { state ->
+                    state.copy(
+                        allResults = state.allResults.map { e ->
+                            if (e.id in ids) e.copy(flagged = !e.flagged) else e
+                        },
+                        selectedIds = emptySet()
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(SearchEvent.ShowError(e.message ?: "Unknown error"))
+                _uiState.update { it.copy(selectedIds = emptySet()) }
             }
         }
     }
