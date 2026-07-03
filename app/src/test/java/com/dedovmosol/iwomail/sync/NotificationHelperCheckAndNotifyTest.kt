@@ -48,6 +48,8 @@ class NotificationHelperCheckAndNotifyTest {
         emailDao = mockk()
         settingsRepo = mockk(relaxed = true)
         every { database.emailDao() } returns emailDao
+        // По умолчанию Inbox пуст (клэмп не срабатывает); тесты переопределяют при необходимости.
+        coEvery { emailDao.getMaxInboxDateReceived(accountId) } returns 0L
 
         // Изолируем побочные эффекты Android/SharedPreferences.
         mockkObject(NotificationHelper)
@@ -133,6 +135,21 @@ class NotificationHelperCheckAndNotifyTest {
             )
         }
         coVerify(exactly = 1) { NotificationHelper.markNotificationsAsShown(context, any()) }
+        coVerify(exactly = 1) { settingsRepo.setLastNotificationCheckTime(accountId, 3_000L) }
+    }
+
+    @Test
+    fun `stale future checkpoint is clamped down to newest inbox mail`() = runTest {
+        // Зависший device-time чекпойнт (9000) выше самого свежего письма (3000) — напр. рассинхрон часов.
+        coEvery { settingsRepo.getLastNotificationCheckTime(accountId) } returns 9_000L
+        coEvery { emailDao.getMaxInboxDateReceived(accountId) } returns 3_000L
+        coEvery { emailDao.getNewEmailsForNotification(accountId, 3_000L) } returns emptyList()
+
+        NotificationHelper.checkAndNotifyNewMail(context, database, settingsRepo, accountId, accountEmail)
+
+        // Запрос идёт по клэмпнутому значению (3000), а не по завышенному 9000.
+        coVerify(exactly = 1) { emailDao.getNewEmailsForNotification(accountId, 3_000L) }
+        // Клэмп персистится, чтобы будущие письма (>3000) снова уведомляли.
         coVerify(exactly = 1) { settingsRepo.setLastNotificationCheckTime(accountId, 3_000L) }
     }
 

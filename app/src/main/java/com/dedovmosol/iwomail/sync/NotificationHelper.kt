@@ -98,20 +98,34 @@ object NotificationHelper {
         accountEmail: String
     ) {
         notificationMutex.withLock {
-            val highWaterMark = settingsRepo.getLastNotificationCheckTime(accountId)
-            if (highWaterMark == 0L) {
+            val storedHwm = settingsRepo.getLastNotificationCheckTime(accountId)
+            val maxInboxDate = database.emailDao().getMaxInboxDateReceived(accountId) ?: 0L
+
+            if (storedHwm == 0L) {
                 // Базовая линия при первом запуске: не уведомляем о существующей почте.
-                val baseline = maxOf(database.emailDao().getMaxInboxDateReceived(accountId) ?: 0L, 1L)
-                settingsRepo.setLastNotificationCheckTime(accountId, baseline)
+                settingsRepo.setLastNotificationCheckTime(accountId, maxOf(maxInboxDate, 1L))
                 return@withLock
             }
 
-            val candidates = database.emailDao().getNewEmailsForNotification(accountId, highWaterMark)
-            if (candidates.isEmpty()) return@withLock
+            // Самоисцеление зависшего чекпойнта: если сохранённое значение «в будущем»
+            // относительно самого свежего письма Inbox (например, остался device-time чекпойнт
+            // с прошлой версии при рассинхроне часов сервера Exchange и устройства), опускаем его
+            // до реального максимума серверного dateReceived. Иначе новые письма с корректным
+            // серверным временем никогда не превысят завышенный чекпойнт и уведомления молчат.
+            // Клэмп безопасен: newest существующее письмо <= maxInboxDate, значит НЕ попадёт под
+            // "> effectiveHwm" и не будет переуведомлено.
+            val effectiveHwm = if (maxInboxDate in 1 until storedHwm) maxInboxDate else storedHwm
+
+            val candidates = database.emailDao().getNewEmailsForNotification(accountId, effectiveHwm)
+            if (candidates.isEmpty()) {
+                // Персистим клэмп, чтобы «расстрять» зависший чекпойнт для будущих писем.
+                if (effectiveHwm != storedHwm) settingsRepo.setLastNotificationCheckTime(accountId, effectiveHwm)
+                return@withLock
+            }
 
             // Продвигаем HWM до самого свежего серверного dateReceived среди ВСЕХ кандидатов
             // (в т.ч. уже показанных) — иначе они бы переспрашивались каждый цикл.
-            val newHighWaterMark = candidates.maxOf { it.dateReceived }
+            val newHighWaterMark = maxOf(effectiveHwm, candidates.maxOf { it.dateReceived })
 
             val shown = getShownNotifications(context)
             val filtered = candidates.filter { !shown.contains("${accountId}_${it.id}") }
@@ -139,7 +153,7 @@ object NotificationHelper {
                 )
             }
 
-            if (newHighWaterMark > highWaterMark) {
+            if (newHighWaterMark != storedHwm) {
                 settingsRepo.setLastNotificationCheckTime(accountId, newHighWaterMark)
             }
         }
@@ -198,7 +212,9 @@ object NotificationHelper {
         val notificationManager = context.getSystemService(NotificationManager::class.java)
 
         val builder = NotificationCompat.Builder(context, MailApplication.CHANNEL_NEW_MAIL)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            // Монохромный vector — корректный status-bar/lock-screen small icon (best practice).
+            // Цветная framework-иконка (android.R.drawable.ic_dialog_email) на части OEM не рендерится.
+            .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
             .setContentTitle(NotificationStrings.getNewMailTitle(count, senderName, isRussian))
             .setContentText(NotificationStrings.getNewMailText(count, subject, isRussian))
             .setNumber(count)

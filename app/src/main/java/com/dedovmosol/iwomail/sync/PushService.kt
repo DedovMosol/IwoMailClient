@@ -484,7 +484,7 @@ class PushService : Service() {
         val isRussian = languageCode == "ru"
 
         return NotificationCompat.Builder(this, MailApplication.CHANNEL_SYNC)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
             .setContentTitle(NotificationStrings.getPushServiceTitle(isRussian))
             .setContentText(NotificationStrings.getPushServiceText(isRussian))
             .setPriority(NotificationCompat.PRIORITY_MIN)
