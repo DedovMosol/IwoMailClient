@@ -15,7 +15,8 @@ test/
     │   ├── WbxmlParserSendMailTest.kt       # SendMail WBXML: стабильный ClientId, дедуп (N-11)
     │   ├── EasMimeHeaderSanitizeTest.kt     # stripHeaderCrlf: защита от инъекции MIME/MDN-заголовков (N-1)
     │   ├── EasMimeSubjectEncodingTest.kt    # RFC 2047 Subject folding + UTF-8 chunking (N-3)
-    │   └── CalendarDateUtilsTest.kt         # parseEwsDateTime: учёт смещения таймзоны ±HH:MM (N-4)
+    │   ├── CalendarDateUtilsTest.kt         # parseEwsDateTime: учёт смещения таймзоны ±HH:MM (N-4)
+    │   └── AttachmentManagerCleanupTest.kt  # Возрастная очистка temp-каталогов вложений reply/forward/draft (CS-11)
     ├── sync/
     │   └── NotificationHelperCheckAndNotifyTest.kt # checkAndNotifyNewMail: детект по серверному high-water-mark
     ├── util/
@@ -285,6 +286,7 @@ fun `syncNotes delegates to notesService`() = runTest {
 27. ✅ CalendarDateUtils — `parseEwsDateTime`: смещение `±HH:MM` учитывается (паттерн XXX), Z/без-TZ трактуются как UTC — регрессия на сдвиг времени (N-4)
 28. ✅ NotificationHelperCheckAndNotify — `checkAndNotifyNewMail`: детект новых писем по серверному high-water-mark вместо часов устройства (MockK, без Robolectric)
 29. ✅ AppCoroutines — `supervisedScope`: `SupervisorJob` + `CoroutineExceptionHandler` (сбой одного `launch` не отменяет соседей и не роняет процесс) — крах-безопасность вне UI (UI-1)
+30. ✅ AttachmentManagerCleanup — `cleanupOldAttachments`: возрастная очистка (7 дней) всех temp-каталогов вложений (attachments/reply/forward/draft), свежие файлы сохраняются (CS-11; реальная temp-ФС + mock `filesDir`)
 
 > **Паттерн тестирования ViewModel:** принимай зависимости (репозитории + `CoroutineDispatcher`) через конструктор. Фабрика берёт реальные из `RepositoryProvider`, тест — моки. Андроид-конструктор репозиториев не запускается (MockK через Objenesis), поэтому Robolectric не нужен.
 

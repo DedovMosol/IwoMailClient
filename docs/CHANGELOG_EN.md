@@ -57,11 +57,15 @@
 - Added ViewModel unit tests (`SearchViewModelTest`, `SyncCleanupViewModelTest`, `NotesViewModelTest`, `TasksViewModelTest`, `UserFoldersViewModelTest`, `EmailListViewModelTest`, `EmailDetailViewModelTest`) on plain JUnit + MockK, no Robolectric
 - Widget formatting unit tests (`MailWidgetFormatTest`: today→time else→date, midnight boundary, same day-of-year across years)
 - Expanded attachment-budget tests (`ComposeAttachmentSizeTest`): inline data:URL image size estimation and combined files+inline budget (CS-1/CS-2)
+- Unit test for temp attachment-dir cleanup (`AttachmentManagerCleanupTest`): age-based cleanup of reply/forward/draft (CS-11)
 
 ### Compose — OOM protection and performance (ComposeScreen audit)
 - A single attachment budget (files + inline images in the body) is checked BEFORE reading bytes into memory, both on send and on draft save: fixes OOM when saving a draft with a large attachment and the limit bypass by a "heavy" body with inline images on send (CS-1, CS-2)
 - Send: `SendController` no longer retains the screen context after the screen closes — leak window removed (applicationContext is passed) (CS-5)
 - Recipient suggestions: added debounce for local search — DB queries (contacts/groups/history) run only after a typing pause instead of on every keystroke (CS-7)
+- Send: removed a double `destroy()` of the editor WebView — a single correct teardown before navigation (CS-6)
+- Editor: if content hasn't synced yet before send/save, the freshest typed text is used — last characters are not lost (CS-9)
+- Cleanup: temporary reply/forward/draft attachment files are removed by age on app startup (CS-11)
 
 
 ## v1.6.2 (27.02.2026)

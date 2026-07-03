@@ -208,6 +208,12 @@ fun ComposeScreen(
             body = flushedHtml
         } else {
             flushId?.let { richTextController.cancelPendingFlush(it) }
+            // CS-9: flush не успел (WebView занят/медленный) — вместо устаревшего body берём самый
+            // свежий кэш редактора latestHtml (обновляется немедленно на каждый ввод через cacheHtml).
+            // Пусто → не перезатираем body. Так последние введённые символы не теряются при
+            // отправке/сохранении. Хуже прежнего не будет: в худшем случае body остаётся как был.
+            val cached = richTextController.latestHtml
+            if (cached.isNotEmpty()) body = cached
         }
     }
 
@@ -1630,19 +1636,15 @@ fun ComposeScreen(
                     onCancel = { }
                 )
 
+                // CS-6: единственный teardown WebView — через RichTextEditor.onRelease.
+                // hideWebView=true убирает редактор из композиции → onRelease делает полный и
+                // корректный teardown (stopLoading / about:blank / removeView / destroy /
+                // webView=null / isLoaded=false) ДО навигации. Прежний ручной destroy здесь убран:
+                // он дублировал onRelease (двойной destroy на одном инстансе). Задержка даёт
+                // композиции обработать disposal перед onSent(). Совпадает с паттерном teardown
+                // WebView в EmailDetailScreen (единственный путь освобождения).
                 hideWebView = true
-                kotlinx.coroutines.delay(100)
-
-                richTextController.webView?.let { webView ->
-                    webView.stopLoading()
-                    webView.loadUrl("about:blank")
-                    (webView.parent as? android.view.ViewGroup)?.removeView(webView)
-                    webView.destroy()
-                }
-                richTextController.webView = null
-                richTextController.isLoaded = false
-
-                kotlinx.coroutines.delay(50)
+                kotlinx.coroutines.delay(150)
                 try {
                     onSent()
                 } catch (e2: Exception) {

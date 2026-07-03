@@ -52,9 +52,27 @@ class AttachmentManager(
         private const val MAX_CACHE_SIZE_BYTES = 500L * 1024 * 1024 // 500 MB
         private const val MAX_FILE_AGE_MS = 7L * 24 * 60 * 60 * 1000 // 7 days
 
+        // Внутренние temp-каталоги вложений (filesDir), подлежащие возрастной очистке (CS-11):
+        // помимо основного кэша "attachments" — временные копии, создаваемые при ответе/пересылке/
+        // редактировании черновика в ComposeScreen (reply/forward/draft_attachments). Возрастной
+        // порог (7 дней) исключает удаление файлов активной сессии написания письма.
+        private val ATTACHMENT_TEMP_DIRS = listOf(
+            "attachments", "reply_attachments", "forward_attachments", "draft_attachments"
+        )
+
         fun cleanupOldAttachments(context: Context) {
+            for (name in ATTACHMENT_TEMP_DIRS) {
+                cleanupDirByAgeAndSize(File(context.filesDir, name))
+            }
+        }
+
+        /**
+         * DRY: удаляет из [dir] файлы старше [MAX_FILE_AGE_MS]; при превышении [MAX_CACHE_SIZE_BYTES]
+         * удаляет самые старые сверх лимита (файлы отсортированы по времени изменения). Отсутствие
+         * каталога / ошибка — тихий no-op (не роняем старт приложения).
+         */
+        private fun cleanupDirByAgeAndSize(dir: File) {
             try {
-                val dir = File(context.filesDir, "attachments")
                 if (!dir.exists()) return
                 val files = dir.listFiles() ?: return
                 val now = System.currentTimeMillis()

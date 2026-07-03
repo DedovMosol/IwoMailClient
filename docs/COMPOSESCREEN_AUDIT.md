@@ -246,11 +246,19 @@ LaunchedEffect(replyToEmailId) {
 - **CS-7 (решено).** Дебаунс локального поиска подсказок: `delay(SUGGESTION_DEBOUNCE_MS = 200)` в начале `suggestionSearchJob` (идиома «отмена предыдущего job + delay»). Запросы к БД — только после паузы ввода.
 - **CS-8 (переоценено → откат, отложено до MVVM).** Первичная правка сбрасывала `isSending` на отложенном пути. При самопроверке выявлено: после успешной постановки письма в очередь WorkManager сброс `isSending` при (редком) сбое навигации **включил бы кнопку отправки → риск двойной отправки**. Держать кнопку заблокированной безопаснее (письмо уже запланировано; «застрявший» спиннер — косметика). Правка откатана; корректное решение — в общем сбросе состояния при MVVM-миграции (Этап 4), а не точечным патчем. Downgrade: Низкая → косметика.
 
+### Низкие (CS-6, CS-9, CS-11) — выполнено (03.07.2026)
+
+Все правки — слой представления / файловая очистка; протокол EAS/EWS и Exchange 2007 SP1/SP2 **не затронуты**.
+
+- **CS-6 (решено).** Убран ручной `webView.destroy()` в `sendEmail` — единственный teardown теперь через `RichTextEditor.onRelease`, который срабатывает при `hideWebView = true` (удаление редактора из композиции) ДО навигации и делает полный teardown (`stopLoading`/`about:blank`/`removeView`/`destroy`/`webView=null`/`isLoaded=false`). Устранён двойной `destroy()` одного инстанса. Совпадает с паттерном teardown WebView в `EmailDetailScreen` (единственный путь в `onDispose`) и с офиц. рекомендацией (WebView уничтожается вместе с композицией/Activity, ссылку на view не держать вне `AndroidView`).
+- **CS-9 (решено).** `flushEditorHtml`: при таймауте flush вместо устаревшего `body` берётся самый свежий `richTextController.latestHtml` (@Volatile, обновляется немедленно на каждый ввод через `cacheHtml`). Пусто → `body` не перезатирается. Последние введённые символы не теряются при отправке/сохранении; хуже прежнего поведение не становится.
+- **CS-11 (решено).** `AttachmentManager.cleanupOldAttachments` расширен (DRY: единый `cleanupDirByAgeAndSize`) на все внутренние temp-каталоги вложений: `attachments`, `reply_attachments`, `forward_attachments`, `draft_attachments`. Возрастная очистка (7 дней) + cap 500 МБ на каталог; порог возраста исключает удаление файлов активной сессии. Вызывается на старте (`MailApplication.onCreate` → IO).
+
 **Осознанно отложено (defense-in-depth, не требуется после CS-2):** guard `maxMimeSize` в `EasEmailService.sendMail`. После фикса CS-2 все реальные вызывающие `sendMail` (`SendController`, `OutboxWorker`, `ScheduledEmailWorker`) получают тело, уже прошедшее UI-бюджет, поэтому дополнительный протокольный guard избыточен (KISS) и потребовал бы менять непроверяемый сейчас код Exchange 2007. DRY-дедупликация лимитов 7/10 МБ в `EasAttachmentService` — кандидат на будущий рефакторинг.
 
 **Тесты (добавлено):** `ComposeAttachmentSizeTest` расширен для `inlineImageBytes` и `composeAttachmentBudgetBytes` (нет data:URL → 0; оценка `len*3/4`; суммирование нескольких; файлы+inline; файлы под лимитом + inline сверх лимита). Чистый JUnit + MockK, без Robolectric.
 
-**Не покрыто в этом проходе (по плану — отдельные этапы):** CS-3, CS-4, CS-6, CS-9 (Этапы 3–4, требуют MVVM), CS-8 (Этап 4), CS-10/CS-11/CS-13/CS-14 (Этап 6). Дебаунс (CS-7) — UI-поведение с таймингом, покрывается инструментальными/Compose-тестами, не чистым JUnit.
+**Не покрыто в этом проходе (по плану — отдельные этапы):** CS-3, CS-4, CS-15 (Этап 3, единый `AttachmentLoader` + `viewModelScope`), CS-8, CS-16 (Этап 4, MVVM), CS-10/CS-13/CS-14 (Этап 6). Дебаунс (CS-7) и teardown WebView (CS-6) — UI-поведение с таймингом, покрываются инструментальными/Compose-тестами, не чистым JUnit.
 
 ### Проверка через интернет (best practices), пошагово
 
@@ -258,6 +266,7 @@ LaunchedEffect(replyToEmailId) {
 - base64 → байты `(3·len/4)−padding ≈ len·3/4` — [SO](https://stackoverflow.com/questions/34546498/calculate-the-size-to-a-base-64-decoded-message), [aaronlenoir](https://blog.aaronlenoir.com/2017/11/10/get-original-length-from-base-64-string/); оценка консервативна (безопасна для бюджета).
 - `MatchGroup.range` даёт длину группы за O(1) без аллокаций и доступен на JVM/Android — [kotlinlang.org](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.text/-match-group/index.html); в отличие от `groupValues`, который материализует захваченные строки — [kotlinlang.org](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.text/-match-result/group-values.html).
 - Debounce через «отмена job + delay» — канонический паттерн вне Flow ([SO 57252799](https://stackoverflow.com/a/57252799/6352712)).
+- Teardown WebView (CS-6): экземпляр уничтожается вместе с композицией/Activity, ссылку на view не держат вне `AndroidView` — [Wrap a WebView in Compose](https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/wrap-webview-in-compose); единый путь освобождения через `onRelease`/`onDispose` (сверено с `EmailDetailScreen`).
 
 ---
 
