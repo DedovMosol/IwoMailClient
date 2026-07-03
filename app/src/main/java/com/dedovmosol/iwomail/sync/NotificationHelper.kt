@@ -220,7 +220,9 @@ object NotificationHelper {
 
         val builder = NotificationCompat.Builder(context, MailApplication.CHANNEL_NEW_MAIL)
             // Монохромный vector — корректный status-bar/lock-screen small icon (best practice).
-            // Цветная framework-иконка (android.R.drawable.ic_dialog_email) на части OEM не рендерится.
+            // Android 5.0+ рендерит small icon по alpha-каналу: цветная framework-иконка
+            // (android.R.drawable.ic_dialog_email) выглядит как белый силуэт/квадрат. Это UX-дефект,
+            // а не причина отсутствия уведомления.
             .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
             .setContentTitle(NotificationStrings.getNewMailTitle(count, senderName, isRussian))
             .setContentText(NotificationStrings.getNewMailText(count, subject, isRussian))
