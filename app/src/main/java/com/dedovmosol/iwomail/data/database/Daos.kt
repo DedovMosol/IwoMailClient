@@ -455,6 +455,21 @@ interface EmailDao {
     suspend fun getNewEmailsForNotification(accountId: Long, afterTime: Long): List<NotificationEmailSummary>
 
     /**
+     * Максимальный dateReceived (серверное время) среди писем Inbox (type=2) аккаунта.
+     * Используется как базовая линия («high-water mark») для детекта новых писем в уведомлениях:
+     * сравнение идёт СЕРВЕРНОЕ-с-СЕРВЕРНЫМ, а не серверное с локальными часами устройства —
+     * это устраняет пропуск уведомлений при рассинхроне часов сервера Exchange и устройства.
+     * Возвращает null, если писем в Inbox нет.
+     */
+    @Query("""
+        SELECT MAX(e.dateReceived) FROM emails e
+        INNER JOIN folders f ON e.folderId = f.id
+        WHERE e.accountId = :accountId
+        AND f.type = 2
+    """)
+    suspend fun getMaxInboxDateReceived(accountId: Long): Long?
+
+    /**
      * Получает все непрочитанные письма из Inbox для аккаунта
      */
     @Query("""

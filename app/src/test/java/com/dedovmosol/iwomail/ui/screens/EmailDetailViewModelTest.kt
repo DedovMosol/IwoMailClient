@@ -368,7 +368,7 @@ class EmailDetailViewModelTest {
         vm.deleteToTrash()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(events.any { it is EmailDetailEvent.Error }).isTrue()
         assertThat(vm.uiState.value.isDeleting).isFalse()
     }
 
@@ -382,7 +382,7 @@ class EmailDetailViewModelTest {
         vm.move("target")
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(events.any { it is EmailDetailEvent.Error }).isTrue()
         assertThat(vm.uiState.value.isMoving).isFalse()
     }
 
@@ -396,7 +396,7 @@ class EmailDetailViewModelTest {
         vm.restore()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(events.any { it is EmailDetailEvent.Error }).isTrue()
         assertThat(vm.uiState.value.isRestoring).isFalse()
     }
 
@@ -410,7 +410,7 @@ class EmailDetailViewModelTest {
         vm.sendMdn()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(events.any { it is EmailDetailEvent.Error }).isTrue()
         assertThat(vm.uiState.value.isSendingMdn).isFalse()
     }
 
@@ -424,7 +424,7 @@ class EmailDetailViewModelTest {
         vm.markUnread()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailDetailEvent.Error }
+        assertThat(events.any { it is EmailDetailEvent.Error }).isTrue()
     }
 
     // ===================== permanent delete wrapper =====================

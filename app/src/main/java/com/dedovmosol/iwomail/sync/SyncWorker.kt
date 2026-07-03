@@ -17,7 +17,6 @@ import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.TimeUnit
 
 /**
@@ -170,69 +169,13 @@ class SyncWorker(
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
         
         if (notificationCheckedAccounts.isNotEmpty()) {
-            val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-            val notificationsCheckpointTime = System.currentTimeMillis()
-            NotificationHelper.notificationMutex.withLock {
-                for (account in activeAccounts) {
-                    if (account.id !in notificationCheckedAccounts) continue
-
-                    var accountNotifCheck = settingsRepo.getLastNotificationCheckTime(account.id)
-                    if (accountNotifCheck == 0L) {
-                        accountNotifCheck = System.currentTimeMillis() - 60_000
-                    }
-
-                    val newEmailEntities =
-                        database.emailDao().getNewEmailsForNotification(account.id, accountNotifCheck)
-                    val shownNow = NotificationHelper.getShownNotifications(applicationContext)
-                    val filteredEmails = newEmailEntities.filter { email ->
-                        !shownNow.contains("${account.id}_${email.id}")
-                    }
-
-                    if (notificationsEnabled && filteredEmails.isNotEmpty()) {
-                        val totalCount = filteredEmails.size
-                        val displayEmails = filteredEmails
-                            .take(NotificationHelper.MAX_DISPLAY_EMAILS)
-                            .map { email ->
-                                NotificationHelper.NewEmailInfo(
-                                    email.id,
-                                    email.fromName,
-                                    email.from,
-                                    email.subject,
-                                    email.dateReceived
-                                )
-                            }
-                        val markReadEmailIds =
-                            if (totalCount <= NotificationHelper.MAX_MARK_READ_ACTION_EMAILS) {
-                                filteredEmails.map { it.id }
-                            } else {
-                                emptyList()
-                            }
-                        NotificationHelper.showNewMailNotification(
-                            context = applicationContext,
-                            displayEmails = displayEmails,
-                            totalCount = totalCount,
-                            markReadEmailIds = markReadEmailIds,
-                            accountId = account.id,
-                            accountEmail = account.email,
-                            settingsRepo = settingsRepo
-                        )
-                        NotificationHelper.markNotificationsAsShown(
-                            applicationContext,
-                            filteredEmails
-                                .take(NotificationHelper.MAX_SHOWN_ENTRIES)
-                                .map { "${account.id}_${it.id}" }
-                        )
-                    }
-
-                    settingsRepo.setLastNotificationCheckTime(account.id, notificationsCheckpointTime)
-                }
-            }
-
-            // Глобальный fallback обновляем только если проверка уведомлений завершилась
-            // для всех activeAccounts. Иначе новый аккаунт без per-account checkpoint
-            // может пропустить письма, если этот цикл оборвался по budget.
-            if (notificationCheckedAccounts.size == activeAccounts.size) {
-                settingsRepo.setLastNotificationCheckTime(notificationsCheckpointTime)
+            // Единая логика детекта+показа (см. NotificationHelper.checkAndNotifyNewMail):
+            // per-account мьютекс + серверный high-water-mark внутри метода.
+            for (account in activeAccounts) {
+                if (account.id !in notificationCheckedAccounts) continue
+                NotificationHelper.checkAndNotifyNewMail(
+                    applicationContext, database, settingsRepo, account.id, account.email
+                )
             }
         }
         

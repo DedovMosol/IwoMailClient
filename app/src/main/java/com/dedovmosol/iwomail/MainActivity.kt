@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
     
-    private var openInboxUnread = mutableStateOf(false)
+    private var openInboxUnreadIntentId = mutableStateOf(0L)
     private var openEmailId = mutableStateOf<String?>(null)
     private var openEmailIntentId = mutableStateOf(0L)
     private var switchToAccountId = mutableStateOf<Long?>(null)
@@ -288,7 +288,7 @@ class MainActivity : ComponentActivity() {
                 AppLanguage.entries.find { it.code == languageCode } ?: AppLanguage.RUSSIAN
             }
             
-            val shouldOpenInboxUnread by openInboxUnread
+            val currentOpenInboxUnreadIntentId by openInboxUnreadIntentId
             val emailIdToOpen by openEmailId
             val currentOpenEmailIntentId by openEmailIntentId
             val accountIdToSwitch by switchToAccountId
@@ -327,7 +327,7 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.background
                         ) {
                             AppNavigation(
-                                openInboxUnread = shouldOpenInboxUnread,
+                                openInboxUnreadIntentId = currentOpenInboxUnreadIntentId,
                                 openEmailId = emailIdToOpen,
                                 openEmailIntentId = currentOpenEmailIntentId,
                                 switchToAccountId = accountIdToSwitch,
@@ -412,14 +412,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
             
-            LaunchedEffect(shouldOpenInboxUnread) {
-                if (shouldOpenInboxUnread) {
-                    kotlinx.coroutines.delay(2000)
-                    openInboxUnread.value = false
-                }
-            }
-            
-            // openEmailId не сбрасываем — AppNavigation сама обработает и запомнит
+            // openInboxUnreadIntentId и openEmailId не сбрасываем вручную —
+            // AppNavigation обрабатывает каждый intent по инкрементному id и запоминает последний.
         }
     }
     
@@ -468,7 +462,8 @@ class MainActivity : ComponentActivity() {
         }
         
         if (intent.getBooleanExtra(EXTRA_OPEN_INBOX_UNREAD, false)) {
-            openInboxUnread.value = true
+            // Инкремент intent-id — повторные тапы (виджет/уведомление) навигируют каждый раз.
+            openInboxUnreadIntentId.value++
             intent.removeExtra(EXTRA_OPEN_INBOX_UNREAD)
             return
         }

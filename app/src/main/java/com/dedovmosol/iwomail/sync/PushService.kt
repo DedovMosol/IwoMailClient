@@ -27,8 +27,6 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.sync.withLock
 
 /**
  * Сервис для Exchange Direct Push
@@ -863,12 +861,6 @@ class PushService : Service() {
             return
         }
 
-        var lastNotificationCheck = settingsRepo.getLastNotificationCheckTime(account.id)
-        // При первом запуске не показываем уведомления для старых писем
-        if (lastNotificationCheck == 0L) {
-            lastNotificationCheck = System.currentTimeMillis() - 60_000
-        }
-
         val allSyncFolders = database.folderDao().getFoldersByAccountList(account.id)
         val systemFolders = allSyncFolders.filter { it.type in FolderType.SYNC_MAIN_TYPES }
         val userFolders = allSyncFolders.filter { it.type in FolderType.SYNC_USER_TYPES }
@@ -909,67 +901,7 @@ class PushService : Service() {
         lastAccountSyncTimes[account.id] = System.currentTimeMillis()
         settingsRepo.setLastSyncTime(System.currentTimeMillis())
 
-        NotificationHelper.notificationMutex.withLock {
-            lastNotificationCheck = settingsRepo.getLastNotificationCheckTime(account.id)
-            if (lastNotificationCheck == 0L) {
-                lastNotificationCheck = System.currentTimeMillis() - 60_000
-            }
-
-            // Checkpoint фиксируем ДО query: письмо, пришедшее после этой точки,
-            // не потеряется и попадёт в следующий цикл.
-            val notificationCheckpointTime = System.currentTimeMillis()
-            val notificationCandidates =
-                database.emailDao().getNewEmailsForNotification(account.id, lastNotificationCheck)
-            val shownNotifications = NotificationHelper.getShownNotifications(this)
-            val filteredEmails = notificationCandidates.filter { email ->
-                val notifKey = "${account.id}_${email.id}"
-                !shownNotifications.contains(notifKey)
-            }
-
-            if (filteredEmails.isNotEmpty()) {
-                val totalCount = filteredEmails.size
-                val displayEmails = filteredEmails
-                    .take(NotificationHelper.MAX_DISPLAY_EMAILS)
-                    .map { email ->
-                        NotificationHelper.NewEmailInfo(
-                            email.id,
-                            email.fromName,
-                            email.from,
-                            email.subject,
-                            email.dateReceived
-                        )
-                    }
-                val markReadEmailIds =
-                    if (totalCount <= NotificationHelper.MAX_MARK_READ_ACTION_EMAILS) {
-                        filteredEmails.map { it.id }
-                    } else {
-                        emptyList()
-                    }
-                val notificationsEnabled = settingsRepo.notificationsEnabled.first()
-                if (notificationsEnabled) {
-                    getSharedPreferences("push_service", Context.MODE_PRIVATE)
-                        .edit().putLong("last_notification_time", System.currentTimeMillis()).apply()
-                    NotificationHelper.showNewMailNotification(
-                        context = this,
-                        displayEmails = displayEmails,
-                        totalCount = totalCount,
-                        markReadEmailIds = markReadEmailIds,
-                        accountId = account.id,
-                        accountEmail = account.email,
-                        settingsRepo = settingsRepo
-                    )
-                    NotificationHelper.markNotificationsAsShown(
-                        this,
-                        filteredEmails
-                            .take(NotificationHelper.MAX_SHOWN_ENTRIES)
-                            .map { "${account.id}_${it.id}" }
-                    )
-                }
-            }
-
-            settingsRepo.setLastNotificationCheckTime(account.id, notificationCheckpointTime)
-            settingsRepo.setLastNotificationCheckTime(notificationCheckpointTime)
-        }
+        NotificationHelper.checkAndNotifyNewMail(this, database, settingsRepo, account.id, account.email)
     }
 
     private suspend fun syncFolders(account: AccountEntity) {

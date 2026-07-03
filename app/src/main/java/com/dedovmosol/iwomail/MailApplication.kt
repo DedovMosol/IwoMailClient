@@ -1,10 +1,8 @@
 package com.dedovmosol.iwomail
 
-import android.app.Activity
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.os.Bundle
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
@@ -23,11 +21,6 @@ class MailApplication : Application() {
     companion object {
         private const val TAG = "MailApplication"
         
-        /** true когда приложение видимо пользователю (есть started Activity) */
-        @Volatile
-        var isInForeground: Boolean = false
-            private set
-        
         const val CHANNEL_NEW_MAIL = "new_mail"
         const val CHANNEL_SYNC = "sync"
         const val CHANNEL_SYNC_STATUS = "sync_status"
@@ -45,7 +38,6 @@ class MailApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         initConscrypt()
-        registerForegroundTracker()
         registerServiceWatchdog()
         settingsRepository = SettingsRepository.getInstance(this)
         createNotificationChannels()
@@ -58,29 +50,6 @@ class MailApplication : Application() {
         startPushService()
     }
     
-    private var startedActivities = 0
-    
-    private fun registerForegroundTracker() {
-        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
-            override fun onActivityStarted(activity: Activity) {
-                startedActivities++
-                isInForeground = true
-            }
-            override fun onActivityStopped(activity: Activity) {
-                startedActivities--
-                if (startedActivities <= 0) {
-                    startedActivities = 0
-                    isInForeground = false
-                }
-            }
-            override fun onActivityCreated(a: Activity, b: Bundle?) {}
-            override fun onActivityResumed(a: Activity) {}
-            override fun onActivityPaused(a: Activity) {}
-            override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
-            override fun onActivityDestroyed(a: Activity) {}
-        })
-    }
-
     // Держим ссылку на процесс-lifetime ресивер watchdog'а PushService.
     private val serviceWatchdogReceiver = com.dedovmosol.iwomail.sync.ServiceWatchdogReceiver()
 

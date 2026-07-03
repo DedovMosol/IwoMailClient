@@ -386,7 +386,7 @@ class EmailListViewModelTest {
         vm.deleteSelectedToTrash()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(events.any { it is EmailListEvent.Error }).isTrue()
         assertThat(vm.uiState.value.selectedIds).isEmpty()
     }
 
@@ -401,7 +401,7 @@ class EmailListViewModelTest {
         vm.deleteSelectedDrafts()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(events.any { it is EmailListEvent.Error }).isTrue()
         assertThat(vm.uiState.value.selectedIds).isEmpty()
     }
 
@@ -416,7 +416,7 @@ class EmailListViewModelTest {
         vm.moveSelectedTo("target")
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(events.any { it is EmailListEvent.Error }).isTrue()
         assertThat(vm.uiState.value.selectedIds).isEmpty()
     }
 
@@ -431,7 +431,7 @@ class EmailListViewModelTest {
         vm.restoreSelected()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(events.any { it is EmailListEvent.Error }).isTrue()
         assertThat(vm.uiState.value.selectedIds).isEmpty()
     }
 
@@ -446,7 +446,7 @@ class EmailListViewModelTest {
         vm.moveSelectedToSpam()
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(events.any { it is EmailListEvent.Error }).isTrue()
         assertThat(vm.uiState.value.selectedIds).isEmpty()
     }
 
@@ -461,7 +461,7 @@ class EmailListViewModelTest {
         vm.markSelectedAsRead(true)
         advanceUntilIdle()
 
-        assertThat(events).anyMatch { it is EmailListEvent.Error }
+        assertThat(events.any { it is EmailListEvent.Error }).isTrue()
     }
 
     // ===================== progress-bar wrapper (вызывается из DeletionController) =====================

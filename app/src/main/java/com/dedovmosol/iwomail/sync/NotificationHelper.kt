@@ -14,6 +14,7 @@ import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Единый хелпер для уведомлений о новых письмах.
@@ -70,6 +71,78 @@ object NotificationHelper {
             repeat(excess) { if (iter.hasNext()) { iter.next(); iter.remove() } }
         }
         prefs.edit().putStringSet(KEY_SHOWN, current).apply()
+    }
+
+    /**
+     * Единая точка детекта и показа уведомлений о новых письмах для одного аккаунта.
+     * Вызывается из PushService и SyncWorker (DRY — раньше ~90% этой логики дублировалось).
+     *
+     * Детект новизны — по СЕРВЕРНОМУ времени (`dateReceived`) относительно per-account
+     * «high-water mark» (последний обработанный серверный `dateReceived`), а НЕ по часам
+     * устройства. Это исправляет ситуацию, когда письмо синкается и видно в приложении, но
+     * системное уведомление не всплывает из-за рассинхрона часов Exchange-сервера и устройства
+     * (штатная проблема on-prem Exchange 2007 SP1/SP2).
+     *
+     * Первый запуск (checkpoint == 0): фиксируем базовую линию = самое свежее письмо в Inbox
+     * (или 1L для пустого Inbox, чтобы первое будущее письмо всё же уведомило) и НЕ уведомляем
+     * о всей уже существующей почте.
+     *
+     * Потокобезопасно: весь read-modify-write чекпойнта под [notificationMutex] — исключает
+     * двойные уведомления при одновременном вызове из PushService и SyncWorker.
+     */
+    suspend fun checkAndNotifyNewMail(
+        context: Context,
+        database: com.dedovmosol.iwomail.data.database.MailDatabase,
+        settingsRepo: SettingsRepository,
+        accountId: Long,
+        accountEmail: String
+    ) {
+        notificationMutex.withLock {
+            val highWaterMark = settingsRepo.getLastNotificationCheckTime(accountId)
+            if (highWaterMark == 0L) {
+                // Базовая линия при первом запуске: не уведомляем о существующей почте.
+                val baseline = maxOf(database.emailDao().getMaxInboxDateReceived(accountId) ?: 0L, 1L)
+                settingsRepo.setLastNotificationCheckTime(accountId, baseline)
+                return@withLock
+            }
+
+            val candidates = database.emailDao().getNewEmailsForNotification(accountId, highWaterMark)
+            if (candidates.isEmpty()) return@withLock
+
+            // Продвигаем HWM до самого свежего серверного dateReceived среди ВСЕХ кандидатов
+            // (в т.ч. уже показанных) — иначе они бы переспрашивались каждый цикл.
+            val newHighWaterMark = candidates.maxOf { it.dateReceived }
+
+            val shown = getShownNotifications(context)
+            val filtered = candidates.filter { !shown.contains("${accountId}_${it.id}") }
+
+            if (filtered.isNotEmpty() && settingsRepo.notificationsEnabled.first()) {
+                val totalCount = filtered.size
+                val displayEmails = filtered
+                    .take(MAX_DISPLAY_EMAILS)
+                    .map { NewEmailInfo(it.id, it.fromName, it.from, it.subject, it.dateReceived) }
+                val markReadEmailIds =
+                    if (totalCount <= MAX_MARK_READ_ACTION_EMAILS) filtered.map { it.id } else emptyList()
+
+                showNewMailNotification(
+                    context = context,
+                    displayEmails = displayEmails,
+                    totalCount = totalCount,
+                    markReadEmailIds = markReadEmailIds,
+                    accountId = accountId,
+                    accountEmail = accountEmail,
+                    settingsRepo = settingsRepo
+                )
+                markNotificationsAsShown(
+                    context,
+                    filtered.take(MAX_SHOWN_ENTRIES).map { "${accountId}_${it.id}" }
+                )
+            }
+
+            if (newHighWaterMark > highWaterMark) {
+                settingsRepo.setLastNotificationCheckTime(accountId, newHighWaterMark)
+            }
+        }
     }
 
     suspend fun showNewMailNotification(

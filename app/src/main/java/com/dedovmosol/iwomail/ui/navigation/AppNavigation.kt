@@ -346,7 +346,7 @@ private suspend fun navigateWithRetry(tag: String, action: () -> Unit) {
 
 @Composable
 fun AppNavigation(
-    openInboxUnread: Boolean = false, 
+    openInboxUnreadIntentId: Long = 0L,
     openEmailId: String? = null,
     openEmailIntentId: Long = 0L,
     switchToAccountId: Long? = null,
@@ -534,10 +534,14 @@ fun AppNavigation(
         }
     }
     
-    var inboxUnreadHandled by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(openInboxUnread, hasCheckedAccounts, accountSwitchCompleted) {
-        if (openInboxUnread && !inboxUnreadHandled && hasCheckedAccounts && accountSwitchCompleted) {
-            inboxUnreadHandled = true
+    // Открытие Inbox (непрочитанные) из виджета/уведомления. Через инкрементный intent-id
+    // (как openEmailIntentId), а НЕ одноразовый boolean — иначе повторные тапы по аватару
+    // виджета/уведомлению перестают навигировать после первого раза за жизнь процесса.
+    var lastHandledInboxUnreadIntentId by rememberSaveable { mutableStateOf(0L) }
+    LaunchedEffect(openInboxUnreadIntentId, hasCheckedAccounts, accountSwitchCompleted) {
+        if (openInboxUnreadIntentId > 0L && openInboxUnreadIntentId != lastHandledInboxUnreadIntentId &&
+            hasCheckedAccounts && accountSwitchCompleted) {
+            lastHandledInboxUnreadIntentId = openInboxUnreadIntentId
             // Получаем папку Входящие
             val account = withContext(Dispatchers.IO) { accountRepo.getActiveAccountSync() }
             if (account != null) {
