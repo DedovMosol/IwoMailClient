@@ -109,11 +109,19 @@ internal fun totalAttachmentBytes(
 /**
  * Оценка суммарного размера inline data:URL-картинок в HTML-теле (в байтах ПОСЛЕ base64-декодирования).
  * base64 кодирует 3 байта в 4 символа (RFC 4648) → декодированный размер ≈ len*3/4; остаток на padding
- * даёт небольшую переоценку — это безопасно (консервативно) для бюджет-проверки. Данные НЕ декодируются
- * (без аллокаций), измеряется только длина совпадений. `internal` — для покрытия юнит-тестом (CS-2).
+ * даёт небольшую переоценку — это безопасно (консервативно) для бюджет-проверки. `internal` — для
+ * покрытия юнит-тестом (CS-2).
+ *
+ * Длина base64-группы берётся через `MatchGroup.range` (доступен на JVM/Android) — БЕЗ материализации
+ * подстроки: `groupValues[2]` скопировал бы всю base64-строку (потенциально мегабайты) в память лишь
+ * ради `.length`. `range` даёт длину за O(1) с нулевыми аллокациями.
  */
 internal fun inlineImageBytes(body: String): Long =
-    DATA_URL_REGEX.findAll(body).sumOf { (it.groupValues[2].length.toLong() * 3L) / 4L }
+    DATA_URL_REGEX.findAll(body).sumOf { match ->
+        val range = match.groups[2]?.range
+        if (range == null || range.isEmpty()) 0L
+        else ((range.last - range.first + 1).toLong() * 3L) / 4L
+    }
 
 /**
  * Единый бюджет письма для защиты от OOM: файловые вложения ([totalAttachmentBytes]) + inline
@@ -1566,9 +1574,6 @@ fun ComposeScreen(
                             scheduledAttachments
                         )
                         SafeToast.short(context, sendScheduledMsg)
-                        // CS-8: письмо поставлено в очередь WorkManager — активной отправки нет,
-                        // снимаем блокировку кнопки до навигации (не залипаем, если onSent не уведёт).
-                        isSending = false
                         onSent()
                         return@launch
                     }

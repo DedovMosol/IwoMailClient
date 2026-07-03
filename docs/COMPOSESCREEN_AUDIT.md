@@ -241,19 +241,22 @@ LaunchedEffect(replyToEmailId) {
 
 Все правки — в слое представления (`ComposeScreen.kt`), протокол EAS/EWS и совместимость с Exchange 2007 SP1/SP2 **не затронуты**.
 
-- **CS-1 + CS-2 (решено).** Введены `inlineImageBytes(body)` и единая `composeAttachmentBudgetBytes(context, attachments, body)` (DRY/SRP). Бюджет (файловые вложения + inline data:URL-картинки в теле, оценка base64 → `len*3/4`, RFC 4648) проверяется ДО чтения байт в память И при отправке, И при сохранении черновика. Закрыт OOM в `saveDraft` и обход лимита inline-картинками при отправке.
+- **CS-1 + CS-2 (решено).** Введены `inlineImageBytes(body)` и единая `composeAttachmentBudgetBytes(context, attachments, body)` (DRY/SRP). Бюджет (файловые вложения + inline data:URL-картинки в теле, оценка base64 → `len*3/4`, RFC 4648) проверяется ДО чтения байт в память И при отправке, И при сохранении черновика. Закрыт OOM в `saveDraft` и обход лимита inline-картинками при отправке. Длина base64 измеряется через `MatchGroup.range` (O(1), без материализации подстроки) — `groupValues[2]` скопировал бы всю картинку (мегабайты) в память ради `.length`.
 - **CS-5 (решено).** `SendController.startSend(context = context.applicationContext)` — убрано окно утечки Activity в процесс-долгоживущем scope.
 - **CS-7 (решено).** Дебаунс локального поиска подсказок: `delay(SUGGESTION_DEBOUNCE_MS = 200)` в начале `suggestionSearchJob` (идиома «отмена предыдущего job + delay»). Запросы к БД — только после паузы ввода.
-- **CS-8 (решено, частично).** `isSending` сбрасывается на отложенном пути (письмо в очереди WorkManager, активной отправки нет). Основной путь отправки намеренно оставлен как есть (отправка реально в процессе через `SendController`, повторное включение кнопки создало бы риск двойной отправки).
+- **CS-8 (переоценено → откат, отложено до MVVM).** Первичная правка сбрасывала `isSending` на отложенном пути. При самопроверке выявлено: после успешной постановки письма в очередь WorkManager сброс `isSending` при (редком) сбое навигации **включил бы кнопку отправки → риск двойной отправки**. Держать кнопку заблокированной безопаснее (письмо уже запланировано; «застрявший» спиннер — косметика). Правка откатана; корректное решение — в общем сбросе состояния при MVVM-миграции (Этап 4), а не точечным патчем. Downgrade: Низкая → косметика.
 
 **Осознанно отложено (defense-in-depth, не требуется после CS-2):** guard `maxMimeSize` в `EasEmailService.sendMail`. После фикса CS-2 все реальные вызывающие `sendMail` (`SendController`, `OutboxWorker`, `ScheduledEmailWorker`) получают тело, уже прошедшее UI-бюджет, поэтому дополнительный протокольный guard избыточен (KISS) и потребовал бы менять непроверяемый сейчас код Exchange 2007. DRY-дедупликация лимитов 7/10 МБ в `EasAttachmentService` — кандидат на будущий рефакторинг.
 
-**Не покрыто в этом проходе (по плану — отдельные этапы):** CS-3, CS-4, CS-6, CS-9 (Этапы 3–4, требуют MVVM), CS-10/CS-11/CS-13/CS-14 (Этап 6), юнит-тесты бюджета/дебаунса (Этап 5).
+**Тесты (добавлено):** `ComposeAttachmentSizeTest` расширен для `inlineImageBytes` и `composeAttachmentBudgetBytes` (нет data:URL → 0; оценка `len*3/4`; суммирование нескольких; файлы+inline; файлы под лимитом + inline сверх лимита). Чистый JUnit + MockK, без Robolectric.
+
+**Не покрыто в этом проходе (по плану — отдельные этапы):** CS-3, CS-4, CS-6, CS-9 (Этапы 3–4, требуют MVVM), CS-8 (Этап 4), CS-10/CS-11/CS-13/CS-14 (Этап 6). Дебаунс (CS-7) — UI-поведение с таймингом, покрывается инструментальными/Compose-тестами, не чистым JUnit.
 
 ### Проверка через интернет (best practices), пошагово
 
 - MVVM/UDF, ре-throw `CancellationException`, WebView не переживает Activity, `StateFlow.debounce` — §4.
 - base64 → байты `(3·len/4)−padding ≈ len·3/4` — [SO](https://stackoverflow.com/questions/34546498/calculate-the-size-to-a-base-64-decoded-message), [aaronlenoir](https://blog.aaronlenoir.com/2017/11/10/get-original-length-from-base-64-string/); оценка консервативна (безопасна для бюджета).
+- `MatchGroup.range` даёт длину группы за O(1) без аллокаций и доступен на JVM/Android — [kotlinlang.org](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.text/-match-group/index.html); в отличие от `groupValues`, который материализует захваченные строки — [kotlinlang.org](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.text/-match-result/group-values.html).
 - Debounce через «отмена job + delay» — канонический паттерн вне Flow ([SO 57252799](https://stackoverflow.com/a/57252799/6352712)).
 
 ---

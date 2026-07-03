@@ -40,7 +40,7 @@ test/
             ├── UserFoldersViewModelTest.kt     # MVVM: папки/фильтр/выделение + пакетное удаление
             ├── EmailListViewModelTest.kt       # MVVM: письма/фильтры/выделение + пакетные операции и синк
             ├── EmailDetailViewModelTest.kt     # MVVM: письмо/тело/inline-картинки + операции (удаление/перенос/MDN)
-            ├── ComposeAttachmentSizeTest.kt    # Лимит суммарного размера вложений ДО чтения в память (N-2)
+            ├── ComposeAttachmentSizeTest.kt    # Бюджет вложений ДО чтения в память: файлы (N-2) + inline data:URL-картинки (CS-1/CS-2)
             └── compose/
                 └── ComposeTextUtilsTest.kt     # Подпись/цитата, cid→data:, извлечение email
 ```
@@ -276,7 +276,7 @@ fun `syncNotes delegates to notesService`() = runTest {
 18. ✅ EmailDetailViewModel — MVVM-слой, ядро экрана (письмо/тело/inline-картинки + операции удаление/перенос/восстановление/MDN)
 19. ✅ WbxmlParserSendMail — детерминизм WBXML при стабильном ClientId, встраивание ClientId/raw MIME (дедуп N-11)
 20. ✅ RichTextEditorSanitize — stripDangerousTags: `on*`/`javascript:`/`data:text/html`/`base`/`link` (L-3)
-21. ✅ ComposeAttachmentSize — суммарный размер вложений и лимит 10 МБ ДО чтения в память (N-2)
+21. ✅ ComposeAttachmentSize — бюджет вложений (лимит 10 МБ) ДО чтения в память: файлы (N-2) + inline data:URL-картинки в теле, оценка base64 `len*3/4` (CS-1/CS-2)
 22. ✅ EasMimeHeaderSanitize — stripHeaderCrlf: нейтрализация CRLF-инъекции адресных/Message-ID заголовков (N-1)
 23. ✅ EasMimeSubjectEncoding — chunkByUtf8Bytes (UTF-8/суррогаты) + RFC 2047 folding Subject (N-3)
 24. ✅ MimeHtmlProcessorInlineImage — единое извлечение CID→data:URL, вложенные multipart, guard рекурсии (N-5)
