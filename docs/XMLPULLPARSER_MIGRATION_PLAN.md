@@ -7,7 +7,7 @@
 - `EasPatterns.kt` — кэш Regex паттернов (ConcurrentHashMap + `getTagPattern`/`getTagPatternWithNs`)
 - `XmlValueExtractor.kt` — обёртка над Regex с namespace support
 - `deps.extractValue()` — per-service Regex extraction
-- Calendar декомпозирован из монолита в 7 файлов (EasCalendarService → facade + 6 сервисов)
+- Calendar декомпозирован из монолита в 8 файлов (EasCalendarService → facade + 7 файлов)
 - Последние рефакторинги синхронизации/уведомлений (`PushService`, `SyncWorker`, `NotificationHelper`) не меняли XML parsing surface; scope миграции остаётся прежним
 
 | Сервис | XML Regex | MIME (не мигрируем) | Сложность |
@@ -83,7 +83,7 @@
 
 ### Этап 7: Calendar (~77 regex) — самый сложный, декомпозирован
 
-Календарь декомпозирован из монолита `EasCalendarService` в 7 файлов:
+Календарь декомпозирован из монолита `EasCalendarService` в 8 файлов:
 
 | Файл | XML Regex | Описание |
 |------|-----------|----------|

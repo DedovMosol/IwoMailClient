@@ -180,7 +180,7 @@ This project is open for improvements! Here's how you can help:
 
 ```
 UI Layer
-  Jetpack Compose — 22 screens, 8 components
+  Jetpack Compose — 19 screens, 10 components
   Navigation, Theme, Localization
     ↓
 Repository Layer

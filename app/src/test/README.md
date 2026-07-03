@@ -14,13 +14,17 @@ test/
     │   ├── EasPatternsTest.kt               # Regex-паттерны EAS/EWS + кэш
     │   ├── WbxmlParserSendMailTest.kt       # SendMail WBXML: стабильный ClientId, дедуп (N-11)
     │   ├── EasMimeHeaderSanitizeTest.kt     # stripHeaderCrlf: защита от инъекции MIME/MDN-заголовков (N-1)
-    │   └── EasMimeSubjectEncodingTest.kt    # RFC 2047 Subject folding + UTF-8 chunking (N-3)
+    │   ├── EasMimeSubjectEncodingTest.kt    # RFC 2047 Subject folding + UTF-8 chunking (N-3)
+    │   └── CalendarDateUtilsTest.kt         # parseEwsDateTime: учёт смещения таймзоны ±HH:MM (N-4)
+    ├── sync/
+    │   └── NotificationHelperCheckAndNotifyTest.kt # checkAndNotifyNewMail: детект по серверному high-water-mark
     ├── util/
     │   ├── HtmlUtilsTest.kt                 # escapeHtml, sanitizeEmailHtml (XSS), strip
     │   ├── EmailUtilsTest.kt                # Имена/адреса/получатели, размеры файлов
     │   ├── DateUtilsTest.kt                 # Границы дня, диапазон (TZ-pinned)
     │   ├── ICalParserTest.kt                # iCalendar/задачи (TZ-pinned)
-    │   └── MimeHtmlProcessorInlineImageTest.kt # Единое извлечение inline-картинок MIME + guard рекурсии (N-5)
+    │   ├── MimeHtmlProcessorInlineImageTest.kt # Единое извлечение inline-картинок MIME + guard рекурсии (N-5)
+    │   └── AppCoroutinesTest.kt             # supervisedScope: крах-безопасный долгоживущий scope (UI-1 вне UI)
     ├── widget/
     │   └── MailWidgetFormatTest.kt          # isSameLocalDay: «сегодня → время, иначе → дата» (W-2/W-3)
     └── ui/
@@ -278,6 +282,9 @@ fun `syncNotes delegates to notesService`() = runTest {
 24. ✅ MimeHtmlProcessorInlineImage — единое извлечение CID→data:URL, вложенные multipart, guard рекурсии (N-5)
 25. ✅ MailWidgetFormat — `isSameLocalDay` (граница суток, разные годы с одним днём года, симметрия) для метки синка/дат писем виджета (W-2/W-3)
 26. ✅ ContextExtensions — `Context.findActivity` (раскрутка `ContextWrapper`→`Activity`, null-случаи; MockK) — основа `isChangingConfigurations`-guard в `onDispose` (SET-1)
+27. ✅ CalendarDateUtils — `parseEwsDateTime`: смещение `±HH:MM` учитывается (паттерн XXX), Z/без-TZ трактуются как UTC — регрессия на сдвиг времени (N-4)
+28. ✅ NotificationHelperCheckAndNotify — `checkAndNotifyNewMail`: детект новых писем по серверному high-water-mark вместо часов устройства (MockK, без Robolectric)
+29. ✅ AppCoroutines — `supervisedScope`: `SupervisorJob` + `CoroutineExceptionHandler` (сбой одного `launch` не отменяет соседей и не роняет процесс) — крах-безопасность вне UI (UI-1)
 
 > **Паттерн тестирования ViewModel:** принимай зависимости (репозитории + `CoroutineDispatcher`) через конструктор. Фабрика берёт реальные из `RepositoryProvider`, тест — моки. Андроид-конструктор репозиториев не запускается (MockK через Objenesis), поэтому Robolectric не нужен.
 

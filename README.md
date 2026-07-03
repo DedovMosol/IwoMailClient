@@ -155,8 +155,6 @@ Background
 - [Архитектура проекта](docs/ARCHITECTURE.md)
 - [Политика конфиденциальности](docs/PRIVACY_POLICY.md)
 - [План миграции XML-парсинга](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
-- [Оптимизация удаления Exchange](docs/EXCHANGE_DELETE_OPTIMIZATION.md)
-- [Аудит производительности](docs/PERFORMANCE_AUDIT.md)
 
 ## Важно: переименование пакета
 

@@ -514,8 +514,6 @@ On Windows:
 | `docs/CHANGELOG_EN.md` | English changelog |
 | `docs/PRIVACY_POLICY.md` | Privacy policy |
 | `docs/XMLPULLPARSER_MIGRATION_PLAN.md` | Planned XML parser migration |
-| `docs/EXCHANGE_DELETE_OPTIMIZATION.md` | Exchange delete optimization notes |
-| `docs/PERFORMANCE_AUDIT.md` | Performance audit notes |
 
 ---
 
