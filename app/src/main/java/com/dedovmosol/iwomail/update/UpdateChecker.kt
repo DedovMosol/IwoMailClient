@@ -787,6 +787,8 @@ class UpdateChecker(context: Context) {
             }
         )
 
+        if (!com.dedovmosol.iwomail.sync.NotificationHelper.canPostNotifications(context)) return
+
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("iwo Mail Client — откат готов")

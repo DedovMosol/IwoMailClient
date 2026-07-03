@@ -138,6 +138,8 @@ class CalendarReminderReceiver : BroadcastReceiver() {
             }
         }
 
+        if (!NotificationHelper.canPostNotifications(context)) return
+
         val notification = NotificationCompat.Builder(context, MailApplication.CHANNEL_CALENDAR)
             .setSmallIcon(R.drawable.ic_calendar_month)
             .setContentTitle(event.subject.ifBlank { context.getString(R.string.calendar_event) })

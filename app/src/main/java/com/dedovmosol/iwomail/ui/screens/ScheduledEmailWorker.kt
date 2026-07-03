@@ -89,11 +89,12 @@ class ScheduledEmailWorker(
     }
     
     private fun showNotification(title: String, text: String) {
+        if (!com.dedovmosol.iwomail.sync.NotificationHelper.canPostNotifications(applicationContext)) return
         val notification = androidx.core.app.NotificationCompat.Builder(
             applicationContext, 
             com.dedovmosol.iwomail.MailApplication.CHANNEL_SCHEDULED
         )
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
             .setContentTitle(title)
             .setContentText(text)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)

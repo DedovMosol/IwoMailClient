@@ -1,12 +1,9 @@
 package com.dedovmosol.iwomail.sync
 
-import android.Manifest
 import android.app.NotificationManager
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import androidx.work.*
 import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.data.database.AccountType
@@ -279,12 +276,7 @@ class SyncWorker(
     }
     
     private fun showSyncCompleteNotification() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val hasPermission = ContextCompat.checkSelfPermission(
-                applicationContext, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!hasPermission) return
-        }
+        if (!NotificationHelper.canPostNotifications(applicationContext)) return
         
         val isRussian = settingsRepo.getLanguageSync() == "ru"
         

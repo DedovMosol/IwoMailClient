@@ -47,6 +47,18 @@ object NotificationHelper {
 
     fun notificationIdForAccount(accountId: Long): Int = 200_000 + accountId.toInt()
 
+    /**
+     * Единая проверка возможности показа уведомлений (DRY).
+     * Android 13+ (TIRAMISU) требует runtime-разрешение POST_NOTIFICATIONS; ниже — всегда true.
+     * Используется всеми путями уведомлений (письма, календарь, задачи, синк, outbox, обновления).
+     */
+    fun canPostNotifications(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(
+            context, Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     fun getShownNotifications(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         return prefs.getStringSet(KEY_SHOWN, emptySet())?.toSet() ?: emptySet()
@@ -171,12 +183,7 @@ object NotificationHelper {
         val count = totalCount
         if (displayEmails.isEmpty()) return
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val hasPermission = ContextCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!hasPermission) return
-        }
+        if (!canPostNotifications(context)) return
 
         val languageCode = settingsRepo.language.first()
         val isRussian = languageCode == "ru"

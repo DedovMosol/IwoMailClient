@@ -2141,12 +2141,7 @@ private fun SearchTopBar(
  * При нажатии открывает экран обновлений.
  */
 private fun showUpdateNotification(context: android.content.Context, versionName: String, isRussian: Boolean) {
-    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.POST_NOTIFICATIONS
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (!hasPermission) return
-    }
+    if (!com.dedovmosol.iwomail.sync.NotificationHelper.canPostNotifications(context)) return
 
     val intent = android.content.Intent(context, com.dedovmosol.iwomail.MainActivity::class.java).apply {
         flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP

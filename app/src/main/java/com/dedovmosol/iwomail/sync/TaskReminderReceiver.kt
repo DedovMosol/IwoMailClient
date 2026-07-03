@@ -106,6 +106,8 @@ class TaskReminderReceiver : BroadcastReceiver() {
             }
         }
         
+        if (!NotificationHelper.canPostNotifications(context)) return
+
         val notification = NotificationCompat.Builder(context, MailApplication.CHANNEL_TASKS)
             .setSmallIcon(R.drawable.ic_task)
             .setContentTitle(task.subject.ifBlank { context.getString(R.string.task) })

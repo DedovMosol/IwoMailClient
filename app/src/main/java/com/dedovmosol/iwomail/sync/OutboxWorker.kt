@@ -1,10 +1,7 @@
 package com.dedovmosol.iwomail.sync
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
-import androidx.core.content.ContextCompat
 import androidx.work.*
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
@@ -271,11 +268,7 @@ class OutboxWorker(
     
     private fun showNotification(count: Int) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-            ) {
-                return
-            }
+            if (!NotificationHelper.canPostNotifications(applicationContext)) return
             val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) 
                 as android.app.NotificationManager
             
@@ -291,7 +284,7 @@ class OutboxWorker(
                 applicationContext, 
                 com.dedovmosol.iwomail.MailApplication.CHANNEL_OUTBOX
             )
-                .setSmallIcon(android.R.drawable.ic_menu_send)
+                .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setAutoCancel(true)
