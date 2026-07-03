@@ -106,6 +106,30 @@ internal fun totalAttachmentBytes(
     }.getOrDefault(0L)
 }
 
+/**
+ * Оценка суммарного размера inline data:URL-картинок в HTML-теле (в байтах ПОСЛЕ base64-декодирования).
+ * base64 кодирует 3 байта в 4 символа (RFC 4648) → декодированный размер ≈ len*3/4; остаток на padding
+ * даёт небольшую переоценку — это безопасно (консервативно) для бюджет-проверки. Данные НЕ декодируются
+ * (без аллокаций), измеряется только длина совпадений. `internal` — для покрытия юнит-тестом (CS-2).
+ */
+internal fun inlineImageBytes(body: String): Long =
+    DATA_URL_REGEX.findAll(body).sumOf { (it.groupValues[2].length.toLong() * 3L) / 4L }
+
+/**
+ * Единый бюджет письма для защиты от OOM: файловые вложения ([totalAttachmentBytes]) + inline
+ * data:URL-картинки в теле ([inlineImageBytes]). Единая функция (DRY) для отправки И сохранения
+ * черновика, чтобы обе операции имели одинаковую защиту ДО чтения байт в память (CS-1, CS-2).
+ * Содержимое файлов НЕ читает.
+ */
+internal fun composeAttachmentBudgetBytes(
+    context: android.content.Context,
+    attachments: List<AttachmentInfo>,
+    body: String
+): Long = totalAttachmentBytes(context, attachments) + inlineImageBytes(body)
+
+/** Дебаунс локального поиска подсказок получателей (CS-7): запросы к БД идут только после паузы ввода. */
+internal const val SUGGESTION_DEBOUNCE_MS = 200L
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ComposeScreen(
@@ -429,6 +453,11 @@ fun ComposeScreen(
         val ownEmail = accountEmail.lowercase()
 
         suggestionSearchJob = scope.launch {
+            // CS-7: дебаунс локального поиска. При быстром вводе каждый следующий символ отменяет
+            // предыдущий job (suggestionSearchJob?.cancel() выше) ДО истечения задержки, поэтому
+            // запросы к БД (контакты/группы/история) выполняются только после паузы ввода.
+            // Идиома "отмена предыдущего job + delay" — стандартный debounce вне Flow.
+            delay(SUGGESTION_DEBOUNCE_MS)
             val suggestions = mutableListOf<EmailSuggestion>()
             val seenEmails = mutableSetOf<String>() // Для отслеживания дубликатов
 
@@ -1251,6 +1280,17 @@ fun ComposeScreen(
                 return@launch
             }
 
+            // CS-1 / CS-2: та же защита от OOM, что и при отправке — суммарный бюджет
+            // (файловые вложения + inline-картинки в теле) проверяется ДО чтения байт в память.
+            // Без этого крупное вложение, отклоняемое при отправке, при сохранении черновика
+            // читалось в память целиком → OutOfMemoryError и «тихий» провал сохранения.
+            val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
+            if (budgetBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+                SafeToast.short(context, attachmentLimitExceededMsg)
+                isSavingDraft = false
+                return@launch
+            }
+
             try {
                 val success: Boolean
                 // Файловые вложения — байты
@@ -1490,9 +1530,11 @@ fun ComposeScreen(
                     return@launch
                 }
 
-                // N-2: проверяем суммарный размер вложений ДО чтения байт в память (иначе большое
-                // вложение вызовет OutOfMemoryError на readBytes раньше серверного лимита EAS).
-                val totalAttachmentSize = withContext(Dispatchers.IO) { totalAttachmentBytes(context, attachments) }
+                // N-2 / CS-2: проверяем суммарный бюджет (файловые вложения + inline-картинки в теле)
+                // ДО чтения байт в память. Иначе крупное вложение ИЛИ тяжёлое тело с inline data:URL
+                // (которые уходят как HTML-тело, минуя список вложений) вызовет OutOfMemoryError на
+                // readBytes/сборке MIME раньше серверного лимита EAS.
+                val totalAttachmentSize = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
                 if (totalAttachmentSize > MAX_TOTAL_ATTACHMENT_BYTES) {
                     isSending = false
                     SafeToast.short(context, attachmentLimitExceededMsg)
@@ -1524,6 +1566,9 @@ fun ComposeScreen(
                             scheduledAttachments
                         )
                         SafeToast.short(context, sendScheduledMsg)
+                        // CS-8: письмо поставлено в очередь WorkManager — активной отправки нет,
+                        // снимаем блокировку кнопки до навигации (не залипаем, если onSent не уведёт).
+                        isSending = false
                         onSent()
                         return@launch
                     }
@@ -1571,7 +1616,10 @@ fun ComposeScreen(
                 sendController.startSend(
                     email = pendingEmail,
                     message = sendingMessageText,
-                    context = context,
+                    // CS-5: SendController живёт в процесс-долгоживущем scope и удерживает context
+                    // на время отсчёта + отправки + досинка Sent (~20с). Передаём applicationContext,
+                    // чтобы не удерживать Activity после закрытия экрана (окно утечки).
+                    context = context.applicationContext,
                     mailRepo = mailRepo,
                     onSuccess = { },
                     onCancel = { }
