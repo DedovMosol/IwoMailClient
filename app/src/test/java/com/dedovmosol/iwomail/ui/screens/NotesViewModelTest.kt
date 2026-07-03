@@ -10,6 +10,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -249,7 +250,11 @@ class NotesViewModelTest {
 
         assertThat(events).contains(NotesEvent.MovedToTrash(1))
         assertThat(vm.uiState.value.selectedIds).isEmpty()
-        coVerify { noteRepo.deleteNotes(match { it.size == 1 && it[0].id == "a" }) }
+        // Свойства мока нельзя дёргать внутри match{} (MockK stdObjectAnswer) — капчим и проверяем снаружи.
+        val deleted = slot<List<NoteEntity>>()
+        coVerify { noteRepo.deleteNotes(capture(deleted)) }
+        assertThat(deleted.captured).hasSize(1)
+        assertThat(deleted.captured[0].id).isEqualTo("a")
     }
 
     // ===================== selection =====================

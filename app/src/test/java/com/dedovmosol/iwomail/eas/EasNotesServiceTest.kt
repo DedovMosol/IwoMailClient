@@ -89,6 +89,8 @@ class EasNotesServiceTest {
                 </Sync>
             """.trimIndent()
             every { extractValue(mockResponse, "Status") } returns "1"
+            // Продакшн после Status=1 извлекает SyncKey (обновляет кэш ключа), затем ServerId.
+            every { extractValue(mockResponse, "SyncKey") } returns "key999"
             every { extractValue(mockResponse, "ServerId") } returns serverId
             EasResult.Success(parser(mockResponse))
         }
@@ -133,6 +135,8 @@ class EasNotesServiceTest {
             val parser = thirdArg<(String) -> Boolean>()
             val mockResponse = "<Status>1</Status>"
             every { extractValue(mockResponse, "Status") } returns "1"
+            // Продакшн после Status=1 извлекает SyncKey для обновления кэша ключа.
+            every { extractValue(mockResponse, "SyncKey") } returns "key999"
             EasResult.Success(parser(mockResponse))
         }
         
@@ -229,11 +233,19 @@ class EasNotesServiceTest {
             EasResult.Success(parser("<SyncKey>key123</SyncKey>"))
         }
         
-        // Mock notes sync
+        // Полная синхронизация Notes-папки: продакшн возвращает Pair(notes, moreAvailable).
+        coEvery {
+            executeEasCommand.invoke<Pair<List<EasNote>, Boolean>>(
+                "Sync",
+                match { it.contains("<SyncKey>key123</SyncKey>") && it.contains("notes123") },
+                any()
+            )
+        } returns EasResult.Success(Pair(emptyList(), false))
+        // Синхронизация папки Deleted Items: продакшн возвращает List<EasNote>.
         coEvery {
             executeEasCommand.invoke<List<EasNote>>(
                 "Sync",
-                match { it.contains("<SyncKey>key123</SyncKey>") },
+                match { it.contains("<SyncKey>key123</SyncKey>") && it.contains("deleted456") },
                 any()
             )
         } returns EasResult.Success(emptyList())

@@ -92,7 +92,8 @@ class EasXmlTemplatesTest {
         
         assertThat(xml).contains("<Search xmlns=\"Search\"")
         assertThat(xml).contains("<Name>Mailbox</Name>")
-        assertThat(xml).contains("<CollectionId>inbox123</CollectionId>")
+        // MS-ASCMD Search: CollectionId в запросе принадлежит namespace AirSync (airsync:CollectionId).
+        assertThat(xml).contains("<airsync:CollectionId>inbox123</airsync:CollectionId>")
         assertThat(xml).contains("<FreeText>test</FreeText>")
         assertThat(xml).contains("<Range>0-25</Range>")
     }
