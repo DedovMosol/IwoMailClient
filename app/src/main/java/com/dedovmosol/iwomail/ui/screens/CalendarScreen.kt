@@ -390,10 +390,6 @@ fun CalendarScreen(
         val eventDeletedText = Strings.eventDeleted
         val deletingOneEventText = Strings.deletingEvents(1)
         val restoringOneEventText = Strings.restoringEvents(1)
-        val undoText = Strings.undo
-        val eventsRestoredText = Strings.eventsRestored
-        val eventRestoredText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие восстановлено" else "Event restored"
-        val eventDeletedPermanentlyText = if (com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN) "Событие удалено навсегда" else "Event permanently deleted"
 
         if (event.isDeleted) {
             // Диалог для удалённого события — восстановить или удалить навсегда
@@ -512,8 +508,6 @@ fun CalendarScreen(
     if (showDeleteConfirmDialog) {
         val eventsDeletedText = Strings.eventDeleted
         val eventsDeletedPermanentlyText = Strings.eventsDeletedPermanently
-        val undoText = Strings.undo
-        val eventsRestoredText = Strings.eventsRestored
 
         com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
             onDismissRequest = {

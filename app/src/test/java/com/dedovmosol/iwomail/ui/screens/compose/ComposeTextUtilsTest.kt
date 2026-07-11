@@ -69,6 +69,43 @@ class ComposeTextUtilsTest {
         assertThat(quote).contains("<b>To:</b> jane@y.com")
     }
 
+    @Test
+    fun `formatHtmlQuote uses localized field labels when provided`() {
+        val quote = formatHtmlQuote(
+            header = "Исходное сообщение",
+            from = "ivan@x.ru",
+            date = "15.01.2026",
+            subject = "Привет",
+            toField = "petr@y.ru",
+            originalBody = "тело",
+            fromLabel = "От",
+            dateLabel = "Дата",
+            subjectLabel = "Тема",
+            toLabel = "Кому"
+        )
+        assertThat(quote).contains("<b>От:</b> ivan@x.ru")
+        assertThat(quote).contains("<b>Дата:</b> 15.01.2026")
+        assertThat(quote).contains("<b>Тема:</b> Привет")
+        assertThat(quote).contains("<b>Кому:</b> petr@y.ru")
+        // Английские метки не должны протекать при заданных русских
+        assertThat(quote).doesNotContain("<b>From:</b>")
+        assertThat(quote).doesNotContain("<b>To:</b>")
+    }
+
+    @Test
+    fun `formatHtmlQuote escapes field labels`() {
+        val quote = formatHtmlQuote(
+            header = "H",
+            from = "a@x.com",
+            date = "d",
+            subject = "s",
+            toField = null,
+            originalBody = "b",
+            fromLabel = "<b&>"
+        )
+        assertThat(quote).contains("&lt;b&amp;&gt;:")
+    }
+
     // ===================== looksLikeHtml =====================
 
     @Test

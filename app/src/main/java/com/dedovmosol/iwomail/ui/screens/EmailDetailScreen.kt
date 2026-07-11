@@ -1424,7 +1424,7 @@ fun EmailDetailScreen(
                     )
                 }
 
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                 // Индикатор загрузки тела
                 if (isLoadingBody) {

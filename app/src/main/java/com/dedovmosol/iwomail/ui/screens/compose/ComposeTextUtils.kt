@@ -54,22 +54,31 @@ internal fun formatHtmlSignature(text: String?, isHtml: Boolean = false): String
     return "<div class=\"signature\"><br>--<br>$content</div><!--/signature-->"
 }
 
+/**
+ * Формирует HTML-цитату исходного письма для reply/forward.
+ * Метки полей ([fromLabel]/[dateLabel]/[subjectLabel]/[toLabel]) передаются извне
+ * для локализации; дефолты — английские (обратная совместимость и безопасный fallback).
+ */
 internal fun formatHtmlQuote(
     header: String,
     from: String,
     date: String,
     subject: String,
     toField: String?,
-    originalBody: String
+    originalBody: String,
+    fromLabel: String = "From",
+    dateLabel: String = "Date",
+    subjectLabel: String = "Subject",
+    toLabel: String = "To"
 ): String {
-    val toLine = if (toField != null) "<b>To:</b> ${toField.escapeHtml()}<br>" else ""
+    val toLine = if (toField != null) "<b>${toLabel.escapeHtml()}:</b> ${toField.escapeHtml()}<br>" else ""
     return """
         <br><br>
         <div style="border-left: 2px solid #ccc; padding-left: 10px; margin-left: 5px; color: #666;">
             <b>--- ${header.escapeHtml()} ---</b><br>
-            <b>From:</b> ${from.escapeHtml()}<br>
-            <b>Date:</b> ${date.escapeHtml()}<br>
-            <b>Subject:</b> ${subject.escapeHtml()}<br>
+            <b>${fromLabel.escapeHtml()}:</b> ${from.escapeHtml()}<br>
+            <b>${dateLabel.escapeHtml()}:</b> ${date.escapeHtml()}<br>
+            <b>${subjectLabel.escapeHtml()}:</b> ${subject.escapeHtml()}<br>
             $toLine
             <br>
             $originalBody

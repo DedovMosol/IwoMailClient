@@ -54,6 +54,11 @@ import java.util.*
 // ThreadLocal гарантирует thread-safety для SimpleDateFormat (каждый поток — свой экземпляр)
 private val TASK_PARSE_DATE_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()) }
 private val TASK_PARSE_TIME_FORMAT = java.lang.ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+
+// DRY-обёртки: java.lang.ThreadLocal.get() — platform-type (nullable в Kotlin), хотя withInitial
+// null не вернёт. Safe-call + пустой fallback в одном месте (конвенция проекта, ср. EmailUtils).
+private fun taskFormatDate(date: Date): String = TASK_PARSE_DATE_FORMAT.get()?.format(date) ?: ""
+private fun taskFormatTime(date: Date): String = TASK_PARSE_TIME_FORMAT.get()?.format(date) ?: ""
 private val TASK_BR_REGEX = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
 private val TASK_P_CLOSE_OPEN_REGEX = Regex("</p>\\s*<p[^>]*>", RegexOption.IGNORE_CASE)
 private val TASK_P_TAG_REGEX = Regex("</?p[^>]*>", RegexOption.IGNORE_CASE)
@@ -1398,16 +1403,16 @@ private fun CreateTaskDialog(
 
         if (task != null) {
             if (task.startDate > 0) {
-                startDateText = TASK_PARSE_DATE_FORMAT.get().format(Date(task.startDate))
-                startTimeText = TASK_PARSE_TIME_FORMAT.get().format(Date(task.startDate))
+                startDateText = taskFormatDate(Date(task.startDate))
+                startTimeText = taskFormatTime(Date(task.startDate))
             }
             if (task.dueDate > 0) {
-                dueDateText = TASK_PARSE_DATE_FORMAT.get().format(Date(task.dueDate))
-                dueTimeText = TASK_PARSE_TIME_FORMAT.get().format(Date(task.dueDate))
+                dueDateText = taskFormatDate(Date(task.dueDate))
+                dueTimeText = taskFormatTime(Date(task.dueDate))
             }
             if (task.reminderTime > 0) {
-                reminderDateText = TASK_PARSE_DATE_FORMAT.get().format(Date(task.reminderTime))
-                reminderTimeText = TASK_PARSE_TIME_FORMAT.get().format(Date(task.reminderTime))
+                reminderDateText = taskFormatDate(Date(task.reminderTime))
+                reminderTimeText = taskFormatTime(Date(task.reminderTime))
             }
         } else {
             // Умолчания для новой задачи:
@@ -1415,25 +1420,23 @@ private fun CreateTaskDialog(
             val now = System.currentTimeMillis()
             val nowDate = Date(now)
             startDate = now
-            startDateText = TASK_PARSE_DATE_FORMAT.get().format(nowDate)
-            startTimeText = TASK_PARSE_TIME_FORMAT.get().format(nowDate)
+            startDateText = taskFormatDate(nowDate)
+            startTimeText = taskFormatTime(nowDate)
             // Срок — через сутки
             val dueDateMs = now + 24 * 60 * 60 * 1000L
             val dueDateObj = Date(dueDateMs)
             dueDate = dueDateMs
-            dueDateText = TASK_PARSE_DATE_FORMAT.get().format(dueDateObj)
-            dueTimeText = TASK_PARSE_TIME_FORMAT.get().format(dueDateObj)
+            dueDateText = taskFormatDate(dueDateObj)
+            dueTimeText = taskFormatTime(dueDateObj)
             // Напоминание — через 12 часов
             val reminderMs = now + 12 * 60 * 60 * 1000L
             val reminderObj = Date(reminderMs)
             reminderTime = reminderMs
             reminderSet = true
-            reminderDateText = TASK_PARSE_DATE_FORMAT.get().format(reminderObj)
-            reminderTimeText = TASK_PARSE_TIME_FORMAT.get().format(reminderObj)
+            reminderDateText = taskFormatDate(reminderObj)
+            reminderTimeText = taskFormatTime(reminderObj)
         }
     }
-
-    val dateTimeFormat = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
 
     val lazyListState = rememberLazyListState()
 
@@ -1855,7 +1858,7 @@ private fun CreateTaskDialog(
         val h = try { startTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
         val m = try { startTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
         val state = rememberTimePickerState(initialHour = h, initialMinute = m, is24Hour = true)
-        AlertDialog(onDismissRequest = { showStartTimePicker = false }) {
+        BasicAlertDialog(onDismissRequest = { showStartTimePicker = false }) {
             Surface(shape = RoundedCornerShape(28.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
                     TimePicker(state = state)
@@ -1875,7 +1878,7 @@ private fun CreateTaskDialog(
         val h = try { dueTimeText.split(":")[0].toInt() } catch (_: Exception) { 18 }
         val m = try { dueTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
         val state = rememberTimePickerState(initialHour = h, initialMinute = m, is24Hour = true)
-        AlertDialog(onDismissRequest = { showDueTimePicker = false }) {
+        BasicAlertDialog(onDismissRequest = { showDueTimePicker = false }) {
             Surface(shape = RoundedCornerShape(28.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
                     TimePicker(state = state)
@@ -1895,7 +1898,7 @@ private fun CreateTaskDialog(
         val h = try { reminderTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
         val m = try { reminderTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
         val state = rememberTimePickerState(initialHour = h, initialMinute = m, is24Hour = true)
-        AlertDialog(onDismissRequest = { showReminderTimePicker = false }) {
+        BasicAlertDialog(onDismissRequest = { showReminderTimePicker = false }) {
             Surface(shape = RoundedCornerShape(28.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
                     TimePicker(state = state)
@@ -1921,7 +1924,7 @@ private fun parseDateTime(dateText: String, timeText: String): Long {
     if (dateText.isBlank()) return 0L
 
     try {
-        val parsedDate = TASK_PARSE_DATE_FORMAT.get().parse(dateText) ?: return 0L
+        val parsedDate = TASK_PARSE_DATE_FORMAT.get()?.parse(dateText) ?: return 0L
 
         val calendar = Calendar.getInstance().apply {
             time = parsedDate

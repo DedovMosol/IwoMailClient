@@ -2,6 +2,18 @@
 
 ## v1.6.3b
 
+### "Easy wins" audit — part 3: defects hidden under "dead code", cleanup, CI (2026-07-11)
+- **Localized quote headers** (A-19): on reply/forward the quote block always showed English `From:/Date:/Subject:/To:` even in the Russian UI — `formatHtmlQuote` hardcoded the labels while the localized `quoteFrom/quoteDate/quoteSubject/quoteTo` were declared but never passed. Labels became parameters (English defaults) and are passed from both call sites. Surfaced while verifying "dead code" — deleting the vars would have hidden the bug. Covered by a RU/EN test + escaping
+- **"Reset all" filters button** (A-20): `clearFilters()` existed in the ViewModel and was tested, but there was no UI button (unfinished feature) — added to the filter panel, visible when filters are active
+- **Ping Status=5 no new loop**: confirmed the `MIN_HEARTBEAT` floor pre-exists — no regression
+- **Dead code removed**: unused `contactRepo`/`focusManager`/`authErrorMsg` (ComposeScreen) + the orphaned `LocalFocusManager` import; 6 leftover toast strings in CalendarScreen (feedback goes through `DeletionController`); `dateTimeFormat` in `TaskEditDialog`. Verified line-by-line that autocomplete/feedback don't break
+- **Idiom — redundant `!!`**: `att.contentId!!` ×6 (under the `!isNullOrBlank()` smart-cast guard) and `lastError!!` ×2 (local `var` right after assignment) removed; `existingUri!!` intentionally kept (no smart-cast there — `!!` is required)
+- **Nullable `SimpleDateFormat` (DRY)**: `java.lang.ThreadLocal.get()` is a platform type; 12 `.get().format()` in TasksScreen reduced to two DRY helpers `taskFormatDate/taskFormatTime` (safe call + fallback in one place, project convention), parse got a targeted `?.`
+- **Deprecated API**: `Divider` → `HorizontalDivider` (EmailDetailScreen); `AlertDialog` → `BasicAlertDialog` ×3 time pickers in TasksScreen (content already has its own `Surface` — no lost background, `ExperimentalMaterial3Api` opted-in globally)
+- **DRY MIME Content-Type**: the repeated `contains("Content-Type: x")||contains("Content-Type:x")` extracted into `String.hasContentType(prefix)` (incl. the pre-existing `extractImagesRecursive`)
+- **CI**: `.github/workflows/ci.yml` (GitHub Actions, JDK 17 Temurin, `testDebugUnitTest` + report artifacts) + Kover 0.7.6 (`koverXmlReportDebug`; 0.7.x chosen deliberately — 0.8/0.9 have variant-resolution regressions on Android+Gradle 8.12, kotlinx-kover#728; compatibility verified locally)
+- **Tests**: suite 432 (was 430) — new `formatHtmlQuote` tests (localized labels + escaping)
+
 ### "Easy wins" audit — stability, leaks, FPS (2026-07-10)
 - **OkHttp connection leak** in update checks: `Response` was not closed on the HTTP-error path (`checkForUpdate`/`checkPreviousVersion`) — the connection was not returned to the pool on every failed auto-check (A-1)
 - **Response close race on coroutine cancellation**: `if (isActive) resume(...)` replaced with the atomic `resume(response) { close() }` in the EAS transport and the long-poll Ping (the `AttachmentManager` pattern); removed now-dead imports (A-2)
@@ -33,8 +45,9 @@
 - **Async email body pipeline**: move MIME/HTML parsing (up to 20 MB) into `produceState`/`Dispatchers.Default` (currently under `remember`, but a multi-MB string compare per frame)
 - **Protocol-core tests**: `WbxmlParser.parse/generate`, `NtlmAuthenticator` (NTLMv2), calendar recurrence logic — zero coverage; needs a test seam
 - **MVVM for `MainScreen`/`ComposeScreen`**: the last large unmigrated screens (see `COMPOSESCREEN_AUDIT.md`)
-- **CI**: no GitHub Actions with `testDebugUnitTest` (+ Kover)
 - **EWS auth fallback**: already DRY behind deps lambdas; the 6-line wrapper with divergent contracts (`String?` vs `EasResult<String>`) was intentionally not merged
+- **Friendly auth toast on send**: send errors currently surface the raw server message; auth errors could be detected and shown as a localized message (low priority, not a bug)
+- ✅ **CI** — done in part 3 (GitHub Actions + Kover 0.7.6)
 
 ### Architecture — MVVM adoption (incremental)
 - Introduced a `ViewModel` + immutable `UiState` + `StateFlow` layer to eliminate state-loss bugs on configuration changes (rotation)

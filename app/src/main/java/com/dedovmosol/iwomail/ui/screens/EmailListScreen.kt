@@ -700,7 +700,17 @@ private fun FilterPanel(
                     }
                 }
 
-                // Пользователь сам выбирает «Все письма» в фильтре при необходимости
+                // Кнопка сброса всех фильтров (видна только когда есть активные)
+                if (activeFiltersCount > 0) {
+                    TextButton(
+                        onClick = onClearFilters,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Icon(AppIcons.Clear, null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(Strings.resetAll)
+                    }
+                }
             }
         }
 

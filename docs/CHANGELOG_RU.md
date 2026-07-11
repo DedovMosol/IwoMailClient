@@ -2,6 +2,18 @@
 
 ## v1.6.3b
 
+### Аудит «лёгкие победы» — часть 3: дефекты под «мёртвым кодом», чистка, CI (11.07.2026)
+- **Локализация заголовков цитаты** (A-19): при reply/forward блок цитаты всегда показывал английские `From:/Date:/Subject:/To:` даже в русском UI — `formatHtmlQuote` хардкодил метки, а локализованные `quoteFrom/quoteDate/quoteSubject/quoteTo` («От/Дата/Тема/Кому») были объявлены, но не пробрасывались. Метки вынесены в параметры (дефолт английский) и переданы из обоих вызовов. Раскопано при верификации «мёртвого кода» — удаление скрыло бы баг. Покрыто тестом RU/EN + экранирование
+- **Кнопка «Сбросить все» фильтры** (A-20): `clearFilters()` был в ViewModel и покрыт тестом, но UI-кнопки не было (незавершённая фича) — добавлена в панель фильтров, видна при активных фильтрах
+- **Ping Status=5 без нового цикла**: подтверждено, что floor `MIN_HEARTBEAT` пред-существует — регрессии нет
+- **Мёртвый код удалён**: неиспользуемые `contactRepo`/`focusManager`/`authErrorMsg` (ComposeScreen) + осиротевший импорт `LocalFocusManager`; 6 leftover-строк тостов в CalendarScreen (фидбек идёт через `DeletionController`); `dateTimeFormat` в `TaskEditDialog`. Проверено построчно, что автодополнение/фидбек не ломаются
+- **Идиоматика — избыточные `!!`**: `att.contentId!!` ×6 (под guard `!isNullOrBlank()` со smart-cast) и `lastError!!` ×2 (локальный `var` после присваивания) убраны; `existingUri!!` оставлены осознанно (там smart-cast не применяется — `!!` необходим)
+- **Nullable `SimpleDateFormat` (DRY)**: `java.lang.ThreadLocal.get()` — platform-type; 12 `.get().format()` в TasksScreen сведены к двум DRY-хелперам `taskFormatDate/taskFormatTime` (safe-call + fallback в одном месте, конвенция проекта), parse — точечный `?.`
+- **Deprecated API**: `Divider` → `HorizontalDivider` (EmailDetailScreen); `AlertDialog` → `BasicAlertDialog` ×3 time-picker'а в TasksScreen (содержимое уже с собственным `Surface` — фон не теряется, `ExperimentalMaterial3Api` включён глобально)
+- **DRY MIME Content-Type**: повтор `contains("Content-Type: x")||contains("Content-Type:x")` вынесен в `String.hasContentType(prefix)` (в т.ч. предсуществующий `extractImagesRecursive`)
+- **CI**: `.github/workflows/ci.yml` (GitHub Actions, JDK 17 Temurin, `testDebugUnitTest` + артефакты отчётов) + Kover 0.7.6 (`koverXmlReportDebug`; версия 0.7.x осознанно — 0.8/0.9 имеют регрессии variant-resolution на Android+Gradle 8.12, kotlinx-kover#728; совместимость проверена локально)
+- **Тесты**: сьюта 432 (было 430) — новые тесты `formatHtmlQuote` (локализованные метки + экранирование)
+
 ### Аудит «лёгкие победы» — стабильность, утечки, FPS (10.07.2026)
 - **Утечка соединений OkHttp** в проверке обновлений: `Response` не закрывался на пути HTTP-ошибки (`checkForUpdate`/`checkPreviousVersion`) — соединение не возвращалось в пул при каждой неудачной автопроверке (A-1)
 - **Гонка закрытия Response при отмене корутины**: `if (isActive) resume(...)` заменён атомарным `resume(response) { close() }` в EAS-транспорте и long-poll Ping (паттерн `AttachmentManager`); убраны ставшие мёртвыми импорты (A-2)
@@ -33,8 +45,9 @@
 - **Async-конвейер тела письма**: разбор MIME/HTML до 20 МБ вынести в `produceState`/`Dispatchers.Default` (сейчас под `remember`, но сравнение многомегабайтной строки на кадр)
 - **Тесты протокольного ядра**: `WbxmlParser.parse/generate`, `NtlmAuthenticator` (NTLMv2), recurrence-логика календаря — ноль покрытия; требуется тест-seam
 - **MVVM для `MainScreen`/`ComposeScreen`**: последние крупные немигрированные экраны (см. `COMPOSESCREEN_AUDIT.md`)
-- **CI**: GitHub Actions с `testDebugUnitTest` (+ Kover) отсутствует
 - **EWS auth-fallback**: уже DRY за deps-лямбдами; 6-строчная обёртка с разными контрактами (`String?` vs `EasResult<String>`) осознанно не объединялась
+- **Дружелюбный auth-тост при отправке**: сейчас ошибки отправки показываются raw-сообщением сервера; можно детектировать auth-ошибку и показывать локализованный текст (низкий приоритет, не баг)
+- ✅ **CI** — сделано в части 3 (GitHub Actions + Kover 0.7.6)
 
 ### Архитектура — внедрение MVVM (инкрементально)
 - Введён слой `ViewModel` + неизменяемый `UiState` + `StateFlow` для устранения багов с потерей состояния при повороте экрана

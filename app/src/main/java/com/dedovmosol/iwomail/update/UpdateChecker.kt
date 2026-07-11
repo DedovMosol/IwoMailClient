@@ -426,7 +426,7 @@ class UpdateChecker(context: Context) {
                 // Проверяем что файл скачан полностью
                 if (contentLength > 0 && totalBytesRead != contentLength) {
                     lastError = "Incomplete download: $totalBytesRead/$contentLength bytes"
-                    android.util.Log.w("UpdateChecker", lastError!!)
+                    android.util.Log.w("UpdateChecker", lastError)
                     apkFile.delete()
                     continue
                 }
@@ -434,7 +434,7 @@ class UpdateChecker(context: Context) {
                 // Проверяем что файл не пустой
                 if (!apkFile.exists() || apkFile.length() == 0L) {
                     lastError = "Downloaded file is empty"
-                    android.util.Log.w("UpdateChecker", lastError!!)
+                    android.util.Log.w("UpdateChecker", lastError)
                     continue
                 }
 

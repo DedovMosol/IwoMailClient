@@ -30,7 +30,6 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
@@ -384,8 +383,7 @@ fun ComposeScreen(
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
     var contactPickerTarget by rememberSaveable { mutableStateOf("to") } // "to", "cc", "bcc"
 
-    // Автодополнение email
-    val contactRepo = remember { RepositoryProvider.getContactRepository(context) }
+    // Автодополнение email (поиск идёт через database.*Dao() в searchSuggestions)
     var toSuggestions by remember { mutableStateOf<List<EmailSuggestion>>(emptyList()) }
     var showToSuggestions by remember { mutableStateOf(false) }
     var toFieldFocused by remember { mutableStateOf(false) }
@@ -402,7 +400,6 @@ fun ComposeScreen(
     }
     var suggestionSearchJob by remember { mutableStateOf<Job?>(null) }
     var suggestionJustSelected by remember { mutableStateOf(false) }
-    val focusManager = LocalFocusManager.current
 
     // Скрываем подсказки при выходе с экрана
     DisposableEffect(Unit) {
@@ -771,7 +768,11 @@ fun ComposeScreen(
                     date = formatEmailDate(email.dateReceived),
                     subject = email.subject,
                     toField = null,
-                    originalBody = originalBody
+                    originalBody = originalBody,
+                    fromLabel = quoteFromStr,
+                    dateLabel = quoteDateStr,
+                    subjectLabel = quoteSubjectStr,
+                    toLabel = quoteToStr
                 )
 
                 val originalAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(emailId) }
@@ -793,7 +794,7 @@ fun ComposeScreen(
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                        inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                        inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                     } else {
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
@@ -818,7 +819,7 @@ fun ComposeScreen(
                                         if (att.isInline && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
                                             val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                            inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                            inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                         } else {
                                             val uri = androidx.core.content.FileProvider.getUriForFile(
                                                 context,
@@ -940,7 +941,11 @@ fun ComposeScreen(
                     date = formatEmailDate(email.dateReceived),
                     subject = email.subject,
                     toField = email.to,
-                    originalBody = originalBody
+                    originalBody = originalBody,
+                    fromLabel = quoteFromStr,
+                    dateLabel = quoteDateStr,
+                    subjectLabel = quoteSubjectStr,
+                    toLabel = quoteToStr
                 )
 
                 val originalAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(emailId) }
@@ -962,7 +967,7 @@ fun ComposeScreen(
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                        inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                        inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                     } else {
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
@@ -987,7 +992,7 @@ fun ComposeScreen(
                                         if (att.isInline && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
                                             val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                            inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                            inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                         } else {
                                             val uri = androidx.core.content.FileProvider.getUriForFile(
                                                 context,
@@ -1152,7 +1157,7 @@ fun ComposeScreen(
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                        inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                        inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                     } else {
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
@@ -1173,7 +1178,7 @@ fun ComposeScreen(
                                             if (att.isInline && !att.contentId.isNullOrBlank()) {
                                                 val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
                                                 val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                                inlineImages[att.contentId!!] = "data:$mimeType;base64,$base64"
+                                                inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                             } else {
                                                 val uri = androidx.core.content.FileProvider.getUriForFile(
                                                     context,
@@ -1283,7 +1288,6 @@ fun ComposeScreen(
     // Локализованные строки для Toast (нужно получить до launch)
     val accountNotFoundMsg = Strings.accountNotFound
     val attachmentLimitExceededMsg = Strings.attachmentLimitExceeded
-    val authErrorMsg = Strings.authError
     val sendScheduledMsg = Strings.sendScheduled
     val draftSavedMsg = Strings.draftSaved
     val draftSaveErrorMsg = Strings.draftSaveError
