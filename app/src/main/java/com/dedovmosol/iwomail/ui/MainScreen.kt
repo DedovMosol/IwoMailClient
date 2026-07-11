@@ -68,6 +68,27 @@ private data class FolderColorsData(val icon: ImageVector, val gradientColors: L
 private val TaskCardColor = Color(0xFF006D77)
 private val TaskCardColorDark = Color(0xFF005F73)
 
+/**
+ * Saver для `UpdateInfo?` (примитивы) — переживание поворота без kotlin-parcelize.
+ * null кодируется пустым списком.
+ */
+private val UpdateInfoSaver = androidx.compose.runtime.saveable.listSaver<com.dedovmosol.iwomail.update.UpdateInfo?, Any>(
+    save = { info ->
+        if (info == null) emptyList()
+        else listOf(info.versionCode, info.versionName, info.apkUrl, info.changelog, info.minSdk)
+    },
+    restore = { list ->
+        if (list.isEmpty()) null
+        else com.dedovmosol.iwomail.update.UpdateInfo(
+            versionCode = list[0] as Int,
+            versionName = list[1] as String,
+            apkUrl = list[2] as String,
+            changelog = list[3] as String,
+            minSdk = list[4] as Int
+        )
+    }
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -338,9 +359,14 @@ fun MainScreen(
         initialCheckDone = true
     }
 
-    // Автопроверка обновлений
+    // Автопроверка обновлений.
+    // autoUpdateInfo — rememberSaveable, иначе при повороте с открытым диалогом
+    // info сбрасывался в null и диалог пропадал до следующей проверки по интервалу.
+    // UpdateInfo — примитивы, сохраняем через listSaver (без kotlin-parcelize).
     var showAutoUpdateDialog by rememberSaveable { mutableStateOf(false) }
-    var autoUpdateInfo by remember { mutableStateOf<com.dedovmosol.iwomail.update.UpdateInfo?>(null) }
+    var autoUpdateInfo by rememberSaveable(stateSaver = UpdateInfoSaver) {
+        mutableStateOf<com.dedovmosol.iwomail.update.UpdateInfo?>(null)
+    }
 
     LaunchedEffect(initialCheckDone) {
         if (!initialCheckDone) return@LaunchedEffect

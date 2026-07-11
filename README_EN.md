@@ -100,6 +100,7 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 ## 💡 Known Limitations
 
 - **Office 365 / Modern Auth** — OAuth 2.0 not yet supported (Basic Auth only)
+- **NTLM for EAS** — the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth
 - **IMAP/POP3** — beta version, may be unstable
 - **EAS 16.0+** (Exchange 2016+) — not tested, possible issues
 - **S/MIME signatures** — not supported

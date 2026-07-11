@@ -611,7 +611,8 @@ class PushService : Service() {
                     }
 
                     val startTime = System.currentTimeMillis()
-                    val result = doPing(currentAccount, effectiveHeartbeat)
+                    val ping = doPing(currentAccount, effectiveHeartbeat)
+                    val result = ping.status
                     val elapsed = System.currentTimeMillis() - startTime
 
                     if (elapsed < 10_000 && result == STATUS_EXPIRED) {
@@ -664,7 +665,11 @@ class PushService : Service() {
                             }
                         }
                         STATUS_HEARTBEAT_OUT_OF_BOUNDS -> {
-                            heartbeat = maxOf(heartbeat / 2, MIN_HEARTBEAT)
+                            // MS-ASCMD: в ответе Status=5 сервер возвращает граничный допустимый
+                            // HeartbeatInterval — принимаем его (в наших пределах) сразу,
+                            // вместо медленной сходимости делением пополам
+                            heartbeat = ping.serverHeartbeat?.coerceIn(MIN_HEARTBEAT, MAX_HEARTBEAT)
+                                ?: maxOf(heartbeat / 2, MIN_HEARTBEAT)
                             saveHeartbeat(accountId, heartbeat)
                             consecutiveErrors = 0
                             consecutiveSuccesses = 0
@@ -772,7 +777,10 @@ class PushService : Service() {
         return true
     }
 
-    private suspend fun doPing(account: AccountEntity, heartbeat: Int): Int {
+    /** Статус Ping + серверный HeartbeatInterval из ответа Status=5 (MS-ASCMD). */
+    private data class PingOutcome(val status: Int, val serverHeartbeat: Int? = null)
+
+    private suspend fun doPing(account: AccountEntity, heartbeat: Int): PingOutcome {
         // MS-ASCMD Ping Status=6: сервер может ограничить количество папок.
         // Начинаем с 25, при Status=6 снижаем до serverMaxFolders.
         val serverMax = maxPingFoldersPerAccount[account.id]
@@ -788,7 +796,7 @@ class PushService : Service() {
             val allFolders = database.folderDao().getFoldersByAccountList(account.id)
                 .filter { it.type in FolderType.PUSH_TYPES }
 
-            if (allFolders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
+            if (allFolders.isEmpty()) return PingOutcome(STATUS_FOLDER_REFRESH_NEEDED)
 
             // КРИТИЧНО: Не конкурируем с InitialSyncController
             if (com.dedovmosol.iwomail.sync.InitialSyncController.isSyncingAccount(account.id)) {
@@ -801,7 +809,7 @@ class PushService : Service() {
                 // Перечитываем папки — InitialSyncController мог их обновить
                 folders = database.folderDao().getFoldersByAccountList(account.id)
                     .filter { it.syncKey != "0" && it.type in FolderType.PUSH_TYPES }
-                if (folders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
+                if (folders.isEmpty()) return PingOutcome(STATUS_FOLDER_REFRESH_NEEDED)
             } else {
                 // Ограничиваем initial sync: таймаут 5 мин + лимит папок
                 kotlinx.coroutines.withTimeoutOrNull(300_000L) {
@@ -819,7 +827,7 @@ class PushService : Service() {
             folders = database.folderDao().getFoldersByAccountList(account.id)
                 .filter { it.syncKey != "0" && it.type in FolderType.PUSH_TYPES }
 
-            if (folders.isEmpty()) return STATUS_FOLDER_REFRESH_NEEDED
+            if (folders.isEmpty()) return PingOutcome(STATUS_FOLDER_REFRESH_NEEDED)
         }
 
         // Лимит папок для Ping: системные + пользовательские по приоритету непрочитанных
@@ -837,13 +845,13 @@ class PushService : Service() {
         // при гонке двух Ping-циклов computeIfAbsent вернёт уже закэшированный клиент,
         // лишний экземпляр отбрасывается (first-writer-wins, как прежний getOrPut).
         val client = easClientCache[account.id] ?: run {
-            val created = accountRepo.createEasClient(account.id) ?: return STATUS_SERVER_ERROR
+            val created = accountRepo.createEasClient(account.id) ?: return PingOutcome(STATUS_SERVER_ERROR)
             easClientCache.computeIfAbsent(account.id) { created }
         }
 
         return when (val result = client.ping(folderIds, heartbeat)) {
-            is EasResult.Success -> result.data.status
-            is EasResult.Error -> STATUS_SERVER_ERROR
+            is EasResult.Success -> PingOutcome(result.data.status, result.data.serverHeartbeatInterval)
+            is EasResult.Error -> PingOutcome(STATUS_SERVER_ERROR)
         }
     }
 

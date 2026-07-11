@@ -9,7 +9,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import android.util.Base64
 
@@ -214,8 +213,9 @@ class EasTransport(
                 if (cont.isActive) cont.resumeWithException(e)
             }
             override fun onResponse(call: Call, response: Response) {
-                if (cont.isActive) cont.resume(response)
-                else response.close()
+                // resume с onCancellation закрывает Response атомарно, если корутина отменилась
+                // между приходом ответа и диспатчем (check-then-act по isActive — гонка)
+                cont.resume(response) { response.close() }
             }
         })
     }

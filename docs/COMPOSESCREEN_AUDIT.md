@@ -1,7 +1,7 @@
 # Аудит ComposeScreen (v1.6.3b)
 
 > Дата: 03.07.2026 · Обновлено: 03.07.2026 (перепроверка кода + верификация best practices по внешним источникам)
-> Объём: `ComposeScreen.kt` ~2549 строк + связанные `ComposeUtils.kt`, `ui/screens/compose/ComposeModels.kt`, `ui/components/SendProgressBar.kt` (`SendController`), `ui/screens/ScheduledEmailWorker.kt`, `EasEmailService.kt`/`EasAttachmentService.kt` (лимиты), жизненный цикл WebView в `ui/components/RichTextEditor.kt`.
+> Объём: `ComposeScreen.kt` ~2604 строки + связанные `ComposeUtils.kt`, `ui/screens/compose/ComposeModels.kt`, `ui/components/SendProgressBar.kt` (`SendController`), `ui/screens/ScheduledEmailWorker.kt`, `EasEmailService.kt`/`EasAttachmentService.kt` (лимиты), жизненный цикл WebView в `ui/components/RichTextEditor.kt`.
 > Цель: найти крэш/OOM/гонко-склонные места и нарушения DRY/KISS/SOLID перед миграцией на MVVM. **Только аудит — код не менялся.**
 > Инвариант: протокол EAS/EWS и совместимость с **Exchange 2007 SP1/SP2** не затрагиваются ни на одном этапе (меняется только слой представления и pre-check'и ДО протокола).
 
@@ -42,6 +42,10 @@
 | CS-14 | Beta-ограничение | Инфо | Путь отправки только EAS (`createEasClient`); IMAP/POP3 отправлять не могут |
 | CS-15 | DRY | **Средняя** | 3 почти идентичных блока загрузки вложений (reply/forward/draft, ~80 строк каждый) — дублирование логики скачивания/base64/CID-резолвинга |
 | CS-16 | SRP / слои | **Средняя** | Бизнес-логика (нормализация, дедуп, дельта-детект, save/send-оркестрация) и прямые `database.*Dao()`-вызовы внутри `@Composable` |
+| CS-17 | Энергопотребление | **Средняя** | `accountRepo.accounts` собирается сырым `.collect` в `LaunchedEffect(Unit)` (блок инициализации аккаунта) — НЕ lifecycle-aware: Room-observer активен, пока композиция жива (экран в бэкстеке/фоне) → лишний расход CPU/батареи |
+| CS-18 | KISS / DRY | Низкая | `groupMappings`/`groupColors` поддерживаются двумя путями — прямая установка в `applyGroupsSelection`/клике подсказки И реактивный репарсинг JSON в `LaunchedEffect(groupMappingsJson, groupColorsJson)` (двойная работа, два источника истины) |
+| CS-19 | Производительность | Низкая | `LaunchedEffect(focusedFieldIndex)` c `delay(100)`+`requestFocus` срабатывает на КАЖДОЕ изменение фокуса (нужно только для восстановления после поворота) |
+| CS-20 | Гонка (латентная) | Низкая | Порядок `LaunchedEffect(Unit)`(account) → `(activeAccount?.id)`(signature) → `(replyToEmailId)`(reply body) не гарантирован: reply/forward-тело может строиться до готовности подписи (сейчас смягчено fallback `selectedSignature ?: activeAccount?.signature`) |
 
 ---
 
@@ -141,6 +145,28 @@ LaunchedEffect(replyToEmailId) {
 ### CS-16 — Бизнес-логика и доступ к БД внутри @Composable (нарушение SRP/слоёв) — Средняя
 
 `@Composable ComposeScreen` содержит: нормализацию/раскрытие групп/дедуп (`normalizeRecipients`, `applyGroupsSelection`), дельта-детект черновика (`hasDraftChanges`), оркестрацию save/send, прямые `database.contactGroupDao()/contactDao()/emailDao()/folderDao()`-вызовы. Нарушает SRP (Composable отвечает и за отрисовку, и за бизнес-правила) и границы слоёв (UI → DAO минуя Repository). Затрудняет тестирование (нельзя проверить без Robolectric). Устраняется выносом в `ComposeViewModel` + делегированием DAO-доступа репозиториям.
+
+### CS-17 — Non-lifecycle-aware сбор `accountRepo.accounts` (энергопотребление) — Средняя
+
+В `LaunchedEffect(Unit)` (блок инициализации аккаунта) выполняется `accountRepo.accounts.collect { allAccounts = it }`. `LaunchedEffect` привязан к композиции, а НЕ к lifecycle: пока `ComposeScreen` в композиции (в бэкстеке за другим экраном, при свёрнутом приложении с неуничтоженной Activity), сбор продолжается → Room-observer остаётся активным, происходят лишние пробуждения/рекомпозиции. Официальная рекомендация — `collectAsStateWithLifecycle` (сбор приостанавливается ниже STARTED), что проект уже принял (N-8). Здесь же — сырой `.collect`, несогласованно.
+
+Дополнительно: этот `LaunchedEffect(Unit)` смешивает одноразовую инициализацию (восстановление аккаунта, `initialToEmail`) с бесконечным `collect` — код после `collect` недостижим (сейчас его нет).
+
+**Устраняется миграцией:** `observeAccounts()` в `viewModelScope` VM + UI собирает `uiState` через `collectAsStateWithLifecycle` (дизайн, задачи 2.3/2.4). Верифицировано: [androiddevelopers — Consuming flows safely](https://medium.com/androiddevelopers/consuming-flows-safely-in-jetpack-compose-cde014d0d5a3).
+
+### CS-18 — Двойное сопровождение групп контактов (KISS/DRY) — Низкая
+
+`groupMappings`/`groupColors` устанавливаются напрямую (в `applyGroupsSelection` и в обработчике клика по подсказке) И параллельно реактивно репарсятся из JSON в `LaunchedEffect(groupMappingsJson, groupColorsJson)`. Итог — двойная сериализация/десериализация и два пути записи одного состояния (риск рассинхрона, лишняя работа при каждом изменении). Консолидировать в один источник: состояние — в VM/`UiState`, JSON — только для персистентности через `rememberSaveable` (без обратного репарсинга в отдельном эффекте).
+
+### CS-19 — Перезапрос фокуса на каждое изменение фокуса (производительность) — Низкая
+
+`LaunchedEffect(focusedFieldIndex)` c `delay(100)` + `requestFocus(...)` нужен для восстановления фокуса после поворота, но срабатывает на КАЖДЫЙ `onFocusChanged` (нормальная навигация по полям), запуская лишнюю корутину и повторный `requestFocus` уже сфокусированного поля. Гейтить срабатывание реальным пересозданием (напр. флаг «восстановление после поворота»), а не любым изменением фокуса.
+
+### CS-20 — Латентная гонка порядка инициализации подписи — Низкая
+
+Порядок трёх независимых эффектов не гарантирован: `LaunchedEffect(Unit)` (грузит `activeAccount`) → `LaunchedEffect(activeAccount?.id)` (грузит подписи, ставит `selectedSignature`) → `LaunchedEffect(replyToEmailId)` (строит тело как `selectedSignature?.text ?: activeAccount?.signature`). При «неудачном» порядке reply/forward-тело может собраться без подписи. Сейчас смягчено fallback-цепочкой, но это латентная гонка.
+
+**Устраняется миграцией:** VM в `init` **строго последовательно** сначала резолвит аккаунт+подпись (`loadAccountAndSignatures`), затем запускает загрузчик с готовым `signatureHtml` (дизайн, Key Flows).
 
 ---
 

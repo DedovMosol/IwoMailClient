@@ -2,6 +2,40 @@
 
 ## v1.6.3b
 
+### "Easy wins" audit — stability, leaks, FPS (2026-07-10)
+- **OkHttp connection leak** in update checks: `Response` was not closed on the HTTP-error path (`checkForUpdate`/`checkPreviousVersion`) — the connection was not returned to the pool on every failed auto-check (A-1)
+- **Response close race on coroutine cancellation**: `if (isActive) resume(...)` replaced with the atomic `resume(response) { close() }` in the EAS transport and the long-poll Ping (the `AttachmentManager` pattern); removed now-dead imports (A-2)
+- **Meeting invitations on EAS 14+**: the retry after Provision (HTTP 449) sent raw MIME bytes with a WBXML Content-Type — the server could not parse the body; the retry now reuses the correctly built request body (A-3)
+- **ANR risk on "Share" with attachments**: cross-process `ContentResolver` queries in ComposeScreen moved off the main thread to `Dispatchers.IO` (A-4)
+- **Email list FPS**: the envelope refresh indicator with three infinite animations recomposed every frame even while invisible (alpha=0) — now composed only when visible (A-5)
+- **Freezes on large emails**: the body pipeline (HTML-from-MIME extraction → entity unescape → Exchange separator cleanup), meeting detection and iCal field parsing ran on every recomposition of the detail screen — extracted into pure `EmailUtils` functions and cached via `remember` (A-6)
+- **Provision per MS-ASPROV**: `settings:DeviceInformation` inside Provision is sent only with EAS 14.1 (previously also on 14.0, where Exchange 2010 RTM could reply with a protocol error); on 12.x/14.0 device info is still sent via the Settings command as before (A-7)
+- **Dead code**: removed unused `BASE64_DETECT_REGEX` (A-8)
+- **Localization**: the calendar empty-trash dialog switched from hardcoded strings to existing `Localization` entries (`emptyCalendarTrashTitle`/`emptyCalendarTrashConfirm`/`trashEmptied`) (A-9)
+- **Accessibility**: touch targets < 48dp (error banner close, attachment save menus in mail and calendar) raised to the Material/WCAG minimum; added missing `contentDescription` (A-10)
+- **Rollback crash-safety**: the `startActivity` fallback in `requestUninstall` wrapped in try/catch — stripped-down OEM firmwares without the app-details screen can no longer crash the process (A-11)
+- **Tests**: `EasProvisioningTest` (pins the 14.1 requirement for DeviceInformation, phase1/phase2, response parsing and validation) + `processEmailBodyForDisplay`/`detectMeetingEmail`/`parseIcalMeetingInfo` tests in `EmailUtilsTest`
+
+### "Easy wins" audit — part 2 (2026-07-10)
+- **HTML email truncation at the first `--`** (A-12): MIME part extraction stopped at the first `--` anywhere in the body — on Outlook conditional comments (`<!--[if mso]>`), `<style><!--` and `-----Original Message-----`, dropping the rest of the message. The main path was rewritten as a proper RFC 2046 split by boundary (content-based truncation is now impossible), with the regex fallback kept for single-part MIME; recursive descent into nested multipart. Covered by `MimeHtmlProcessorExtractHtmlTest` (9 tests incl. Outlook comments and the `-- ` signature delimiter)
+- **EWS NTLM auth over the connection pool** (A-13): the 401 challenge body is now fully consumed (an unread body made OkHttp discard the connection, so Type3 went out on a new TCP → intermittent 401s, since NTLM authenticates the connection); the handshake was isolated into a dedicated client with `ConnectionPool(1)` so parallel EAS/EWS requests cannot steal the authenticating connection between Type1 and Type3
+- **"Save as…" across rotation** (A-14): the attachment id for the system file picker moved to `rememberSaveable` — rotation/process death over the picker no longer silently cancels the save (the object is resolved from the attachment list by id)
+- **Auto-update dialog across rotation** (A-15): `UpdateInfo` is persisted via a `listSaver` — the available-update dialog survives rotation instead of disappearing until the next interval check
+- **Ping Status=5: server HeartbeatInterval** (A-16): per MS-ASCMD, when the interval is out of range the server returns the boundary allowed value — we now accept it (within our 120–1800 s bounds) immediately, instead of slow convergence by halving
+- **Attachment base64 with CRLF** (A-17): base64 lines in MIME attachments are separated by CRLF (RFC 2045), not a bare LF (`Base64.DEFAULT`) — consistent with the email body
+- **DRY empty-trash dialogs** (A-18): three identical dialog scaffolds (tasks/notes/calendar) replaced with a shared `EmptyTrashConfirmDialog` — the action specifics stay in each screen's callback
+- **DRY MIME Content-Type detection**: the repeated `contains("Content-Type: x") || contains("Content-Type:x")` (6 sites) extracted into `String.hasContentType(prefix)`
+- **Tests**: suite 430 (was 421) — new `MimeHtmlProcessorExtractHtmlTest`
+
+### Deferred (future iterations, beyond the "easy wins" scope)
+- **HTTP 451 (ActiveSync redirect, `X-MS-Location`)**: correct support needs mutating the server URL, invalidating the lazy `ewsUrl` and persisting to the DB — a half-correct version would leave `ewsUrl` out of sync. Partially covered by the manual dual-URL (`EasClient.probeAlternateUrl`)
+- **markAsReadViaEws by subject** (EWS FindItem on `item:Subject` across 4 folders): two emails with the same subject can share a read status — narrow to `InternetMessageId`/date, or enable the fallback only on a confirmed EAS failure
+- **Async email body pipeline**: move MIME/HTML parsing (up to 20 MB) into `produceState`/`Dispatchers.Default` (currently under `remember`, but a multi-MB string compare per frame)
+- **Protocol-core tests**: `WbxmlParser.parse/generate`, `NtlmAuthenticator` (NTLMv2), calendar recurrence logic — zero coverage; needs a test seam
+- **MVVM for `MainScreen`/`ComposeScreen`**: the last large unmigrated screens (see `COMPOSESCREEN_AUDIT.md`)
+- **CI**: no GitHub Actions with `testDebugUnitTest` (+ Kover)
+- **EWS auth fallback**: already DRY behind deps lambdas; the 6-line wrapper with divergent contracts (`String?` vs `EasResult<String>`) was intentionally not merged
+
 ### Architecture — MVVM adoption (incremental)
 - Introduced a `ViewModel` + immutable `UiState` + `StateFlow` layer to eliminate state-loss bugs on configuration changes (rotation)
 - `SyncCleanupScreen` → `SyncCleanupViewModel`: sync & cleanup settings survive rotation without manual flags

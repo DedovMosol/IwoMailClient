@@ -695,46 +695,28 @@ fun CalendarScreen(
 
     // Диалог очистки корзины календаря
     if (showEmptyTrashDialog) {
-        val isRussian = com.dedovmosol.iwomail.ui.LocalLanguage.current == com.dedovmosol.iwomail.ui.AppLanguage.RUSSIAN
-        val trashEmptiedText = if (isRussian) "Корзина очищена" else "Trash emptied"
+        val trashEmptiedText = Strings.trashEmptied
 
-        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { showEmptyTrashDialog = false },
-            icon = { Icon(AppIcons.DeleteForever, null) },
-            title = { Text(if (isRussian) "Очистить корзину?" else "Empty trash?") },
-            text = {
-                Text(
-                    if (isRussian) "Удалить навсегда ${deletedEvents.size} событий из корзины?"
-                    else "Permanently delete ${deletedEvents.size} events from trash?"
-                )
-            },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.DeleteButton(
-                    onClick = {
-                        showEmptyTrashDialog = false
-                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                calendarRepo.emptyCalendarTrash(accountId)
-                            }
-                            when (result) {
-                                is EasResult.Success -> {
-                                    SafeToast.short(context, trashEmptiedText)
-                                }
-                                is EasResult.Error -> {
-                                    SafeToast.long(context, result.message)
-                                }
-                            }
+        com.dedovmosol.iwomail.ui.components.EmptyTrashConfirmDialog(
+            title = Strings.emptyCalendarTrashTitle,
+            text = Strings.emptyCalendarTrashConfirm(deletedEvents.size),
+            onDismiss = { showEmptyTrashDialog = false },
+            onConfirm = {
+                showEmptyTrashDialog = false
+                com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        calendarRepo.emptyCalendarTrash(accountId)
+                    }
+                    when (result) {
+                        is EasResult.Success -> {
+                            SafeToast.short(context, trashEmptiedText)
                         }
-                    },
-                    text = Strings.yes
-                )
-            },
-            dismissButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showEmptyTrashDialog = false },
-                    text = Strings.no
-                )
+                        is EasResult.Error -> {
+                            SafeToast.long(context, result.message)
+                        }
+                    }
+                }
             }
         )
     }

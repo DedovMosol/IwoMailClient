@@ -286,27 +286,35 @@ fun ComposeScreen(
     var shareAttachmentsLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!shareAttachmentsLoaded && com.dedovmosol.iwomail.ui.navigation.ShareIntentData.attachments.isNotEmpty()) {
-            shareAttachmentsLoaded = true
             val shareUris = com.dedovmosol.iwomail.ui.navigation.ShareIntentData.attachments
-            com.dedovmosol.iwomail.ui.navigation.ShareIntentData.clear()
 
-            val newAttachmentStrings = mutableListOf<String>()
-            for (uri in shareUris) {
-                try {
-                    val cursor = context.contentResolver.query(uri, null, null, null, null)
-                    cursor?.use {
-                        if (it.moveToFirst()) {
-                            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                            val name = if (nameIndex >= 0) it.getString(nameIndex) else "attachment"
-                            val size = if (sizeIndex >= 0) it.getLong(sizeIndex) else 0L
-                            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                            val attInfo = AttachmentInfo(uri, name, size, mimeType)
-                            newAttachmentStrings.add(attInfo.toSaveableString())
+            // ContentResolver — кросс-процессные binder-вызовы (DocumentsProvider бывает
+            // медленным) — выполняем вне главного потока
+            val newAttachmentStrings = withContext(Dispatchers.IO) {
+                val collected = mutableListOf<String>()
+                for (uri in shareUris) {
+                    try {
+                        val cursor = context.contentResolver.query(uri, null, null, null, null)
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                                val name = if (nameIndex >= 0) it.getString(nameIndex) else "attachment"
+                                val size = if (sizeIndex >= 0) it.getLong(sizeIndex) else 0L
+                                val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                                val attInfo = AttachmentInfo(uri, name, size, mimeType)
+                                collected.add(attInfo.toSaveableString())
+                            }
                         }
-                    }
-                } catch (_: Exception) { }
+                    } catch (_: Exception) { }
+                }
+                collected
             }
+            // Флаг и очистка — только ПОСЛЕ suspend-точки: withContext — точка отмены,
+            // и при повороте во время загрузки эффект перезапустится и дочитает вложения
+            // (иначе flag=true + очищенный ShareIntentData = молчаливая потеря)
+            shareAttachmentsLoaded = true
+            com.dedovmosol.iwomail.ui.navigation.ShareIntentData.clear()
             if (newAttachmentStrings.isNotEmpty()) {
                 attachmentStrings = attachmentStrings + newAttachmentStrings
             }

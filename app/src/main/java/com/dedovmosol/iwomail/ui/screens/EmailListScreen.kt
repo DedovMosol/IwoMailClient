@@ -891,8 +891,11 @@ private fun EmailList(
                     // Скроллбар
                     LazyColumnScrollbar(listState)
 
-                    // Кастомный индикатор с конвертиком
-                    if (!isFavorites) {
+                    // Кастомный индикатор с конвертиком.
+                    // Гейт по видимости обязателен: внутри 3 InfiniteTransition, которые
+                    // рекомпозируют индикатор каждый кадр — без гейта это происходит
+                    // постоянно (при alpha=0), съедая FPS списка и батарею
+                    if (!isFavorites && (isRefreshing || pullRefreshState.progress > 0f)) {
                         EnvelopeRefreshIndicator(
                             refreshing = isRefreshing,
                             state = pullRefreshState,
@@ -1411,8 +1414,9 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(text = message, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
-            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                Icon(AppIcons.Close, null, modifier = Modifier.size(16.dp))
+            // Без явного size у IconButton: минимальный тач-таргет 48dp (Material/WCAG)
+            IconButton(onClick = onDismiss) {
+                Icon(AppIcons.Close, Strings.close, modifier = Modifier.size(16.dp))
             }
         }
     }

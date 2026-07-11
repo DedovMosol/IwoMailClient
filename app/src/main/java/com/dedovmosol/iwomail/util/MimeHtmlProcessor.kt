@@ -20,11 +20,15 @@ object MimeHtmlProcessor {
     private val CHARSET_HEADER = Regex("charset\\s*=\\s*\"?([^\";\\r\\n]+)\"?", RegexOption.IGNORE_CASE)
     private val TRANSFER_ENCODING = Regex("Content-Transfer-Encoding:\\s*([^\\s;\\r\\n]+)", RegexOption.IGNORE_CASE)
 
-    private val HTML_PART = "(Content-Type:\\s*text/html[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
+    // Fallback-регексы для MIME без boundary (одночастный/нестандартный).
+    // Lookahead требует "--" в НАЧАЛЕ строки (RFC 2046: разделитель = CRLF + "--" + boundary):
+    // голое (?=--|$) обрезало тело на первом "--" где угодно — на "<!--[if mso]>" Outlook,
+    // "<style><!--" и "-----Original Message-----"
+    private val HTML_PART = "(Content-Type:\\s*text/html[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=\\r?\\n--|\$)".toRegex(
         setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
     )
 
-    private val TEXT_PART = "(Content-Type:\\s*text/plain[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=--|\$)".toRegex(
+    private val TEXT_PART = "(Content-Type:\\s*text/plain[^\\r\\n]*(?:\\r?\\n[^\\r\\n]+)*)\\r?\\n\\r?\\n(.*?)(?=\\r?\\n--|\$)".toRegex(
         setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
     )
 
@@ -42,28 +46,71 @@ object MimeHtmlProcessor {
     /**
      * Extracts HTML from MIME data (bodyType=4).
      * Falls back to text/plain → HTML conversion if no HTML part found.
+     *
+     * Основной путь — честный RFC 2046-сплит по boundary (тело части = всё до следующего
+     * разделителя, никакая обрезка по содержимому невозможна); regex-fallback остаётся
+     * для одночастного MIME и нестандартных boundary.
      */
     fun extractHtmlFromMime(mimeData: String): String {
         val decoded = decodeMimeWrapper(mimeData)
 
-        val htmlMatch = HTML_PART.find(decoded)
-        if (htmlMatch != null) {
-            return decodeMimePartContent(
-                headers = htmlMatch.groupValues[1],
-                body = htmlMatch.groupValues[2].trim()
-            )
-        }
-
-        val textMatch = TEXT_PART.find(decoded)
-        if (textMatch != null) {
-            val content = decodeMimePartContent(
-                headers = textMatch.groupValues[1],
-                body = textMatch.groupValues[2].trim()
-            )
-            return content.replace("\n", "<br>")
-        }
+        findTextPart(decoded, "text/html")?.let { return it }
+        findTextPart(decoded, "text/plain")?.let { return it.replace("\n", "<br>") }
 
         return decoded
+    }
+
+    /**
+     * Ищет часть указанного типа (text/html | text/plain), рекурсивно спускаясь
+     * во вложенные multipart (multipart/mixed { multipart/alternative { plain + html } }).
+     * Возвращает декодированное содержимое (CTE + charset) или null.
+     */
+    private fun findTextPart(section: String, type: String, boundary: String? = null, depth: Int = 0): String? {
+        if (depth <= 10) {
+            val effectiveBoundary = boundary ?: BOUNDARY.find(section)?.groupValues?.get(1)
+            if (effectiveBoundary != null) {
+                for (part in section.split("--$effectiveBoundary")) {
+                    val (headers, body) = splitHeadersFromBody(part) ?: continue
+
+                    val nestedBoundary = BOUNDARY.find(headers)?.groupValues?.get(1)
+                    if (nestedBoundary != null && nestedBoundary != effectiveBoundary &&
+                        headers.hasContentType("multipart/")
+                    ) {
+                        findTextPart(part, type, nestedBoundary, depth + 1)?.let { return it }
+                        continue
+                    }
+
+                    if (headers.hasContentType(type)) {
+                        return decodeMimePartContent(headers, body.trim())
+                    }
+                }
+            }
+        }
+
+        // Fallback: одночастный MIME / boundary не сработал — прежний regex-путь
+        val regex = if (type == "text/html") HTML_PART else TEXT_PART
+        val match = regex.find(section) ?: return null
+        return decodeMimePartContent(
+            headers = match.groupValues[1],
+            body = match.groupValues[2].trim()
+        )
+    }
+
+    /** Есть ли в заголовках `Content-Type: <prefix>` (с пробелом после двоеточия или без). */
+    private fun String.hasContentType(prefix: String): Boolean =
+        contains("Content-Type: $prefix", ignoreCase = true) ||
+            contains("Content-Type:$prefix", ignoreCase = true)
+
+    /** Разделяет MIME-часть на заголовки и тело по первой пустой строке (CRLF или LF). */
+    private fun splitHeadersFromBody(part: String): Pair<String, String>? {
+        val crlfIdx = part.indexOf("\r\n\r\n")
+        val lfIdx = part.indexOf("\n\n")
+        val (idx, sepLen) = when {
+            crlfIdx != -1 && (lfIdx == -1 || crlfIdx <= lfIdx) -> crlfIdx to 4
+            lfIdx != -1 -> lfIdx to 2
+            else -> return null
+        }
+        return part.substring(0, idx) to part.substring(idx + sepLen)
     }
 
     /**
@@ -217,16 +264,12 @@ object MimeHtmlProcessor {
         val parts = mimeSection.split("--$boundary")
 
         for (part in parts) {
-            val isNestedMultipart = part.contains("Content-Type: multipart/", ignoreCase = true) ||
-                    part.contains("Content-Type:multipart/", ignoreCase = true)
-            if (isNestedMultipart) {
+            if (part.hasContentType("multipart/")) {
                 extractImagesRecursive(part, images, depth + 1)
                 continue
             }
 
-            val isImage = part.contains("Content-Type: image/", ignoreCase = true) ||
-                    part.contains("Content-Type:image/", ignoreCase = true)
-            if (!isImage) continue
+            if (!part.hasContentType("image/")) continue
 
             val contentId = CID_HEADER.find(part)?.groupValues?.get(1) ?: continue
             val contentType = IMAGE_TYPE.find(part)?.groupValues?.get(1)?.trim() ?: "image/png"

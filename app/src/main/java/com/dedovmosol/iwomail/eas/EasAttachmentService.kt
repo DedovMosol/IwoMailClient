@@ -332,7 +332,9 @@ class EasAttachmentService internal constructor(
             sb.append("Content-Transfer-Encoding: base64\r\n")
             sb.append("Content-Disposition: attachment; filename=\"$encodedName\"\r\n")
             sb.append("\r\n")
-            sb.append(Base64.encodeToString(data, Base64.DEFAULT))
+            // RFC 2045: строки base64 в MIME разделяются CRLF, не голым LF (как Base64.DEFAULT).
+            // Единообразно с телом письма в EasEmailService
+            sb.append(Base64.encodeToString(data, Base64.CRLF))
             sb.append("\r\n")
         }
 

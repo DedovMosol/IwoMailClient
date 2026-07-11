@@ -316,44 +316,32 @@ fun TasksScreen(
         val deletingMessage = Strings.deletingTasks(deletedTasks.size)
         val tasksTrashEmptiedText = Strings.tasksTrashEmptied
 
-        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { showEmptyTrashDialog = false },
-            icon = { Icon(AppIcons.DeleteForever, null) },
-            title = { Text(Strings.emptyTasksTrash) },
-            text = { Text(Strings.emptyTasksTrashConfirm(deletedTasks.size)) },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.DeleteButton(
-                    onClick = {
-                        showEmptyTrashDialog = false
-                        com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+        com.dedovmosol.iwomail.ui.components.EmptyTrashConfirmDialog(
+            title = Strings.emptyTasksTrash,
+            text = Strings.emptyTasksTrashConfirm(deletedTasks.size),
+            onDismiss = { showEmptyTrashDialog = false },
+            onConfirm = {
+                showEmptyTrashDialog = false
+                com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
 
-                        val taskIds = deletedTasks.map { it.id }
-                        if (taskIds.isNotEmpty()) {
-                            deletionController.startDeletion(
-                                emailIds = taskIds,
-                                message = deletingMessage,
-                                scope = scope,
-                                isRestore = false
-                            ) { ids, onProgress ->
-                                val result = viewModel.emptyTrash()
-                                onProgress(ids.size, ids.size)
-                                when (result) {
-                                    is EasResult.Success ->
-                                        SafeToast.short(context, "$tasksTrashEmptiedText: ${result.data}")
-                                    is EasResult.Error ->
-                                        SafeToast.long(context, result.message)
-                                }
-                            }
+                val taskIds = deletedTasks.map { it.id }
+                if (taskIds.isNotEmpty()) {
+                    deletionController.startDeletion(
+                        emailIds = taskIds,
+                        message = deletingMessage,
+                        scope = scope,
+                        isRestore = false
+                    ) { ids, onProgress ->
+                        val result = viewModel.emptyTrash()
+                        onProgress(ids.size, ids.size)
+                        when (result) {
+                            is EasResult.Success ->
+                                SafeToast.short(context, "$tasksTrashEmptiedText: ${result.data}")
+                            is EasResult.Error ->
+                                SafeToast.long(context, result.message)
                         }
-                    },
-                    text = Strings.yes
-                )
-            },
-            dismissButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { showEmptyTrashDialog = false },
-                    text = Strings.no
-                )
+                    }
+                }
             }
         )
     }

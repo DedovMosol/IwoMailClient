@@ -31,6 +31,20 @@ class EwsClient(
     private val ntlmLock = Any()
     @Volatile var serverVersion: String = VERSION_2007
         private set
+
+    /**
+     * Выделенный клиент для NTLM-handshake. NTLM аутентифицирует TCP-соединение,
+     * а не запрос: Type1 и Type3 обязаны уйти по ОДНОМУ соединению. Общий пул
+     * делит соединения с параллельными EAS/EWS-запросами того же хоста — Type3
+     * мог уйти по «чужому» соединению и получить 401. Собственный пул + сериализация
+     * через [ntlmLock] гарантируют, что Type3 переиспользует соединение Type1.
+     * newBuilder() наследует TLS/mTLS/таймауты/интерсепторы базового клиента.
+     */
+    private val ntlmClient: OkHttpClient by lazy {
+        httpClient.newBuilder()
+            .connectionPool(okhttp3.ConnectionPool(1, 60, java.util.concurrent.TimeUnit.SECONDS))
+            .build()
+    }
     
     // ==================== Низкоуровневые методы ====================
     
@@ -100,13 +114,16 @@ class EwsClient(
             .header("Connection", "keep-alive")
             .build()
         
-        val response1 = httpClient.newCall(request1).execute()
-        
+        val response1 = ntlmClient.newCall(request1).execute()
+
         if (response1.code != 401) {
             return@synchronized response1.use { if (it.isSuccessful) it.body?.string() else null }
         }
         val wwwAuth = response1.header("WWW-Authenticate")
-        response1.body?.close()
+        // Дочитываем тело 401 ПОЛНОСТЬЮ: close() непрочитанного тела заставляет OkHttp
+        // выбросить соединение вместо возврата в пул (IIS шлёт непустую 401.2-страницу),
+        // а Type3 по новому соединению для NTLM недействителен
+        response1.use { it.body?.bytes() }
 
         if (wwwAuth == null) return@synchronized null
 
@@ -123,7 +140,7 @@ class EwsClient(
             .header("Connection", "keep-alive")
             .build()
         
-        return@synchronized httpClient.newCall(request3).execute().use { response3 ->
+        return@synchronized ntlmClient.newCall(request3).execute().use { response3 ->
             if (response3.isSuccessful) {
                 response3.body?.string()
             } else {

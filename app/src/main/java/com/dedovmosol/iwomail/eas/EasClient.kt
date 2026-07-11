@@ -8,7 +8,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import android.util.Base64
 import com.dedovmosol.iwomail.util.MimeHtmlProcessor
@@ -1201,8 +1200,9 @@ $foldersXml
                             if (cont.isActive) cont.resumeWithException(e)
                         }
                         override fun onResponse(call: Call, response: Response) {
-                            if (cont.isActive) cont.resume(response)
-                            else response.close()
+                            // resume с onCancellation: long-poll Ping часто отменяется PushService'ом —
+                            // Response закрывается атомарно, без гоночного check-then-act по isActive
+                            cont.resume(response) { response.close() }
                         }
                     })
                 }
@@ -1233,7 +1233,10 @@ $foldersXml
                         }
                     }
 
-                    EasResult.Success(PingResult(status, changedFolders))
+                    // MS-ASCMD: при Status=5 сервер сообщает граничный допустимый интервал
+                    val serverHeartbeat = extractValue(responseXml, "HeartbeatInterval")?.toIntOrNull()
+
+                    EasResult.Success(PingResult(status, changedFolders, serverHeartbeat))
                 }
 
             } catch (e: java.net.SocketTimeoutException) {
@@ -2244,7 +2247,9 @@ $foldersXml
                     is EasResult.Success -> {
                         val retryRequest = Request.Builder()
                             .url(url)
-                            .post(mimeBytes.toRequestBody(contentType.toMediaType()))
+                            // Переиспользуем requestBody: на EAS 14+ тело — WBXML ComposeMail,
+                            // сырые mimeBytes под WBXML Content-Type сервер не распарсит
+                            .post(requestBody)
                             .header("Authorization", getAuthHeader())
                             .header("MS-ASProtocolVersion", easVersion)
                             .header("Content-Type", contentType)
@@ -2589,7 +2594,9 @@ data class EasAttachment(
  */
 data class PingResult(
     val status: Int,
-    val changedFolders: List<String> // ServerId папок с изменениями
+    val changedFolders: List<String>, // ServerId папок с изменениями
+    // MS-ASCMD: при Status=5 сервер возвращает граничный (min/max) допустимый интервал
+    val serverHeartbeatInterval: Int? = null
 )
 
 /**

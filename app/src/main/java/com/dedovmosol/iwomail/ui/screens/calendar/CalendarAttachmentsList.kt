@@ -232,13 +232,11 @@ internal fun CalendarAttachmentsList(
                         if (isDownloading) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         } else {
-                            IconButton(
-                                onClick = { showSaveMenu = true },
-                                modifier = Modifier.size(24.dp)
-                            ) {
+                            // Без явного size у IconButton: минимальный тач-таргет 48dp (Material/WCAG)
+                            IconButton(onClick = { showSaveMenu = true }) {
                                 Icon(
                                     AppIcons.MoreVert,
-                                    contentDescription = null,
+                                    contentDescription = Strings.more,
                                     modifier = Modifier.size(20.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

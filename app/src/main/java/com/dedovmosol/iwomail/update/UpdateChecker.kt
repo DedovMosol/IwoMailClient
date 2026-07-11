@@ -155,6 +155,8 @@ class UpdateChecker(context: Context) {
                 val response = updateClient.newCall(request).execute()
 
                 if (!response.isSuccessful) {
+                    // На этом пути тело не потребляется — без close() соединение не вернётся в пул (утечка)
+                    response.close()
                     lastError = Exception("HTTP ${response.code}")
                     if (attempt < MAX_RETRY_ATTEMPTS - 1) {
                         kotlinx.coroutines.delay(1000L * (attempt + 1)) // 1s, 2s задержка
@@ -243,6 +245,8 @@ class UpdateChecker(context: Context) {
                 val response = updateClient.newCall(request).execute()
 
                 if (!response.isSuccessful) {
+                    // На этом пути тело не потребляется — без close() соединение не вернётся в пул (утечка)
+                    response.close()
                     lastError = Exception("HTTP ${response.code}")
                     if (attempt < MAX_RETRY_ATTEMPTS - 1) {
                         kotlinx.coroutines.delay(1000L * (attempt + 1))
@@ -540,7 +544,12 @@ class UpdateChecker(context: Context) {
             val detailsIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
-            context.startActivity(detailsIntent)
+            try {
+                context.startActivity(detailsIntent)
+            } catch (e2: Exception) {
+                // Урезанные прошивки без экрана настроек приложения — не роняем процесс
+                android.util.Log.e("UpdateChecker", "requestUninstall fallback failed: ${e2.message}", e2)
+            }
         }
     }
 

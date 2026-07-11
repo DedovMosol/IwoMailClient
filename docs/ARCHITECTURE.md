@@ -204,6 +204,10 @@ Room v42 adds indexes for these home-screen widget paths: `emails(read, dateRece
 
 EWS requests use SOAP and `RequestServerVersion="Exchange2007_SP1"` by default. EWS is used where EAS 12.x is incomplete or unreliable: notes, many task paths, server drafts, calendar details/meetings/exceptions/attachments and selected fallback deletes.
 
+The NTLM handshake (Type1 → Type2 → Type3) runs on a dedicated OkHttp client with `ConnectionPool(1)` and is serialized via a lock, so Type1 and Type3 share one TCP connection and cannot be interleaved with parallel EAS/EWS traffic — NTLM authenticates the connection, not the request. The 401 challenge body is fully consumed so the connection returns to the pool.
+
+MIME body extraction (`MimeHtmlProcessor.extractHtmlFromMime`) uses a proper RFC 2046 boundary split with recursion into nested multipart; a regex fallback covers single-part MIME.
+
 ### IMAP/POP3 beta
 
 `ImapClient` and `Pop3Client` implement `shared.MailClient` via JavaMail. IMAP supports folders and message flags. POP3 is INBOX-only and cannot preserve server read/flag state. Full SMTP parity is not implemented as a separate production layer.
@@ -290,7 +294,7 @@ Drafts-specific reconcile keeps full `EmailEntity` because body/bodyType migrati
 
 | Component | Responsibility |
 |-----------|----------------|
-| `PushService` | Foreground Direct Push service, adaptive EAS Ping heartbeat, per-account jobs |
+| `PushService` | Foreground Direct Push service, adaptive EAS Ping heartbeat (on Ping `Status=5` the server-supplied `HeartbeatInterval` is accepted within the 120–1800 s bounds per MS-ASCMD), per-account jobs |
 | `SyncWorker` | Periodic/manual sync, notification pass, auto-cleanup, PushService health check |
 | `OutboxWorker` | Offline outbox send |
 | `PushRestartWorker` | Push restart after failures |
@@ -357,7 +361,7 @@ Exchange 2007 SP1 exposes EAS 12.1. The app keeps Exchange 2007 behavior as a fi
 |---------|-----------|-------------------|
 | Mail sync/send/move/flag | EAS | EWS fallback for selected hard-delete/error paths |
 | Folder sync/CRUD | EAS FolderSync | Serialized per account to protect SyncKey state |
-| Direct Push | EAS Ping | Adaptive heartbeat |
+| Direct Push | EAS Ping | Adaptive heartbeat; honors server `HeartbeatInterval` on `Status=5` |
 | Contacts | EAS + GAL search | Local contacts also supported |
 | Notes | EWS on Exchange 2007 | EAS Notes class is 14.0+ |
 | Tasks | EAS/EWS depending on version/path | EWS for Exchange 2007 task gaps |

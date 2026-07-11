@@ -60,28 +60,17 @@ import com.dedovmosol.iwomail.util.TASK_SUBJECT_REGEX
 import com.dedovmosol.iwomail.util.BODY_LINK_REGEX
 import com.dedovmosol.iwomail.util.TASK_DUE_DATE_REGEX
 import com.dedovmosol.iwomail.util.TASK_DESCRIPTION_REGEX
-import com.dedovmosol.iwomail.util.HTML_STRIP_REGEX
-import com.dedovmosol.iwomail.util.ICAL_SUMMARY_REGEX
-import com.dedovmosol.iwomail.util.ICAL_DTSTART_REGEX
-import com.dedovmosol.iwomail.util.ICAL_DTEND_REGEX
-import com.dedovmosol.iwomail.util.ICAL_LOCATION_REGEX
-import com.dedovmosol.iwomail.util.ICAL_DESCRIPTION_REGEX
-import com.dedovmosol.iwomail.util.ICAL_ORGANIZER_REGEX
 import com.dedovmosol.iwomail.util.LINE_FOLDING_REGEX
-import com.dedovmosol.iwomail.util.EXCHANGE_SEPARATOR_1_REGEX
-import com.dedovmosol.iwomail.util.EXCHANGE_SEPARATOR_2_REGEX
-import com.dedovmosol.iwomail.util.EXCHANGE_SEPARATOR_3_REGEX
-import com.dedovmosol.iwomail.util.EXCHANGE_SEPARATOR_4_REGEX
-import com.dedovmosol.iwomail.util.MimeHtmlProcessor
 import com.dedovmosol.iwomail.util.ICalParser
+import com.dedovmosol.iwomail.util.detectMeetingEmail
+import com.dedovmosol.iwomail.util.parseIcalMeetingInfo
+import com.dedovmosol.iwomail.util.processEmailBodyForDisplay
 import com.dedovmosol.iwomail.ui.screens.emaildetail.AttachmentsSection
 import com.dedovmosol.iwomail.util.extractDisplayName
 import com.dedovmosol.iwomail.util.extractEmailAddress
 import com.dedovmosol.iwomail.util.parseRecipientPairs
 import com.dedovmosol.iwomail.util.formatFullDate
 import com.dedovmosol.iwomail.util.formatFileSize
-import com.dedovmosol.iwomail.util.looksLikeEncodedHtmlEmailContent
-import com.dedovmosol.iwomail.util.looksLikeHtmlEmailContent
 import com.dedovmosol.iwomail.util.sanitizeEmailHtml
 import java.io.File
 
@@ -156,8 +145,11 @@ fun EmailDetailScreen(
     // downloadingId — UI-состояние загрузки вложения (launcher'ы/файловый I/O), остаётся в UI.
     var downloadingId by rememberSaveable { mutableStateOf<Long?>(null) }
 
-    // Save As: запоминаем вложение для сохранения через системный файл-пикер
-    var pendingSaveAsAttachment by remember { mutableStateOf<AttachmentEntity?>(null) }
+    // Save As: id вложения для сохранения через системный файл-пикер.
+    // rememberSaveable обязателен: пикер CreateDocument открыт ПОВЕРХ Activity —
+    // поворот/смерть процесса сбрасывали plain remember в null, и выбор места
+    // сохранения молча игнорировался (сам объект резолвим из attachments по id)
+    var pendingSaveAsAttachmentId by rememberSaveable { mutableStateOf<Long?>(null) }
     var pendingPreviewFile by remember { mutableStateOf<File?>(null) }
     val previewLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -168,8 +160,10 @@ fun EmailDetailScreen(
     val saveAsLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
-        val attachment = pendingSaveAsAttachment ?: return@rememberLauncherForActivityResult
-        pendingSaveAsAttachment = null
+        val attachmentId = pendingSaveAsAttachmentId ?: return@rememberLauncherForActivityResult
+        pendingSaveAsAttachmentId = null
+        val attachment = attachments.find { it.id == attachmentId }
+            ?: return@rememberLauncherForActivityResult
         scope.launch {
             try {
                 val sourceFile = if (attachment.downloaded && attachment.localPath != null) {
@@ -814,37 +808,25 @@ fun EmailDetailScreen(
                     }
                 }
 
-                // Приглашение на встречу (iCalendar в теле письма или вложении)
-                val calendarAttachment = attachments.find {
-                    it.contentType.contains("text/calendar", ignoreCase = true) ||
-                    it.contentType.contains("application/ics", ignoreCase = true) ||
-                    it.displayName.endsWith(".ics", ignoreCase = true)
+                // Приглашение на встречу (iCalendar в теле письма или вложении).
+                // PERF: детект сканирует всё тело/тему — считаем раз на письмо, не на рекомпозицию
+                val calendarAttachment = remember(attachments) {
+                    attachments.find {
+                        it.contentType.contains("text/calendar", ignoreCase = true) ||
+                        it.contentType.contains("application/ics", ignoreCase = true) ||
+                        it.displayName.endsWith(".ics", ignoreCase = true)
+                    }
                 }
                 val hasCalendarAttachment = calendarAttachment != null
-                val bodyHasVEvent = currentEmail.body.contains("BEGIN:VEVENT", ignoreCase = true) ||
-                    currentEmail.body.contains("BEGIN:VCALENDAR", ignoreCase = true)
-
-                // Проверяем признаки приглашения Exchange в теле (Когда: ... Где: ...)
-                val bodyHasMeetingInfo = (currentEmail.body.contains("Когда:", ignoreCase = true) ||
-                    currentEmail.body.contains("When:", ignoreCase = true)) &&
-                    (currentEmail.body.contains("Где:", ignoreCase = true) ||
-                    currentEmail.body.contains("Where:", ignoreCase = true))
-
-                // Определяем тип письма: приглашение или ответ на приглашение
-                val isAcceptedResponse = currentEmail.subject.startsWith("Принято:", ignoreCase = true) ||
-                    currentEmail.subject.startsWith("Accepted:", ignoreCase = true)
-                val isDeclinedResponse = currentEmail.subject.startsWith("Отклонено:", ignoreCase = true) ||
-                    currentEmail.subject.startsWith("Declined:", ignoreCase = true)
-                val isTentativeResponse = currentEmail.subject.startsWith("Под вопросом:", ignoreCase = true) ||
-                    currentEmail.subject.startsWith("Tentative:", ignoreCase = true)
-                val isMeetingResponse = isAcceptedResponse || isDeclinedResponse || isTentativeResponse
-
-                // Проверяем типичные признаки приглашения в теме
-                val subjectHasInvitation = currentEmail.subject.contains("Приглашение:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Invitation:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Meeting:", ignoreCase = true) ||
-                    currentEmail.subject.contains("Встреча:", ignoreCase = true)
-                val isMeetingInvitation = (hasCalendarAttachment || bodyHasVEvent || subjectHasInvitation || bodyHasMeetingInfo) && !isMeetingResponse
+                val meetingDetection = remember(currentEmail.body, currentEmail.subject, hasCalendarAttachment) {
+                    detectMeetingEmail(currentEmail.body, currentEmail.subject, hasCalendarAttachment)
+                }
+                val bodyHasVEvent = meetingDetection.bodyHasVEvent
+                val isAcceptedResponse = meetingDetection.isAcceptedResponse
+                val isDeclinedResponse = meetingDetection.isDeclinedResponse
+                val isTentativeResponse = meetingDetection.isTentativeResponse
+                val isMeetingResponse = meetingDetection.isMeetingResponse
+                val isMeetingInvitation = meetingDetection.isMeetingInvitation
 
                 // UI для ответа на приглашение (организатор видит ответ участника)
                 if (isMeetingResponse && !isTaskEmail) {
@@ -996,15 +978,18 @@ fun EmailDetailScreen(
                         }
                     }
 
-                    // Используем данные из тела или из загруженного вложения
+                    // Используем данные из тела или из загруженного вложения.
                     // Обрабатываем iCalendar line folding (RFC 5545): строки могут быть разбиты
-                    // с пробелом или табом в начале продолжения
+                    // с пробелом или табом в начале продолжения.
+                    // PERF: regex-проход по всему телу — под remember, не на каждую рекомпозицию
                     val resolvedIcalData = loadedIcalData
-                    val icalData = when {
-                        bodyHasVEvent -> currentEmail.body
-                        resolvedIcalData != null -> resolvedIcalData
-                        else -> ""
-                    }.replace(LINE_FOLDING_REGEX, "") // Убираем line folding
+                    val icalData = remember(currentEmail.body, bodyHasVEvent, resolvedIcalData) {
+                        when {
+                            bodyHasVEvent -> currentEmail.body
+                            resolvedIcalData != null -> resolvedIcalData
+                            else -> ""
+                        }.replace(LINE_FOLDING_REGEX, "") // Убираем line folding
+                    }
 
                     if (!eventAdded) {
                         Card(
@@ -1057,27 +1042,21 @@ fun EmailDetailScreen(
                                 } else {
                                     Spacer(modifier = Modifier.height(8.dp))
 
-                                    // Получаем email организатора для отправки ответа
-                                    val organizerEmail = ICAL_ORGANIZER_REGEX.find(icalData)?.groupValues?.get(1)
-                                        ?: currentEmail.from
-
-                                    // Парсим данные встречи заранее
-                                    val meetingSummary = ICAL_SUMMARY_REGEX.find(icalData)?.groupValues?.get(1)
-                                        ?.replace("\\n", " ")?.replace("\\,", ",")?.trim()
-                                        ?: currentEmail.subject
-                                    // Извлекаем TZID и дату из DTSTART/DTEND
-                                    val dtStartMatch = ICAL_DTSTART_REGEX.find(icalData)
-                                    val dtStartTzid = dtStartMatch?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
-                                    val dtStart = dtStartMatch?.groupValues?.get(2)
-                                    val dtEndMatch = ICAL_DTEND_REGEX.find(icalData)
-                                    val dtEndTzid = dtEndMatch?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
-                                    val dtEnd = dtEndMatch?.groupValues?.get(2)
-                                    val meetingLocation = ICAL_LOCATION_REGEX.find(icalData)?.groupValues?.get(1)
-                                        ?.replace("\\n", " ")?.replace("\\,", ",")?.trim() ?: ""
-                                    val meetingDescription = ICAL_DESCRIPTION_REGEX.find(icalData)?.groupValues?.get(1)
-                                        ?.replace("\\n", "\n")?.replace("\\,", ",")?.trim() ?: ""
-                                    val meetingStartTime = ICalParser.parseICalDate(dtStart, dtStartTzid) ?: System.currentTimeMillis()
-                                    val meetingEndTime = ICalParser.parseICalDate(dtEnd, dtEndTzid) ?: (meetingStartTime + 60 * 60 * 1000)
+                                    // Парсим данные встречи (организатор, тема, время, место).
+                                    // PERF: 6 regex-проходов по iCal-данным — раз на письмо, не на рекомпозицию
+                                    val meeting = remember(icalData, currentEmail.from, currentEmail.subject) {
+                                        parseIcalMeetingInfo(
+                                            icalData = icalData,
+                                            fallbackOrganizer = currentEmail.from,
+                                            fallbackSummary = currentEmail.subject
+                                        )
+                                    }
+                                    val organizerEmail = meeting.organizerEmail
+                                    val meetingSummary = meeting.summary
+                                    val meetingLocation = meeting.location
+                                    val meetingDescription = meeting.description
+                                    val meetingStartTime = meeting.startTime
+                                    val meetingEndTime = meeting.endTime
 
                                     suspend fun buildResponseAndSend(responseType: String, statusText: String) {
                                         val account = withContext(Dispatchers.IO) {
@@ -1357,7 +1336,7 @@ fun EmailDetailScreen(
                             }
                         },
                         onSaveAsClick = { attachment ->
-                            pendingSaveAsAttachment = attachment
+                            pendingSaveAsAttachmentId = attachment.id
                             saveAsLauncher.launch(attachment.displayName)
                         },
                         onShareClick = { attachment ->
@@ -1477,40 +1456,15 @@ fun EmailDetailScreen(
                         )
                     }
                 } else {
-                    // Тело письма - определяем HTML или plain text
-                    // КРИТИЧНО: Если bodyType=4 (MIME), извлекаем HTML из MIME
-                    val rawBody = if (currentEmail.bodyType == 4) {
-                        MimeHtmlProcessor.extractHtmlFromMime(currentEmail.body)
-                    } else {
-                        currentEmail.body
+                    // Тело письма — определяем HTML или plain text.
+                    // PERF: конвейер (MIME-извлечение → unescape XML entities → чистка
+                    // Exchange-разделителей) — тяжёлые полнострочные проходы по телу до МБ;
+                    // строго под remember, иначе пересчёт на каждую рекомпозицию экрана
+                    val displayBody = remember(currentEmail.body, currentEmail.bodyType) {
+                        processEmailBodyForDisplay(currentEmail.body, currentEmail.bodyType)
                     }
-
-                    // КРИТИЧНО: Расэкранируем XML entities, если body содержит закодированные HTML-теги.
-                    // Проблема: WBXML-парсер при EAS Sync выводит тело как XML,
-                    // где <div> становится &lt;div&gt;, <br> → &lt;br&gt; и т.д.
-                    // В parseEmail() мы уже добавили unescapeXml, но старые закэшированные
-                    // письма в БД всё ещё содержат encoded entities. Этот safety-net
-                    // исправляет и старые, и новые данные.
-                    val unescapedBody = if (rawBody.contains("&lt;") && looksLikeEncodedHtmlEmailContent(rawBody)) {
-                        rawBody
-                            .replace("&lt;", "<")
-                            .replace("&gt;", ">")
-                            .replace("&quot;", "\"")
-                            .replace("&apos;", "'")
-                            .replace("&amp;", "&")
-                    } else {
-                        rawBody
-                    }
-
-                    // Убираем разделители Exchange из тела (включая частичные остатки типа ~*)
-                    val cleanedBody = unescapedBody
-                        .replace(EXCHANGE_SEPARATOR_1_REGEX, "")
-                        .replace(EXCHANGE_SEPARATOR_2_REGEX, "")
-                        .replace(EXCHANGE_SEPARATOR_3_REGEX, "") // Убираем остатки типа ~* или ~**
-                        .replace(EXCHANGE_SEPARATOR_4_REGEX, "") // Убираем остатки типа *~ или *~~
-                        .trim()
-                    val bodyText = cleanedBody.ifEmpty { Strings.noText }
-                    val isHtml = looksLikeHtmlEmailContent(bodyText)
+                    val bodyText = displayBody.text.ifEmpty { Strings.noText }
+                    val isHtml = displayBody.isHtml
 
                     if (isHtml) {
                         // HTML контент - используем WebView с белым фоном

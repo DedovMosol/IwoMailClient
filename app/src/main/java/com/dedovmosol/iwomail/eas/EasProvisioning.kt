@@ -23,13 +23,17 @@ class EasProvisioning(
     )
     
     /**
-     * Поддерживает ли версия EAS DeviceInformation в Provision
-     * EAS 14.0+ (Exchange 2010+) поддерживает DeviceInformation
-     * EAS 12.x (Exchange 2007) — не поддерживает
+     * Поддерживает ли версия EAS элемент settings:DeviceInformation внутри Provision.
+     * По MS-ASPROV он валиден только с EAS 14.1 (Exchange 2010 SP1+);
+     * на 14.0 сервер может ответить Status=2 (protocol error) —
+     * там информация об устройстве передаётся отдельной командой Settings.
+     * EAS 12.x (Exchange 2007) — не поддерживает.
      */
     fun supportsDeviceInfo(): Boolean {
-        val major = easVersion.substringBefore(".").toIntOrNull() ?: 12
-        return major >= 14
+        val parts = easVersion.split(".")
+        val major = parts.getOrNull(0)?.toIntOrNull() ?: return false
+        val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        return major > 14 || (major == 14 && minor >= 1)
     }
     
     /**
