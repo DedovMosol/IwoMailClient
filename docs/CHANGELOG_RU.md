@@ -10,7 +10,6 @@
 - **Идиоматика — избыточные `!!`**: `att.contentId!!` ×6 (под guard `!isNullOrBlank()` со smart-cast) и `lastError!!` ×2 (локальный `var` после присваивания) убраны; `existingUri!!` оставлены осознанно (там smart-cast не применяется — `!!` необходим)
 - **Nullable `SimpleDateFormat` (DRY)**: `java.lang.ThreadLocal.get()` — platform-type; 12 `.get().format()` в TasksScreen сведены к двум DRY-хелперам `taskFormatDate/taskFormatTime` (safe-call + fallback в одном месте, конвенция проекта), parse — точечный `?.`
 - **Deprecated API**: `Divider` → `HorizontalDivider` (EmailDetailScreen); `AlertDialog` → `BasicAlertDialog` ×3 time-picker'а в TasksScreen (содержимое уже с собственным `Surface` — фон не теряется, `ExperimentalMaterial3Api` включён глобально)
-- **DRY MIME Content-Type**: повтор `contains("Content-Type: x")||contains("Content-Type:x")` вынесен в `String.hasContentType(prefix)` (в т.ч. предсуществующий `extractImagesRecursive`)
 - **CI**: `.github/workflows/ci.yml` (GitHub Actions, JDK 17 Temurin, `testDebugUnitTest` + артефакты отчётов) + Kover 0.7.6 (`koverXmlReportDebug`; версия 0.7.x осознанно — 0.8/0.9 имеют регрессии variant-resolution на Android+Gradle 8.12, kotlinx-kover#728; совместимость проверена локально)
 - **Тесты**: сьюта 432 (было 430) — новые тесты `formatHtmlQuote` (локализованные метки + экранирование)
 

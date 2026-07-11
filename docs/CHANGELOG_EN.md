@@ -10,7 +10,6 @@
 - **Idiom — redundant `!!`**: `att.contentId!!` ×6 (under the `!isNullOrBlank()` smart-cast guard) and `lastError!!` ×2 (local `var` right after assignment) removed; `existingUri!!` intentionally kept (no smart-cast there — `!!` is required)
 - **Nullable `SimpleDateFormat` (DRY)**: `java.lang.ThreadLocal.get()` is a platform type; 12 `.get().format()` in TasksScreen reduced to two DRY helpers `taskFormatDate/taskFormatTime` (safe call + fallback in one place, project convention), parse got a targeted `?.`
 - **Deprecated API**: `Divider` → `HorizontalDivider` (EmailDetailScreen); `AlertDialog` → `BasicAlertDialog` ×3 time pickers in TasksScreen (content already has its own `Surface` — no lost background, `ExperimentalMaterial3Api` opted-in globally)
-- **DRY MIME Content-Type**: the repeated `contains("Content-Type: x")||contains("Content-Type:x")` extracted into `String.hasContentType(prefix)` (incl. the pre-existing `extractImagesRecursive`)
 - **CI**: `.github/workflows/ci.yml` (GitHub Actions, JDK 17 Temurin, `testDebugUnitTest` + report artifacts) + Kover 0.7.6 (`koverXmlReportDebug`; 0.7.x chosen deliberately — 0.8/0.9 have variant-resolution regressions on Android+Gradle 8.12, kotlinx-kover#728; compatibility verified locally)
 - **Tests**: suite 432 (was 430) — new `formatHtmlQuote` tests (localized labels + escaping)
 
