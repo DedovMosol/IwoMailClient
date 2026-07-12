@@ -2,6 +2,13 @@
 
 🇬🇧 [English version](README_EN.md)
 
+[![CI](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml/badge.svg)](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/DedovMosol/IwoMailClient)](https://github.com/DedovMosol/IwoMailClient/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Android-brightgreen)
+![Min API](https://img.shields.io/badge/API-26%2B-blue)
+![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)
+
 Почтовый клиент для Android с основным фокусом на Microsoft Exchange Server 2007 SP1+ через Exchange ActiveSync и EWS. IMAP/POP3 присутствуют как beta-направление с ограниченной функциональностью.
 
 **Версия:** 1.6.3b
