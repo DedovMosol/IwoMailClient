@@ -127,8 +127,8 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
     
     // Network - OkHttp для HTTP запросов
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:5.4.0")
     
     // Conscrypt - для поддержки старых TLS протоколов (Exchange 2007)
     implementation("org.conscrypt:conscrypt-android:2.5.2")
