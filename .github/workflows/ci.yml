@@ -28,6 +28,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Provide easter-egg audio placeholder (real file is copyrighted & gitignored)
+        run: |
+          mkdir -p app/src/main/res/raw
+          [ -f app/src/main/res/raw/pashalka_iwo.m4a ] || printf 'placeholder' > app/src/main/res/raw/pashalka_iwo.m4a
+
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
@@ -73,6 +78,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Provide easter-egg audio placeholder (real file is copyrighted & gitignored)
+        run: |
+          mkdir -p app/src/main/res/raw
+          [ -f app/src/main/res/raw/pashalka_iwo.m4a ] || printf 'placeholder' > app/src/main/res/raw/pashalka_iwo.m4a
+
       - name: Assemble release APK (minified with R8)
         run: ./gradlew assembleRelease --stacktrace
 
@@ -101,6 +111,11 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Provide easter-egg audio placeholder (real file is copyrighted & gitignored)
+        run: |
+          mkdir -p app/src/main/res/raw
+          [ -f app/src/main/res/raw/pashalka_iwo.m4a ] || printf 'placeholder' > app/src/main/res/raw/pashalka_iwo.m4a
 
       - name: Run Android Lint
         run: ./gradlew lintDebug --stacktrace
