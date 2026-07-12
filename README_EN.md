@@ -3,6 +3,7 @@
 🇷🇺 [Русская версия](README.md)
 
 [![CI](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml/badge.svg)](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/DedovMosol/IwoMailClient/branch/main/graph/badge.svg)](https://codecov.io/gh/DedovMosol/IwoMailClient)
 [![Release](https://img.shields.io/github/v/release/DedovMosol/IwoMailClient)](https://github.com/DedovMosol/IwoMailClient/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android-brightgreen)
@@ -52,10 +53,10 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 | | |
 |:-:|:-:|
 | <img src="screenshots/1.jpg" width="230"><br>**Home** — daily summary and section tiles | <img src="screenshots/2.jpg" width="230"><br>**Navigation drawer** — folders and sections |
-| <img src="screenshots/3.jpg" width="230"><br>**Account settings** — connection status and MITM protection (pinning) | <img src="screenshots/4.jpg" width="230"><br>**Inbox** — search, filters, favorites |
-| <img src="screenshots/5.jpg" width="230"><br>**Message view** — HTML rendering and reply | <img src="screenshots/6.jpg" width="230"><br>**Compose** — rich formatting and inline images |
-| <img src="screenshots/7.jpg" width="230"><br>**Tasks** — filters, priorities, due dates | <img src="screenshots/8.jpg" width="230"><br>**Notes** — Exchange Notes with trash |
-| <img src="screenshots/9.jpg" width="230"><br>**Calendar event** — location, organizer, attachments | <img src="screenshots/10.jpg" width="230"><br>**Calendar** — recurrence and period filters |
+| <img src="screenshots/3.jpg" width="230"><br>**Account settings** | <img src="screenshots/4.jpg" width="230"><br>**Inbox** |
+| <img src="screenshots/5.jpg" width="230"><br>**Message view** — HTML rendering | <img src="screenshots/6.jpg" width="230"><br>**Compose** |
+| <img src="screenshots/7.jpg" width="230"><br>**Tasks** — filters, priorities, due dates | <img src="screenshots/8.jpg" width="230"><br>**Notes** |
+| <img src="screenshots/10.jpg" width="230"><br>**Calendar (event list)** | <img src="screenshots/9.jpg" width="230"><br>**Calendar event view** |
 
 ---
 
