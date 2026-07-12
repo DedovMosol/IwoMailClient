@@ -1,6 +1,6 @@
 # Privacy Policy / Политика конфиденциальности
 
-**Last updated / Последнее обновление:** March 11, 2026
+**Last updated / Последнее обновление:** July 12, 2026
 
 ---
 
@@ -56,6 +56,7 @@ The App requests the following permissions:
 - **Battery optimization exemption** — to ensure reliable background sync
 - **Vibration** — for haptic feedback in the app
 - **Install packages** — to install app updates downloaded from GitHub
+- **Remove packages** — to uninstall a previous/old app version during rollback or the `com.iwo.iwomail` → `com.dedovmosol.iwomail` package migration; only user confirmation triggers it
 
 ### Security
 
@@ -149,6 +150,7 @@ iwo Mail Client ("Приложение") разработано DedovMosol. На
 - **Исключение оптимизации батареи** — для надёжной фоновой синхронизации
 - **Вибрация** — для тактильной обратной связи в приложении
 - **Установка пакетов** — для установки обновлений, скачанных с GitHub
+- **Удаление пакетов** — для удаления предыдущей/старой версии приложения при откате или миграции пакета `com.iwo.iwomail` → `com.dedovmosol.iwomail`; выполняется только с подтверждения пользователя
 
 ### Безопасность
 

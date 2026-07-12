@@ -41,12 +41,13 @@
 
 ## Скриншоты
 
-| | | |
-|:-:|:-:|:-:|
-| <img src="screenshots/1.jpg" width="240"> | <img src="screenshots/2.jpg" width="240"> | <img src="screenshots/3.jpg" width="240"> |
-| <img src="screenshots/4.jpg" width="240"> | <img src="screenshots/5.jpg" width="240"> | <img src="screenshots/6.jpg" width="240"> |
-| <img src="screenshots/7.jpg" width="240"> | <img src="screenshots/8.jpg" width="240"> | <img src="screenshots/9.jpg" width="240"> |
-| <img src="screenshots/10.jpg" width="240"> | | |
+| | |
+|:-:|:-:|
+| <img src="screenshots/1.jpg" width="230"><br>**Главный экран** — сводка дня и плитки разделов | <img src="screenshots/2.jpg" width="230"><br>**Боковое меню** — папки и разделы |
+| <img src="screenshots/3.jpg" width="230"><br>**Настройки аккаунта** — подключение и защита от MITM (pinning) | <img src="screenshots/4.jpg" width="230"><br>**Входящие** — поиск, фильтры, избранное |
+| <img src="screenshots/5.jpg" width="230"><br>**Просмотр письма** — HTML-рендеринг и ответ | <img src="screenshots/6.jpg" width="230"><br>**Редактор письма** — форматирование и inline-картинки |
+| <img src="screenshots/7.jpg" width="230"><br>**Задачи** — фильтры, приоритеты, сроки | <img src="screenshots/8.jpg" width="230"><br>**Заметки** — Exchange Notes с корзиной |
+| <img src="screenshots/9.jpg" width="230"><br>**Событие календаря** — место, организатор, вложения | <img src="screenshots/10.jpg" width="230"><br>**Календарь** — повторения и фильтры по периоду |
 
 ## Требования
 
