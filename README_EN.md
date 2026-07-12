@@ -3,52 +3,43 @@
 🇷🇺 [Русская версия](README.md)
 
 [![CI](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml/badge.svg)](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/DedovMosol/IwoMailClient/branch/main/graph/badge.svg)](https://codecov.io/gh/DedovMosol/IwoMailClient)
 [![Release](https://img.shields.io/github/v/release/DedovMosol/IwoMailClient)](https://github.com/DedovMosol/IwoMailClient/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android-brightgreen)
 ![Min API](https://img.shields.io/badge/API-26%2B-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)
 
-Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Exchange ActiveSync and EWS. IMAP and POP3 are available as beta mail-only paths.
+Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Exchange ActiveSync and EWS. IMAP/POP3 are present as a beta direction with limited functionality.
 
 **Version:** 1.6.3b
+**Package:** `com.dedovmosol.iwomail`
 **Developer:** DedovMosol
 **Telegram:** [@i_wantout](https://t.me/i_wantout)
 **Email:** andreyid@outlook.com
 
-## 🌟 Features
+## Current project status
 
-- 📧 **Exchange ActiveSync** — EAS 12.0-14.1 support (Exchange 2007+). Tested on Exchange 2007 SP1 (EAS 12.1)
-- 🔄 **EWS for Exchange 2007** — calendar, tasks, notes, drafts, calendar attachments and meeting responses via EWS with NTLMv2 (fallback for EAS 12.x)
-- 📬 **IMAP/POP3** — beta mail-only support through JavaMail
-- 📱 **Android 8.0 - 16** — works on all Android versions from Oreo to the latest
-- 🔒 **Exchange 2007 compatibility** — TLS 1.0-1.3 support via Conscrypt
-- 🔐 **Server certificates** — self-signed certificate support for corporate servers
-- 🔑 **Client certificates** — mTLS authentication via PKCS#12 (.p12/.pfx) for corporate environments with mutual TLS verification
-- 🌍 **Two languages** — 🇷🇺 Russian / 🇬🇧 English
-- 🎨 **Material Design 3** — modern interface with color themes
-- 🔔 **Push notifications** — instant notifications for new emails (Direct Push)
+- **Production focus:** Exchange 2007 SP1/SP2 and compatible on-premise Exchange servers.
+- **Primary protocol:** EAS 12.0/12.1/14.0/14.1 for mail, folders, contacts, Direct Push and part of the operations.
+- **EWS addition:** calendar, tasks, notes, drafts, calendar attachments, meeting responses and fallback scenarios for Exchange 2007.
+- **Auth:** Basic Auth; NTLMv2 fallback additionally for EWS operations. The EAS transport works with Basic Auth only. OAuth 2.0 / Modern Auth are not yet implemented.
+- **Local model:** offline-first via Room DB, the UI reads data through Flow, background services update the database.
 
-## 📱 Capabilities
+## Features
 
-- ✅ **Mail** — sync, send with attachments, search, filters, favorites, folder management, drafts, scheduled send, send group users
-- ✅ **Contacts** — personal and GAL, groups, import/export (vCard, CSV)
-- ✅ **Calendar** — recurring events, attendee management, attachments, online meeting links, local trash and server-confirmed permanent delete
-- ✅ **Notes** — create, edit, sync
-- ✅ **Tasks** — create, edit, assign, reminders, sync
-- ✅ **Notifications** — Push (Direct Push), background sync, night mode
-- ✅ **Auto-cleanup** — configurable Trash/Drafts/Spam cleanup per account (interval-based or disabled via “Never”)
-- ✅ **Widget** — home screen widget with quick access to emails, search, calendar, tasks, and compose; widget data uses lightweight Room projections without loading heavy email/event bodies
-- ✅ **Interface** — dark/light theme, 4 color schemes, personalization
-- ✅ **Multiple accounts** — with individual signatures and settings
-- ✅ **MDN/DSN** — read and delivery receipt requests
+- **Mail:** sync of system and user folders, HTML sending, attachments, inline images, CC/BCC, importance, search, filters, favorites, multi-select, batch operations.
+- **Drafts:** server mode via Exchange/EWS and a local beta mode, selectable in onboarding and account settings.
+- **Sending:** scheduled send, outbox queue for offline scenarios, undo-send, MDN/DSN requests.
+- **Contacts:** local and Exchange contacts, GAL, groups, favorites, vCard/CSV import/export, address autocomplete.
+- **Calendar:** events, meetings, attendees, invitation responses, recurrences, exceptions, reminders, attachments, online links, local trash, permanent delete only after server confirmation.
+- **Tasks:** active/completed/important/overdue tasks, due dates, priorities, assignment, reminders, trash and restore.
+- **Notes:** Exchange Notes sync, create/edit, trash and restore.
+- **Notifications:** Direct Push via EAS Ping, WorkManager sync, AlarmManager fallback, notifications for mail, calendar, tasks, updates and outbox.
+- **Interface:** Jetpack Compose, Material 3, RU/EN localization, dark/light theme, color schemes, daily themes, custom file icons, drag selection.
+- **Widget & shortcuts:** Glance home-screen widget, quick access to mail, search, calendar, tasks and compose; widget data is read via lightweight Room projections without loading heavy mail/event bodies.
+- **Updates:** `update.json` check on GitHub, APK selection by ABI, download, install and rollback preparation.
 
-📋 Changelog: [CHANGELOG_EN.md](docs/CHANGELOG_EN.md)
-
----
-
-## 📸 Screenshots
+## Screenshots
 
 | | |
 |:-:|:-:|
@@ -58,175 +49,146 @@ Android mail client focused on Microsoft Exchange Server 2007 SP1+ through Excha
 | <img src="screenshots/7.jpg" width="230"><br>**Tasks** — filters, priorities, due dates | <img src="screenshots/8.jpg" width="230"><br>**Notes** |
 | <img src="screenshots/10.jpg" width="230"><br>**Calendar (event list)** | <img src="screenshots/9.jpg" width="230"><br>**Calendar event view** |
 
----
-
-## ⚠️ Important: Package Rename
-
-**Version 1.6.1 changed the package name** from `com.iwo.iwomail` to `com.dedovmosol.iwomail`.
-
-**This means:**
-- ❌ APK update old versions **is impossible** — Android treats it as a different app
-- ⚠️ Full **reinstallation required** — uninstall old version, install new one
-- 💾 Data will be lost — export contacts/settings before updating
-- ✅ Future versions will update normally
-
-**How to update:**
-1. Export contacts (vCard/CSV) in the app
-2. Uninstall old version `com.iwo.iwomail`
-3. Install new version `com.dedovmosol.iwomail`
-4. Set up accounts again
-5. Import contacts
-
----
-
-## 📋 Requirements
+## Requirements
 
 | Parameter | Minimum | Recommended |
 |-----------|---------|-------------|
 | Android | 8.0+ (API 26) | — |
 | RAM | 2 GB | 4+ GB |
 | Storage | 50 MB | 100+ MB |
-| CPU | ARMv7 / x86 | ARM64 / x86_64 |
+| CPU/ABI | armeabi-v7a / x86 | arm64-v8a / x86_64 |
 
-- Target SDK: 36 (Android 16)
-- Supported architectures: armeabi-v7a, arm64-v8a, x86, x86_64
-- Build JDK: JDK 17 recommended (JDK 11 minimum for Android Gradle Plugin 8.7.3)
+- **Compile SDK:** 36
+- **Target SDK:** 36
+- **Java/Kotlin target:** JVM 17
+- **APK:** universal + ABI splits for `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`
+- **Build:** JDK 17 required (JDK 11 minimum for Android Gradle Plugin 8.7.3)
 
-## 🖥️ Supported Servers
+## Supported servers
 
 | Server | Status |
 |--------|--------|
-| Exchange 2007 SP1/SP2 | ✅ Stable |
-| Exchange 2010/2013+ | ⚠️ Needs testing |
-| Office 365 | ⚠️ Requires OAuth |
-| IMAP/POP3 servers | ⚠️ Beta |
+| Exchange 2007 SP1/SP2 | Stable primary scenario |
+| Exchange 2010/2013/2016 on-premise | Architecturally supported via EAS/EWS, needs verification on the specific infrastructure |
+| Office 365 / Exchange Online | Limited: requires OAuth/Modern Auth, which is not yet implemented |
+| IMAP/POP3 | Beta: read/sync via JavaMail, without full parity with Exchange |
 
-## 📅 Calendar and Attachments
+## Calendar and attachments
 
-- **DRY recurring attachments** — calendar attachments are stored locally as JSON metadata (`fileReference`, name, size), not duplicated file bytes for every occurrence.
-- **Exchange 2007 SP1** — calendar attachment upload/fetch uses EWS `CreateAttachment`/`GetItem`; recurring series resolve the master ItemId.
-- **Permanent delete** — local DB deletion happens only after successful server-side deletion; calendar mutations are serialized with per-account sync locks.
-- **CRA resurrection prevention** — attendee meetings are declined through `MeetingResponse` or EWS `DeclineItem` before deletion; if the original meeting request cannot be found, local deletion is blocked.
-- **Preview cache** — attachment previews use `cacheDir/calendar_preview`, stable names derived from `fileReference`, and delayed cleanup designed to avoid races with external viewers.
+- **DRY for recurring events:** calendar attachments are stored as JSON metadata (`fileReference`, name, size), not as file copies for each occurrence.
+- **Exchange 2007 SP1:** calendar attachment upload/fetch goes through EWS `CreateAttachment`/`GetItem`; recurring series use the master ItemId.
+- **Permanent delete:** local DB deletion happens only after successful server-side deletion; operations are serialized with calendar sync via a per-account mutex.
+- **CRA resurrection prevention:** attendee meetings are declined through `MeetingResponse`/EWS `DeclineItem` before deletion; if the original meeting request cannot be found, local deletion is not performed.
+- **Preview cache:** attachment previews use a temporary `cacheDir/calendar_preview` directory, stable names derived from `fileReference`, and delayed cleanup without races with external viewers.
 
-## 🧩 Widget and Performance
+## Widget and performance
 
-- **Lightweight DAO projections** — the widget reads only displayed fields for recent unread emails, the next task and the next calendar event.
-- **Correct unread logic** — the widget's new-mail list is limited to Inbox and `read = 0`.
-- **Race protection** — `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
-- **Width-adaptive layout** — the bottom action row adapts to widget width (a Glance `Row` never wraps its content): narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped; avatars scale with the widget.
-- **Room v42** — hot widget paths are indexed for unread Inbox, folder type lookup, active tasks, current calendar events and upcoming calendar events.
+- **Lightweight DAO projections:** the widget reads only displayed fields for recent unread emails, the next task and the next calendar event.
+- **Correct unread logic:** the widget's new-mail list is filtered by Inbox and `read = 0`.
+- **Race protection:** `updateMailWidget()` serializes `GlanceAppWidget.updateAll()` through a shared mutex and uses `applicationContext`.
+- **Width-adaptive layout:** the bottom action row adapts to widget width (a Glance `Row` never wraps its content) — narrow sizes show fewer avatars and hide the last-sync label so the buttons aren't clipped; avatars scale with the widget.
+- **Room v42:** indexes added for hot widget queries: unread Inbox, folder type, active tasks, current and upcoming calendar events.
 
-## 💡 Known Limitations
+## Security and compatibility
 
-- **Office 365 / Modern Auth** — OAuth 2.0 not yet supported (Basic Auth only)
-- **NTLM for EAS** — the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth
-- **IMAP/POP3** — beta version, may be unstable
-- **EAS 16.0+** (Exchange 2016+) — not tested, possible issues
-- **S/MIME signatures** — not supported
+- **Conscrypt:** added for TLS 1.0/1.1 and compatibility with old Exchange 2007 installations.
+- **Server certificates:** system, user and self-signed certificate support.
+- **mTLS:** PKCS#12 client certificates (`.p12`/`.pfx`) with KeyManager caching.
+- **Certificate Pinning:** stores SHA-256, CN/O and certificate dates per account.
+- **Passwords:** `EncryptedSharedPreferences`, fallback to an obfuscated store when Keystore is unavailable.
+- **Alternate URL:** primary and backup Exchange URL with fallback on network errors and later auto-switchback.
+- **Email body XSS protection:** `sanitizeEmailHtml` blocks `<script>`, plugin containers (`iframe`/`object`/`embed`/`applet`), event handlers, `meta http-equiv="refresh"`, `javascript:` and `data:text/html` URIs in all URL-context attributes. Combined with `loadDataWithBaseURL(null, ...)` in the WebView for isolation from cross-origin context.
 
-## 📊 Tech Stack
+## Known limitations
 
-**Language & Frameworks:**
-- Kotlin 1.9.22
-- Jetpack Compose — UI
-- Coroutines + Flow — async
-- Material Design 3 — design
+- **OAuth 2.0 / Modern Auth:** not supported.
+- **Office 365:** typically does not work without Basic Auth.
+- **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
+- **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features.
+- **S/MIME:** signing and encryption not implemented.
+- **EAS 16.x:** explicitly not a target version of the project; the code's main range is EAS 12.x-14.1.
 
-**Storage:**
-- Room Database — local DB
-- Room schema version: `MailDatabase` v42
-- DataStore — settings and per-account sync/notification checkpoints
+## Tech stack
 
-**Network & Protocols:**
-- OkHttp 4.12.0 — HTTP client
-- Conscrypt — TLS 1.0-1.3 (Exchange 2007 support)
-- EAS 12.0-14.1 — ActiveSync
-- EWS (NTLM) — Exchange Web Services
-- JavaMail (com.sun.mail) — IMAP/POP3
+| Category | Technologies |
+|-----------|------------|
+| Kotlin | Kotlin 1.9.22, Java 17 |
+| Android | AGP 8.7.3, minSdk 26, targetSdk 36 |
+| UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3 |
+| Async | Coroutines 1.7.3, Flow |
+| Storage | Room 2.6.1 (`MailDatabase` v42), DataStore Preferences |
+| Network | OkHttp 4.12.0, Conscrypt 2.5.2 |
+| Protocols | EAS, EWS, JavaMail IMAP/POP3 |
+| Background | WorkManager 2.9.0, Foreground Service, AlarmManager |
+| Security | AndroidX Security Crypto, TLS/mTLS, Certificate Pinning |
+| UI extras | Coil, Glance AppWidget |
+| DI | Manual DI via `RepositoryProvider` |
 
-**Security:**
-- Certificate Pinning (Public Key Pinning)
-- SSL/TLS mutual authentication (mTLS)
-- Self-signed certificates support
-- XSS protection for email bodies: sanitizer blocks `<script>`, plugin containers (`iframe`/`object`/`embed`/`applet`), event handlers, `meta http-equiv="refresh"`, `javascript:` and `data:text/html` URIs in URL-context attributes. Combined with `loadDataWithBaseURL(null, ...)` for cross-origin isolation in WebView.
-- `EncryptedSharedPreferences` for passwords with obfuscated fallback when Android Keystore is unavailable
+## Architecture at a glance
 
-**Other:**
-- WorkManager — background sync
-- Manual DI (RepositoryProvider) — dependency injection
-- Coil — image loading
+```text
+UI Layer
+  Jetpack Compose, Navigation, Theme, Localization
+  MainScreen, Setup/Verification, Mail, Compose, Contacts, Calendar, Notes, Tasks, Updates
+    ↓
+Repository Layer
+  AccountRepository, MailRepository, CalendarRepository, ContactRepository,
+  NoteRepository, TaskRepository, SettingsRepository, AccountServerHealthRepository
+  EmailSyncService, EmailOperationsService, FolderSyncService, AppFileCleanupService
+    ↓
+Protocol Layer
+  EasClient facade
+  EasTransport + EAS services + EWS client + IMAP/POP3 beta clients
+    ↓
+Persistence / Network
+  Room MailDatabase v42, DataStore
+  HttpClientProvider, NetworkMonitor, NtlmAuthenticator
+    ↓
+Background
+  PushService, SyncWorker, OutboxWorker, reminders, notifications, watchdogs
+```
 
-## 🔧 Build
+Details: [Project Architecture](docs/ARCHITECTURE.md)
+
+## Build
 
 Recommended production build path is Android Studio with JDK 17. The CLI commands below are a supplemental option when `JAVA_HOME` is configured correctly.
 
 ```bash
-./gradlew assembleDebug    # Debug
-./gradlew assembleRelease  # Release
+./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
-## 📖 Documentation
+On Windows:
 
-- [Changelog](docs/CHANGELOG_EN.md)
+```powershell
+.\gradlew.bat assembleDebug
+.\gradlew.bat assembleRelease
+```
+
+## Documentation
+
+- [Changelog RU](docs/CHANGELOG_RU.md)
+- [Changelog EN](docs/CHANGELOG_EN.md)
 - [Project Architecture](docs/ARCHITECTURE.md)
-- [XmlPullParser migration plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 - [Privacy Policy](docs/PRIVACY_POLICY.md)
+- [XmlPullParser migration plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 
-## 🤝 Contributing
+## Important: package rename
 
-This project is open for improvements! Here's how you can help:
+Version 1.6.1 changed the package from `com.iwo.iwomail` to `com.dedovmosol.iwomail`.
 
-**🐛 Report a bug:**
-- Telegram: [@i_wantout](https://t.me/i_wantout)
-- Email: andreyid@outlook.com
-- [GitHub Issues](https://github.com/DedovMosol/IwoMailClient/issues)
+- Updating old APKs as a normal update is impossible: Android treats it as a different app.
+- Reinstallation required: uninstall the old version, install the new one and re-add accounts.
+- Before moving from the old package, export local contacts/data.
 
-**💡 Suggest an improvement:**
-- Message on Telegram with your idea
-- Or create an Issue on GitHub
+## Feedback
 
-**❓ Ask a question:**
-- About Exchange 2007/2010/2013 setup
-- About sync issues
-- Any technical questions
+- **Telegram:** [@i_wantout](https://t.me/i_wantout)
+- **Email:** andreyid@outlook.com
+- **Issues:** [GitHub Issues](https://github.com/DedovMosol/IwoMailClient/issues)
 
-**🔧 Pull Requests:**
-- Bug fixes are welcome
-- New features are welcome
-- Follow existing code style
-- Write clear commit messages
-
-## 🏗️ Architecture
-
-```
-UI Layer
-  Jetpack Compose — 19 screens, 10 components
-  Navigation, Theme, Localization
-    ↓
-Repository Layer
-  AccountRepository, MailRepository, CalendarRepository,
-  ContactRepository, NoteRepository, TaskRepository, SettingsRepository
-  + EmailSyncService, EmailOperationsService, FolderSyncService
-    ↓
-Protocol Layer
-  EAS/EWS — EasClient (Email, Calendar, Tasks, Notes, Drafts, Contacts, Attachment)
-  IMAP — ImapClient  |  POP3 — Pop3Client
-    ↓
-Database Layer                    Network Layer
-  Room — 11 DAOs, 10 Entities      HttpClientProvider, NetworkMonitor
-  MailDatabase (v42)                NtlmAuthenticator
-    ↓
-Background Services
-  PushService, SyncWorker, OutboxWorker
-  BootReceiver, SyncAlarmReceiver, PushRestartWorker
-  ServiceWatchdogReceiver, ScheduledEmailWorker
-  NotificationHelper, MailNotificationActionReceiver
-  CalendarReminderReceiver, TaskReminderReceiver
-  MarkEmailReadWorker, MarkTaskCompleteWorker
-```
-
-## 📄 License
+## License
 
 MIT License
 

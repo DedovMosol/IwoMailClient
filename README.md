@@ -3,7 +3,6 @@
 🇬🇧 [English version](README_EN.md)
 
 [![CI](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml/badge.svg)](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/DedovMosol/IwoMailClient/branch/main/graph/badge.svg)](https://codecov.io/gh/DedovMosol/IwoMailClient)
 [![Release](https://img.shields.io/github/v/release/DedovMosol/IwoMailClient)](https://github.com/DedovMosol/IwoMailClient/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android-brightgreen)
