@@ -9,6 +9,12 @@ android {
     namespace = "com.dedovmosol.iwomail"
     compileSdk = 36
 
+    lint {
+        // Existing issues are snapshotted in lint-baseline.xml; CI fails only on
+        // NEW lint errors introduced after the baseline.
+        baseline = file("lint-baseline.xml")
+    }
+
     defaultConfig {
         applicationId = "com.dedovmosol.iwomail"
         minSdk = 26  // Android 8.0

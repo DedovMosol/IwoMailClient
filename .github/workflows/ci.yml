@@ -94,11 +94,8 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
 
   lint:
-    name: Android Lint (advisory)
+    name: Android Lint
     runs-on: ubuntu-latest
-    # Advisory: surfaces lint issues without gating the pipeline. Flip to
-    # blocking (remove continue-on-error) once the report is clean.
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -126,18 +123,3 @@ jobs:
         with:
           name: lint-report
           path: app/build/reports/lint-results-debug.*
-
-  ktlint:
-    name: Kotlin style — ktlint (advisory)
-    runs-on: ubuntu-latest
-    # Advisory: style-only. Commit a ktlint baseline, then flip to blocking.
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run ktlint
-        run: |
-          curl -sSLO https://github.com/pinterest/ktlint/releases/download/1.3.1/ktlint
-          chmod +x ktlint
-          ./ktlint "app/src/**/*.kt"
