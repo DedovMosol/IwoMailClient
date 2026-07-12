@@ -1385,7 +1385,11 @@ fun ComposeScreen(
                if (editDraftId != null && editDraftId != "synced" && !editDraftId.startsWith("local_draft_")) {
     val email = withContext(Dispatchers.IO) { database.emailDao().getEmail(editDraftId) }
                     if (email != null) {
-                        if (allServerAttachments.isNotEmpty()) {
+                        // #3: delete+create нужен не только когда есть ТЕКУЩИЕ вложения, но и когда
+                        // исходный черновик ИМЕЛ вложения (email.hasAttachments), а пользователь их
+                        // все удалил: EWS UpdateItem/SetItemField НЕ умеет удалять вложения (MS docs),
+                        // поэтому updateDraft оставил бы удалённые вложения на серверном черновике.
+                        if (allServerAttachments.isNotEmpty() || email.hasAttachments) {
                             // При наличии вложений: СНАЧАЛА создаём новый, ПОТОМ удаляем старый.
                             // Если создание не удалось — старый черновик остаётся (защита от потери данных).
                             // EWS UpdateItem НЕ обновляет вложения, поэтому нужен delete+create.
@@ -1405,7 +1409,7 @@ fun ComposeScreen(
     localBody = body,
     fromEmail = account.email,
     fromName = account.displayName,
-    hasAttachments = true,
+    hasAttachments = allServerAttachments.isNotEmpty(),
     attachmentFiles = allServerAttachments
 )
                             }
@@ -1450,7 +1454,7 @@ fun ComposeScreen(
                                                 bodyType = 2,
                                                 dateReceived = System.currentTimeMillis(),
                                                 read = true,
-                                                hasAttachments = true
+                                                hasAttachments = allServerAttachments.isNotEmpty()
                                             )
                                             database.emailDao().insert(fallback)
                                             // P3 FIX: Восстанавливаем записи вложений.

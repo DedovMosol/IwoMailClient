@@ -2,6 +2,13 @@
 
 ## v1.6.3b
 
+### Server drafts & widget audit — part 4 (2026-07-12)
+- **Orphaned draft after send** (D-1): when sending a server draft it was deleted only from the local DB — on the server it stayed orphaned (visible in Outlook/OWA) and "resurrected" on the next Drafts-folder sync. Now `SendProgressBar` calls `mailRepo.deleteDraft` (server EWS delete + local cleanup + `registerDeletedEmail` anti-resurrection) in the background, without delaying the success sound/navigation. DRY — reuses the same method as the re-save path
+- **Removing all draft attachments** (D-3): if a draft had attachments and the user removed them all, the code took the `updateDraft` path (EWS `SetItemField`), which per [MS docs](https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/updateitem-operation) cannot modify attachments — the removed attachments stayed on the server draft. The delete+create condition now also covers `email.hasAttachments` (the original draft had attachments), with a correct `hasAttachments` on the new draft. On Exchange 2007 an empty set goes through `createDraftEws` → a valid attachment-free draft
+- **Widget theme-color DRY** (W-2): `themeToColor()` hardcoded hex colors, duplicating `AppColorTheme` (Theme.kt) — a drift risk when the palette changes. Reduced to a single source: `AppColorTheme.fromCode(code).gradientStart.toArgb()` (exact round-trip, PURPLE default = the old else branch)
+- **Widget formatter tests** (W-3): the "sync time" label logic was extracted into a pure `formatSyncLabel` (no `Context`) + 6 unit tests covering all branches and edges (no sync, <60s, exactly 60s, clock moved backwards, not-today → date, today → "в/at HH:MM"); `formatSyncAgo` delegates
+- **Tests**: suite 438 (was 432)
+
 ### "Easy wins" audit — part 3: defects hidden under "dead code", cleanup, CI (2026-07-11)
 - **Localized quote headers** (A-19): on reply/forward the quote block always showed English `From:/Date:/Subject:/To:` even in the Russian UI — `formatHtmlQuote` hardcoded the labels while the localized `quoteFrom/quoteDate/quoteSubject/quoteTo` were declared but never passed. Labels became parameters (English defaults) and are passed from both call sites. Surfaced while verifying "dead code" — deleting the vars would have hidden the bug. Covered by a RU/EN test + escaping
 - **"Reset all" filters button** (A-20): `clearFilters()` existed in the ViewModel and was tested, but there was no UI button (unfinished feature) — added to the filter panel, visible when filters are active

@@ -5,6 +5,8 @@ import android.content.Intent
 import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import com.dedovmosol.iwomail.ui.theme.AppColorTheme
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -172,26 +174,28 @@ class MailWidget : GlanceAppWidget() {
         )
     }
     
-    private fun themeToColor(themeCode: String): Int = when (themeCode) {
-        "blue" -> 0xFF1565C0.toInt()
-        "yellow" -> 0xFFC77700.toInt()
-        "green" -> 0xFF2E7D32.toInt()
-        else -> 0xFF5C00D4.toInt()
-    }
+    // DRY: единый источник цветов тем — AppColorTheme (Theme.kt). Раньше hex дублировались
+    // здесь и в Theme.kt (риск дрейфа при смене палитры). fromCode() даёт PURPLE по умолчанию —
+    // совпадает с прежней веткой else. toArgb() — точный round-trip sRGB для этих значений.
+    private fun themeToColor(themeCode: String): Int =
+        AppColorTheme.fromCode(themeCode).gradientStart.toArgb()
     
     private fun formatSyncAgo(context: Context, lastSyncMillis: Long): String {
         if (lastSyncMillis == 0L) return ""
         val now = System.currentTimeMillis()
-        val diff = now - lastSyncMillis
-        if (diff < 0 || diff < 60_000) return context.getString(R.string.widget_synced_just_now)
         val locale = context.resources.configuration.locales[0]
-        // Не сегодня → только дата: «14:30» от вчерашнего синка иначе выглядит как сегодняшний, а
-        // короткая «dd.MM» (короче «в HH:MM») точно не вытолкнет кнопки на широком виджете.
-        if (!isSameLocalDay(lastSyncMillis, now)) {
-            return java.text.SimpleDateFormat("dd.MM", locale).format(Date(lastSyncMillis))
-        }
-        val timeStr = DateFormat.getTimeFormat(context).format(Date(lastSyncMillis))
-        return if (locale.language == "ru") "в $timeStr" else "at $timeStr"
+        // Context-зависимые части (строка ресурса, системный формат времени 12/24ч, локаль) —
+        // здесь; ветвление «сегодня/не-сегодня/только что» — в чистой formatSyncLabel (под тестом).
+        // dateText/timeText вычисляются заранее: виджет рендерится редко, стоимость двух format() мала.
+        return formatSyncLabel(
+            lastSyncMillis = lastSyncMillis,
+            nowMillis = now,
+            sameLocalDay = isSameLocalDay(lastSyncMillis, now),
+            isRussian = locale.language == "ru",
+            justNowText = context.getString(R.string.widget_synced_just_now),
+            dateText = java.text.SimpleDateFormat("dd.MM", locale).format(Date(lastSyncMillis)),
+            timeText = DateFormat.getTimeFormat(context).format(Date(lastSyncMillis))
+        )
     }
     
     private fun formatTodayDate(context: Context): String {
@@ -233,6 +237,30 @@ internal fun isSameLocalDay(a: Long, b: Long): Boolean {
     val cb = Calendar.getInstance().apply { timeInMillis = b }
     return ca.get(Calendar.YEAR) == cb.get(Calendar.YEAR) &&
         ca.get(Calendar.DAY_OF_YEAR) == cb.get(Calendar.DAY_OF_YEAR)
+}
+
+/**
+ * Чистая логика метки «время последнего синка» (тестируемо, без [Context]).
+ * Строки ([justNowText]/[dateText]/[timeText]) и флаги locale вычисляются вызывающим кодом.
+ *  - `""` при отсутствии синка (0);
+ *  - [justNowText] при diff < 60с или отрицательном (часы уехали назад);
+ *  - [dateText] («dd.MM») для НЕ-сегодняшнего синка (иначе «14:30» вчера выглядит как сегодня);
+ *  - «в HH:MM»/«at HH:MM» ([timeText]) для сегодняшнего.
+ */
+internal fun formatSyncLabel(
+    lastSyncMillis: Long,
+    nowMillis: Long,
+    sameLocalDay: Boolean,
+    isRussian: Boolean,
+    justNowText: String,
+    dateText: String,
+    timeText: String
+): String {
+    if (lastSyncMillis == 0L) return ""
+    val diff = nowMillis - lastSyncMillis
+    if (diff < 0 || diff < 60_000) return justNowText
+    if (!sameLocalDay) return dateText
+    return if (isRussian) "в $timeText" else "at $timeText"
 }
 
 private val searchBg = Color.White

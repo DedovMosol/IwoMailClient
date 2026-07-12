@@ -218,21 +218,25 @@ class SendController {
 
                 when (result) {
                     is EasResult.Success -> {
-                        // Удаляем черновик если был
+                        // #1: полное удаление черновика после отправки — серверное (EWS HardDelete
+                        // на Exchange 2007) + локальное + защита от «воскрешения» (registerDeletedEmail
+                        // внутри deleteDraft). Раньше удаляли ТОЛЬКО локально: серверный черновик
+                        // оставался сиротой (виден в Outlook/OWA) и возвращался при следующей
+                        // синхронизации папки Drafts. Путь Exchange-only (client создаётся через
+                        // createEasClient). В фоне — чтобы не задерживать звук/навигацию успеха
+                        // сетевым EWS-запросом; deleteDraft на 2007 всегда очищает локально даже
+                        // при ошибке сервера. updateDraftsFolderCount выполняется внутри deleteDraft.
                         email.draftId?.let { draftId ->
-                            withContext(Dispatchers.IO) {
-                                val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
-                                val emailEntity = database.emailDao().getEmail(draftId)
-                                if (emailEntity != null) {
-                                    // Удаляем черновик
-                                    database.emailDao().delete(draftId)
-                                    // Обновляем счетчики папки черновиков
-                                    val draftsFolder = database.folderDao().getFolderByType(emailEntity.accountId, 3)
-                                    if (draftsFolder != null) {
-                                        val totalCount = database.emailDao().getCountByFolder(draftsFolder.id)
-                                        val unreadCount = database.emailDao().getUnreadCount(draftsFolder.id)
-                                        database.folderDao().updateCounts(draftsFolder.id, unreadCount, totalCount)
+                            launch(Dispatchers.IO) {
+                                try {
+                                    val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
+                                    val emailEntity = database.emailDao().getEmail(draftId)
+                                    if (emailEntity != null) {
+                                        mailRepo.deleteDraft(emailEntity.accountId, emailEntity.serverId)
                                     }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    android.util.Log.w("SendController", "Draft cleanup after send failed: ${e.message}")
                                 }
                             }
                         }
