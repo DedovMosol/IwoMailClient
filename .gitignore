@@ -134,10 +134,8 @@ keystore.properties
 .cursor/
 .cursorignore
 
-# Lint reports / baseline
+# Lint reports (generated); the baseline IS tracked (see app/lint-baseline.xml)
 lint-results*
-lint-baseline.xml
-app/lint-baseline.xml
 
 # Crashlytics / Firebase
 crashlytics-build.properties
