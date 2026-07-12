@@ -138,7 +138,7 @@ dependencies {
     implementation("com.sun.mail:android-activation:1.6.7")
     
     // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     
     // WorkManager для фоновой синхронизации
     implementation("androidx.work:work-runtime-ktx:2.9.0")
@@ -158,7 +158,7 @@ dependencies {
     
     // Testing
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("io.mockk:mockk:1.13.8")
     testImplementation("com.google.truth:truth:1.1.5")
     
