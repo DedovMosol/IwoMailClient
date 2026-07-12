@@ -27,9 +27,14 @@ docs/SYNC_STABILITY_FIXES.md
 krista_office2007.reg
 register_krista_addin.bat
 
-# Screenshots (for store, not for repo)
+# Screenshots (store/marketing artifacts not for repo)
 Screenshots/
 Rustore*.png
+# ...but the README app screenshots ARE tracked:
+!/screenshots/
+
+# Local AI/IDE tool directories
+.kiro/
 
 # Room database schemas (generated)
 app/schemas/

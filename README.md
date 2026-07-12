@@ -32,6 +32,15 @@
 - **Виджет и shortcuts:** домашний виджет Glance, быстрый доступ к письмам, поиску, календарю, задачам и созданию письма; данные виджета читаются лёгкими Room-проекциями без загрузки тяжёлых тел писем/событий.
 - **Обновления:** проверка `update.json` на GitHub, выбор APK по ABI, скачивание, установка и подготовка отката.
 
+## Скриншоты
+
+| | | |
+|:-:|:-:|:-:|
+| <img src="screenshots/1.jpg" width="240"> | <img src="screenshots/2.jpg" width="240"> | <img src="screenshots/3.jpg" width="240"> |
+| <img src="screenshots/4.jpg" width="240"> | <img src="screenshots/5.jpg" width="240"> | <img src="screenshots/6.jpg" width="240"> |
+| <img src="screenshots/7.jpg" width="240"> | <img src="screenshots/8.jpg" width="240"> | <img src="screenshots/9.jpg" width="240"> |
+| <img src="screenshots/10.jpg" width="240"> | | |
+
 ## Требования
 
 | Параметр | Минимум | Рекомендуется |
