@@ -1,0 +1,23 @@
+# Normalize line endings to LF in the repo, auto-convert on checkout
+* text=auto eol=lf
+
+# Windows batch scripts must keep CRLF
+*.bat text eol=crlf
+
+# Gradle wrapper script must stay LF so ./gradlew runs on Unix CI runners
+gradlew text eol=lf
+
+# Binary assets — never touch line endings
+*.jpg   binary
+*.jpeg  binary
+*.png   binary
+*.webp  binary
+*.gif   binary
+*.ico   binary
+*.jar   binary
+*.apk   binary
+*.aab   binary
+*.keystore binary
+*.jks   binary
+*.p12   binary
+*.pfx   binary
