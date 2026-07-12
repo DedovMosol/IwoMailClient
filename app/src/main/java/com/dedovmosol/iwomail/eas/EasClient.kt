@@ -2587,7 +2587,17 @@ data class EasAttachment(
     val estimatedSize: Long = 0,
     val isInline: Boolean = false,
     val contentId: String? = null // Для inline изображений (cid:)
-)
+) {
+    /**
+     * Единый признак «вложение — inline (встроено в тело, не показывать в списке файлов)»:
+     * сервер выставил IsInline ЛИБО у вложения есть ContentId. Exchange 2007 SP1 для
+     * inline-картинок черновиков часто НЕ выставляет IsInline, но inline-вложения
+     * идентифицируются по Content-ID (MS: «match the HTML body to the attachments» по CID).
+     * Единый источник истины — чтобы начальный sync и reconcile классифицировали одинаково,
+     * иначе inline-картинка дублируется: и в теле (через MIME-fallback), и как файловое вложение.
+     */
+    val effectiveIsInline: Boolean get() = isInline || !contentId.isNullOrBlank()
+}
 
 /**
  * Результат Ping запроса

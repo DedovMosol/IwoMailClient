@@ -351,7 +351,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                         displayName = att.displayName,
                                         contentType = att.contentType,
                                         estimatedSize = att.estimatedSize,
-                                        isInline = att.isInline,
+                                        // Единая классификация inline (sync == reconcile): inline при наличии ContentId,
+                                        // даже если Exchange 2007 SP1 не выставил IsInline для черновика
+                                        isInline = att.effectiveIsInline,
                                         contentId = att.contentId
                                     )
                                 }
@@ -1144,7 +1146,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                         displayName = sAtt.displayName,
                                         contentType = sAtt.contentType,
                                         estimatedSize = sAtt.estimatedSize,
-                                        isInline = sAtt.isInline,
+                                        // Единая классификация inline (sync == reconcile) — см. EasAttachment.effectiveIsInline
+                                        isInline = sAtt.effectiveIsInline,
                                         contentId = sAtt.contentId
                                     )
                                 }
@@ -1178,7 +1181,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             displayName = att.displayName,
                             contentType = att.contentType,
                             estimatedSize = att.estimatedSize,
-                            isInline = att.isInline,
+                            // Единая классификация inline (sync == reconcile) — см. EasAttachment.effectiveIsInline
+                            isInline = att.effectiveIsInline,
                             contentId = att.contentId
                         )
                     }
@@ -1518,8 +1522,13 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     if (serverAtt.fileReference.isNotEmpty()) {
                         attachmentDao.updateFileReference(emailId, serverAtt.displayName, serverAtt.fileReference)
                     }
-                    if (!serverAtt.contentId.isNullOrBlank() && existing.contentId != serverAtt.contentId) {
-                        attachmentDao.updateContentId(existing.id, serverAtt.contentId, true)
+                    // Синхронизируем contentId + inline-флаг, если изменился contentId ИЛИ inline
+                    // ещё не выставлен (например черновик, синхронизированный старой версией со
+                    // строгим isInline=IsInline). Иначе inline-картинка осталась бы дублем.
+                    if (!serverAtt.contentId.isNullOrBlank() &&
+                        (existing.contentId != serverAtt.contentId || existing.isInline != serverAtt.effectiveIsInline)
+                    ) {
+                        attachmentDao.updateContentId(existing.id, serverAtt.contentId, serverAtt.effectiveIsInline)
                     }
                 } else if (serverAtt.fileReference.isNotEmpty() || !serverAtt.contentId.isNullOrBlank()) {
                     newAtts.add(AttachmentEntity(
@@ -1528,7 +1537,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         displayName = serverAtt.displayName,
                         contentType = serverAtt.contentType,
                         estimatedSize = serverAtt.estimatedSize,
-                        isInline = serverAtt.isInline || !serverAtt.contentId.isNullOrBlank(),
+                        isInline = serverAtt.effectiveIsInline,
                         contentId = serverAtt.contentId
                     ))
                 }
