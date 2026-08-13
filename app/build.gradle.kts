@@ -153,6 +153,10 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     
     // Security для хранения паролей
+    // NOTE: security-crypto is officially deprecated (no stable release, last alpha 2021)
+    // See: https://developer.android.com/jetpack/androidx/releases/security
+    // Current strategy: use EncryptedSharedPreferences with XOR-obfuscated fallback (AccountRepository)
+    // Alpha version kept as best available option; migration to alternative pending official recommendation
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     
     // Glance для виджетов

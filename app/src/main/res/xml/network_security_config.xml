@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!--
+        Removed user CA trust from base-config per security best practice (Android 7+).
+        Self-signed Exchange certificates are handled via:
+        1. certificatePath - explicit certificate pinning (HttpClientProvider)
+        2. acceptAllCerts - user opt-in for dev/test environments
+
+        User-installed CAs expand MITM attack surface and are not needed when
+        explicit certificate validation is implemented at application level.
+
+        See: https://developer.android.com/privacy-and-security/security-config
+    -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
-            <!-- Доверять системным сертификатам -->
+            <!-- Доверять только системным сертификатам -->
             <certificates src="system"/>
-            <!-- Доверять пользовательским сертификатам (установленным вручную) -->
-            <certificates src="user"/>
         </trust-anchors>
     </base-config>
 </network-security-config>

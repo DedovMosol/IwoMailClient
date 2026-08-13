@@ -5,5 +5,13 @@
     <files-path name="reply_attachments" path="reply_attachments/" />
     <files-path name="draft_attachments" path="draft_attachments/" />
     <files-path name="updates" path="updates/" />
-    <cache-path name="cache" path="/" />
+    <!-- Scoped cache paths - narrowed from path="/" per security best practice (audit N-14) -->
+    <cache-path name="calendar_preview" path="calendar_preview/" />
+    <cache-path name="calendar_event_attachments" path="calendar_event_attachments/" />
+    <cache-path name="email_preview" path="email_preview/" />
+    <cache-path name="email_share" path="email_share/" />
+    <cache-path name="email_drag" path="email_drag/" />
+    <cache-path name="share_attachments" path="share_attachments/" />
+    <!-- Root cache for ContactUtils.shareFile - creates file directly in cacheDir -->
+    <cache-path name="cache_root" path="." />
 </paths>
