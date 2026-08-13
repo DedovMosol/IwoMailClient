@@ -33,4 +33,12 @@
     <string name="widget_no_events_today">Нет событий на сегодня</string>
     <string name="widget_no_tasks">Нет задач на сегодня</string>
     <string name="widget_no_notes">Нет заметок</string>
+
+    <!-- L-7: Предупреждения безопасности для небезопасного хранения паролей -->
+    <string name="security_warning_insecure_storage_title">⚠️ Предупреждение безопасности</string>
+    <string name="security_warning_insecure_storage_message">Шифрование паролей недоступно. Ваши пароли хранятся с пониженным уровнем защиты.</string>
+    <string name="security_warning_insecure_storage_reason">Причина: %s</string>
+    <string name="security_warning_acknowledge">Понятно</string>
+    <string name="security_banner_insecure_storage">⚠️ Активна пониженная защита паролей</string>
+    <string name="security_banner_tap_for_details">Нажмите для подробностей</string>
 </resources>

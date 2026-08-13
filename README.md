@@ -95,7 +95,7 @@
 - **Сертификаты сервера:** поддержка системных, пользовательских и самоподписанных сертификатов.
 - **mTLS:** клиентские сертификаты PKCS#12 (`.p12`/`.pfx`) с кэшированием KeyManager.
 - **Certificate Pinning:** хранение SHA-256, CN/O и дат сертификата в аккаунте.
-- **Пароли:** `EncryptedSharedPreferences`, fallback на обфусцированное хранилище при недоступности Keystore.
+- **Пароли:** `EncryptedSharedPreferences` (Android KeyStore, AES256-GCM) для основного пути; при недоступности KeyStore — fallback на PBKDF2-обфусцированное хранилище с уведомлением пользователя и опциональным fail-closed режимом (L-7).
 - **Alternate URL:** основной и резервный URL Exchange с fallback при сетевых ошибках и последующим auto-switchback.
 - **XSS-защита тел писем:** `sanitizeEmailHtml` блокирует `<script>`, plugin-контейнеры (`iframe`/`object`/`embed`/`applet`), event-handlers, `meta http-equiv="refresh"`, `javascript:` и `data:text/html` URI во всех атрибутах с URL-контекстом. Комбинируется с `loadDataWithBaseURL(null, ...)` в WebView для изоляции от cross-origin контекста.
 

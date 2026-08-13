@@ -1,14 +1,13 @@
 package com.dedovmosol.iwomail.data.repository
 
 import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.SyncMode
 import com.dedovmosol.iwomail.data.database.MailDatabase
+import com.dedovmosol.iwomail.data.security.PasswordStorage
 import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.imap.ImapClient
@@ -24,13 +23,18 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Репозиторий для управления аккаунтами Exchange
  * Single Responsibility: только работа с аккаунтами
+ *
+ * L-7 fix: Migrated from inline ObfuscatedSharedPreferences to PasswordStorage.
  */
 class AccountRepository(private val context: Context) {
-    
+
     private val database = MailDatabase.getInstance(context)
     private val accountDao = database.accountDao()
     private val attachmentDao = database.attachmentDao()
-    
+
+    // L-7: Centralized password storage with security telemetry
+    private val passwordStorage = PasswordStorage.getInstance(context)
+
     // Кэш EAS клиентов для предотвращения утечек памяти
     // Каждый EasClient создаёт OkHttpClient с connection pool
     private val easClientCache = ConcurrentHashMap<Long, EasClient>()
@@ -44,36 +48,26 @@ class AccountRepository(private val context: Context) {
         const val FALLBACK_PROBE_INTERVAL_MS = 10 * 60 * 1000L
     }
     
-    private val securePrefs by lazy {
-        try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            
-            EncryptedSharedPreferences.create(
-                context,
-                "secure_passwords",
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        } catch (e: Exception) {
-            android.util.Log.e("AccountRepo", "EncryptedSharedPreferences failed, using obfuscated fallback", e)
-            ObfuscatedSharedPreferences(
-                context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE),
-                context
-            )
-        }
-    }
-    
     val accounts: Flow<List<AccountEntity>> = accountDao.getAllAccounts()
     val activeAccount: Flow<AccountEntity?> = accountDao.getActiveAccount()
     
     suspend fun getActiveAccountSync(): AccountEntity? = accountDao.getActiveAccountSync()
-    
+
     suspend fun getAccount(id: Long): AccountEntity? = accountDao.getAccount(id)
-    
+
     suspend fun getAccountCount(): Int = accountDao.getCount()
+
+    /**
+     * Check if password storage is using insecure fallback.
+     * L-7: Expose security status to UI for warning banner.
+     */
+    fun isUsingInsecurePasswordStorage(): Boolean = passwordStorage.isUsingInsecureStorage()
+
+    /**
+     * Get reason for insecure password storage fallback.
+     * L-7: For detailed security warnings.
+     */
+    fun getInsecurePasswordStorageReason(): String? = passwordStorage.getInsecureStorageReason()
 
     suspend fun getResolvedProfileRelativePath(accountId: Long): String? {
         val accounts = accountDao.getAllAccountsList()
@@ -417,42 +411,50 @@ class AccountRepository(private val context: Context) {
     suspend fun setActiveAccount(accountId: Long) {
         accountDao.setActiveAccount(accountId)
     }
-    
+
     suspend fun getPassword(accountId: Long): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        securePrefs.getString("password_$accountId", null)
+        passwordStorage.getPassword(accountId)
     }
-    
+
     private fun savePassword(accountId: Long, password: String) {
-        securePrefs.edit().putString("password_$accountId", password).apply()
+        try {
+            passwordStorage.savePassword(accountId, password)
+        } catch (e: SecurityException) {
+            // L-7: Fail-closed mode enabled and using insecure storage
+            android.util.Log.e("AccountRepo", "Cannot save password in fail-closed mode", e)
+            throw e
+        }
     }
-    
+
     private fun deletePassword(accountId: Long) {
-        securePrefs.edit().remove("password_$accountId").apply()
+        passwordStorage.deletePassword(accountId)
     }
-    
+
     /**
      * Сохранение пароля клиентского сертификата
      */
     private fun saveClientCertPassword(accountId: Long, password: String) {
-        securePrefs.edit()
-            .putString("client_cert_password_$accountId", password)
-            .apply()
+        try {
+            passwordStorage.saveClientCertPassword(accountId, password)
+        } catch (e: SecurityException) {
+            // L-7: Fail-closed mode enabled and using insecure storage
+            android.util.Log.e("AccountRepo", "Cannot save client cert password in fail-closed mode", e)
+            throw e
+        }
     }
-    
+
     /**
      * Получение пароля клиентского сертификата
      */
     private fun getClientCertPassword(accountId: Long): String? {
-        return securePrefs.getString("client_cert_password_$accountId", null)
+        return passwordStorage.getClientCertPassword(accountId)
     }
-    
+
     /**
      * Удаление пароля клиентского сертификата (при удалении аккаунта)
      */
     private fun deleteClientCertPassword(accountId: Long) {
-        securePrefs.edit()
-            .remove("client_cert_password_$accountId")
-            .apply()
+        passwordStorage.deleteClientCertPassword(accountId)
     }
     
     /**
@@ -1032,61 +1034,3 @@ class AccountRepository(private val context: Context) {
         }
     }
 }
-
-/**
- * SharedPreferences wrapper: XOR-обфускация значений ключом из SHA-256(ANDROID_ID + salt).
- * Не является криптографической защитой, но предотвращает хранение паролей в plaintext.
- * Используется только при недоступности EncryptedSharedPreferences (повреждённый Keystore).
- */
-private class ObfuscatedSharedPreferences(
-    private val delegate: android.content.SharedPreferences,
-    context: Context
-) : android.content.SharedPreferences by delegate {
-
-    private val obfKey: ByteArray by lazy {
-        val androidId = android.provider.Settings.Secure.getString(
-            context.contentResolver, android.provider.Settings.Secure.ANDROID_ID
-        ) ?: "fallback_device_id"
-        java.security.MessageDigest.getInstance("SHA-256")
-            .digest("iwomail_obf_v1_$androidId".toByteArray(Charsets.UTF_8))
-    }
-
-    override fun getString(key: String?, defValue: String?): String? {
-        val raw = delegate.getString(key, null) ?: return defValue
-        return try {
-            xorTransform(android.util.Base64.decode(raw, android.util.Base64.NO_WRAP), obfKey)
-                .toString(Charsets.UTF_8)
-        } catch (_: Exception) {
-            defValue
-        }
-    }
-
-    override fun edit(): android.content.SharedPreferences.Editor =
-        ObfuscatedEditor(delegate.edit(), obfKey)
-
-    private class ObfuscatedEditor(
-        private val editor: android.content.SharedPreferences.Editor,
-        private val key: ByteArray
-    ) : android.content.SharedPreferences.Editor by editor {
-
-        override fun putString(k: String?, value: String?): android.content.SharedPreferences.Editor {
-            if (value == null) return editor.putString(k, null)
-            val obfuscated = android.util.Base64.encodeToString(
-                xorTransform(value.toByteArray(Charsets.UTF_8), key),
-                android.util.Base64.NO_WRAP
-            )
-            return editor.putString(k, obfuscated)
-        }
-    }
-
-    companion object {
-        private fun xorTransform(data: ByteArray, key: ByteArray): ByteArray {
-            val out = ByteArray(data.size)
-            for (i in data.indices) {
-                out[i] = (data[i].toInt() xor key[i % key.size].toInt()).toByte()
-            }
-            return out
-        }
-    }
-}
-

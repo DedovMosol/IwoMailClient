@@ -34,4 +34,12 @@
     <string name="widget_no_tasks">No tasks today</string>
     <string name="widget_no_notes">No notes</string>
     <string name="loading">Loading…</string>
+
+    <!-- L-7: Security warnings for insecure password storage -->
+    <string name="security_warning_insecure_storage_title">⚠️ Security Warning</string>
+    <string name="security_warning_insecure_storage_message">Password encryption is unavailable. Your passwords are stored with reduced protection.</string>
+    <string name="security_warning_insecure_storage_reason">Reason: %s</string>
+    <string name="security_warning_acknowledge">I Understand</string>
+    <string name="security_banner_insecure_storage">⚠️ Reduced password protection active</string>
+    <string name="security_banner_tap_for_details">Tap for details</string>
 </resources>

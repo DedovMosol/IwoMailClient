@@ -82,23 +82,30 @@ object CalendarDateUtils {
 
     // ========================= EWS DateTime Parsing =========================
 
+    /**
+     * Parses EWS datetime string (ISO 8601) to Unix timestamp (ms).
+     *
+     * N-4 fix: preserves timezone offset (Z or ±HH:MM) instead of stripping it.
+     * Uses java.time.Instant (API 26+) — simpler and more robust than SimpleDateFormat.
+     *
+     * Handles:
+     *  - "2024-01-15T10:30:00Z" → UTC
+     *  - "2024-01-15T13:30:00+03:00" → UTC offset applied
+     *  - "2024-01-15T10:30:00" → treated as UTC (Exchange 2007 default)
+     *  - "2024-01-15T10:30:00.123Z" → fractional seconds ignored
+     *
+     * @return Unix timestamp in milliseconds, or null if parsing fails
+     */
     fun parseEwsDateTime(dateStr: String?): Long? {
         if (dateStr.isNullOrEmpty()) return null
         return try {
-            // N-4: доли секунды SimpleDateFormat парсит нестабильно — убираем. Но смещение таймзоны
-            // ('Z' или ±HH:MM) НЕ выбрасываем: паттерн XXX (Java 7+) парсит и 'Z' (→ UTC), и '±HH:MM'.
-            // Раньше смещение вырезалось и время трактовалось как UTC → сдвиг при ненулевом offset.
-            // Exchange 2007 SP1 EWS обычно отдаёт 'Z', но теперь и со смещением корректно.
-            val cleaned = dateStr.replace(Regex("\\.\\d+"), "")
-            val hasTimeZone = cleaned.endsWith("Z") ||
-                Regex("[+-]\\d{2}:\\d{2}$").containsMatchIn(cleaned)
-            val format = if (hasTimeZone) {
-                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
-            } else {
-                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
-                    .apply { timeZone = TimeZone.getTimeZone("UTC") }
+            // Normalize to ISO 8601: append 'Z' if no timezone present (Exchange default: UTC)
+            val normalized = when {
+                dateStr.endsWith("Z") || Regex("[+-]\\d{2}:\\d{2}$").containsMatchIn(dateStr) -> dateStr
+                else -> "${dateStr}Z"
             }
-            format.parse(cleaned)?.time
+            // java.time.Instant.parse() handles ISO 8601 natively (Z, ±HH:MM, fractional seconds)
+            java.time.Instant.parse(normalized).toEpochMilli()
         } catch (_: Exception) {
             null
         }

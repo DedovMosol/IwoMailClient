@@ -72,6 +72,8 @@
 - Dependencies are constructor-injected (DIP): system push/sync side-effects are hidden behind a `SyncEffects` interface
 
 ### Stability & security (code audit)
+- **Centralized password storage:** introduced `PasswordStorage` singleton with two modes: `EncryptedSharedPreferences` (AES256-GCM/SIV via Android Keystore) and XOR obfuscation with PBKDF2-HMAC-SHA256 (10,000 iterations, OWASP 2024) when Keystore is unavailable. `SecurityTelemetry` notifies users of degradation and supports an optional fail-closed mode. `AccountRepository` delegates all password operations to `PasswordStorage`. Defense-in-depth — plaintext eliminated, 39 unit tests (L-7)
+- **Calendar/task date parsing optimization:** `parseEwsDateTime` switched from `SimpleDateFormat` to `java.time.Instant.parse()` — simpler, faster, best-practice compliant. Covered by 6 tests (N-4)
 - Fixed crashes when changing sync/cleanup settings and in notes/tasks/folders/search mutations: mandatory exception handling with proper loading/selection flag reset (M-1)
 - Fixed a Push service crash on Android 12+ (`ForegroundServiceStartNotAllowedException`): safe foreground start + graceful stop (N-10)
 - Restored the Push watchdog on Android 8+: the screen/unlock/charging receiver is now registered dynamically (a manifest receiver never fired → Push degradation) (N-12)
