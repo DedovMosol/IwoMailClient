@@ -1053,8 +1053,8 @@ class AttachmentLoaderTest {
 |------|--------|-------------|----------------|---------|
 | 0. Подготовка | ✅ DONE | 2026-07-01 | 2026-07-03 | CS-1, CS-2, CS-5, CS-6, CS-7, CS-9, CS-11 |
 | 1. Инфраструктура | ✅ DONE | 2026-08-14 | 2026-08-14 | 5288715 (ComposeUiState, ComposeEvent, ComposeViewModel skeleton) |
-| 2. AttachmentLoader | 🔄 | 2026-08-14 | — | — |
-| 3. Бизнес-логика | ⏸️ | — | — | — |
+| 2. AttachmentLoader | ✅ DONE | 2026-08-14 | 2026-08-14 | 6df8f82 (AttachmentLoader + 15 tests, CS-15, CS-4) |
+| 3. Бизнес-логика | 🔄 | 2026-08-14 | — | — |
 | 4. UI подключение | ⏸️ | — | — | — |
 | 5. Тесты | ⏸️ | — | — | — |
 
