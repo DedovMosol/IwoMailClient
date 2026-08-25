@@ -142,24 +142,23 @@ object NotificationHelper {
             val shown = getShownNotifications(context)
             val filtered = candidates.filter { !shown.contains("${accountId}_${it.id}") }
 
-            if (filtered.isNotEmpty() && settingsRepo.notificationsEnabled.first()) {
-                val totalCount = filtered.size
-                val displayEmails = filtered
-                    .take(MAX_DISPLAY_EMAILS)
-                    .map { NewEmailInfo(it.id, it.fromName, it.from, it.subject, it.dateReceived) }
-                val markReadEmailIds =
-                    if (totalCount <= MAX_MARK_READ_ACTION_EMAILS) filtered.map { it.id } else emptyList()
-
-                // Практика Gmail/Outlook: НЕ всплываем системным уведомлением о письмах,
-                // которые пользователь уже видит в открытом клиенте — реактивный список
-                // (Room Flow) показывает письмо мгновенно, дубль в шторке = шум.
+            if (filtered.isNotEmpty()) {
+                // Единственная точка решения (практика Gmail/Outlook): показываем только когда
+                // уведомления разрешены И клиент закрыт — в открытом клиенте письма и так
+                // появляются мгновенно в реактивном списке (Room Flow), дубль в шторке = шум.
                 // Помечаем как показанные в обоих ветках: при возврате в фон «догоняющее»
                 // уведомление о том же письме не всплывет (HWM тоже продвигается ниже).
                 val showNotification = AppForegroundTracker.shouldShowNewMailNotification(
-                    notificationsEnabled = true,
+                    notificationsEnabled = settingsRepo.notificationsEnabled.first(),
                     appInForeground = AppForegroundTracker.isInForeground()
                 )
                 if (showNotification) {
+                    val totalCount = filtered.size
+                    val displayEmails = filtered
+                        .take(MAX_DISPLAY_EMAILS)
+                        .map { NewEmailInfo(it.id, it.fromName, it.from, it.subject, it.dateReceived) }
+                    val markReadEmailIds =
+                        if (totalCount <= MAX_MARK_READ_ACTION_EMAILS) filtered.map { it.id } else emptyList()
                     showNewMailNotification(
                         context = context,
                         displayEmails = displayEmails,

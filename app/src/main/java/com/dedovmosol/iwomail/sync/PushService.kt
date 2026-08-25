@@ -27,6 +27,8 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Сервис для Exchange Direct Push
@@ -67,6 +69,14 @@ class PushService : Service() {
 
     // Per-account debounce: предотвращает блокировку sync аккаунта B из-за аккаунта A
     private val lastAccountSyncTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
+    // Per-account мьютекс: исключает ПАРАЛЛЕЛЬНЫЙ синк одного аккаунта разными вызывающими
+    // (Ping STATUS_CHANGES_FOUND, NetworkCallback onAvailable, foreground-resume).
+    // Без него второй вызов проходит 30-с дебаунс (метка пишется в КОНЦЕ синка), на уровне
+    // папки получает «Синхронизация уже выполняется» → ошибка → неправомерный полный
+    // resync со сбросом синхронизационных ключей во время активного синка (на
+    // Exchange 2007 SP1/SP2 с их нестабильными при сбросе ServerId это путь к дублям/потере).
+    private val accountSyncMutexes = ConcurrentHashMap<Long, Mutex>()
 
     // NetworkCallback для отслеживания состояния сети
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -907,47 +917,61 @@ class PushService : Service() {
             return
         }
 
-        val allSyncFolders = database.folderDao().getFoldersByAccountList(account.id)
-        val systemFolders = allSyncFolders.filter { it.type in FolderType.SYNC_MAIN_TYPES }
-        val userFolders = allSyncFolders.filter { it.type in FolderType.SYNC_USER_TYPES }
-        // ВСЕ папки синхронизируются инкрементально (быстро, ~1-3 сек/папка).
-        // Full resync (до 280с/папка) — только для первых N несинхронизированных user-папок.
-        val folders = (systemFolders + userFolders)
-            .sortedBy { if (it.type == FolderType.INBOX) 0 else 1 }
-
-        val unsyncedUserFolderIds = userFolders
-            .filter { it.syncKey == "0" }
-            .take(FolderType.MAX_FULL_RESYNC_USER_FOLDERS)
-            .map { it.id }
-            .toSet()
-
-        // Бюджет на sync одного аккаунта: 600с.
-        // PushService — foreground, нет 10-мин лимита WorkManager, но 200 папок × 60с timeout = 3.3 часа worst case.
-        // Без бюджета push-уведомления блокируются на часы.
-        // INBOX и системные папки уже синхронизированы (первые в сортировке).
-        val syncBudgetMs = 600_000L
-        val syncStartTime = System.currentTimeMillis()
-
-        for (folder in folders) {
-            if (System.currentTimeMillis() - syncStartTime > syncBudgetMs) {
-                android.util.Log.w("PushService", "Sync budget exhausted for account ${account.id}, remaining folders in next cycle")
-                break
-            }
-
-            val allowFull = folder.type in FolderType.SYNC_MAIN_TYPES
-                || folder.syncKey != "0"
-                || folder.id in unsyncedUserFolderIds
-            syncFolderWithRetry(
-                mailRepo, account.id, folder.id,
-                allowFullResync = allowFull, tag = "PushService",
-                accountRepo = accountRepo
-            )
+        // Анти-гонка: если другой вызывающий (например, догоняющий foreground-sync)
+        // уже синхронизирует ЭТОТ аккаунт — выходим. Дебаунс выше не закрывает окно,
+        // т.к. метка времени пишется в КОНЦЕ синка (см. комментарий у accountSyncMutexes).
+        // tryLock = никогда не блокируемся и не устраиваем очередь из синков.
+        val accountMutex = accountSyncMutexes.computeIfAbsent(account.id) { Mutex() }
+        if (!accountMutex.tryLock()) {
+            android.util.Log.d(TAG, "Sync already running for account ${account.id}, skipping")
+            return
         }
 
-        lastAccountSyncTimes[account.id] = System.currentTimeMillis()
-        settingsRepo.setLastSyncTime(System.currentTimeMillis())
+        try {
+            val allSyncFolders = database.folderDao().getFoldersByAccountList(account.id)
+            val systemFolders = allSyncFolders.filter { it.type in FolderType.SYNC_MAIN_TYPES }
+            val userFolders = allSyncFolders.filter { it.type in FolderType.SYNC_USER_TYPES }
+            // ВСЕ папки синхронизируются инкрементально (быстро, ~1-3 сек/папка).
+            // Full resync (до 280с/папка) — только для первых N несинхронизированных user-папок.
+            val folders = (systemFolders + userFolders)
+                .sortedBy { if (it.type == FolderType.INBOX) 0 else 1 }
 
-        NotificationHelper.checkAndNotifyNewMail(this, database, settingsRepo, account.id, account.email)
+            val unsyncedUserFolderIds = userFolders
+                .filter { it.syncKey == "0" }
+                .take(FolderType.MAX_FULL_RESYNC_USER_FOLDERS)
+                .map { it.id }
+                .toSet()
+
+            // Бюджет на sync одного аккаунта: 600с.
+            // PushService — foreground, нет 10-мин лимита WorkManager, но 200 папок × 60с timeout = 3.3 часа worst case.
+            // Без бюджета push-уведомления блокируются на часы.
+            // INBOX и системные папки уже синхронизированы (первые в сортировке).
+            val syncBudgetMs = 600_000L
+            val syncStartTime = System.currentTimeMillis()
+
+            for (folder in folders) {
+                if (System.currentTimeMillis() - syncStartTime > syncBudgetMs) {
+                    android.util.Log.w("PushService", "Sync budget exhausted for account ${account.id}, remaining folders in next cycle")
+                    break
+                }
+
+                val allowFull = folder.type in FolderType.SYNC_MAIN_TYPES
+                    || folder.syncKey != "0"
+                    || folder.id in unsyncedUserFolderIds
+                syncFolderWithRetry(
+                    mailRepo, account.id, folder.id,
+                    allowFullResync = allowFull, tag = "PushService",
+                    accountRepo = accountRepo
+                )
+            }
+
+            lastAccountSyncTimes[account.id] = System.currentTimeMillis()
+            settingsRepo.setLastSyncTime(System.currentTimeMillis())
+
+            NotificationHelper.checkAndNotifyNewMail(this, database, settingsRepo, account.id, account.email)
+        } finally {
+            accountMutex.unlock()
+        }
     }
 
     private suspend fun syncFolders(account: AccountEntity) {
