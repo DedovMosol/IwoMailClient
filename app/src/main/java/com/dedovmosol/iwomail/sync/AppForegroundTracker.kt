@@ -25,8 +25,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * Потокобезопасность: [MutableStateFlow] — lock-free, атомарные update/read с любого потока
  * (вызывается из main-потока через lifecycle-колбэки, читается из IO-диспатчера сервисов).
  *
- * Тестируемость: чистая логика «нужно ли подавлять уведомление» вынесена в
- * [shouldSuppressNewMailNotification] (companion) — юнит-тестируется без Android-фреймворка.
+ * Тестируемость: чистая логика «нужно ли показывать системное уведомление» вынесена в
+ * [shouldShowNewMailNotification] (companion) — юнит-тестируется без Android-фреймворка.
  */
 object AppForegroundTracker : DefaultLifecycleObserver {
 
@@ -66,9 +66,12 @@ object AppForegroundTracker : DefaultLifecycleObserver {
 
     /**
      * Чистая логика решения «показывать ли сейчас системное уведомление о новых письмах»
-     * (DRY + тестируемость без Android-фреймворка). Показываем только если уведомления
-     * разрешены И приложение НЕ в foreground: в открытом клиенте письма и так появляются
-     * мгновенно в реактивном списке (Room Flow), дубль в шторке — шум (практика Gmail/Outlook).
+     * (DRY + тестируемость без Android-фреймворка). Единственная точка решения — вызывающий
+     * код НЕ дублирует условия.
+     *
+     * Контракт (практика Gmail/Outlook): показываем только когда уведомления РАЗРЕШЕНЫ
+     * пользователем И приложение НЕ в foreground — в открытом клиенте письма и так появляются
+     * мгновенно в реактивном списке (Room Flow), дубль в шторке = шум.
      */
     fun shouldShowNewMailNotification(notificationsEnabled: Boolean, appInForeground: Boolean): Boolean =
         notificationsEnabled && !appInForeground
