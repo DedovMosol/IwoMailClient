@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Foreground-aware mail notifications & instant inbox delivery (2026-08-25)** — release goal «мгновенное получение сообщений при открытом клиенте» (без FCM — Exchange 2007 on-prem его не шлёт, серверный relay = мёртвый код по YAGNI):
+  - Новый `AppForegroundTracker` на официальном паттерне `ProcessLifecycleOwner` + `DefaultLifecycleObserver` (androidx `lifecycle-process`): единый источник истины о видимости приложения, потокобезопасный `StateFlow`, идемпотентная инициализация из `Application.onCreate`.
+  - Подавление системных уведомлений при открытом клиенте (практика Gmail/Outlook): новое письмо уже мгновенно появляется в списке через реактивный Room Flow — дубль в шторке шум. HWM всё равно продвигается и письма помечаются показанными, поэтому при возврате в фон «догоняющее» уведомление о них не всплывает.
+  - `PushService`: немедленная догоняющая инкрементальная синхронизация при выходе приложения из фона — страховка от убитого системой сервиса и переключения сети. Нагрузка под контролем существующих защит (30-с дебаунс на аккаунт, гвард `InitialSyncController`, бюджет 600с). Совместимость с Exchange 2007 SP1/SP2 без изменений: тот же инкрементальный Sync по синхронизационным ключам.
+  - 6 новых тестов: 4 — чистая логика решения `shouldShowNewMailNotification` (полная таблица истинности), 2 — интеграция подавления в `checkAndNotifyNewMail` (foreground подавляет + продвигает HWM + помечает показанными; фон уведомляет как раньше).
+  - **Верификация**: 616 юнит-тестов зелёные, полная перекомпиляция `--rerun-tasks` — 0 предупреждений / 0 ошибок.
+
 - **Round 4 compiler-warning cleanup (2026-08-25)** — all 101 pre-existing Kotlin warnings eliminated per DRY/KISS/SOLID/SOC/YAGNI; full `--rerun-tasks` rebuild now reports **0 warnings / 0 errors**:
   - **Signature-replacement hardening**: the 4 duplicated `Regex.escapeReplacement(...)` call sites collapsed into a single tested helper `replaceSignatureHtml()` in `ComposeTextUtils` (DRY); 7 new regression tests cover `$`, `\`, `$1`/`$99` group-reference patterns and html-mode signatures.
   - **NTLM/EWS cascade completed (YAGNI/KISS)**: removed ~200 dead `ewsUrl`/`authHeader` references across 12 files — `EasTransport`/`EwsClient` own the URL via constructor; the 5 service `Deps` interfaces, 4 calendar sub-services and `EasClient` no longer thread dead parameters or bridge them with `{ _, _, _ -> }` adapters. `tryBasicAuthEws` is now private in `EasTransport` (single DRY entry `executeEwsWithAuth`).
@@ -42,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **DRY**: removed `isRussian()` duplicate in `ComposeViewModel`; now uses shared `isRussianLanguage()` from `Localization`.
   - **Test coverage**: 8 new tests for 7 previously uncovered public VM methods (`setImportance`, `setRequestReadReceipt`, `setRequestDeliveryReceipt`, `removeAttachment`, `addGroupsFromPicker`, `dismissDiscardDialog`, `saveDraftAndExit`).
   - **Verification**: 598 tests / 0 failures / 0 errors / 41 suites, `assembleDebug` — 5 APK.
-: real `EmailEntity.id` is a composite `accountId_serverId` string; `Long.toString()` could never match a real email, silently breaking reply/forward/draft prefill.
+- **Email ID type handling**: real `EmailEntity.id` is a composite `accountId_serverId` string; `Long.toString()` could never match a real email, silently breaking reply/forward/draft prefill.
 
 ### Security
 

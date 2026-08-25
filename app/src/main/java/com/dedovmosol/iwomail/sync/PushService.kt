@@ -285,6 +285,20 @@ class PushService : Service() {
             }
         }
 
+        // Возврат из фона → немедленная инкрементальная синхронизация (цель релиза:
+        // «мгновенное получение сообщений при открытом клиенте»). В фоне письма уже
+        // доставлялись через Direct Push, но сервис мог быть убит системой или сеть
+        // переключилась — догоняющий цикл страхует оба случая. Внутри клиента
+        // уведомления подавлены (см. NotificationHelper): список обновится сам через
+        // реактивный Room Flow. syncAccount идемпотентен: 30-с дебаунс на аккаунт
+        // + защита от гонки с InitialSyncController + бюджет 600с, поэтому подписка
+        // на каждое пересечение границы фона не создаёт нагрузку.
+        serviceScope.launch {
+            AppForegroundTracker.inForeground.collect { inForeground ->
+                if (inForeground) syncOnForegroundResume()
+            }
+        }
+
         // Регистрируем NetworkCallback для отслеживания состояния сети
         registerNetworkCallback()
 
@@ -852,6 +866,30 @@ class PushService : Service() {
         return when (val result = client.ping(folderIds, heartbeat)) {
             is EasResult.Success -> PingOutcome(result.data.status, result.data.serverHeartbeatInterval)
             is EasResult.Error -> PingOutcome(STATUS_SERVER_ERROR)
+        }
+    }
+
+    /**
+     * Догоняющая синхронизация при возврате приложения из фона в видимое состояние
+     * (подписана на [AppForegroundTracker.inForeground] в onCreate).
+     *
+     * Exchange 2007 SP1/SP2 не меняет поведение: синхронизация идёт обычным
+     * Sync-путём по синхронизационным ключам (инкрементально), без специальных
+     * версионных веток. Безопасность нагрузки гарантируют существующие защиты
+     * [syncAccount] (30-с дебаунс на аккаунт, проверка InitialSyncController,
+     * бюджет 600с на аккаунт). Ошибки отдельных аккаунтов изолированы:
+     * сбой одного не блокирует синхронизацию остальных.
+     */
+    private suspend fun syncOnForegroundResume() {
+        val accounts = database.accountDao().getAllAccountsList()
+        for (account in accounts) {
+            try {
+                syncAccount(account)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Foreground-resume sync failed for account ${account.id}", e)
+            }
         }
     }
 
