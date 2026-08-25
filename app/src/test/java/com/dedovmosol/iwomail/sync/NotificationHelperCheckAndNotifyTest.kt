@@ -58,11 +58,17 @@ class NotificationHelperCheckAndNotifyTest {
         coEvery {
             NotificationHelper.showNewMailNotification(any(), any(), any(), any(), any(), any(), any())
         } just Runs
+
+        // Явно фиксируем состояние видимости приложения: по умолчанию тесты исполняют
+        // фоновый сценарий (уведомления показываются), отдельные тесты переопределяют.
+        mockkObject(AppForegroundTracker)
+        every { AppForegroundTracker.isInForeground() } returns false
     }
 
     @After
     fun tearDown() {
         unmockkObject(NotificationHelper)
+        unmockkObject(AppForegroundTracker)
     }
 
     private fun summary(id: String, date: Long) =
@@ -167,5 +173,47 @@ class NotificationHelperCheckAndNotifyTest {
             NotificationHelper.showNewMailNotification(any(), any(), any(), any(), any(), any(), any())
         }
         coVerify(exactly = 1) { settingsRepo.setLastNotificationCheckTime(accountId, 3_000L) }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Подавление при открытом клиенте (практика Gmail/Outlook):
+    // письма уже видимы в реактивном списке → системное уведомление = шум.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `new mail in foreground suppresses notification but advances hwm and marks shown`() = runTest {
+        every { AppForegroundTracker.isInForeground() } returns true
+        coEvery { settingsRepo.getLastNotificationCheckTime(accountId) } returns 1_000L
+        coEvery { emailDao.getNewEmailsForNotification(accountId, 1_000L) } returns
+            listOf(summary("1_a", 3_000L), summary("1_b", 2_000L))
+        every { settingsRepo.notificationsEnabled } returns flowOf(true)
+
+        NotificationHelper.checkAndNotifyNewMail(context, database, settingsRepo, accountId, accountEmail)
+
+        // Уведомление подавлено — пользователь уже видит письма в открытом клиенте.
+        coVerify(exactly = 0) {
+            NotificationHelper.showNewMailNotification(any(), any(), any(), any(), any(), any(), any())
+        }
+        // Но письма помечаются показанными: при возврате в фон они не всплывут повторно.
+        coVerify(exactly = 1) { NotificationHelper.markNotificationsAsShown(context, any()) }
+        // HWM продвигается — эти письма не станут кандидатами на следующих циклах.
+        coVerify(exactly = 1) { settingsRepo.setLastNotificationCheckTime(accountId, 3_000L) }
+    }
+
+    @Test
+    fun `background mail still notifies normally (regression guard for foreground suppression)`() = runTest {
+        every { AppForegroundTracker.isInForeground() } returns false
+        coEvery { settingsRepo.getLastNotificationCheckTime(accountId) } returns 1_000L
+        coEvery { emailDao.getNewEmailsForNotification(accountId, 1_000L) } returns
+            listOf(summary("1_a", 3_000L))
+        every { settingsRepo.notificationsEnabled } returns flowOf(true)
+
+        NotificationHelper.checkAndNotifyNewMail(context, database, settingsRepo, accountId, accountEmail)
+
+        coVerify(exactly = 1) {
+            NotificationHelper.showNewMailNotification(
+                context, any(), 1, any(), accountId, accountEmail, settingsRepo
+            )
+        }
     }
 }

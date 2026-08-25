@@ -150,15 +150,26 @@ object NotificationHelper {
                 val markReadEmailIds =
                     if (totalCount <= MAX_MARK_READ_ACTION_EMAILS) filtered.map { it.id } else emptyList()
 
-                showNewMailNotification(
-                    context = context,
-                    displayEmails = displayEmails,
-                    totalCount = totalCount,
-                    markReadEmailIds = markReadEmailIds,
-                    accountId = accountId,
-                    accountEmail = accountEmail,
-                    settingsRepo = settingsRepo
+                // Практика Gmail/Outlook: НЕ всплываем системным уведомлением о письмах,
+                // которые пользователь уже видит в открытом клиенте — реактивный список
+                // (Room Flow) показывает письмо мгновенно, дубль в шторке = шум.
+                // Помечаем как показанные в обоих ветках: при возврате в фон «догоняющее»
+                // уведомление о том же письме не всплывет (HWM тоже продвигается ниже).
+                val showNotification = AppForegroundTracker.shouldShowNewMailNotification(
+                    notificationsEnabled = true,
+                    appInForeground = AppForegroundTracker.isInForeground()
                 )
+                if (showNotification) {
+                    showNewMailNotification(
+                        context = context,
+                        displayEmails = displayEmails,
+                        totalCount = totalCount,
+                        markReadEmailIds = markReadEmailIds,
+                        accountId = accountId,
+                        accountEmail = accountEmail,
+                        settingsRepo = settingsRepo
+                    )
+                }
                 markNotificationsAsShown(
                     context,
                     filtered.take(MAX_SHOWN_ENTRIES).map { "${accountId}_${it.id}" }

@@ -112,6 +112,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+    // ProcessLifecycleOwner — детекция foreground/background всего процесса (единый источник
+    // истины для подавления уведомлений при открытом клиенте и немедленного sync при возврате).
+    implementation("androidx.lifecycle:lifecycle-process:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     
     // Compose BOM - используем стабильную версию

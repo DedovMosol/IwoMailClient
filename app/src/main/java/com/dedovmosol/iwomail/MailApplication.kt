@@ -39,6 +39,10 @@ class MailApplication : Application() {
         super.onCreate()
         initConscrypt()
         registerServiceWatchdog()
+        // Единый источник истины о видимости приложения (ProcessLifecycleOwner).
+        // Подавляет дублирующие уведомления при открытом клиенте и триггерит немедленный
+        // sync при возврате из фона (см. AppForegroundTracker / PushService).
+        com.dedovmosol.iwomail.sync.AppForegroundTracker.init()
         settingsRepository = SettingsRepository.getInstance(this)
         createNotificationChannels()
         cleanupStaleTempFiles()
