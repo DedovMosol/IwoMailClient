@@ -156,7 +156,7 @@ class EmailUtilsTest {
 
     @Test
     fun `formatFileSize uses Russian units under ru locale`() {
-        Locale.setDefault(Locale("ru"))
+        Locale.setDefault(Locale.Builder().setLanguage("ru").build())
         assertThat(formatFileSize(500)).isEqualTo("500 Б")
         assertThat(formatFileSize(2048)).isEqualTo("2 КБ")
     }

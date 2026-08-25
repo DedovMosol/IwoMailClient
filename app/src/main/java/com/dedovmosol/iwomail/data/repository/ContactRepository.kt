@@ -108,6 +108,21 @@ class ContactRepository(context: Context) {
         if (query.isBlank()) return emptyList()
         return contactDao.searchForAutocomplete(accountId, query, ownEmail, limit)
     }
+
+    /**
+     * Контакты группы одним списком (для автодополнения по группам, Этап 3 / CS-16).
+     */
+    suspend fun getContactsByGroupList(accountId: Long, groupId: String): List<ContactEntity> {
+        return contactDao.getContactsByGroupList(accountId, groupId)
+    }
+
+    /**
+     * Инкремент счётчика использования контакта по email (для сортировки автодополнения).
+     * Обёртка над DAO для presentation-слоя (Этап 3, CS-16).
+     */
+    suspend fun incrementUseCountByEmail(accountId: Long, email: String) {
+        contactDao.incrementUseCountByEmail(accountId, email)
+    }
     
     /**
      * Поиск в глобальной адресной книге (GAL)

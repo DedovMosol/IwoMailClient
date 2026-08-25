@@ -54,7 +54,6 @@ class DeletionController {
     fun startDeletion(
         emailIds: List<String>,
         message: String,
-        scope: CoroutineScope, // Игнорируется, используем собственный scope
         isRestore: Boolean = false,
         onDelete: suspend (List<String>, onProgress: (deleted: Int, total: Int) -> Unit) -> Unit
     ) {

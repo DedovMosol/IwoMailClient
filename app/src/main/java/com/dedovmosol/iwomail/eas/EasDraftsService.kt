@@ -93,10 +93,9 @@ class EasDraftsService internal constructor(
         val getEasVersion: () -> String,
         val isVersionDetected: () -> Boolean,
         val detectEasVersion: suspend () -> EasResult<String>,
-        val performNtlmHandshake: suspend (String, String, String) -> String?,
-        val executeNtlmRequest: suspend (String, String, String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String, String) -> String?,
-        val getEwsUrl: () -> String,
+        val performNtlmHandshake: suspend () -> String?,
+        val executeNtlmRequest: suspend (String, String) -> String?,
+        val tryBasicAuthEws: suspend (String, String) -> String?,
         val getDraftsFolderId: suspend () -> String?
     )
     
@@ -107,7 +106,6 @@ suspend fun createDraft(
     bcc: String,
     subject: String,
     body: String,
-    draftsFolderId: String? = null,
     attachments: List<DraftAttachmentData> = emptyList()
 ): EasResult<String> {
         if (!deps.isVersionDetected()) {
@@ -203,7 +201,7 @@ suspend fun createDraft(
             // Если обновление не удалось - создаём новый
         }
         
-       return createDraft(to, cc, bcc, subject, body, existingDraftId)
+       return createDraft(to, cc, bcc, subject, body)
     }
     
     /**
@@ -235,7 +233,6 @@ suspend fun updateDraft(
 suspend fun getDraftBody(serverId: String): EasResult<String> {
     return withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val escapedServerId = deps.escapeXml(serverId)
             
             val soapRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -259,7 +256,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "GetItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
             
             val rawBody = BODY_PATTERN
@@ -293,12 +290,11 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             if (!deps.isVersionDetected()) {
                 deps.detectEasVersion()
             }
-            val ewsUrl = deps.getEwsUrl()
             val exchangeVersion = resolveEwsVersion()
 
             // 1. FindItem — получаем список черновиков (заголовки)
             val findRequest = buildFindDraftsRequest(exchangeVersion)
-            val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+            val findResponse = executeEwsWithAuth(findRequest, "FindItem")
                 ?: return@withContext EasResult.Error("EWS FindItem: нет ответа от сервера")
             if (findResponse.contains("ResponseClass=\"Error\"")) {
                 val msg = EasPatterns.EWS_MESSAGE_TEXT.find(findResponse)?.groupValues?.get(1) ?: "FindItem error"
@@ -312,7 +308,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
 
             // 2. GetItem batch — body + recipients + attachments для ВСЕХ черновиков.
             //    FindItem НЕ возвращает Body и ToRecipients/CcRecipients (MS docs).
-            val enriched = fillDraftDetailsEws(ewsUrl, drafts, exchangeVersion)
+            val enriched = fillDraftDetailsEws(drafts, exchangeVersion)
             EasResult.Success(enriched)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -340,7 +336,6 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
      */
     suspend fun fetchMimeContentEws(itemId: String): EasResult<String> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val ewsVersion = resolveEwsVersion()
             val escapedItemId = deps.escapeXml(itemId)
             
@@ -364,7 +359,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "GetItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS GetItem")
             
             // КРИТИЧНО: XmlValueExtractor.extractEws использует regex
@@ -396,10 +391,9 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     
     suspend fun downloadAttachmentEws(attachmentId: String): EasResult<ByteArray> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val request = buildGetAttachmentRequest(attachmentId, resolveEwsVersion())
 
-            val response = executeEwsWithAuth(ewsUrl, request, "GetAttachment")
+            val response = executeEwsWithAuth(request, "GetAttachment")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS GetAttachment")
 
             val contentBase64 = XmlValueExtractor.extractEws(response, "Content")
@@ -431,7 +425,6 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         attachments: List<DraftAttachmentData>
     ): EasResult<String> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val ewsVersion = resolveEwsVersion()
             
             val tempFile = java.io.File.createTempFile("mime_draft_", ".tmp")
@@ -481,7 +474,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val soapRequest = sb.toString()
             
             // 3. Отправляем
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
                 ?: return@withContext EasResult.Error("MIME CreateItem: нет ответа от сервера")
             
             // 4. Извлекаем ItemId
@@ -629,11 +622,11 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
      * Basic Auth → NTLM fallback для EWS SOAP запросов.
      * DRY: единая точка авторизации вместо inline-повторений.
      */
-    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? {
-        var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, operation)
+    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
+        var responseXml = deps.tryBasicAuthEws(soapRequest, operation)
         if (responseXml == null) {
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
-            responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+            deps.performNtlmHandshake() ?: return null
+            responseXml = deps.executeNtlmRequest(soapRequest, operation)
         }
         return responseXml
     }
@@ -645,7 +638,6 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
      * Совместим с Exchange 2007 SP1+.
      */
     private suspend fun findDraftItemIdBySubject(subject: String): String? {
-        val ewsUrl = deps.getEwsUrl()
         val ewsVersion = resolveEwsVersion()
         val escapedSubject = deps.escapeXml(subject)
         
@@ -680,7 +672,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         findSb.append("</soap:Envelope>")
         val findRequest = findSb.toString()
         
-        val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem") ?: return null
+        val findResponse = executeEwsWithAuth(findRequest, "FindItem") ?: return null
 
         // Извлекаем первый (самый свежий) ItemId
         return XmlValueExtractor.extractAttribute(findResponse, "ItemId", "Id")
@@ -694,7 +686,6 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
      * Совместим с Exchange 2007 SP1+ (EWS FindItem).
      */
     suspend fun findAllDraftItemIdsBySubject(subject: String): EasResult<List<String>> {
-        val ewsUrl = deps.getEwsUrl()
         val ewsVersion = resolveEwsVersion()
         val escapedSubject = deps.escapeXml(subject)
         
@@ -728,7 +719,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         findSb.append("</soap:Envelope>")
         val findRequest = findSb.toString()
         
-        val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+        val findResponse = executeEwsWithAuth(findRequest, "FindItem")
             ?: return EasResult.Error("EWS FindItem failed")
 
         val allIds = ITEM_ID_NS_PATTERN.findAll(findResponse).map { it.groupValues[1] }.toList()
@@ -753,11 +744,10 @@ private suspend fun createDraftEws(
 ): EasResult<String> {
     return withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val ewsVersion = resolveEwsVersion()
             val soapRequest = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
 
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
 
             val itemId = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "Id")
@@ -772,7 +762,7 @@ private suspend fun createDraftEws(
                 if (attachments.isNotEmpty()) {
                     try {
                         val changeKey = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "ChangeKey")
-                        attachFilesEws(ewsUrl, itemId, changeKey, attachments, ewsVersion)
+                        attachFilesEws(itemId, changeKey, attachments, ewsVersion)
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
                     }
@@ -801,11 +791,10 @@ private suspend fun createDraftEws(
 ): EasResult<String> {
         return withContext(Dispatchers.IO) {
             try {
-                val ewsUrl = deps.getEwsUrl()
                 val ewsVersion = resolveEwsVersion()
                 val request = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
                 
-                val response = executeEwsWithAuth(ewsUrl, request, "CreateItem")
+                val response = executeEwsWithAuth(request, "CreateItem")
                     ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
                 
                 val itemId = XmlValueExtractor.extractAttribute(response, "ItemId", "Id")
@@ -815,7 +804,7 @@ private suspend fun createDraftEws(
                     if (attachments.isNotEmpty()) {
                         try {
                             val changeKey = XmlValueExtractor.extractAttribute(response, "ItemId", "ChangeKey")
-                            attachFilesEws(ewsUrl, itemId, changeKey, attachments, ewsVersion)
+                            attachFilesEws(itemId, changeKey, attachments, ewsVersion)
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                         }
@@ -861,7 +850,6 @@ private suspend fun updateDraftEws(
 ): EasResult<Boolean> {
     return withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val exchangeVersion = resolveEwsVersion()
 
             // КРИТИЧНО: Получаем ChangeKey через GetItem перед UpdateItem
@@ -883,7 +871,7 @@ private suspend fun updateDraftEws(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
+            val getItemResponse = executeEwsWithAuth(getItemRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
 
             // Извлекаем ChangeKey из ответа
@@ -949,7 +937,7 @@ private suspend fun updateDraftEws(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "UpdateItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "UpdateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
 
             if (EwsClient.isEwsSuccess(responseXml)) {
@@ -974,7 +962,6 @@ private suspend fun updateDraftEws(
             
             for (attempt in 1..maxRetries) {
                 try {
-                    val ewsUrl = deps.getEwsUrl()
                     val soapRequest = """
                         <?xml version="1.0" encoding="utf-8"?>
                         <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -993,14 +980,14 @@ private suspend fun updateDraftEws(
                         </soap:Envelope>
                     """.trimIndent()
 
-                    val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+                    val responseXml = executeEwsWithAuth(soapRequest, "DeleteItem")
                     if (responseXml == null) {
                         lastError = "Не удалось выполнить запрос к EWS"
                         if (attempt < maxRetries) {
                             kotlinx.coroutines.delay(1000L * attempt)
                             continue
                         }
-                        return@withContext EasResult.Error(lastError!!)
+                        return@withContext EasResult.Error(lastError)
                     }
 
                     if (responseXml.contains("NoError") || responseXml.contains("ResponseClass=\"Success\"")) {
@@ -1038,7 +1025,6 @@ private suspend fun updateDraftEws(
      * каждый последующий запрос использует актуальный ChangeKey.
      */
     private suspend fun attachFilesEws(
-        ewsUrl: String,
         itemId: String,
         changeKey: String?,
         attachments: List<DraftAttachmentData>,
@@ -1053,7 +1039,7 @@ private suspend fun updateDraftEws(
                 itemId, currentChangeKey, listOf(att), exchangeVersion
             )
 
-            val response = executeEwsWithAuth(ewsUrl, request, "CreateAttachment")
+            val response = executeEwsWithAuth(request, "CreateAttachment")
                 ?: return@withContext EasResult.Error(
                     "Не удалось прикрепить вложение ${index + 1}/${attachments.size} (${att.name})"
                 )
@@ -1355,14 +1341,12 @@ private suspend fun updateDraftEws(
      * Вызывается из syncDraftsEws() после FindItem.
      */
     private suspend fun fillDraftDetailsEws(
-        ewsUrl: String,
         drafts: List<EasDraft>,
         exchangeVersion: String
     ): List<EasDraft> {
         if (drafts.isEmpty()) return drafts
 
         val detailsMap = getDraftDetailsEws(
-            ewsUrl,
             drafts.map { it.serverId },
             exchangeVersion
         )
@@ -1390,7 +1374,6 @@ private suspend fun updateDraftEws(
      * Basic Auth first, NTLM fallback. Exchange 2007 SP1+.
      */
     private suspend fun getDraftDetailsEws(
-        ewsUrl: String,
         itemIds: List<String>,
         exchangeVersion: String
     ): Map<String, DraftEwsDetails> {
@@ -1400,14 +1383,13 @@ private suspend fun updateDraftEws(
         // Для 100+ черновиков одним запросом можно получить таймаут или ошибку.
         val result = mutableMapOf<String, DraftEwsDetails>()
         for (chunk in itemIds.chunked(50)) {
-            val chunkResult = getDraftDetailsBatchEws(ewsUrl, chunk, exchangeVersion)
+            val chunkResult = getDraftDetailsBatchEws(chunk, exchangeVersion)
             result.putAll(chunkResult)
         }
         return result
     }
 
     private suspend fun getDraftDetailsBatchEws(
-        ewsUrl: String,
         itemIds: List<String>,
         exchangeVersion: String
     ): Map<String, DraftEwsDetails> {
@@ -1435,7 +1417,7 @@ private suspend fun updateDraftEws(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val response = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
+        val response = executeEwsWithAuth(getItemRequest, "GetItem") ?: return emptyMap()
 
         val result = mutableMapOf<String, DraftEwsDetails>()
         val itemBlocks = MESSAGE_PATTERN.findAll(response)

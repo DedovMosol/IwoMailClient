@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui
 
 import android.content.Context
+import androidx.core.content.pm.PackageInfoCompat
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -98,9 +99,7 @@ fun MainScreen(
     onComposeToEmail: (String) -> Unit = {},
     onNavigateToSettings: () -> Unit,
     onNavigateToAccountSettings: (Long) -> Unit,
-    onNavigateToOnboarding: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
-    onNavigateToEmailDetail: (String) -> Unit = {},
     onNavigateToContacts: () -> Unit = {},
     onNavigateToNotes: () -> Unit = {},
     onNavigateToCalendar: () -> Unit = {},
@@ -152,7 +151,6 @@ fun MainScreen(
 
     // Состояние синхронизации из контроллера
     val isSyncing = InitialSyncController.isSyncing
-    val initialSyncDone = InitialSyncController.syncDone
 
     // Время последней синхронизации (для обновления статистики)
     val lastSyncTime by settingsRepo.lastSyncTime.collectAsStateWithLifecycle(initialValue = 0L)
@@ -237,7 +235,11 @@ fun MainScreen(
     // Синхронизируем папки при КАЖДОМ запуске если есть аккаунты (обновляет SyncKey)
     LaunchedEffect(Unit) {
         try {
-            val currentVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionCode
+            // PackageInfoCompat.getLongVersionCode — официальная замена deprecated versionCode,
+            // безопасна на всех API (внутри делает if SDK >= 28). minSdk=26 — поддерживается.
+            val currentVersion = PackageInfoCompat.getLongVersionCode(
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            ).toInt()
             val lastVersion = withContext(Dispatchers.IO) { settingsRepo.getLastAppVersion() }
 
             // Синхронизируем папки ТОЛЬКО если:
@@ -674,7 +676,6 @@ fun MainScreen(
         AutoUpdateDialog(
             updateInfo = currentUpdateInfo,
             context = context,
-            settingsRepo = settingsRepo,
             onDismiss = {
                 showAutoUpdateDialog = false
             },
@@ -899,13 +900,10 @@ private fun HomeContent(
     val tasksName = Strings.tasks
     val foldersTitle = Strings.folders
     val refreshText = Strings.refresh
-    val emailsCountText = Strings.emailsCount
-    val emptyText = Strings.empty
     val contactsName = Strings.contacts
     val userFoldersName = Strings.userFolders
 
     // Переменные для диалога доната (вынесены для использования вне LazyColumn)
-    val accountCopiedText = Strings.accountCopied
 
     // PERF: remember orderedFolders — избегаем filter/find/sumOf на каждую рекомпозицию LazyColumn
     // Вынесено из LazyListScope (не Composable) в Composable scope
@@ -1406,8 +1404,6 @@ private fun HomeContent(
 
     if (showDonateDialog) {
         val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-        val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-        val useRowButtons = configuration.screenWidthDp >= 360
         val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
 
         // Пульсирующая анимация для кнопок диалога
@@ -1897,7 +1893,6 @@ private fun FolderCard(
     modifier: Modifier = Modifier
 ) {
     FolderCardDisplay(
-        id = folder.id,
         name = folder.displayName,
         count = folder.totalCount,
         unreadCount = folder.unreadCount,
@@ -1923,7 +1918,6 @@ private fun FolderRow(
     ) {
         rowFolders.forEach { folder: FolderDisplayData ->
             FolderCardDisplay(
-                id = folder.id,
                 name = folder.name,
                 count = folder.count,
                 unreadCount = folder.unreadCount,
@@ -1948,7 +1942,6 @@ private fun FolderRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderCardDisplay(
-    id: String,
     name: String,
     count: Int,
     unreadCount: Int = 0,
@@ -2201,7 +2194,6 @@ private fun showUpdateNotification(context: android.content.Context, versionName
 private fun AutoUpdateDialog(
     updateInfo: com.dedovmosol.iwomail.update.UpdateInfo,
     context: android.content.Context,
-    settingsRepo: com.dedovmosol.iwomail.data.repository.SettingsRepository,
     onDismiss: () -> Unit,
     onLater: () -> Unit
 ) {

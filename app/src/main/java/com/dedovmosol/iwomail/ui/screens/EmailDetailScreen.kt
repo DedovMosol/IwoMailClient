@@ -253,8 +253,8 @@ fun EmailDetailScreen(
 
     // Диалог MDN
     // КРИТИЧНО: используем локальную переменную вместо !! чтобы избежать NPE при race condition в recomposition
-    val currentEmail = email
-    if (showMdnDialog && currentEmail != null && !currentEmail.mdnRequestedBy.isNullOrBlank()) {
+    val mdnEmail = email
+    if (showMdnDialog && mdnEmail != null && !mdnEmail.mdnRequestedBy.isNullOrBlank()) {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = {
                 showMdnDialog = false
@@ -311,7 +311,6 @@ fun EmailDetailScreen(
                             deletionController.startDeletion(
                                 emailIds = listOf(emailId),
                                 message = deletingSingleEmailMessage,
-                                scope = scope
                             ) { ids, onProgress ->
                                 val result = viewModel.deleteEmailPermanently(ids) { deleted, total ->
                                     onProgress(deleted, total)
@@ -503,9 +502,9 @@ fun EmailDetailScreen(
                 CircularProgressIndicator()
             }
         } else {
-            // Используем локальную переменную для безопасного доступа
-            // PERF: smart-cast вместо !! — безопаснее при recomposition race
-            val currentEmail = email ?: return@Scaffold
+            // Smart-cast: в else-ветви после проверки email == null тип гарантированно ненулевой.
+            // Локальная переменная сохраняет ненулевой тип через recomposition (val не перечитывается).
+            val currentEmail = email
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1575,8 +1574,8 @@ fun EmailDetailScreen(
                                                         when (uri.scheme) {
                                                             "mailto" -> {
                                                                 // Открываем окно написания письма в нашем приложении
-                                                                val email = uri.schemeSpecificPart.substringBefore("?")
-                                                                onComposeToEmail(email)
+                                                                val mailtoRecipient = uri.schemeSpecificPart.substringBefore("?")
+                                                                onComposeToEmail(mailtoRecipient)
                                                             }
                                                             "tel" -> {
                                                                 // Номеронабиратель с fallback на буфер обмена (планшеты без телефона)

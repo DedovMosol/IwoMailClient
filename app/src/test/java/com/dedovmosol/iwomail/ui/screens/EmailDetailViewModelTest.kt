@@ -60,7 +60,7 @@ class EmailDetailViewModelTest {
         // Открытие письма: по умолчанию письмо прочитано и тело уже загружено → без markAsRead/loadBody.
         coEvery { actions.getEmailSync(EMAIL_ID) } returns email()
         coEvery { actions.markAsRead(any(), any()) } returns EasResult.Success(Unit)
-        coEvery { actions.loadInlineImages(any(), any(), any(), any(), any(), any()) } returns emptyMap()
+        coEvery { actions.loadInlineImages(any(), any(), any(), any(), any()) } returns emptyMap()
     }
 
     @After
@@ -98,7 +98,7 @@ class EmailDetailViewModelTest {
     @Test
     fun `open unread email marks it as read`() = runTest(dispatcher) {
         coEvery { actions.getEmailSync(EMAIL_ID) } returns email(read = false)
-        val vm = createViewModel()
+        createViewModel()
         advanceUntilIdle()
         coVerify { actions.markAsRead(EMAIL_ID, true) }
     }
@@ -137,11 +137,11 @@ class EmailDetailViewModelTest {
 
     @Test
     fun `inline images are loaded into state`() = runTest(dispatcher) {
-        coEvery { actions.loadInlineImages(any(), any(), any(), any(), any(), any()) } returns mapOf("cid" to "data:img")
+        coEvery { actions.loadInlineImages(any(), any(), any(), any(), any()) } returns mapOf("cid" to "data:img")
         val vm = createViewModel()
         advanceUntilIdle()
         assertThat(vm.uiState.value.inlineImages).containsEntry("cid", "data:img")
-        coVerify { actions.loadInlineImages(any(), any(), any(), any(), any(), any()) }
+        coVerify { actions.loadInlineImages(any(), any(), any(), any(), any()) }
     }
 
     // ===================== refresh =====================

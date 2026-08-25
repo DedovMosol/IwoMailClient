@@ -58,7 +58,7 @@ class CustomTextToolbar(private val view: View) : TextToolbar {
                         }
                         
                         if (onSelectAllRequested != null) {
-                            menu.add(Menu.NONE, MENU_ITEM_SELECT_ALL, order++, android.R.string.selectAll)
+                            menu.add(Menu.NONE, MENU_ITEM_SELECT_ALL, order, android.R.string.selectAll)
                                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
                         }
                         

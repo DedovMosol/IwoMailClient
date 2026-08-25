@@ -162,10 +162,9 @@ class EasClient(
             detectEasVersion = { detectEasVersion() },
             getTasksFolderId = { getTasksFolderId() },
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
-            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { transport.ewsUrl },
+            performNtlmHandshake = { transport.performNtlmHandshake() },
+            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
+            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
             sendMail = { to, subject, body, cc, bcc, importance ->
                 sendMail(to, subject, body, cc, bcc, importance)
             }
@@ -190,11 +189,10 @@ class EasClient(
             detectEasVersion = { detectEasVersion() },
             getNotesFolderId = { getNotesFolderId() },
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
-            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { transport.ewsUrl },
-            findEwsNoteItemId = { ewsUrl, serverId, subject, searchInDeletedItems -> findEwsNoteItemId(ewsUrl, serverId, subject, searchInDeletedItems) }
+            performNtlmHandshake = { transport.performNtlmHandshake() },
+            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
+            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+            findEwsNoteItemId = { subject, searchInDeletedItems -> findEwsNoteItemId(subject, searchInDeletedItems) }
         ))
     }
 
@@ -214,10 +212,9 @@ class EasClient(
             getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
-            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { transport.ewsUrl },
+            performNtlmHandshake = { transport.performNtlmHandshake() },
+            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
+            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
             parseEasDate = { dateStr -> parseCalendarDate(dateStr) }
         ))
     }
@@ -238,10 +235,9 @@ class EasClient(
             getEasVersion = { transport.easVersion },
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
-            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
-            tryBasicAuthEws = { url, request, action -> transport.tryBasicAuthEws(url, request, action) },
-            getEwsUrl = { transport.ewsUrl },
+            performNtlmHandshake = { transport.performNtlmHandshake() },
+            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
+            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
             getDraftsFolderId = { getDraftsFolderId() }
         ))
     }
@@ -272,9 +268,8 @@ class EasClient(
                 else username
             },
             getDeviceId = { deviceId },
-            performNtlmHandshake = { url, request, action -> transport.performNtlmHandshake(url, request, action) },
-            executeNtlmRequest = { url, request, auth, action -> transport.executeNtlmRequest(url, request, auth, action) },
-            getEwsUrl = { transport.ewsUrl },
+            performNtlmHandshake = { transport.performNtlmHandshake() },
+            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
             getDeletedItemsFolderId = { getDeletedItemsFolderId() },
             isExchange2007 = { isExchange2007() },
             buildEwsSoapRequest = { body -> transport.buildEwsSoapRequest(body) },
@@ -895,7 +890,7 @@ class EasClient(
         </m:FindItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-                    val findResponse = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+                    val findResponse = transport.executeEwsWithAuth(findRequest, "FindItem")
                         ?: return EasResult.Error("FindItem request failed")
                     val ids = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
                     return EasResult.Success(ids)
@@ -955,7 +950,7 @@ class EasClient(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-                val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
+                val getItemResponse = transport.executeEwsWithAuth(getItemRequest, "GetItem")
                     ?: return@withContext EasResult.Error("GetItem request failed")
 
                 // Извлекаем Body. ВАЖНО: используем префикс `t:`, потому что в SOAP
@@ -1096,10 +1091,8 @@ class EasClient(
      * @see EasAttachmentService.downloadAttachment
      */
     suspend fun downloadAttachment(
-        fileReference: String,
-        collectionId: String? = null,
-        serverId: String? = null
-    ): EasResult<ByteArray> = attachmentService.downloadAttachment(fileReference, collectionId, serverId)
+        fileReference: String
+    ): EasResult<ByteArray> = attachmentService.downloadAttachment(fileReference)
 
     /**
      * Скачивание вложения в файл (streaming, без OOM для больших файлов).
@@ -1107,10 +1100,8 @@ class EasClient(
      */
     suspend fun downloadAttachmentToFile(
         fileReference: String,
-        destFile: java.io.File,
-        collectionId: String? = null,
-        serverId: String? = null
-    ): EasResult<java.io.File> = attachmentService.downloadAttachmentToFile(fileReference, destFile, collectionId, serverId)
+        destFile: java.io.File
+    ): EasResult<java.io.File> = attachmentService.downloadAttachmentToFile(fileReference, destFile)
 
     suspend fun downloadDraftAttachment(fileReference: String): EasResult<ByteArray> {
         return if (fileReference.contains(":")) {
@@ -1150,6 +1141,7 @@ class EasClient(
      * 7 - Папка не существует
      * 8 - Общая ошибка
      */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     suspend fun ping(
         folderIds: List<String>,
         heartbeatInterval: Int = 900 // 15 минут по умолчанию
@@ -1498,18 +1490,11 @@ $foldersXml
     val notesIncrementalNoChanges: Boolean
         get() = notesService.lastSyncWasIncrementalNoChanges
 
-    private suspend fun performNtlmHandshake(ewsUrl: String, soapRequest: String, action: String): String? =
-        transport.performNtlmHandshake(ewsUrl, soapRequest, action)
+    private suspend fun performNtlmHandshake(): String? =
+        transport.performNtlmHandshake()
 
-    private suspend fun executeNtlmRequest(ewsUrl: String, soapRequest: String, authHeader: String, action: String): String? =
-        transport.executeNtlmRequest(ewsUrl, soapRequest, authHeader, action)
-
-    private suspend fun tryBasicAuthEws(ewsUrl: String, soapRequest: String, action: String): String? =
-        transport.tryBasicAuthEws(ewsUrl, soapRequest, action)
-
-    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? =
-        transport.executeEwsWithAuth(ewsUrl, soapRequest, operation)
-
+    private suspend fun executeNtlmRequest(soapRequest: String, action: String): String? =
+        transport.executeNtlmRequest(soapRequest, action)
     /**
      * Создание события календаря на сервере Exchange
      * Делегирует в CalendarService
@@ -1705,7 +1690,7 @@ $foldersXml
      * Находит EWS ItemId события календаря с ChangeKey
      * Возвращает пару (ItemId, ChangeKey)
      */
-    private suspend fun findEwsCalendarItemIdWithChangeKey(ewsUrl: String, easServerId: String, subject: String = ""): Pair<String, String>? {
+    private suspend fun findEwsCalendarItemIdWithChangeKey(easServerId: String, subject: String = ""): Pair<String, String>? {
         if (easServerId.length > 50 && !easServerId.contains(":")) {
             val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -1726,9 +1711,9 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val ntlmAuth = performNtlmHandshake(ewsUrl, getItemRequest, "GetItem")
+            val ntlmAuth = performNtlmHandshake()
             if (ntlmAuth != null) {
-                val responseXml = executeNtlmRequest(ewsUrl, getItemRequest, ntlmAuth, "GetItem")
+                val responseXml = executeNtlmRequest(getItemRequest, "GetItem")
                 if (responseXml != null) {
                     val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
                     val match = itemIdPattern.find(responseXml)
@@ -1773,10 +1758,10 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem")
+        performNtlmHandshake()
             ?: return null
 
-        val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem")
+        val responseXml = executeNtlmRequest(findRequest, "FindItem")
             ?: return null
 
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
@@ -1798,9 +1783,8 @@ $foldersXml
                 if (serverId.length <= 50 || serverId.contains(":")) {
                     return@withContext EasResult.Error("EWS fallback requires the original meeting request EWS ItemId")
                 }
-                val ewsUrl = this@EasClient.ewsUrl
 
-                val itemInfo = findEwsCalendarItemIdWithChangeKey(ewsUrl, serverId, subject)
+                val itemInfo = findEwsCalendarItemIdWithChangeKey(serverId, subject)
 
                 if (itemInfo == null) {
                     return@withContext EasResult.Error("Не удалось найти исходное письмо-приглашение на сервере")
@@ -1838,12 +1822,12 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-                val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, "CreateItem")
+                val ntlmAuth = performNtlmHandshake()
                 if (ntlmAuth == null) {
                     return@withContext EasResult.Error("NTLM аутентификация не удалась")
                 }
 
-                val responseXml = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, "CreateItem")
+                val responseXml = executeNtlmRequest(soapRequest, "CreateItem")
                 if (responseXml == null) {
                     return@withContext EasResult.Error("Не удалось выполнить запрос")
                 }
@@ -1943,7 +1927,7 @@ $foldersXml
      * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
      * @param searchInDeletedItems - искать также в корзине (для restore операций)
      */
-    private suspend fun findEwsNoteItemId(ewsUrl: String, easServerId: String, subject: String, searchInDeletedItems: Boolean = false): String? {
+    private suspend fun findEwsNoteItemId(subject: String, searchInDeletedItems: Boolean = false): String? {
         if (subject.isBlank()) {
             android.util.Log.w("EasClient", "findEwsNoteItemId: empty subject — cannot safely identify note")
             return null
@@ -1982,8 +1966,8 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val ntlmAuth = performNtlmHandshake(ewsUrl, findRequest, "FindItem") ?: continue
-            val responseXml = executeNtlmRequest(ewsUrl, findRequest, ntlmAuth, "FindItem") ?: continue
+            performNtlmHandshake() ?: continue
+            val responseXml = executeNtlmRequest(findRequest, "FindItem") ?: continue
             val found = itemIdPattern.find(responseXml)?.groupValues?.get(1)
             if (found != null) return found
         }
@@ -2365,9 +2349,8 @@ $foldersXml
     bcc: String,
     subject: String,
     body: String,
-    draftsFolderId: String? = null,
     attachments: List<DraftAttachmentData> = emptyList()
-): EasResult<String> = draftsService.createDraft(to, cc, bcc, subject, body, draftsFolderId, attachments)
+): EasResult<String> = draftsService.createDraft(to, cc, bcc, subject, body, attachments)
 
     /**
      * Получить ВСЕ ItemId черновиков с данным subject.
@@ -2441,7 +2424,7 @@ $foldersXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-                val responseXml = executeEwsWithAuth(ewsUrl, getItemRequest, "FindItem")
+                val responseXml = transport.executeEwsWithAuth(getItemRequest, "FindItem")
                     ?: return@withContext EasResult.Error("Failed to execute FindItem")
 
                 // Извлекаем ItemId из ответа
@@ -2487,7 +2470,7 @@ $foldersXml
 </m:FindItem>""".trimIndent()
                 val findRequest = buildEwsSoapRequest(findBody)
 
-                val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+                val responseXml = transport.executeEwsWithAuth(findRequest, "FindItem")
                     ?: return@withContext null
 
                 val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()

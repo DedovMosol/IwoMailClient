@@ -53,11 +53,10 @@ class EasNotesService internal constructor(
         val detectEasVersion: suspend () -> EasResult<String>,
         val getNotesFolderId: suspend () -> String?,
         val getDeletedItemsFolderId: suspend () -> String?,
-        val performNtlmHandshake: suspend (String, String, String) -> String?,
-        val executeNtlmRequest: suspend (String, String, String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String, String) -> String?,
-        val getEwsUrl: () -> String,
-        val findEwsNoteItemId: suspend (String, String, String, Boolean) -> String?
+        val performNtlmHandshake: suspend () -> String?,
+        val executeNtlmRequest: suspend (String, String) -> String?,
+        val tryBasicAuthEws: suspend (String, String) -> String?,
+        val findEwsNoteItemId: suspend (String, Boolean) -> String?
     )
     
     // Кэш ID папки заметок
@@ -568,7 +567,7 @@ class EasNotesService internal constructor(
                     "8" -> true
                     "3", "12" -> {
                         syncKeyCache.remove(folderId)
-                        throw InvalidSyncKeyException(status ?: "3")
+                        throw InvalidSyncKeyException(status)
                     }
                     else -> false
                 }
@@ -615,11 +614,11 @@ class EasNotesService internal constructor(
     
     // ==================== Private EWS methods ====================
     
-    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? {
-        var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, operation)
+    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
+        var responseXml = deps.tryBasicAuthEws(soapRequest, operation)
         if (responseXml == null) {
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
-            responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+            deps.performNtlmHandshake() ?: return null
+            responseXml = deps.executeNtlmRequest(soapRequest, operation)
         }
         return responseXml
     }
@@ -627,13 +626,12 @@ class EasNotesService internal constructor(
     private suspend fun syncNotesEws(): EasResult<List<EasNote>> = withContext(Dispatchers.IO) {
         try {
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: START - syncing ACTIVE notes")
-            val ewsUrl = deps.getEwsUrl()
             
             // === 1. Синхронизация АКТИВНЫХ заметок из папки "notes" ===
             val findRequest = EasXmlTemplates.ewsSoapRequest(EasXmlTemplates.ewsFindItem("notes"))
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: FindItem (notes) request length=${findRequest.length}")
             
-            val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+            val responseXml = executeEwsWithAuth(findRequest, "FindItem")
             if (responseXml == null) {
                 android.util.Log.e("NOT", "syncNotesEws: Auth FAILED for notes")
                 return@withContext EasResult.Success(emptyList())
@@ -641,17 +639,17 @@ class EasNotesService internal constructor(
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Response length=${responseXml.length}")
             val activeNotes = parseEwsNotesResponse(responseXml).toMutableList()
-            val activeWithBodies = fillNoteBodiesEws(ewsUrl, activeNotes).toMutableList()
+            val activeWithBodies = fillNoteBodiesEws(activeNotes).toMutableList()
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${activeNotes.size} ACTIVE notes")
             
             // === 2. Синхронизация УДАЛЁННЫХ заметок из папки "deleteditems" ===
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: START - syncing DELETED notes")
             val findDeletedRequest = EasXmlTemplates.ewsSoapRequest(EasXmlTemplates.ewsFindItem("deleteditems"))
             
-            val deletedResponseXml = executeEwsWithAuth(ewsUrl, findDeletedRequest, "FindItem")
+            val deletedResponseXml = executeEwsWithAuth(findDeletedRequest, "FindItem")
             if (deletedResponseXml != null) {
                 val deletedNotesRaw = parseEwsNotesResponse(deletedResponseXml)
-                val deletedNotes = fillNoteBodiesEws(ewsUrl, deletedNotesRaw)
+                val deletedNotes = fillNoteBodiesEws(deletedNotesRaw)
                     .map { it.copy(isDeleted = true) }
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${deletedNotes.size} DELETED notes")
                 activeWithBodies.addAll(deletedNotes)
@@ -676,8 +674,6 @@ class EasNotesService internal constructor(
     private suspend fun createNoteEws(subject: String, body: String): EasResult<String> = withContext(Dispatchers.IO) {
         if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: START subjectLen=${subject.length}")
         try {
-            val ewsUrl = deps.getEwsUrl()
-            if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: ewsUrl=$ewsUrl")
             val escapedSubject = deps.escapeXml(subject)
             val escapedBody = deps.escapeXml(body)
             
@@ -705,7 +701,7 @@ class EasNotesService internal constructor(
 </soap:Envelope>""".trimIndent()
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "createNoteEws: request length=${soapRequest.length}")
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
             if (responseXml == null) {
                 android.util.Log.e("NOT", "createNoteEws: Auth FAILED")
                 return@withContext EasResult.Error("Аутентификация не удалась")
@@ -743,12 +739,11 @@ class EasNotesService internal constructor(
     
     private suspend fun updateNoteEws(serverId: String, subject: String, body: String): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             
             val ewsItemId = if (serverId.length >= 50 && !serverId.contains(":")) {
                 serverId
             } else {
-                val foundId = deps.findEwsNoteItemId(ewsUrl, serverId, subject, false)
+                val foundId = deps.findEwsNoteItemId(subject, false)
                 if (foundId == null) {
                     return@withContext EasResult.Error("Заметка не найдена")
                 }
@@ -775,7 +770,7 @@ class EasNotesService internal constructor(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
+            val getItemResponse = executeEwsWithAuth(getItemRequest, "GetItem")
             if (getItemResponse == null) {
                 return@withContext EasResult.Error("Аутентификация не удалась")
             }
@@ -826,13 +821,12 @@ class EasNotesService internal constructor(
     </soap:Body>
 </soap:Envelope>"""
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "UpdateItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "UpdateItem")
             if (responseXml == null) {
                 return@withContext EasResult.Error("Аутентификация не удалась")
             }
             
             if (!EwsClient.isEwsSuccess(responseXml)) {
-                val errorCode = Regex("<ResponseCode>([^<]+)</ResponseCode>").find(responseXml)?.groupValues?.get(1)
                 val errorMsg = Regex("MessageText>([^<]+)</").find(responseXml)?.groupValues?.get(1)
                 return@withContext EasResult.Error(errorMsg ?: "Ошибка обновления заметки")
             }
@@ -854,18 +848,17 @@ class EasNotesService internal constructor(
     
     private suspend fun deleteNoteEwsInternal(serverId: String, deleteType: String, subject: String = ""): EasResult<Boolean> {
         return try {
-            val ewsUrl = deps.getEwsUrl()
             val ewsItemId = if (serverId.length >= 50 && !serverId.contains(":")) {
                 serverId
             } else {
-                deps.findEwsNoteItemId(ewsUrl, serverId, subject, false) ?: serverId
+                deps.findEwsNoteItemId(subject, false) ?: serverId
             }
             
             val soapRequest = EasXmlTemplates.ewsSoapRequest(
                 EasXmlTemplates.ewsDeleteItem(ewsItemId, deleteType)
             )
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "DeleteItem")
                 ?: return EasResult.Error("Аутентификация не удалась")
             
             EasResult.Success(EwsClient.isEwsSuccessOrNotFound(responseXml))
@@ -888,7 +881,6 @@ class EasNotesService internal constructor(
             require(deleteType in listOf("HardDelete", "SoftDelete", "MoveToDeletedItems")) {
                 "Invalid deleteType: $deleteType"
             }
-            val ewsUrl = deps.getEwsUrl()
             val ewsItemIds = mutableListOf<String>()
 
             for (sid in serverIds) {
@@ -897,7 +889,7 @@ class EasNotesService internal constructor(
                 } else {
                     val searchDeleted = (deleteType == "HardDelete")
                     val subj = subjects[sid] ?: ""
-                    deps.findEwsNoteItemId(ewsUrl, sid, subj, searchDeleted) ?: sid
+                    deps.findEwsNoteItemId(subj, searchDeleted) ?: sid
                 }
                 ewsItemIds.add(ewsItemId)
             }
@@ -915,7 +907,7 @@ $itemIdsXml
     </m:DeleteItem>""".trimIndent()
             val soapRequest = EasXmlTemplates.ewsSoapRequest(soapBody)
 
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "DeleteItem")
                 ?: return@withContext EasResult.Error("Аутентификация не удалась")
 
             if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService",
@@ -937,13 +929,12 @@ $itemIdsXml
     private suspend fun restoreNoteEws(serverId: String, subject: String = ""): EasResult<String> = withContext(Dispatchers.IO) {
         try {
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: START serverId=$serverId")
-            val ewsUrl = deps.getEwsUrl()
             val ewsItemId = if (serverId.length >= 50 && !serverId.contains(":")) {
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: Using serverId as EWS ItemId")
                 serverId
             } else {
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: Finding EWS ItemId for EAS serverId (searching in deleteditems)")
-                deps.findEwsNoteItemId(ewsUrl, serverId, subject, true) ?: run {
+                deps.findEwsNoteItemId(subject, true) ?: run {
                     android.util.Log.e("NOT", "restoreNoteEws: EWS ItemId NOT FOUND in notes or deleteditems")
                     return@withContext EasResult.Error("Заметка не найдена")
                 }
@@ -970,7 +961,7 @@ $itemIdsXml
 </soap:Envelope>""".trimIndent()
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "restoreNoteEws: MoveItem request length=${soapRequest.length}")
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "MoveItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "MoveItem")
             if (responseXml == null) {
                 android.util.Log.e("NOT", "restoreNoteEws: Auth FAILED")
                 return@withContext EasResult.Error("Аутентификация не удалась")
@@ -1089,9 +1080,9 @@ $itemIdsXml
         return notes
     }
 
-    private suspend fun fillNoteBodiesEws(ewsUrl: String, notes: List<EasNote>): List<EasNote> {
+    private suspend fun fillNoteBodiesEws(notes: List<EasNote>): List<EasNote> {
         if (notes.isEmpty()) return notes
-        val bodies = getNoteBodiesEws(ewsUrl, notes.map { it.serverId })
+        val bodies = getNoteBodiesEws(notes.map { it.serverId })
         if (bodies.isEmpty()) return notes
         return notes.map { note ->
             val body = bodies[note.serverId]
@@ -1103,7 +1094,7 @@ $itemIdsXml
         }
     }
 
-    private suspend fun getNoteBodiesEws(ewsUrl: String, itemIds: List<String>): Map<String, String> {
+    private suspend fun getNoteBodiesEws(itemIds: List<String>): Map<String, String> {
         if (itemIds.isEmpty()) return emptyMap()
         val itemIdsXml = itemIds.joinToString("") { """<t:ItemId Id="${deps.escapeXml(it)}"/>""" }
         val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -1127,7 +1118,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val responseXml = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem") ?: return emptyMap()
+        val responseXml = executeEwsWithAuth(getItemRequest, "GetItem") ?: return emptyMap()
 
         val result = mutableMapOf<String, String>()
         EWS_ITEM_PATTERN.findAll(responseXml).forEach { match ->
@@ -1171,7 +1162,6 @@ $itemIdsXml
     private suspend fun syncDeletedNotesEws(): EasResult<List<EasNote>> {
         return withContext(Dispatchers.IO) {
             try {
-                val ewsUrl = deps.getEwsUrl()
                 val findRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
@@ -1201,7 +1191,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-                val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem")
+                val responseXml = executeEwsWithAuth(findRequest, "FindItem")
                     ?: return@withContext EasResult.Success(emptyList())
 
                 val notes = parseEwsNotesResponse(responseXml).map { it.copy(isDeleted = true) }

@@ -63,7 +63,6 @@ fun NotesScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
     val haptic = LocalHapticFeedback.current
 
@@ -193,7 +192,6 @@ fun NotesScreen(
                     deletionController.startDeletion(
                         emailIds = listOf(note.id),
                         message = deletingOneNoteText,
-                        scope = scope,
                         isRestore = false
                     ) { _, onProgress ->
                         val result = viewModel.deleteNotePermanently(note)
@@ -214,7 +212,6 @@ fun NotesScreen(
                 deletionController.startDeletion(
                     emailIds = listOf(note.id),
                     message = noteRestoredText,
-                    scope = scope,
                     isRestore = true
                 ) { _, onProgress ->
                     val result = viewModel.restoreNote(note)
@@ -246,7 +243,6 @@ fun NotesScreen(
                     deletionController.startDeletion(
                         emailIds = noteIds,
                         message = deletingMessage,
-                        scope = scope,
                         isRestore = false
                     ) { _, onProgress ->
                         when (val result = viewModel.emptyTrash(serverIds) { deleted, total -> onProgress(deleted, total) }) {
@@ -312,7 +308,6 @@ fun NotesScreen(
                             deletionController.startDeletion(
                                 emailIds = noteIds,
                                 message = deletingPermanentlyMessage,
-                                scope = scope,
                                 isRestore = false
                             ) { _, onProgress ->
                                 val result = viewModel.deleteNotesPermanently(notesToDelete) { deleted, total ->
@@ -368,7 +363,6 @@ fun NotesScreen(
                             deletionController.startDeletion(
                                 emailIds = notesToRestore.map { it.id },
                                 message = restoringMessage,
-                                scope = scope,
                                 isRestore = true
                             ) { _, onProgress ->
                                 val result = viewModel.restoreNotes(notesToRestore) { restored, total ->

@@ -187,6 +187,22 @@ class PasswordStorage private constructor(
                 instance ?: PasswordStorage(context.applicationContext).also { instance = it }
             }
         }
+
+        /**
+         * Только для тестов: сброс синглтона.
+         *
+         * В Robolectric каждый тест получает новое окружение (свои
+         * SharedPreferences), а статический синглтон переживает тест-классы
+         * в одной JVM и держит СТАРУЮ ссылку на чужие настройки — без сброса
+         * состояние (например, чужой режим «небезопасное хранилище») утекает
+         * между тестами.
+         */
+        @androidx.annotation.VisibleForTesting
+        fun resetForTesting() {
+            synchronized(this) {
+                instance = null
+            }
+        }
     }
 }
 
@@ -210,7 +226,7 @@ class PasswordStorage private constructor(
  * YAGNI: No unnecessary complexity (e.g., IV, salt rotation) — this is fallback-only.
  * KISS: Simple XOR with PBKDF2-derived key, not full encryption.
  */
-private class ObfuscatedSharedPreferences(
+internal class ObfuscatedSharedPreferences(
     private val delegate: SharedPreferences,
     context: Context
 ) : SharedPreferences by delegate {
@@ -251,13 +267,21 @@ private class ObfuscatedSharedPreferences(
         private val key: ByteArray
     ) : SharedPreferences.Editor by editor {
 
+        // ВАЖНО (контракт SharedPreferences.Editor): все методы обязаны возвращать
+        // ЭТОТ ЖЕ редактор для цепочек. Раньше возвращался делегат — и второй
+        // вызов в цепочке putString().putString() писал пароль В ОТКРЫТОМ ВИДЕ
+        // мимо обфускации (реальный прод-баг).
         override fun putString(k: String?, value: String?): SharedPreferences.Editor {
-            if (value == null) return editor.putString(k, null)
+            if (value == null) {
+                editor.putString(k, null)
+                return this
+            }
             val obfuscated = android.util.Base64.encodeToString(
                 xorTransform(value.toByteArray(Charsets.UTF_8), key),
                 android.util.Base64.NO_WRAP
             )
-            return editor.putString(k, obfuscated)
+            editor.putString(k, obfuscated)
+            return this
         }
     }
 

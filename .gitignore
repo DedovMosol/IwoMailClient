@@ -30,6 +30,9 @@ register_krista_addin.bat
 # Screenshots (store/marketing artifacts not for repo)
 Screenshots/
 Rustore*.png
+
+# Pre-refactor screen backups (.bak copies of Compose screens)
+backups/
 # ...but the README app screenshots ARE tracked:
 !/screenshots/
 

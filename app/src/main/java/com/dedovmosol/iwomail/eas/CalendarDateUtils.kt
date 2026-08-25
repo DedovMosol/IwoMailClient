@@ -104,8 +104,12 @@ object CalendarDateUtils {
                 dateStr.endsWith("Z") || Regex("[+-]\\d{2}:\\d{2}$").containsMatchIn(dateStr) -> dateStr
                 else -> "${dateStr}Z"
             }
-            // java.time.Instant.parse() handles ISO 8601 natively (Z, ±HH:MM, fractional seconds)
-            java.time.Instant.parse(normalized).toEpochMilli()
+            // java.time.Instant.parse() handles ISO 8601 natively (Z, ±HH:MM, fractional seconds).
+            // Truncate to whole seconds: Exchange timestamps are second-precision and the
+            // fractional part must not leak into epoch millis (documented contract + unit test).
+            java.time.Instant.parse(normalized)
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+                .toEpochMilli()
         } catch (_: Exception) {
             null
         }

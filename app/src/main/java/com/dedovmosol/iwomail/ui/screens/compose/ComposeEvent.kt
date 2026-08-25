@@ -28,10 +28,16 @@ sealed class ComposeEvent {
     /** Ошибка валидации поля */
     data class ValidationError(val field: ValidationField) : ComposeEvent()
 
-    // UI-эффекты
+    /**
+     * Предупреждение о дубликатах получателей: часть адресов уже присутствует в полях.
+     * Уникальные адреса уже добавлены; [count] = сколько дубликатов пропущено.
+     * Локализация текста — на стороне UI (Этап 4).
+     */
+    data class DuplicatesWarning(val count: Int) : ComposeEvent()
 
-    /** Воспроизвести звук успешной отправки */
-    data object PlaySendSound : ComposeEvent()
+    // UI-эффекты
+    // Звук успешной отправки играет SendProgressBar через SoundPlayer —
+    // отдельное событие не нужно (мёртвый код удалён в рамках аудита).
 
     /** Навигация назад */
     data object NavigateBack : ComposeEvent()

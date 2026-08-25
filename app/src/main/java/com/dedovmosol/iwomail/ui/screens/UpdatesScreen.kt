@@ -821,7 +821,6 @@ private fun RollbackDialog(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
-    val colorTheme = LocalColorTheme.current
     val isRu = isRussian()
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE

@@ -140,7 +140,7 @@ class AttachmentManager(
             EasXmlTemplates.itemOperationsFetchAttachment(safeRef, range = "0-999999999")
         )
         
-        for ((index, xml) in variants.withIndex()) {
+        for (xml in variants) {
             val result = tryDownload(xml, fileName, onProgress)
             if (result is EasResult.Success) {
                 return@withContext result

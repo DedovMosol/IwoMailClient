@@ -155,6 +155,7 @@ object Strings {
 
     // Цветовые темы
     val colorTheme: String @Composable get() = if (isRussian()) "Цветовая тема" else "Color theme"
+    val themeMode: String @Composable get() = if (isRussian()) "Режим темы" else "Theme mode"
     val selectColorTheme: String @Composable get() = if (isRussian()) "Выберите тему" else "Select theme"
     val dailyThemes: String @Composable get() = if (isRussian()) "Темы по дням недели" else "Daily themes"
     val dailyThemesDesc: String @Composable get() = if (isRussian()) "Разные цвета для каждого дня" else "Different colors for each day"
@@ -1243,6 +1244,7 @@ object OnboardingStrings {
         "Выберите цвет оформления приложения"
     else
         "Choose the app color scheme"
+    fun themeModeLabel(isRussian: Boolean): String = if (isRussian) "Режим темы" else "Theme mode"
 
     fun pageMailTitle(isRussian: Boolean): String = if (isRussian) "Почта и уведомления" else "Mail & Notifications"
     fun pageOrganizerTitle(isRussian: Boolean): String = if (isRussian) "Органайзер" else "Organizer"
@@ -1719,6 +1721,14 @@ val LocalLanguage = compositionLocalOf { AppLanguage.RUSSIAN }
  */
 @Composable
 fun isRussian(): Boolean = LocalLanguage.current == AppLanguage.RUSSIAN
+
+/**
+ * Язык интерфейса по коду ("ru" = русский). Общий слой для несоставных контекстов
+ * (ViewModel, фоновые операции), где недоступен Compose LocalLanguage.
+ * Использовать вместо ручного сравнения `getLanguageSync() == "ru"`.
+ */
+fun isRussianLanguage(languageCode: String): Boolean = languageCode == AppLanguage.RUSSIAN.code
+
 
 /**
  * Локализация названий системных папок

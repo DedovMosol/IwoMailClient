@@ -38,6 +38,13 @@ class PasswordStorageTest {
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
 
+        // Изоляция синглтонов: статические экземпляры переживают тесты и даже классы
+        // тестов в одной JVM (особенность Robolectric). Без сброса сюда утекает
+        // чужое состояние — напр. fail_closed_mode=true из SecurityTelemetryTest,
+        // который ломал все 12 тестов через SecurityException.
+        PasswordStorage.resetForTesting()
+        SecurityTelemetry.resetForTesting()
+
         // Clear any existing data
         context.getSharedPreferences("secure_passwords", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE).edit().clear().commit()
@@ -53,6 +60,11 @@ class PasswordStorageTest {
         context.getSharedPreferences("secure_passwords", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("security_telemetry", Context.MODE_PRIVATE).edit().clear().commit()
+
+        // Не оставлять синглтоны со ссылками на этот тестовый Application
+        // (иначе следующий класс тестов получит их с протухшим контекстом).
+        PasswordStorage.resetForTesting()
+        SecurityTelemetry.resetForTesting()
     }
 
     @Test

@@ -343,7 +343,7 @@ class CalendarRepository(private val context: Context) {
         attendees: String
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
-            val account = accountRepo.getAccount(accountId)
+            accountRepo.getAccount(accountId)
                 ?: return@withContext EasResult.Error(RepositoryErrors.ACCOUNT_NOT_FOUND)
 
             val easClient = accountRepo.createEasClient(accountId)

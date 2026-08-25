@@ -402,7 +402,6 @@ fun CalendarScreen(
                     deletionController.startDeletion(
                         emailIds = listOf(event.id),
                         message = restoringOneEventText,
-                        scope = scope,
                         isRestore = true
                     ) { _, onProgress ->
                         val result = withContext(Dispatchers.IO) {
@@ -426,7 +425,6 @@ fun CalendarScreen(
                     deletionController.startDeletion(
                         emailIds = listOf(event.id),
                         message = deletingOneEventText,
-                        scope = scope,
                         isRestore = false
                     ) { _, onProgress ->
                         val result = withContext(Dispatchers.IO) {
@@ -457,7 +455,6 @@ fun CalendarScreen(
             EventDetailDialog(
                 event = event,
                 calendarRepo = calendarRepo,
-                currentUserEmail = activeAccount?.email ?: "",
                 onDismiss = { selectedEventId = null },
                 onComposeClick = onComposeClick,
                 onEditClick = {
@@ -553,7 +550,6 @@ fun CalendarScreen(
                                 deletionController.startDeletion(
                                     emailIds = eventIds,
                                     message = deletingEventsMessage,
-                                    scope = scope,
                                     isRestore = false
                                 ) { _, onProgress ->
                                     var deleted = 0
@@ -963,7 +959,6 @@ fun CalendarScreen(
                                 deletionController.startDeletion(
                                     emailIds = eventIds,
                                     message = restoringEventsMessage,
-                                    scope = scope,
                                     isRestore = true
                                 ) { _, onProgress ->
                                     var restored = 0

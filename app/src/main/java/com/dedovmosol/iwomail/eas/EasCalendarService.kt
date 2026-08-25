@@ -38,10 +38,9 @@ class EasCalendarService internal constructor(
         val getEasVersion: () -> String,
         val isVersionDetected: () -> Boolean,
         val detectEasVersion: suspend () -> EasResult<String>,
-        val performNtlmHandshake: suspend (String, String, String) -> String?,
-        val executeNtlmRequest: suspend (String, String, String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String, String) -> String?,
-        val getEwsUrl: () -> String,
+        val performNtlmHandshake: suspend () -> String?,
+        val executeNtlmRequest: suspend (String, String) -> String?,
+        val tryBasicAuthEws: suspend (String, String) -> String?,
         val parseEasDate: (String?) -> Long?
     )
 
@@ -76,15 +75,13 @@ class EasCalendarService internal constructor(
         ewsRequest = ::ewsRequest,
         parseEwsAttachments = xmlParser::parseEwsAttachments,
         escapeXml = deps.escapeXml,
-        parseEasDate = deps.parseEasDate,
-        getEwsUrl = deps.getEwsUrl
+        parseEasDate = deps.parseEasDate
     )
 
     private val exceptionService = CalendarExceptionService(
         escapeXml = deps.escapeXml,
         formatEasDate = CalendarDateUtils::formatEasDate,
-        ewsRequest = ::ewsRequest,
-        getEwsUrl = deps.getEwsUrl
+        ewsRequest = ::ewsRequest
     )
 
     private val syncService = EasCalendarSyncService(
@@ -106,15 +103,14 @@ class EasCalendarService internal constructor(
     // === EWS Auth (shared by all services via lambda) ===
 
     private suspend fun ewsRequest(
-        ewsUrl: String,
         soapBody: String,
         operation: String
     ): EasResult<String> {
-        var response = deps.tryBasicAuthEws(ewsUrl, soapBody, operation)
+        var response = deps.tryBasicAuthEws(soapBody, operation)
         if (response == null) {
-            val authHeader = deps.performNtlmHandshake(ewsUrl, soapBody, operation)
+            deps.performNtlmHandshake()
                 ?: return EasResult.Error("NTLM handshake failed ($operation)")
-            response = deps.executeNtlmRequest(ewsUrl, soapBody, authHeader, operation)
+            response = deps.executeNtlmRequest(soapBody, operation)
                 ?: return EasResult.Error("EWS request failed ($operation)")
         }
         return EasResult.Success(response)
@@ -224,10 +220,9 @@ class EasCalendarService internal constructor(
         attachmentService.deleteCalendarAttachments(attachmentIds)
 
     internal suspend fun attachFilesEws(
-        ewsUrl: String,
         itemId: String,
         changeKey: String?,
         attachments: List<DraftAttachmentData>,
         exchangeVersion: String
-    ): EasResult<String> = attachmentService.attachFilesEws(ewsUrl, itemId, changeKey, attachments, exchangeVersion)
+    ): EasResult<String> = attachmentService.attachFilesEws(itemId, changeKey, attachments, exchangeVersion)
 }

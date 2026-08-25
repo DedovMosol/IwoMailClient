@@ -208,7 +208,7 @@ internal fun CreateEventDialog(
                     val attachmentsDir = File(context.cacheDir, "calendar_event_attachments").apply { mkdirs() }
                     val tempFile = File(attachmentsDir, "event_${UUID.randomUUID().toString().replace("-", "")}")
                     val copiedSize = context.contentResolver.openInputStream(uri)?.use { input ->
-                        tempFile.outputStream().use { output ->
+                        tempFile.outputStream().use outputStream@{ output ->
                         val buffer = ByteArray(8 * 1024)
                         var totalRead = 0L
                         while (true) {
@@ -217,11 +217,11 @@ internal fun CreateEventDialog(
                             totalRead += read
                             if (totalRead > maxSingleFile) {
                                 streamExceededSingleLimit = true
-                                return@use null
+                                return@outputStream null
                             }
                             if (currentTotal + totalRead > maxTotal) {
                                 streamExceededTotalLimit = true
-                                return@use null
+                                return@outputStream null
                             }
                             output.write(buffer, 0, read)
                         }
@@ -965,7 +965,7 @@ internal fun CreateEventDialog(
         val initHour = try { startTimeText.split(":")[0].toInt() } catch (_: Exception) { 9 }
         val initMinute = try { startTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
         val timePickerState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
-        AlertDialog(
+        BasicAlertDialog(
             onDismissRequest = { showStartTimePicker = false }
         ) {
             Surface(shape = RoundedCornerShape(28.dp)) {
@@ -987,7 +987,7 @@ internal fun CreateEventDialog(
         val initHour = try { endTimeText.split(":")[0].toInt() } catch (_: Exception) { 10 }
         val initMinute = try { endTimeText.split(":")[1].toInt() } catch (_: Exception) { 0 }
         val timePickerState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
-        AlertDialog(
+        BasicAlertDialog(
             onDismissRequest = { showEndTimePicker = false }
         ) {
             Surface(shape = RoundedCornerShape(28.dp)) {

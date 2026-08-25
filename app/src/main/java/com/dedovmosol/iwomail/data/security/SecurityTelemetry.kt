@@ -34,12 +34,16 @@ class SecurityTelemetry private constructor(
 
         val alreadyWarned = prefs.getBoolean(KEY_INSECURE_STORAGE_WARNING_SHOWN, false)
 
-        // Save the reason and mark as using insecure storage
-        prefs.edit()
+        // Save the reason and mark as using insecure storage.
+        // The FIRST_USED timestamp records the FIRST occurrence only — subsequent
+        // calls must not shift it (used by telemetry/auditing).
+        val editor = prefs.edit()
             .putBoolean(KEY_USING_INSECURE_STORAGE, true)
             .putString(KEY_INSECURE_STORAGE_REASON, reason)
-            .putLong(KEY_INSECURE_STORAGE_FIRST_USED, System.currentTimeMillis())
-            .apply()
+        if (prefs.getLong(KEY_INSECURE_STORAGE_FIRST_USED, 0L) == 0L) {
+            editor.putLong(KEY_INSECURE_STORAGE_FIRST_USED, System.currentTimeMillis())
+        }
+        editor.apply()
 
         // Show warning to user (once per app lifetime)
         if (!alreadyWarned) {
@@ -144,6 +148,17 @@ class SecurityTelemetry private constructor(
         fun getInstance(context: Context): SecurityTelemetry {
             return instance ?: synchronized(this) {
                 instance ?: SecurityTelemetry(context.applicationContext).also { instance = it }
+            }
+        }
+
+        /**
+         * Только для тестов: сброс синглтона (см. PasswordStorage — та же
+         * проблема статических синглтонов в одной JVM под Robolectric).
+         */
+        @androidx.annotation.VisibleForTesting
+        fun resetForTesting() {
+            synchronized(this) {
+                instance = null
             }
         }
     }

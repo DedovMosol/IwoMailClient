@@ -18,6 +18,53 @@ enum class SuggestionSource {
     GROUP
 }
 
+/**
+ * Поле получателей (для адресных мутаций в [ComposeViewModel]).
+ */
+enum class RecipientField {
+    To, Cc, Bcc
+}
+
+/**
+ * Выбор группы контактов (контакт-пикер / подсказки).
+ * @param name Имя группы
+ * @param emails Email-адреса участников группы
+ * @param color Цвет группы (для подкраски токена [GroupName])
+ */
+data class GroupSelection(
+    val name: String,
+    val emails: List<String>,
+    val color: Int
+)
+
+/**
+ * Отложенное добавление получателей, содержащих дубликаты (перенесено из локального
+ * состояния диалога ComposeScreen в VM, Этап 3 / CS-16). Пользователь подтверждает
+ * добавление через [ComposeViewModel.confirmDuplicateAddition].
+ *
+ * @param duplicateEmail Первый найденный дубликат (для текста предупреждения)
+ * @param duplicateFieldName Поле, где найден дубликат ("To"/"Cc"/"Bcc"), или null
+ * @param targetField Поле, в которое выполняется добавление
+ * @param emails Обычные email-адреса для добавления при подтверждении
+ * @param groupName Имя группы (для групповой подсказки)
+ * @param groupEmails Адреса группы (для групповой подсказки)
+ * @param groupColor Цвет группы (для групповой подсказки)
+ * @param groups Список групп из контакт-пикера (применяются при подтверждении)
+ * @param replaceLastToken true = заменить частичный ввод (поток подсказок),
+ *   false = дописать в конец (поток контакт-пикера)
+ */
+data class PendingDuplicateAddition(
+    val duplicateEmail: String,
+    val duplicateFieldName: String?,
+    val targetField: RecipientField,
+    val emails: List<String> = emptyList(),
+    val groupName: String? = null,
+    val groupEmails: List<String> = emptyList(),
+    val groupColor: Int = 0,
+    val groups: List<GroupSelection> = emptyList(),
+    val replaceLastToken: Boolean = false
+)
+
 enum class ImageQuality(val maxSize: Int, val jpegQuality: Int, val labelRu: String, val labelEn: String) {
     SMALL(800, 70, "Маленькое (~100 КБ)", "Small (~100 KB)"),
     MEDIUM(1024, 85, "Среднее (~300 КБ)", "Medium (~300 KB)"),

@@ -344,7 +344,6 @@ fun SearchScreen(
                                         email = email,
                                         query = query,
                                         isSelected = email.id in selectedIds,
-                                        isSelectionMode = isSelectionMode,
                                         onClick = {
                                             if (isSelectionMode) {
                                                 viewModel.toggleSelection(email.id)
@@ -431,7 +430,6 @@ private fun SearchResultItem(
     email: EmailEntity,
     query: String,
     isSelected: Boolean,
-    isSelectionMode: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier

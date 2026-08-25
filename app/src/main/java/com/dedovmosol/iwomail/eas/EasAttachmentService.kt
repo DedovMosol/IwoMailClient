@@ -449,9 +449,7 @@ class EasAttachmentService internal constructor(
      * Для больших файлов (>50 МБ) рекомендуется downloadAttachmentToFile().
      */
     suspend fun downloadAttachment(
-        fileReference: String,
-        collectionId: String? = null,
-        serverId: String? = null
+        fileReference: String
     ): EasResult<ByteArray> {
         val itemOpsResult = downloadViaItemOperations(fileReference)
         if (itemOpsResult is EasResult.Success) return itemOpsResult
@@ -459,8 +457,7 @@ class EasAttachmentService internal constructor(
         // Убран broken-fallback «ItemOperations Fetch целого письма»: он возвращал ВЕСЬ MIME письма
         // как «вложение» (TODO извлечения вложения по FileReference из MIME не был реализован) →
         // пользователь получал повреждённый файл (всё письмо). Корректные пути — Fetch по
-        // FileReference (выше) и GetAttachment (ниже). collectionId/serverId сохранены для
-        // будущей корректной реализации извлечения вложения из MIME.
+        // FileReference (выше) и GetAttachment (ниже).
         val getAttResult = downloadViaGetAttachment(fileReference)
         if (getAttResult is EasResult.Success) return getAttResult
 
@@ -474,9 +471,7 @@ class EasAttachmentService internal constructor(
      */
     suspend fun downloadAttachmentToFile(
         fileReference: String,
-        destFile: java.io.File,
-        collectionId: String? = null,
-        serverId: String? = null
+        destFile: java.io.File
     ): EasResult<java.io.File> {
         val itemOpsResult = downloadViaItemOperations(fileReference)
         if (itemOpsResult is EasResult.Success && itemOpsResult.data.isNotEmpty()) {
@@ -634,9 +629,9 @@ class EasAttachmentService internal constructor(
         val initialResponse = deps.executeRequest(buildGetAttachmentRequest(attachmentName))
         if (initialResponse.code == 449) {
             initialResponse.close()
-            when (val provResult = deps.provision()) {
-                is EasResult.Success -> return deps.executeRequest(buildGetAttachmentRequest(attachmentName))
-                is EasResult.Error -> return null
+            return when (deps.provision()) {
+                is EasResult.Success -> deps.executeRequest(buildGetAttachmentRequest(attachmentName))
+                is EasResult.Error -> null
             }
         }
         return initialResponse

@@ -16,15 +16,24 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
+private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 /**
  * Репозиторий для хранения настроек приложения
- * Singleton для избежания создания множества экземпляров
+ * Singleton для избежания создания множества экземпляров.
+ *
+ * DataStore инжектируется через конструктор (Dependency Inversion):
+ * в проде — общий делегат [settingsDataStore], в тестах — изолированный
+ * экземпляр через [PreferenceDataStoreFactory] (официальный паттерн
+ * тестирования DataStore, устраняет гонки статического делегата).
  */
-class SettingsRepository private constructor(private val context: Context) {
+class SettingsRepository private constructor(
+    private val context: Context,
+    private val dataStore: DataStore<Preferences>
+) {
     
     companion object {
         private const val TAG = "SettingsRepository"
@@ -34,13 +43,35 @@ class SettingsRepository private constructor(private val context: Context) {
         
         fun getInstance(context: Context): SettingsRepository {
             return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: SettingsRepository(context.applicationContext).also { INSTANCE = it }
+                INSTANCE ?: SettingsRepository(
+                    context.applicationContext,
+                    context.applicationContext.settingsDataStore
+                ).also { INSTANCE = it }
             }
+        }
+
+        /**
+         * Только для тестов: экземпляр с изолированным DataStore.
+         * Не трогает прод-синглтон [INSTANCE].
+         */
+        @androidx.annotation.VisibleForTesting
+        fun createForTesting(context: Context, dataStore: DataStore<Preferences>): SettingsRepository {
+            return SettingsRepository(context.applicationContext, dataStore)
         }
     }
     
     // Scope для фоновых операций кэширования
     private val cacheScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO)
+
+    // Флаги «сеттер записал ключ в рамках жизни этого экземпляра»: после записи
+    // сеттера коллектор НЕ должен перезаписывать соответствующий кэш устаревшими
+    // эмиссиями — эхо собственных записей в DataStore приходит асинхронно и может
+    // откатить кэш к промежуточному значению (гонка «сеттер → устаревшая эмиссия»).
+    // Корректно в силу инварианта единственного писателя: файл настроек пишет
+    // только этот репозиторий (официальное ограничение DataStore — single writer).
+    private val themeModeWrittenBySetter = AtomicBoolean(false)
+    private val colorThemeWrittenBySetter = AtomicBoolean(false)
+    private val dayThemesWrittenBySetter = AtomicBoolean(false)
     
     // Кэшированные значения для часто используемых настроек UI (thread-safe)
     private val cachedFontSize = AtomicReference<FontSize?>(null)
@@ -48,6 +79,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private val cachedDailyThemesEnabled = AtomicReference<Boolean?>(null)
     private val cachedAnimationsEnabled = AtomicReference<Boolean?>(null)
     private val cachedLanguage = AtomicReference<String?>(null)
+    private val cachedThemeMode = AtomicReference<ThemeMode?>(null)
     
     // Кэшированные значения для простых настроек
     private val cachedLastSyncTime = AtomicReference<Long?>(null)
@@ -78,64 +110,28 @@ class SettingsRepository private constructor(private val context: Context) {
     private val cachedDayThemes = java.util.concurrent.ConcurrentHashMap<Int, String>()
     
     init {
-        // Инициализация кэша при создании (один раз)
+        // Подписка на изменения для обновления кэша.
+        //
+        // ВАЖНО (гонка): единственный источник правды для кэша — этот поток.
+        // `dataStore.data` эмитит ТЕКУЩЕЕ значение сразу при подписке, поэтому
+        // отдельный первичный «сид» не нужен. Дублирующий сид создавал гонку:
+        // поздний запуск мог перезаписать кэш значением из файла ПОСЛЕ того,
+        // как сеттер уже обновил его (тест «sync cache reflects value
+        // immediately after set»). DRY + корректность.
         cacheScope.launch {
             try {
-                val prefs = context.dataStore.data.first()
-                // UI настройки
-                cachedFontSize.set(FontSize.fromName(prefs[Keys.FONT_SIZE] ?: FontSize.MEDIUM.name))
-                cachedColorTheme.set(prefs[Keys.COLOR_THEME] ?: "purple")
-                cachedDailyThemesEnabled.set(prefs[Keys.DAILY_THEMES_ENABLED] ?: false)
-                cachedAnimationsEnabled.set(prefs[Keys.ANIMATIONS_ENABLED] ?: true)
-                cachedLanguage.set(prefs[Keys.LANGUAGE] ?: "ru")
-                
-                // Простые настройки
-                cachedLastSyncTime.set(prefs[Keys.LAST_SYNC_TIME] ?: 0L)
-                cachedLastNotificationCheckTime.set(prefs[Keys.LAST_NOTIFICATION_CHECK_TIME] ?: 0L)
-                cachedLastTrashCleanupTime.set(prefs[Keys.LAST_TRASH_CLEANUP_TIME] ?: 0L)
-                cachedOnboardingShown.set(prefs[Keys.ONBOARDING_SHOWN] ?: false)
-                cachedDefaultDraftMode.set(prefs[Keys.DEFAULT_DRAFT_MODE] ?: "SERVER")
-                cachedUpdateCheckInterval.set(UpdateCheckInterval.fromName(prefs[Keys.UPDATE_CHECK_INTERVAL] ?: UpdateCheckInterval.DAILY.name))
-                cachedLastUpdateCheckTime.set(prefs[Keys.LAST_UPDATE_CHECK_TIME] ?: 0L)
-                cachedUpdateDismissedVersion.set(prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0)
-                cachedSoundEnabled.set(prefs[Keys.SOUND_ENABLED] ?: true)
-                cachedScrollbarColor.set(prefs[Keys.SCROLLBAR_COLOR] ?: "blue")
-                
-                // Темы по дням недели
-                cachedDayThemes[java.util.Calendar.MONDAY] = prefs[Keys.THEME_MONDAY] ?: "purple"
-                cachedDayThemes[java.util.Calendar.TUESDAY] = prefs[Keys.THEME_TUESDAY] ?: "purple"
-                cachedDayThemes[java.util.Calendar.WEDNESDAY] = prefs[Keys.THEME_WEDNESDAY] ?: "purple"
-                cachedDayThemes[java.util.Calendar.THURSDAY] = prefs[Keys.THEME_THURSDAY] ?: "purple"
-                cachedDayThemes[java.util.Calendar.FRIDAY] = prefs[Keys.THEME_FRIDAY] ?: "purple"
-                cachedDayThemes[java.util.Calendar.SATURDAY] = prefs[Keys.THEME_SATURDAY] ?: "purple"
-                cachedDayThemes[java.util.Calendar.SUNDAY] = prefs[Keys.THEME_SUNDAY] ?: "purple"
-                
-                // Цвета скроллбара по дням недели
-                cachedDayScrollbarColors[java.util.Calendar.MONDAY] = prefs[Keys.SCROLLBAR_MONDAY] ?: "blue"
-                cachedDayScrollbarColors[java.util.Calendar.TUESDAY] = prefs[Keys.SCROLLBAR_TUESDAY] ?: "blue"
-                cachedDayScrollbarColors[java.util.Calendar.WEDNESDAY] = prefs[Keys.SCROLLBAR_WEDNESDAY] ?: "blue"
-                cachedDayScrollbarColors[java.util.Calendar.THURSDAY] = prefs[Keys.SCROLLBAR_THURSDAY] ?: "blue"
-                cachedDayScrollbarColors[java.util.Calendar.FRIDAY] = prefs[Keys.SCROLLBAR_FRIDAY] ?: "blue"
-                cachedDayScrollbarColors[java.util.Calendar.SATURDAY] = prefs[Keys.SCROLLBAR_SATURDAY] ?: "blue"
-                cachedDayScrollbarColors[java.util.Calendar.SUNDAY] = prefs[Keys.SCROLLBAR_SUNDAY] ?: "blue"
-                
-                // Per-account настройки НЕ загружаем заранее (lazy load при первом обращении)
-            } catch (e: Exception) {
-                android.util.Log.w(TAG, "Failed to init settings cache", e)
-            }
-        }
-        
-        // Подписка на изменения для обновления кэша
-        cacheScope.launch {
-            try {
-                context.dataStore.data.collect { prefs ->
+                dataStore.data.collect { prefs ->
                     // UI настройки
                     cachedFontSize.set(FontSize.fromName(prefs[Keys.FONT_SIZE] ?: FontSize.MEDIUM.name))
-                    cachedColorTheme.set(prefs[Keys.COLOR_THEME] ?: "purple")
+                    if (!colorThemeWrittenBySetter.get()) {
+                        cachedColorTheme.set(prefs[Keys.COLOR_THEME] ?: "purple")
+                    }
                     cachedDailyThemesEnabled.set(prefs[Keys.DAILY_THEMES_ENABLED] ?: false)
                     cachedAnimationsEnabled.set(prefs[Keys.ANIMATIONS_ENABLED] ?: true)
                     cachedLanguage.set(prefs[Keys.LANGUAGE] ?: "ru")
-                    
+                    if (!themeModeWrittenBySetter.get()) {
+                        cachedThemeMode.set(ThemeMode.fromName(prefs[Keys.THEME_MODE]))
+                    }                    
                     // Простые настройки
                     cachedLastSyncTime.set(prefs[Keys.LAST_SYNC_TIME] ?: 0L)
                     cachedLastNotificationCheckTime.set(prefs[Keys.LAST_NOTIFICATION_CHECK_TIME] ?: 0L)
@@ -149,13 +145,15 @@ class SettingsRepository private constructor(private val context: Context) {
                     cachedScrollbarColor.set(prefs[Keys.SCROLLBAR_COLOR] ?: "blue")
                     
                     // Темы по дням недели
-                    cachedDayThemes[java.util.Calendar.MONDAY] = prefs[Keys.THEME_MONDAY] ?: "purple"
-                    cachedDayThemes[java.util.Calendar.TUESDAY] = prefs[Keys.THEME_TUESDAY] ?: "purple"
-                    cachedDayThemes[java.util.Calendar.WEDNESDAY] = prefs[Keys.THEME_WEDNESDAY] ?: "purple"
-                    cachedDayThemes[java.util.Calendar.THURSDAY] = prefs[Keys.THEME_THURSDAY] ?: "purple"
-                    cachedDayThemes[java.util.Calendar.FRIDAY] = prefs[Keys.THEME_FRIDAY] ?: "purple"
-                    cachedDayThemes[java.util.Calendar.SATURDAY] = prefs[Keys.THEME_SATURDAY] ?: "purple"
-                    cachedDayThemes[java.util.Calendar.SUNDAY] = prefs[Keys.THEME_SUNDAY] ?: "purple"
+                    if (!dayThemesWrittenBySetter.get()) {
+                        cachedDayThemes[java.util.Calendar.MONDAY] = prefs[Keys.THEME_MONDAY] ?: "purple"
+                        cachedDayThemes[java.util.Calendar.TUESDAY] = prefs[Keys.THEME_TUESDAY] ?: "purple"
+                        cachedDayThemes[java.util.Calendar.WEDNESDAY] = prefs[Keys.THEME_WEDNESDAY] ?: "purple"
+                        cachedDayThemes[java.util.Calendar.THURSDAY] = prefs[Keys.THEME_THURSDAY] ?: "purple"
+                        cachedDayThemes[java.util.Calendar.FRIDAY] = prefs[Keys.THEME_FRIDAY] ?: "purple"
+                        cachedDayThemes[java.util.Calendar.SATURDAY] = prefs[Keys.THEME_SATURDAY] ?: "purple"
+                        cachedDayThemes[java.util.Calendar.SUNDAY] = prefs[Keys.THEME_SUNDAY] ?: "purple"
+                    }
                     
                     // Цвета скроллбара по дням недели
                     cachedDayScrollbarColors[java.util.Calendar.MONDAY] = prefs[Keys.SCROLLBAR_MONDAY] ?: "blue"
@@ -179,6 +177,7 @@ class SettingsRepository private constructor(private val context: Context) {
         val CONFIRM_DELETE = booleanPreferencesKey("confirm_delete")
         val LANGUAGE = stringPreferencesKey("app_language")
         val FONT_SIZE = stringPreferencesKey("font_size")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val LAST_NOTIFICATION_CHECK_TIME = longPreferencesKey("last_notification_check_time")
         val COLOR_THEME = stringPreferencesKey("color_theme")
@@ -233,19 +232,32 @@ class SettingsRepository private constructor(private val context: Context) {
         }
     }
     
-    val notificationsEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    // Режим темы: системный / светлая / тёмная
+    enum class ThemeMode(val displayNameRu: String, val displayNameEn: String) {
+        SYSTEM("Как в системе", "Follow system"),
+        LIGHT("Светлая", "Light"),
+        DARK("Тёмная", "Dark");
+        
+        fun getDisplayName(isRussian: Boolean): String = if (isRussian) displayNameRu else displayNameEn
+        
+        companion object {
+            fun fromName(name: String?): ThemeMode = entries.find { it.name == name } ?: SYSTEM
+        }
+    }
+    
+    val notificationsEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.NOTIFICATIONS_ENABLED] ?: true
     }
     
-    val syncOnWifiOnly: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val syncOnWifiOnly: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.SYNC_ON_WIFI_ONLY] ?: false
     }
     
-    val showPreview: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val showPreview: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.SHOW_PREVIEW] ?: true
     }
     
-    val confirmDelete: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val confirmDelete: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.CONFIRM_DELETE] ?: true
     }
     
@@ -283,12 +295,12 @@ class SettingsRepository private constructor(private val context: Context) {
         }
     }
     
-    val fontSize: Flow<FontSize> = context.dataStore.data.map { prefs ->
+    val fontSize: Flow<FontSize> = dataStore.data.map { prefs ->
         FontSize.fromName(prefs[Keys.FONT_SIZE] ?: FontSize.MEDIUM.name)
     }
     
     suspend fun setFontSize(size: FontSize) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.FONT_SIZE] = size.name
         }
     }
@@ -299,36 +311,36 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     suspend fun setNotificationsEnabled(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.NOTIFICATIONS_ENABLED] = enabled
         }
     }
     
     suspend fun setSyncOnWifiOnly(wifiOnly: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.SYNC_ON_WIFI_ONLY] = wifiOnly
         }
     }
     
     suspend fun setShowPreview(show: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.SHOW_PREVIEW] = show
         }
     }
     
     suspend fun setConfirmDelete(confirm: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.CONFIRM_DELETE] = confirm
         }
     }
     
     // Язык приложения
-    val language: Flow<String> = context.dataStore.data.map { prefs ->
+    val language: Flow<String> = dataStore.data.map { prefs ->
         prefs[Keys.LANGUAGE] ?: "ru"
     }
     
     suspend fun setLanguage(languageCode: String) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.LANGUAGE] = languageCode
         }
     }
@@ -339,12 +351,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Время последней синхронизации
-    val lastSyncTime: Flow<Long> = context.dataStore.data.map { prefs ->
+    val lastSyncTime: Flow<Long> = dataStore.data.map { prefs ->
         prefs[Keys.LAST_SYNC_TIME] ?: 0L
     }
     
     suspend fun setLastSyncTime(timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.LAST_SYNC_TIME] = timeMillis
         }
     }
@@ -355,28 +367,28 @@ class SettingsRepository private constructor(private val context: Context) {
     
     // Флаг завершения первой синхронизации для аккаунта
     suspend fun isInitialSyncCompleted(accountId: Long): Boolean {
-        return context.dataStore.data.first()[Keys.initialSyncCompleted(accountId)] ?: false
+        return dataStore.data.first()[Keys.initialSyncCompleted(accountId)] ?: false
     }
     
     suspend fun setInitialSyncCompleted(accountId: Long, completed: Boolean = true) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.initialSyncCompleted(accountId)] = completed
         }
     }
     
     suspend fun resetInitialSyncFlag(accountId: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs.remove(Keys.initialSyncCompleted(accountId))
         }
     }
     
     // Время последней проверки уведомлений (для определения новых писем)
-    val lastNotificationCheckTime: Flow<Long> = context.dataStore.data.map { prefs ->
+    val lastNotificationCheckTime: Flow<Long> = dataStore.data.map { prefs ->
         prefs[Keys.LAST_NOTIFICATION_CHECK_TIME] ?: 0L
     }
     
     suspend fun setLastNotificationCheckTime(timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.LAST_NOTIFICATION_CHECK_TIME] = timeMillis
         }
     }
@@ -386,14 +398,14 @@ class SettingsRepository private constructor(private val context: Context) {
     }
 
     suspend fun setLastNotificationCheckTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.accountNotificationCheckTime(accountId)] = timeMillis
         }
         cachedAccountNotificationCheckTimes[accountId] = timeMillis
     }
 
     suspend fun getLastNotificationCheckTime(accountId: Long): Long {
-        val value = context.dataStore.data.first()[Keys.accountNotificationCheckTime(accountId)] ?: 0L
+        val value = dataStore.data.first()[Keys.accountNotificationCheckTime(accountId)] ?: 0L
         cachedAccountNotificationCheckTimes[accountId] = value
         return value
     }
@@ -403,7 +415,7 @@ class SettingsRepository private constructor(private val context: Context) {
     }
 
     suspend fun resetLastNotificationCheckTime(accountId: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs.remove(Keys.accountNotificationCheckTime(accountId))
         }
         cachedAccountNotificationCheckTimes.remove(accountId)
@@ -418,13 +430,14 @@ class SettingsRepository private constructor(private val context: Context) {
     }
 
     // Цветовая тема
-    val colorTheme: Flow<String> = context.dataStore.data.map { prefs ->
+    val colorTheme: Flow<String> = dataStore.data.map { prefs ->
         migrateThemeCode(prefs[Keys.COLOR_THEME] ?: "purple")
     }
     
     suspend fun setColorTheme(themeCode: String) {
+        colorThemeWrittenBySetter.set(true) // кэш авторитетен от сеттера (см. поля флагов)
         cachedColorTheme.set(themeCode) // Обновляем кэш сразу (виджет читает кэш)
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.COLOR_THEME] = themeCode
         }
     }
@@ -434,13 +447,39 @@ class SettingsRepository private constructor(private val context: Context) {
         return migrateThemeCode(cachedColorTheme.get() ?: "purple")
     }
     
+    // Режим темы (системный / светлая / тёмная)
+    val themeMode: Flow<ThemeMode> = dataStore.data.map { prefs ->
+        ThemeMode.fromName(prefs[Keys.THEME_MODE])
+    }
+    
+    suspend fun setThemeMode(mode: ThemeMode) {
+        // После записи сеттера коллектор не трогает кэш этого ключа (см. поля
+        // флагов) — устраняет гонку «сеттер → устаревшая эмиссия».
+        themeModeWrittenBySetter.set(true)
+        cachedThemeMode.set(mode) // Обновляем кэш сразу (синк-читатели)
+        dataStore.edit { prefs ->
+            prefs[Keys.THEME_MODE] = mode.name
+        }
+    }
+    
+    fun getThemeModeSync(): ThemeMode {
+        // Как и остальные Sync-геттеры файла (getFontSizeSync и др.): читаем
+        // только кэш, без runBlocking — блокировка главного потока на первом
+        // чтении DataStore запрещена официальными гайдлайнами (риск ANR/джанка).
+        // Холодный кэш возможен лишь в узком окне после создания репозитория,
+        // пока init-коллектор не успел эмитить; до эмитта UI всё равно не знает
+        // сохранённый режим, поэтому детерминированный дефолт SYSTEM корректен:
+        // первый же эмит применит сохранённый режим реактивно через themeMode.
+        return cachedThemeMode.get() ?: ThemeMode.SYSTEM
+    }
+    
     // Темы по дням недели
-    val dailyThemesEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val dailyThemesEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.DAILY_THEMES_ENABLED] ?: false
     }
     
     suspend fun setDailyThemesEnabled(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.DAILY_THEMES_ENABLED] = enabled
         }
     }
@@ -451,12 +490,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Анимации интерфейса
-    val animationsEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val animationsEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.ANIMATIONS_ENABLED] ?: true
     }
     
     suspend fun setAnimationsEnabled(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.ANIMATIONS_ENABLED] = enabled
         }
     }
@@ -467,12 +506,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Звуки приложения
-    val soundEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val soundEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.SOUND_ENABLED] ?: true
     }
     
     suspend fun setSoundEnabled(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.SOUND_ENABLED] = enabled
         }
     }
@@ -482,12 +521,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Цвет скроллбара
-    val scrollbarColor: Flow<String> = context.dataStore.data.map { prefs ->
+    val scrollbarColor: Flow<String> = dataStore.data.map { prefs ->
         prefs[Keys.SCROLLBAR_COLOR] ?: "blue"
     }
     
     suspend fun setScrollbarColor(colorCode: String) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.SCROLLBAR_COLOR] = colorCode
         }
     }
@@ -497,12 +536,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Цвет скроллбара по дням недели
-    fun getDayScrollbarColor(dayOfWeek: Int): Flow<String> = context.dataStore.data.map { prefs ->
+    fun getDayScrollbarColor(dayOfWeek: Int): Flow<String> = dataStore.data.map { prefs ->
         prefs[getDayScrollbarKey(dayOfWeek)] ?: "blue"
     }
     
     suspend fun setDayScrollbarColor(dayOfWeek: Int, colorCode: String) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getDayScrollbarKey(dayOfWeek)] = colorCode
         }
     }
@@ -554,12 +593,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Время последней очистки (глобальное, проверяем раз в день)
-    val lastTrashCleanupTime: Flow<Long> = context.dataStore.data.map { prefs ->
+    val lastTrashCleanupTime: Flow<Long> = dataStore.data.map { prefs ->
         prefs[Keys.LAST_TRASH_CLEANUP_TIME] ?: 0L
     }
     
     suspend fun setLastTrashCleanupTime(timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.LAST_TRASH_CLEANUP_TIME] = timeMillis
         }
     }
@@ -572,7 +611,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private fun getAutoCleanupTrashKey(accountId: Long) = longPreferencesKey("last_auto_cleanup_trash_$accountId")
 
     suspend fun setLastAutoCleanupTrashTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getAutoCleanupTrashKey(accountId)] = timeMillis
         }
         cachedAutoCleanupTrashTimes[accountId] = timeMillis
@@ -583,7 +622,7 @@ class SettingsRepository private constructor(private val context: Context) {
     }
 
     suspend fun getLastAutoCleanupTrashTime(accountId: Long): Long {
-        val value = context.dataStore.data.first()[getAutoCleanupTrashKey(accountId)] ?: 0L
+        val value = dataStore.data.first()[getAutoCleanupTrashKey(accountId)] ?: 0L
         cachedAutoCleanupTrashTimes[accountId] = value
         return value
     }
@@ -592,7 +631,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private fun getAutoCleanupDraftsKey(accountId: Long) = longPreferencesKey("last_auto_cleanup_drafts_$accountId")
 
     suspend fun setLastAutoCleanupDraftsTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getAutoCleanupDraftsKey(accountId)] = timeMillis
         }
         cachedAutoCleanupDraftsTimes[accountId] = timeMillis
@@ -603,7 +642,7 @@ class SettingsRepository private constructor(private val context: Context) {
     }
 
     suspend fun getLastAutoCleanupDraftsTime(accountId: Long): Long {
-        val value = context.dataStore.data.first()[getAutoCleanupDraftsKey(accountId)] ?: 0L
+        val value = dataStore.data.first()[getAutoCleanupDraftsKey(accountId)] ?: 0L
         cachedAutoCleanupDraftsTimes[accountId] = value
         return value
     }
@@ -612,7 +651,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private fun getAutoCleanupSpamKey(accountId: Long) = longPreferencesKey("last_auto_cleanup_spam_$accountId")
 
     suspend fun setLastAutoCleanupSpamTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getAutoCleanupSpamKey(accountId)] = timeMillis
         }
         cachedAutoCleanupSpamTimes[accountId] = timeMillis
@@ -623,54 +662,54 @@ class SettingsRepository private constructor(private val context: Context) {
     }
 
     suspend fun getLastAutoCleanupSpamTime(accountId: Long): Long {
-        val value = context.dataStore.data.first()[getAutoCleanupSpamKey(accountId)] ?: 0L
+        val value = dataStore.data.first()[getAutoCleanupSpamKey(accountId)] ?: 0L
         cachedAutoCleanupSpamTimes[accountId] = value
         return value
     }
     
     // --- Очистка файлов приложения (глобальные, не per-account) ---
 
-    val autoCleanupDownloadsDays: Flow<Int> = context.dataStore.data.map { prefs ->
+    val autoCleanupDownloadsDays: Flow<Int> = dataStore.data.map { prefs ->
         prefs[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] ?: 0
     }
 
     suspend fun getAutoCleanupDownloadsDays(): Int =
-        context.dataStore.data.first()[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] ?: 0
+        dataStore.data.first()[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] ?: 0
 
     suspend fun setAutoCleanupDownloadsDays(days: Int) {
-        context.dataStore.edit { prefs -> prefs[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] = days }
+        dataStore.edit { prefs -> prefs[Keys.AUTO_CLEANUP_DOWNLOADS_DAYS] = days }
     }
 
-    val autoCleanupRollbackDays: Flow<Int> = context.dataStore.data.map { prefs ->
+    val autoCleanupRollbackDays: Flow<Int> = dataStore.data.map { prefs ->
         prefs[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] ?: 0
     }
 
     suspend fun getAutoCleanupRollbackDays(): Int =
-        context.dataStore.data.first()[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] ?: 0
+        dataStore.data.first()[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] ?: 0
 
     suspend fun setAutoCleanupRollbackDays(days: Int) {
-        context.dataStore.edit { prefs -> prefs[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] = days }
+        dataStore.edit { prefs -> prefs[Keys.AUTO_CLEANUP_ROLLBACK_DAYS] = days }
     }
 
     suspend fun getLastAutoCleanupDownloadsTime(): Long =
-        context.dataStore.data.first()[Keys.LAST_AUTO_CLEANUP_DOWNLOADS] ?: 0L
+        dataStore.data.first()[Keys.LAST_AUTO_CLEANUP_DOWNLOADS] ?: 0L
 
     suspend fun setLastAutoCleanupDownloadsTime(timeMillis: Long) {
-        context.dataStore.edit { prefs -> prefs[Keys.LAST_AUTO_CLEANUP_DOWNLOADS] = timeMillis }
+        dataStore.edit { prefs -> prefs[Keys.LAST_AUTO_CLEANUP_DOWNLOADS] = timeMillis }
     }
 
     suspend fun getLastAutoCleanupRollbackTime(): Long =
-        context.dataStore.data.first()[Keys.LAST_AUTO_CLEANUP_ROLLBACK] ?: 0L
+        dataStore.data.first()[Keys.LAST_AUTO_CLEANUP_ROLLBACK] ?: 0L
 
     suspend fun setLastAutoCleanupRollbackTime(timeMillis: Long) {
-        context.dataStore.edit { prefs -> prefs[Keys.LAST_AUTO_CLEANUP_ROLLBACK] = timeMillis }
+        dataStore.edit { prefs -> prefs[Keys.LAST_AUTO_CLEANUP_ROLLBACK] = timeMillis }
     }
 
     // Время последней синхронизации контактов (для каждого аккаунта отдельно)
     private fun getContactsSyncKey(accountId: Long) = longPreferencesKey("last_contacts_sync_$accountId")
     
     suspend fun setLastContactsSyncTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getContactsSyncKey(accountId)] = timeMillis
         }
         cachedContactsSyncTimes[accountId] = timeMillis  // Явное обновление кэша
@@ -688,7 +727,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private fun getNotesSyncKey(accountId: Long) = longPreferencesKey("last_notes_sync_$accountId")
     
     suspend fun setLastNotesSyncTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getNotesSyncKey(accountId)] = timeMillis
         }
         cachedNotesSyncTimes[accountId] = timeMillis  // Явное обновление кэша
@@ -706,7 +745,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private fun getCalendarSyncKey(accountId: Long) = longPreferencesKey("last_calendar_sync_$accountId")
     
     suspend fun setLastCalendarSyncTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getCalendarSyncKey(accountId)] = timeMillis
         }
         cachedCalendarSyncTimes[accountId] = timeMillis  // Явное обновление кэша
@@ -724,7 +763,7 @@ class SettingsRepository private constructor(private val context: Context) {
     private fun getTasksSyncKey(accountId: Long) = longPreferencesKey("last_tasks_sync_$accountId")
     
     suspend fun setLastTasksSyncTime(accountId: Long, timeMillis: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getTasksSyncKey(accountId)] = timeMillis
         }
         cachedTasksSyncTimes[accountId] = timeMillis  // Явное обновление кэша
@@ -739,14 +778,15 @@ class SettingsRepository private constructor(private val context: Context) {
     }
 
     // Получить тему для конкретного дня (1=Воскресенье, 2=Понедельник, ..., 7=Суббота)
-    fun getDayTheme(dayOfWeek: Int): Flow<String> = context.dataStore.data.map { prefs ->
+    fun getDayTheme(dayOfWeek: Int): Flow<String> = dataStore.data.map { prefs ->
         val key = getDayKey(dayOfWeek)
         migrateThemeCode(prefs[key] ?: "purple")
     }
     
     suspend fun setDayTheme(dayOfWeek: Int, themeCode: String) {
+        dayThemesWrittenBySetter.set(true) // кэш авторитетен от сеттера (см. поля флагов)
         cachedDayThemes[dayOfWeek] = themeCode // Обновляем кэш сразу (виджет читает кэш)
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[getDayKey(dayOfWeek)] = themeCode
         }
     }
@@ -782,12 +822,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Onboarding показан
-    val onboardingShown: Flow<Boolean> = context.dataStore.data.map { prefs ->
+    val onboardingShown: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[Keys.ONBOARDING_SHOWN] ?: false
     }
     
     suspend fun setOnboardingShown(shown: Boolean) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.ONBOARDING_SHOWN] = shown
         }
     }
@@ -798,7 +838,7 @@ class SettingsRepository private constructor(private val context: Context) {
     
     // Режим черновиков по умолчанию (для новых аккаунтов)
     suspend fun setDefaultDraftMode(mode: String) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.DEFAULT_DRAFT_MODE] = mode
         }
     }
@@ -821,12 +861,12 @@ class SettingsRepository private constructor(private val context: Context) {
         }
     }
     
-    val updateCheckInterval: Flow<UpdateCheckInterval> = context.dataStore.data.map { prefs ->
+    val updateCheckInterval: Flow<UpdateCheckInterval> = dataStore.data.map { prefs ->
         UpdateCheckInterval.fromName(prefs[Keys.UPDATE_CHECK_INTERVAL] ?: UpdateCheckInterval.DAILY.name)
     }
     
     suspend fun setUpdateCheckInterval(interval: UpdateCheckInterval) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.UPDATE_CHECK_INTERVAL] = interval.name
         }
     }
@@ -836,12 +876,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Время последней проверки обновлений
-    val lastUpdateCheckTime: Flow<Long> = context.dataStore.data.map { prefs ->
+    val lastUpdateCheckTime: Flow<Long> = dataStore.data.map { prefs ->
         prefs[Keys.LAST_UPDATE_CHECK_TIME] ?: 0L
     }
     
     suspend fun setLastUpdateCheckTime(time: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.LAST_UPDATE_CHECK_TIME] = time
         }
     }
@@ -851,12 +891,12 @@ class SettingsRepository private constructor(private val context: Context) {
     }
     
     // Версия, которую пользователь отложил (нажал "Позже")
-    val updateDismissedVersion: Flow<Int> = context.dataStore.data.map { prefs ->
+    val updateDismissedVersion: Flow<Int> = dataStore.data.map { prefs ->
         prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0
     }
     
     suspend fun setUpdateDismissedVersion(versionCode: Int) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.UPDATE_DISMISSED_VERSION] = versionCode
         }
     }
@@ -867,21 +907,21 @@ class SettingsRepository private constructor(private val context: Context) {
     
     // Последняя запущенная версия приложения
     suspend fun getLastAppVersion(): Int {
-        return context.dataStore.data.first()[Keys.LAST_APP_VERSION] ?: 0
+        return dataStore.data.first()[Keys.LAST_APP_VERSION] ?: 0
     }
     
     suspend fun setLastAppVersion(versionCode: Int) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.LAST_APP_VERSION] = versionCode
         }
     }
     
     suspend fun getLastInstallTime(): Long {
-        return context.dataStore.data.first()[Keys.LAST_INSTALL_TIME] ?: 0L
+        return dataStore.data.first()[Keys.LAST_INSTALL_TIME] ?: 0L
     }
     
     suspend fun setLastInstallTime(time: Long) {
-        context.dataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.LAST_INSTALL_TIME] = time
         }
     }
@@ -910,12 +950,18 @@ class SettingsRepository private constructor(private val context: Context) {
     
     /**
      * Очистка ресурсов при завершении приложения
-     * Отменяет coroutine scope для предотвращения memory leak
+     * Отменяет coroutine scope для предотвращения memory leak.
+     *
+     * Глобальный синглтон сбрасывается только если ЭТОТ экземпляр им и
+     * является — тестовые экземпляры из [createForTesting] не должны
+     * трогать прод-синглтон (SOC).
      */
     fun cleanup() {
         cacheScope.cancel()
         synchronized(Companion) {
-            INSTANCE = null
+            if (INSTANCE === this) {
+                INSTANCE = null
+            }
         }
     }
 }

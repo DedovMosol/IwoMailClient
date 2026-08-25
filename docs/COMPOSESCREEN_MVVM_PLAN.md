@@ -681,17 +681,111 @@ fun saveDraft() {
 }
 ```
 
-### 3.5. Чек-лист Этапа 3
+### 3.5. Чек-лист Этапа 3 (выполнен 2026-08-24)
 
-- [ ] Перенести `normalizeRecipients` в VM
-- [ ] Перенести валидацию получателей в VM
-- [ ] Перенести дебаунс-подсказки в VM (CS-7 уже частично сделано)
-- [ ] Перенести `sendEmail` в VM (с `finally { isSending = false }`)
-- [ ] Перенести `saveDraft` в VM (с бюджетом CS-1)
-- [ ] Убрать прямые DAO-вызовы из ComposeScreen (CS-16)
-- [ ] Тесты: `ComposeViewModelTest.kt` (валидация, дедуп, бюджет)
+- [x] Перенести `normalizeRecipients` в VM (общая `ComposeTextUtils.normalizeRecipients`, DRY)
+- [x] Перенести валидацию получателей в VM (`isValidRecipientList` + `ValidationError` события)
+- [x] Перенести дебаунс-подсказки в VM (CS-7: контакты/история/группы + GAL, дедуп, исключение себя)
+- [x] Перенести `sendEmail` в VM (бюджет ДО чтения байт, валидация, `SendController` с `onError`,
+      отложенная отправка через `scheduleEmail`, корректный `PendingEmail` с раскрытием групп)
+- [x] Перенести `saveDraft` в VM (бюджет CS-1/CS-2, inline data:URL→cid:, delete+create с
+      защитой от «воскрешения», верификация новой записи; `finally { isSavingDraft = false }`)
+- [x] Убрать прямые DAO-вызовы из пути VM (обёртки в репозиториях: `searchEmailHistory`,
+      `getContactsByGroupList`, `incrementUseCountByEmail`, `getSignaturesForAccount`,
+      `insertDraftRecord`; старый `ComposeScreen` пока жив до Этапа 4)
+- [x] Тесты: `ComposeViewModelTest.kt` — 31 тест (валидация, дедуп, дебаунс, бюджет, отправка,
+      черновик, дельта-детект, crash-resistance) + 12 тестов чистых функций в `ComposeTextUtilsTest`
+- [x] Фикс окружения сборки: `org.gradle.java.home` → JDK 17 (Robolectric 4.11.1 ASM не
+      поддерживает class file v67/JDK 23 → все Robolectric-сьюты падали)
+- [x] Фикс `SendController`: добавлен `onError` callback (раньше после ошибки отправки
+      `isSending` оставался `true` навсегда — заблокированный экран)
+
+### 3.5.1. Въедливый самоаудит Этапа 3 (выполнен 2026-08-24)
+
+Поразрядная сверка нового `ComposeViewModel` с эталонным `ComposeScreen` выявила и закрыла
+8 регрессий портирования (все подтверждены реальными прогонами):
+
+- [x] `AttachmentLoader`: скачивание вложений черновика — через `downloadDraftAttachment`
+      (роутинг EAS ItemOperations vs EWS GetItem по наличию `:` в fileReference) — критично
+      для черновиков из Outlook/OWA на Exchange 2007 SP1/SP2
+- [x] `AttachmentLoader`: скачанные файлы → `filesDir/<source>_attachments` (эталонные
+      каталоги, покрыты `file_paths.xml`), а не `cacheDir` (вычищается ОС)
+- [x] `loadReplyEmail`/`loadForwardEmail`: локализованные метки и заголовки цитаты (RU/EN,
+      эталон `Strings.quoteFrom` и т.д.); в цитате ответа `toField = null` (нет строки «Кому:»);
+      удалён несуществующий в эталоне хак `contains("____")`
+- [x] Reply/draft: нормализация получателей (`normalizeRecipients`) + пересчёт
+      `toValid`/`ccValid`/`hasRecipients` для загруженных значений
+- [x] Мультиаккаунт: клиент для скачивания вложений создаётся от аккаунта
+      письма/черновика, а не от активного аккаунта
+- [x] `loadEditDraft`: ленивая догрузка тела (`loadEmailBody`), `refreshAttachmentMetadata`
+      (вложения, добавленные в Outlook на ПК), резолв `cid:` с роутингом EAS/EWS
+      (`fetchInlineImages`/`fetchInlineImagesEws` для длинных ItemId) и запись
+      резолвленного тела в БД (нет повторного сетевого запроса при каждом открытии)
+- [x] Share intent: `ShareIntentData.clear()` только ПОСЛЕ потребления; вложения дополняют
+      любой режим, не затирая reply/forward/draft/mailto
+- [x] Mailto: параметры применяются при любом из `initialTo`/`initialSubject`/`initialBody`
+- [x] Обёртка `MailRepository.updateEmailBody` (единая точка записи, инвариант проекта)
+- [x] Тесты: +18 в `ComposeViewModelTest` (итого 49), +1 в `AttachmentLoaderTest` (итого 13);
+      **579 тестов / 0 падений / 0 ошибок**, 5 APK
 
 **Коммит:** `feat(compose): migrate business logic to ViewModel (Этап 3, CS-16)`
+
+### 3.5.3. Самоаудит Этапа 3 — раунд 3 (выполнен 2026-08-24)
+
+Перепроверка всех находок раунда 2 по топ-практикам (DRY/KISS/SOLID/SOC/YAGNI)
+с фактическим кодом и официальной документацией Kotlin/Android:
+
+- [x] **КРИТИЧНО: Regex.replace без escapeReplacement** — `HTML_SIGNATURE_REGEX` не имеет
+      групп, но замена `newSignatureHtml` шла без `Regex.escapeReplacement`. По документации
+      Kotlin `$` и `\` в replacement — спецсимволы → подпись с `$` крашила бы приложение
+      или искажалась. Исправлено: `Regex.escapeReplacement(newSignatureHtml)` в 4 местах
+      (ComposeScreen ×2, ComposeViewModel ×2).
+- [x] **runBlocking на главном потоке** — `getThemeModeSync()` блокировал UI-поток на
+      первом чтении DataStore (риск ANR). Исправлено: читаем только кэш, без runBlocking
+      (как остальные 24 Sync-геттера файла).
+- [x] **DRY: дубли утилит получателей** — `normalizeRecipients`/`extractQueryPart`/
+      `replaceLastRecipient` существовали в двух местах: `ComposeTextUtils` и локальные
+      копии в `ComposeScreen`. Удалены локальные копии, `ComposeScreen` импортирует из
+      общего слоя.
+- [x] **DRY: дубль isRussian** — `ComposeViewModel` имел свой `isRussian()` через
+      `getLanguageSync() == "ru"`. Вынесен общий `isRussianLanguage(languageCode)`
+      в `Localization.kt`.
+- [x] **Тесты: 7 публичных методов без покрытия** — добавлены тесты на `setImportance`,
+      `setRequestReadReceipt`, `setRequestDeliveryReceipt`, `removeAttachment`,
+      `addGroupsFromPicker`, `dismissDiscardDialog`, `saveDraftAndExit`.
+      **598 тестов / 0 падений / 0 ошибок / 41 сьют**, `assembleDebug` — 5 APK.
+
+**Коммит:** `fix(compose): audit round 3 — crash fix, DRY, runBlocking removal, test coverage`
+
+
+### 3.5.2. Самоаудит Этапа 3 — раунд 2 (выполнен 2026-08-24)
+
+Второй проход построчной сверки (включая аудит СОБСТВЕННЫХ фиксов раунда 1) выявил
+и закрыл ещё 5 упущений — все подтверждены реальными прогонами `--rerun-tasks`:
+
+- [x] **Локализация ВСЕХ ошибок** (требование релиза №2): 11 захардкоженных английских
+      строк в `ComposeEvent.Error` заменены локализованными хелперами (рус/англ через
+      `SettingsRepository.getLanguageSync`): Email/Draft not found, Failed to load
+      reply/forward/draft, Failed to apply suggestion, Failed to add recipients/groups,
+      Failed to confirm addition, Initialization failed. Ошибки загрузки вложений:
+      пользователю — чистое локализованное сообщение, детали — в лог (локализация в VM,
+      а не в доменном `AttachmentLoader` — SOC)
+- [x] **Подпись в mailto**: `applyMailtoIntent` перезаписывал `body` целиком — подпись,
+      подставленная `loadSignaturesForAccount` до этого, терялась. Эталон строит тело как
+      «почитаемое тело + подпись»; теперь подпись сохраняется под телом шаринга
+- [x] **Валидация получателей при отправке**: проверка «нет получателей» смотрела только
+      на `to` — письмо с адресатом лишь в копии/скрытой копии блокировалось (нарушение
+      логики). Эталон гейтит по любому из полей (`hasRecipients`)
+- [x] **FPS/main-thread**: `createEasClient` (доступ к БД + чтение паролей из кеша)
+      вызывался на Main-диспетчере во всех трёх загрузчиках режимов — обёрнут в
+      `withContext(dispatcher)` (блокировка вынесена из UI-потока)
+- [x] **YAGNI**: удалён мёртвый `ComposeEvent.PlaySendSound` (ни эмиттера, ни консьюмера;
+      звук отправки играет `SendProgressBar` через `SoundPlayer`)
+- [x] Тесты: +10 в `ComposeViewModelTest` (итого 59): локализация ошибок RU/EN,
+      mailto + подпись, cc-only отправка, блокировка без получателей, локализованная
+      ошибка вложений; убраны 5 предупреждений компилятора
+- [x] Верификация: полный прогон `testDebugUnitTest --rerun-tasks` —
+      **589 тестов / 0 падений / 0 ошибок / 41 сьют**, `assembleDebug` — 5 APK
 
 ---
 
@@ -1054,9 +1148,17 @@ class AttachmentLoaderTest {
 | 0. Подготовка | ✅ DONE | 2026-07-01 | 2026-07-03 | CS-1, CS-2, CS-5, CS-6, CS-7, CS-9, CS-11 |
 | 1. Инфраструктура | ✅ DONE | 2026-08-14 | 2026-08-14 | 5288715 (ComposeUiState, ComposeEvent, ComposeViewModel skeleton) |
 | 2. AttachmentLoader | ✅ DONE | 2026-08-14 | 2026-08-14 | 6df8f82 (AttachmentLoader + 15 tests, CS-15, CS-4) |
-| 3. Бизнес-логика | 🔄 | 2026-08-14 | — | — |
+| 3. Бизнес-логика | ✅ DONE | 2026-08-14 | 2026-08-24 | — (VM готов, пока не подключён к живому UI) |
 | 4. UI подключение | ⏸️ | — | — | — |
 | 5. Тесты | ⏸️ | — | — | — |
+
+---
+
+**Примечание 2026-08-25 (раунд 4):** 4 дублирующих сайта замены подписи
+(`Regex.escapeReplacement`) консолидированы в единый протестированный хелпер
+`replaceSignatureHtml()` в `ComposeTextUtils` (ComposeScreen ×2, ComposeViewModel ×2).
+Поведение идентично; добавлено 7 регрессионных тестов на `$` / `\` / групповые ссылки.
+Весь код: 0 предупреждений компилятора, полная перекомпиляция `--rerun-tasks` чистая.
 
 ---
 

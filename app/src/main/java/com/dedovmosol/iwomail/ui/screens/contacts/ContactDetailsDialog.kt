@@ -41,7 +41,6 @@ internal fun ContactDetailsDialog(
     onDismiss: () -> Unit,
     onWriteEmail: (String) -> Unit,
     onCopyEmail: (String) -> Unit,
-    onCall: (String) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onAddToContacts: () -> Unit
@@ -53,13 +52,6 @@ internal fun ContactDetailsDialog(
     val isLocal = contact.source == ContactSource.LOCAL
     val name = contact.displayName
     val email = cleanContactEmail(contact.email)
-    val phone = contact.phone
-    val mobilePhone = contact.mobilePhone
-    val workPhone = contact.workPhone
-    val company = contact.company
-    val department = contact.department
-    val jobTitle = contact.jobTitle
-    val notes = contact.notes
 
     // Находим группу контакта
     val contactGroup = contact.groupId?.let { groupId ->

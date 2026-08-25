@@ -36,10 +36,9 @@ class EasTasksService internal constructor(
         val detectEasVersion: suspend () -> EasResult<String>,
         val getTasksFolderId: suspend () -> String?,
         val getDeletedItemsFolderId: suspend () -> String?,
-        val performNtlmHandshake: suspend (String, String, String) -> String?,
-        val executeNtlmRequest: suspend (String, String, String, String) -> String?,
-        val tryBasicAuthEws: suspend (String, String, String) -> String?,
-        val getEwsUrl: () -> String,
+        val performNtlmHandshake: suspend () -> String?,
+        val executeNtlmRequest: suspend (String, String) -> String?,
+        val tryBasicAuthEws: suspend (String, String) -> String?,
         val sendMail: suspend (String, String, String, String, String, Int) -> EasResult<Boolean>
     )
     
@@ -100,9 +99,9 @@ class EasTasksService internal constructor(
         val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
         
         return if (!assignTo.isNullOrBlank()) {
-            createTaskEws(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, assignTo)
+            createTaskEws(subject, body, startDate, dueDate, importance, assignTo)
         } else if (majorVersion < 14) {
-            createTaskEws(subject, body, startDate, dueDate, importance, reminderSet, reminderTime, null)
+            createTaskEws(subject, body, startDate, dueDate, importance, null)
         } else {
             createTaskEas(subject, body, startDate, dueDate, importance, reminderSet, reminderTime)
         }
@@ -399,7 +398,13 @@ class EasTasksService internal constructor(
                 is EasResult.Success -> {
                     val (newSyncKey, tasks, moreAvailable) = result.data
                     
+                    syncKey = newSyncKey
+                    allTasks.addAll(tasks)
+                    hasMore = moreAvailable
+
                     // Защита от зацикливания: если сервер возвращает тот же syncKey
+                    // 3 раза подряд — принудительно останавливаем цикл.
+                    // Присваиваем hasMore ДО проверки, чтобы защита могла переопределить.
                     if (newSyncKey == previousSyncKey) {
                         sameKeyCount++
                         if (sameKeyCount >= 3) {
@@ -410,10 +415,6 @@ class EasTasksService internal constructor(
                         sameKeyCount = 0
                         previousSyncKey = newSyncKey
                     }
-                    
-                    syncKey = newSyncKey
-                    allTasks.addAll(tasks)
-                    hasMore = moreAvailable
                     
                     // Если сервер говорит moreAvailable но не отдаёт данные - прерываем
                     if (moreAvailable && tasks.isEmpty()) {
@@ -466,7 +467,7 @@ class EasTasksService internal constructor(
                     if (newKey != null) syncKeyCache[tasksFolderId] = newKey
                     deps.extractValue(responseXml, "ServerId") ?: clientId
                 } else if (status == "3" || status == "12") {
-                    throw InvalidSyncKeyException(status ?: "3")
+                    throw InvalidSyncKeyException(status)
                 } else {
                     throw Exception("Ошибка создания задачи: Status=$status")
                 }
@@ -614,38 +615,37 @@ class EasTasksService internal constructor(
     
     // ==================== Private EWS methods ====================
 
-    private suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? {
-        var responseXml = deps.tryBasicAuthEws(ewsUrl, soapRequest, operation)
+    private suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
+        var responseXml = deps.tryBasicAuthEws(soapRequest, operation)
         if (responseXml == null) {
-            val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
-            responseXml = deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+            deps.performNtlmHandshake() ?: return null
+            responseXml = deps.executeNtlmRequest(soapRequest, operation)
         }
         return responseXml
     }
     
     private suspend fun syncTasksEws(): EasResult<List<EasTask>> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val allActiveTasks = mutableListOf<EasTask>()
 
             // 0. Диагностика: GetFolder на tasks → TotalCount + ChildFolderCount
-            val folderInfo = getTasksFolderInfo(ewsUrl)
+            val folderInfo = getTasksFolderInfo()
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "syncTasksEws: GetFolder tasks → totalCount=${folderInfo.first}, childFolders=${folderInfo.second}")
 
             // 1. Синхронизация из корневой папки Tasks (DistinguishedFolderId)
-            val rootTasks = syncTasksFromFolderEws(ewsUrl, "tasks", isDeleted = false) { offset, pageSize ->
+            val rootTasks = syncTasksFromFolderEws("tasks", isDeleted = false) { offset, pageSize ->
                 buildEwsFindTasksRequest(offset, pageSize)
             }
             allActiveTasks.addAll(rootTasks)
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: root tasks folder: ${rootTasks.size}")
             
             // 2. Обнаруживаем подпапки Tasks и ищем в каждой.
-            val subfolderIds = discoverTaskSubfolderIds(ewsUrl)
+            val subfolderIds = discoverTaskSubfolderIds()
             if (subfolderIds.isNotEmpty()) {
                 if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: discovered ${subfolderIds.size} task subfolders")
                 for (subfolderId in subfolderIds) {
-                    val subTasks = syncTasksFromFolderEws(ewsUrl, "tasks-sub-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
+                    val subTasks = syncTasksFromFolderEws("tasks-sub-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
                         buildEwsFindTasksByFolderIdRequest(subfolderId, offset, pageSize)
                     }
                     allActiveTasks.addAll(subTasks)
@@ -653,13 +653,13 @@ class EasTasksService internal constructor(
             }
 
             // 2b. Подпапки непосредственно внутри "tasks" (Deep от msgfolderroot может пропустить)
-            val directSubfolders = discoverDirectTaskSubfolders(ewsUrl)
+            val directSubfolders = discoverDirectTaskSubfolders()
             if (directSubfolders.isNotEmpty()) {
                 if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                     "syncTasksEws: ${directSubfolders.size} direct subfolders under tasks")
                 for (subfolderId in directSubfolders) {
                     if (subfolderIds.contains(subfolderId)) continue
-                    val subTasks = syncTasksFromFolderEws(ewsUrl, "tasks-direct-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
+                    val subTasks = syncTasksFromFolderEws("tasks-direct-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
                         buildEwsFindTasksByFolderIdRequest(subfolderId, offset, pageSize)
                     }
                     allActiveTasks.addAll(subTasks)
@@ -677,7 +677,7 @@ class EasTasksService internal constructor(
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: active tasks total: ${uniqueActive.size} (before dedup: ${allActiveTasks.size})")
             
             // 4. Синхронизация удалённых задач
-            val deletedTasks = syncTasksFromFolderEws(ewsUrl, "deleteditems", isDeleted = true) { offset, pageSize ->
+            val deletedTasks = syncTasksFromFolderEws("deleteditems", isDeleted = true) { offset, pageSize ->
                 buildEwsFindDeletedTasksRequest(offset, pageSize)
             }
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: deleted tasks: ${deletedTasks.size}")
@@ -692,7 +692,6 @@ class EasTasksService internal constructor(
     }
     
     private suspend fun syncTasksFromFolderEws(
-        ewsUrl: String, 
         folderLabel: String, 
         isDeleted: Boolean,
         buildRequest: (offset: Int, pageSize: Int) -> String
@@ -710,7 +709,7 @@ class EasTasksService internal constructor(
                 yield()
                 val findRequest = buildRequest(offset, pageSize)
                 
-                val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem") ?: break
+                val responseXml = executeEwsWithAuth(findRequest, "FindItem") ?: break
 
                 val totalItemsMatch = Companion.REGEX_TOTAL_ITEMS_IN_VIEW.find(responseXml)
                 val totalItems = totalItemsMatch?.groupValues?.get(1)?.toIntOrNull() ?: -1
@@ -752,7 +751,7 @@ class EasTasksService internal constructor(
             if (uniqueIds.isEmpty()) return emptyList()
             
             // ЭТАП 2: GetItem с AllProperties — получаем ВСЕ свойства задач (включая Body).
-            val tasks = getTaskDetailsEws(ewsUrl, uniqueIds, folderLabel)
+            val tasks = getTaskDetailsEws(uniqueIds, folderLabel)
             return tasks.map { it.copy(isDeleted = isDeleted) }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
@@ -766,7 +765,6 @@ class EasTasksService internal constructor(
      * Exchange 2007 SP1: GetItem с AllProperties возвращает ВСЕ свойства задач.
      */
     private suspend fun getTaskDetailsEws(
-        ewsUrl: String,
         itemIds: List<String>,
         label: String
     ): List<EasTask> {
@@ -797,7 +795,7 @@ class EasTasksService internal constructor(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val responseXml = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem") ?: continue
+            val responseXml = executeEwsWithAuth(getItemRequest, "GetItem") ?: continue
 
             if (responseXml.isBlank()) continue
             
@@ -839,15 +837,12 @@ class EasTasksService internal constructor(
         startDate: Long,
         dueDate: Long,
         importance: Int,
-        reminderSet: Boolean,
-        reminderTime: Long,
         assignTo: String?
     ): EasResult<String> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val soapRequest = buildEwsCreateTaskRequest(subject, body, startDate, dueDate, importance)
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "CreateItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS CreateItem")
 
             if (responseXml.contains("ErrorSchemaValidation") || responseXml.contains("ErrorInvalidRequest")) {
@@ -883,8 +878,7 @@ class EasTasksService internal constructor(
         notFoundIsSuccess: Boolean
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
-            val ewsItemId = resolveEwsTaskItemId(ewsUrl, serverId)
+            val ewsItemId = resolveEwsTaskItemId(serverId)
             if (ewsItemId == null) {
                 return@withContext if (notFoundIsSuccess) EasResult.Success(true)
                     else EasResult.Error("Не удалось найти задачу на сервере")
@@ -892,7 +886,7 @@ class EasTasksService internal constructor(
             val escapedItemId = deps.escapeXml(ewsItemId)
             val soapRequest = buildEwsDeleteRequest(escapedItemId, deleteType)
 
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "DeleteItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
 
             EasResult.Success(EwsClient.isEwsSuccessOrNotFound(responseXml))
@@ -914,11 +908,10 @@ class EasTasksService internal constructor(
             require(deleteType in listOf("HardDelete", "SoftDelete", "MoveToDeletedItems")) {
                 "Invalid deleteType: $deleteType"
             }
-            val ewsUrl = deps.getEwsUrl()
             val ewsItemIds = mutableListOf<String>()
 
             for (sid in serverIds) {
-                val ewsItemId = resolveEwsTaskItemId(ewsUrl, sid)
+                val ewsItemId = resolveEwsTaskItemId(sid)
                 if (ewsItemId != null) {
                     ewsItemIds.add(ewsItemId)
                 } else {
@@ -940,7 +933,7 @@ $itemIdsXml
     </m:DeleteItem>""".trimIndent()
             val soapRequest = EasXmlTemplates.ewsSoapRequest(soapBody)
 
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "DeleteItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "DeleteItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS batch DeleteItem")
 
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
@@ -989,11 +982,10 @@ $itemIdsXml
      */
     private suspend fun restoreTaskEws(serverId: String, subject: String? = null): EasResult<String> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             val ewsItemId = if (serverId.length >= 50 && !serverId.contains(":")) {
                 serverId
             } else {
-                resolveEwsTaskItemId(ewsUrl, serverId, subject) ?: run {
+                resolveEwsTaskItemId(serverId, subject) ?: run {
                     return@withContext EasResult.Error("Задача не найдена")
                 }
             }
@@ -1017,7 +1009,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "MoveItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "MoveItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS MoveItem")
             
             val success = responseXml.contains("ResponseClass=\"Success\"") &&
@@ -1051,11 +1043,10 @@ $itemIdsXml
         oldSubject: String? = null
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
             // КРИТИЧНО: Используем СТАРЫЙ subject для поиска (если subject изменился)
             val searchSubject = oldSubject ?: subject
             
-            val ewsItemId = resolveEwsTaskItemId(ewsUrl, serverId, searchSubject)
+            val ewsItemId = resolveEwsTaskItemId(serverId, searchSubject)
             if (ewsItemId == null) {
                 return@withContext EasResult.Error("Не удалось найти задачу на сервере")
             }
@@ -1079,7 +1070,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val getItemResponse = executeEwsWithAuth(ewsUrl, getItemRequest, "GetItem")
+            val getItemResponse = executeEwsWithAuth(getItemRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
 
             val changeKeyMatch = REGEX_ITEM_CHANGE_KEY.find(getItemResponse)
@@ -1148,7 +1139,7 @@ $itemIdsXml
             
             val soapRequest = buildEwsUpdateTaskRequest(escapedItemId, escapedChangeKey, updates)
             
-            val responseXml = executeEwsWithAuth(ewsUrl, soapRequest, "UpdateItem")
+            val responseXml = executeEwsWithAuth(soapRequest, "UpdateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS UpdateItem")
 
             if (EwsClient.isEwsSuccess(responseXml)) {
@@ -1170,7 +1161,6 @@ $itemIdsXml
      * КРИТИЧНО: Возвращает ItemId в правильном формате, избегая ошибки "RTM format"
      */
     private suspend fun findTaskItemIdBySubject(subject: String): String? {
-        val ewsUrl = deps.getEwsUrl()
         val escapedSubject = deps.escapeXml(subject)
         
         val findRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -1200,12 +1190,12 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val responseXml = executeEwsWithAuth(ewsUrl, findRequest, "FindItem") ?: return null
+        val responseXml = executeEwsWithAuth(findRequest, "FindItem") ?: return null
 
         return REGEX_ITEM_ID_T.find(responseXml)?.groupValues?.get(1)
     }
 
-    private suspend fun resolveEwsTaskItemId(ewsUrl: String, serverId: String, subject: String? = null): String? {
+    private suspend fun resolveEwsTaskItemId(serverId: String, subject: String? = null): String? {
         // КРИТИЧНО: ВСЕГДА ищем актуальный ItemId через FindItem по subject
         // Exchange 2007 SP1 может вернуть ошибку "формат RTM" если использовать старый ItemId
         // который был получен при создании или предыдущей операции
@@ -1279,7 +1269,7 @@ $itemIdsXml
      * задач в нестандартных расположениях (Outlook "My Tasks", пользовательские списки).
      * Возвращает folderIds включая TotalCount каждой папки для диагностики.
      */
-    private suspend fun discoverTaskSubfolderIds(ewsUrl: String): List<String> {
+    private suspend fun discoverTaskSubfolderIds(): List<String> {
         try {
             val request = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -1305,7 +1295,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val responseXml = executeEwsWithAuth(ewsUrl, request, "FindFolder") ?: return emptyList()
+            val responseXml = executeEwsWithAuth(request, "FindFolder") ?: return emptyList()
 
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverTaskSubfolderIds: response len=${responseXml.length}")
@@ -1342,7 +1332,7 @@ $itemIdsXml
     /**
      * GetFolder на "tasks" → TotalCount + ChildFolderCount для диагностики.
      */
-    private suspend fun getTasksFolderInfo(ewsUrl: String): Pair<Int, Int> {
+    private suspend fun getTasksFolderInfo(): Pair<Int, Int> {
         try {
             val request = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -1362,7 +1352,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val responseXml = executeEwsWithAuth(ewsUrl, request, "GetFolder") ?: return Pair(-1, -1)
+            val responseXml = executeEwsWithAuth(request, "GetFolder") ?: return Pair(-1, -1)
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "getTasksFolderInfo: response: ${responseXml.take(800)}")
 
@@ -1382,7 +1372,7 @@ $itemIdsXml
      * FindFolder Shallow непосредственно под "tasks" — ищет дочерние папки,
      * которые Deep-поиск от msgfolderroot мог пропустить.
      */
-    private suspend fun discoverDirectTaskSubfolders(ewsUrl: String): List<String> {
+    private suspend fun discoverDirectTaskSubfolders(): List<String> {
         try {
             val request = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -1408,7 +1398,7 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val responseXml = executeEwsWithAuth(ewsUrl, request, "FindFolder") ?: return emptyList()
+            val responseXml = executeEwsWithAuth(request, "FindFolder") ?: return emptyList()
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverDirectTaskSubfolders: response len=${responseXml.length}, first 600: ${responseXml.take(600)}")
 

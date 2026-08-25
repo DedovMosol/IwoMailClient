@@ -94,7 +94,7 @@ class TasksViewModelTest {
 
     @Test
     fun `auto-sync is skipped when local tasks exist`() = runTest(dispatcher) {
-        val vm = createViewModel()
+        createViewModel()
         advanceUntilIdle()
         coVerify(exactly = 0) { taskRepo.syncTasks(any(), any()) }
     }

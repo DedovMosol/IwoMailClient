@@ -11,37 +11,42 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Unit tests for PBKDF2-based obfuscation (L-7 fix).
+ * Тесты PBKDF2-обфускации (L-7) — реальный класс [ObfuscatedSharedPreferences].
  *
- * Tests the fallback storage mechanism when EncryptedSharedPreferences is unavailable.
- * This tests the ObfuscatedSharedPreferences implementation indirectly through SharedPreferences.
+ * Механизм: [prefs] — обфусцирующая обёртка поверх сырого делегата [rawPrefs].
+ * Все записи/чтения идут через обёртку; инвариант «данные не лежат в открытом
+ * виде» проверяется чтением СЫРОГО делегата (то, что реально на диске).
  *
- * Internet best practices:
- * - Test data round-trip (write → read)
- * - Test edge cases (empty strings, special characters, Unicode)
- * - Test data persistence
- * - Test that obfuscated data is not plaintext
- *
- * Note: Direct testing of ObfuscatedSharedPreferences is limited because it's private.
- * We test through the SharedPreferences interface.
+ * Покрытие:
+ * - сырое значение на диске не является открытым текстом и не содержит подстрок
+ * - сырое значение — валидный Base64
+ * - round-trip: простой текст, спецсимволы, Unicode, пустая строка, переводы строк, длинная строка
+ * - обработка null, отсутствующих ключей, независимость ключей, перезапись, удаление, очистка
+ * - персистентность между экземплярами поверх одного файла
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [26])
 class ObfuscatedStorageTest {
 
     private lateinit var context: Context
+
+    /** Сырой делегат — то, что реально пишется на диск. */
+    private lateinit var rawPrefs: android.content.SharedPreferences
+
+    /** Обфусцирующая обёртка — интерфейс, через который работает приложение. */
     private lateinit var prefs: android.content.SharedPreferences
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
-        prefs = context.getSharedPreferences("test_obfuscated", Context.MODE_PRIVATE)
-        prefs.edit().clear().commit()
+        rawPrefs = context.getSharedPreferences("test_obfuscated", Context.MODE_PRIVATE)
+        rawPrefs.edit().clear().commit()
+        prefs = ObfuscatedSharedPreferences(rawPrefs, context)
     }
 
     @After
     fun tearDown() {
-        prefs.edit().clear().commit()
+        rawPrefs.edit().clear().commit()
     }
 
     @Test
@@ -51,16 +56,18 @@ class ObfuscatedStorageTest {
 
         prefs.edit().putString(key, value).commit()
 
-        // Read raw value from delegate (should be Base64-encoded obfuscated data)
-        val rawValue = prefs.getString(key, null)
-
+        // Читаем СЫРОЙ делегат (то, что на диске) — должен быть обфускат, не открытый текст.
+        val rawValue = rawPrefs.getString(key, null)
         assertThat(rawValue).isNotNull()
-        assertThat(rawValue).isNotEqualTo(value) // Not plaintext
-        assertThat(rawValue).doesNotContain("sensitive") // Not visible substring
-        assertThat(rawValue).doesNotContain("password") // Not visible substring
+        assertThat(rawValue).isNotEqualTo(value)
+        assertThat(rawValue).doesNotContain("sensitive")
+        assertThat(rawValue).doesNotContain("password")
 
-        // Verify it's Base64 (contains only Base64 characters)
+        // Обфускат — валидный Base64.
         assertThat(rawValue).matches("[A-Za-z0-9+/=]+")
+
+        // Через обёртку значение читается обратно как оригинал.
+        assertThat(prefs.getString(key, null)).isEqualTo(value)
     }
 
     @Test
@@ -195,7 +202,7 @@ class ObfuscatedStorageTest {
     }
 
     @Test
-    fun `different obfuscated values for same plaintext at different keys`() {
+    fun `same plaintext at different keys both decrypt correctly`() {
         val value = "same_password"
 
         prefs.edit()
@@ -203,12 +210,12 @@ class ObfuscatedStorageTest {
             .putString("account2", value)
             .commit()
 
-        // Both should decrypt to same value
         assertThat(prefs.getString("account1", null)).isEqualTo(value)
         assertThat(prefs.getString("account2", null)).isEqualTo(value)
 
-        // But raw stored values might differ due to key mixing (implementation detail)
-        // This is a weak test since we can't access raw delegate directly in this setup
+        // Оба сырых значения — не открытый текст.
+        assertThat(rawPrefs.getString("account1", null)).doesNotContain("same_password")
+        assertThat(rawPrefs.getString("account2", null)).doesNotContain("same_password")
     }
 
     @Test
@@ -230,10 +237,16 @@ class ObfuscatedStorageTest {
         val key = "persistent_key"
         val value = "persistent_value"
 
-        val prefs1 = context.getSharedPreferences("test_obfuscated", Context.MODE_PRIVATE)
+        val prefs1 = ObfuscatedSharedPreferences(
+            context.getSharedPreferences("test_obfuscated_persist", Context.MODE_PRIVATE),
+            context
+        )
         prefs1.edit().putString(key, value).commit()
 
-        val prefs2 = context.getSharedPreferences("test_obfuscated", Context.MODE_PRIVATE)
+        val prefs2 = ObfuscatedSharedPreferences(
+            context.getSharedPreferences("test_obfuscated_persist", Context.MODE_PRIVATE),
+            context
+        )
         val retrieved = prefs2.getString(key, null)
 
         assertThat(retrieved).isEqualTo(value)

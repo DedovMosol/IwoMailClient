@@ -115,6 +115,22 @@ class EmailSyncService(
 
         fun confirmDeletions(confirmedDeletedIds: Set<String>, context: Context? = null) =
             deletedTracker.confirmDeleted(confirmedDeletedIds, context)
+
+        /**
+         * Защита цикла синхронизации от зацикливания (чистая функция для тестирования).
+         *
+         * Сервер может зациклиться: возвращать тот же syncKey или moreAvailable=true
+         * без данных. Оба случая останавливаем принудительно.
+         *
+         * @param sameKeyCount сколько раз подряд сервер вернул тот же syncKey
+         * @param emptyDataCount сколько раз подряд moreAvailable=true без данных
+         * @return true — продолжать цикл, false — принудительно остановить
+         */
+        fun shouldContinueSync(sameKeyCount: Int, emptyDataCount: Int): Boolean {
+            if (sameKeyCount >= 5) return false
+            if (emptyDataCount >= 5) return false
+            return true
+        }
     }
 
     init {
@@ -207,16 +223,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         if (trulyLocalDrafts.isNotEmpty() && draftMode != DraftMode.LOCAL) {
             val easClient = accountRepo.createEasClient(accountId)
             if (easClient != null) {
-                val draftsFolder = folderDao.getFolder(folderId)
-                if (draftsFolder != null) {
+                if (folderDao.getFolder(folderId) != null) {
                     for (draft in trulyLocalDrafts) {
                         val result = easClient.createDraft(
                             to = draft.to,
                             cc = draft.cc,
                             bcc = "",
                             subject = draft.subject,
-                            body = draft.body,
-                            draftsFolderId = draftsFolder.serverId
+                            body = draft.body
                         )
 
                         when (result) {
@@ -634,7 +648,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             var previousSyncKey = syncKey
             var sameKeyCount = 0
             var emptyDataCount = 0
-            var syncLoopCompletedFully = false
+            var syncLoopCompletedFully: Boolean
 
             while (moreAvailable && iterations < maxIterations && consecutiveErrors < maxConsecutiveErrors) {
                 iterations++
@@ -661,11 +675,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         }
 
                         val newSyncKey = result.data.syncKey
+                        moreAvailable = result.data.moreAvailable
 
+                        // Защита от зацикливания: если сервер возвращает тот же syncKey
+                        // 5 раз подряд — принудительно останавливаем цикл.
+                        // Присваиваем moreAvailable ДО проверки, чтобы защита могла переопределить.
                         if (newSyncKey == previousSyncKey) {
                             sameKeyCount++
-                            if (sameKeyCount >= 5) {
-                                android.util.Log.w("EmailSync", "SyncKey not changing for 5 iterations, breaking loop")
+                            if (!shouldContinueSync(sameKeyCount, emptyDataCount)) {
+                                android.util.Log.w("EmailSync", "SyncKey not changing for $sameKeyCount iterations, breaking loop")
                                 moreAvailable = false
                             }
                         } else {
@@ -673,12 +691,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             previousSyncKey = newSyncKey
                         }
 
-                        moreAvailable = result.data.moreAvailable
-
                         if (moreAvailable && result.data.emails.isEmpty() && result.data.deletedIds.isEmpty() && result.data.changedEmails.isEmpty()) {
                             emptyDataCount++
                             android.util.Log.w("EmailSync", "Server says moreAvailable but no data (empty #$emptyDataCount), syncKey=$newSyncKey")
-                            if (emptyDataCount >= 5) {
+                            if (!shouldContinueSync(sameKeyCount, emptyDataCount)) {
                                 android.util.Log.w("EmailSync", "No data for $emptyDataCount consecutive iterations, breaking loop")
                                 moreAvailable = false
                             }
@@ -700,7 +716,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             draftReplacements = batchResult.draftReplacements
 
                             if (savedDraftBodies.isNotEmpty() && folder.type == FolderType.DRAFTS) {
-                                restoreSavedDraftBodies(savedDraftBodies, batchResult.allInserted, folderId)
+                                restoreSavedDraftBodies(savedDraftBodies, batchResult.allInserted)
                             }
                             if (folder.type == FolderType.DRAFTS && pendingDraftRestores.isNotEmpty()) {
                                 restoreFromPendingDraftRestores(accountId, batchResult.allInserted)
@@ -710,8 +726,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             }
                         }
 
-                        applyDraftReplacements(draftReplacements, accountId)
-                        processServerDeletions(result.data.deletedIds, accountId, folderId, folder, handledDraftDeletionIds)
+                        applyDraftReplacements(draftReplacements)
+                        processServerDeletions(result.data.deletedIds, accountId, folder, handledDraftDeletionIds)
                         processServerChanges(result.data, accountId, folderId, folder, serverDraftIdsInFullResync, serverSentIdsInFullResync, serverGenericIdsInFullResync)
 
                         // КРИТИЧНО: Сохраняем SyncKey ПОСЛЕ успешной обработки
@@ -752,7 +768,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             syncLoopCompletedFully = !moreAvailable && consecutiveErrors < maxConsecutiveErrors
 
             if (serverDraftIdsInFullResync != null && serverDraftIdsInFullResync.isNotEmpty() && syncLoopCompletedFully) {
-                reconcileDraftsAfterFullResync(serverDraftIdsInFullResync, folderId, accountId)
+                reconcileDraftsAfterFullResync(serverDraftIdsInFullResync, folderId)
             }
 
             if (serverSentIdsInFullResync != null && serverSentIdsInFullResync.isNotEmpty() && syncLoopCompletedFully) {
@@ -1199,8 +1215,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      */
     private suspend fun restoreSavedDraftBodies(
         savedDraftBodies: List<SavedDraftBody>,
-        allInserted: List<EmailEntity>,
-        folderId: String
+        allInserted: List<EmailEntity>
     ) {
         if (savedDraftBodies.isEmpty() || allInserted.isEmpty()) return
 
@@ -1310,8 +1325,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      * P7 FIX: Замена старых черновиков при внешнем обновлении (Add без Delete).
      */
     private suspend fun applyDraftReplacements(
-        draftReplacements: Map<String, String>,
-        accountId: Long
+        draftReplacements: Map<String, String>
     ) {
         if (draftReplacements.isEmpty()) return
 
@@ -1340,7 +1354,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     private suspend fun processServerDeletions(
         deletedIds: List<String>,
         accountId: Long,
-        folderId: String,
         folder: FolderEntity,
         handledDraftDeletionIds: Set<String> = emptySet()
     ) {
@@ -1560,8 +1573,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      */
     private suspend fun reconcileDraftsAfterFullResync(
         serverDraftIds: Set<String>,
-        folderId: String,
-        accountId: Long
+        folderId: String
     ) {
         val now = System.currentTimeMillis()
         val localDrafts = emailDao.getEmailsByFolderList(folderId)

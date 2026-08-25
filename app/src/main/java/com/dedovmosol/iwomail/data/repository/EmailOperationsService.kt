@@ -336,7 +336,6 @@ class EmailOperationsService(
                                     ewsResult.data.originalMessageId
                                         ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
                                         ?.let { emailDao.updateInternetMessageId(emailId, it) }
-                                    recovered = true
                                     return EasResult.Success(bodyContent)
                                 }
                             }

@@ -56,7 +56,6 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
-    val isRu = isRussian()
 
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
     var accountToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -430,7 +429,7 @@ fun ContactsSyncDialog(
  * Получить локализованное название темы
  */
 @Composable
-private fun getThemeDisplayName(theme: AppColorTheme, isRu: Boolean): String {
+private fun getThemeDisplayName(theme: AppColorTheme): String {
     return when (theme) {
         AppColorTheme.PURPLE -> Strings.themePurple
         AppColorTheme.BLUE -> Strings.themeBlue
@@ -446,7 +445,6 @@ private fun getThemeDisplayName(theme: AppColorTheme, isRu: Boolean): String {
 private fun DayThemeRow(
     dayName: String,
     currentThemeCode: String,
-    isRu: Boolean,
     onThemeSelected: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -478,7 +476,7 @@ private fun DayThemeRow(
 
         // Название темы - фиксированная ширина для выравнивания
         Text(
-            text = getThemeDisplayName(currentTheme, isRu),
+            text = getThemeDisplayName(currentTheme),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
@@ -508,7 +506,7 @@ private fun DayThemeRow(
                                     .background(theme.gradientStart)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
-                            Text(getThemeDisplayName(theme, isRu))
+                            Text(getThemeDisplayName(theme))
                         }
                     },
                     onClick = {

@@ -25,9 +25,9 @@ class EasNotesServiceTest {
     private val detectEasVersion = mockk<suspend () -> EasResult<String>>()
     private val getNotesFolderId = mockk<suspend () -> String?>()
     private val getDeletedItemsFolderId = mockk<suspend () -> String?>()
-    private val performNtlmHandshake = mockk<suspend (String, String, String) -> String?>()
-    private val executeNtlmRequest = mockk<suspend (String, String, String, String) -> String?>()
-    private val findEwsNoteItemId = mockk<suspend (String, String, String, Boolean) -> String?>()
+    private val performNtlmHandshake = mockk<suspend () -> String?>()
+    private val executeNtlmRequest = mockk<suspend (String, String) -> String?>()
+    private val findEwsNoteItemId = mockk<suspend (String, Boolean) -> String?>()
     
     @Before
     fun setup() {
@@ -45,8 +45,7 @@ class EasNotesServiceTest {
             getDeletedItemsFolderId = getDeletedItemsFolderId,
             performNtlmHandshake = performNtlmHandshake,
             executeNtlmRequest = executeNtlmRequest,
-            tryBasicAuthEws = { _, _, _ -> null },
-            getEwsUrl = { "https://exchange.local/EWS/Exchange.asmx" },
+            tryBasicAuthEws = { _, _ -> null },
             findEwsNoteItemId = findEwsNoteItemId
         )
         
@@ -209,8 +208,6 @@ class EasNotesServiceTest {
     @Test
     fun `syncNotes EAS 14+ syncs from Notes and Deleted Items folders`() = runTest {
         // Arrange
-        val notesFolderId = "notes123"
-        val deletedItemsFolderId = "deleted456"
         val folders = listOf(
             EasFolder("notes123", "Notes", "0", 10),
             EasFolder("deleted456", "Deleted Items", "0", 4)

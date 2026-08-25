@@ -184,7 +184,7 @@ sealed class Screen(val route: String) {
             isFirstAccount: Boolean = false,
             alternateServerUrl: String? = null
         ): String {
-            VerificationSecrets.password = password?.toCharArray()
+            VerificationSecrets.password = password.toCharArray()
             VerificationSecrets.clientCertificatePassword = clientCertificatePassword?.toCharArray()
 
             val certPathEncoded = certificatePath ?: ""
@@ -371,7 +371,6 @@ fun AppNavigation(
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
-    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
     val settingsRepo = remember { SettingsRepository.getInstance(context) }
     
@@ -714,14 +713,8 @@ fun AppNavigation(
                 onNavigateToAccountSettings = { accountId ->
                     navController.navigate(Screen.AccountSettings.createRoute(accountId))
                 },
-                onNavigateToOnboarding = {
-                    navController.navigate(Screen.Onboarding.createRoute(isFirstLaunch = false))
-                },
                 onNavigateToSearch = {
                     navController.navigate(Screen.Search.route)
-                },
-                onNavigateToEmailDetail = { emailId ->
-                    navController.navigate(Screen.EmailDetail.createRoute(emailId))
                 },
                 onNavigateToContacts = {
                     navController.navigate(Screen.Contacts.route)

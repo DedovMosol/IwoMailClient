@@ -105,7 +105,6 @@ fun EmailListScreen(
     initialDateFilter: EmailDateFilter = EmailDateFilter.ALL
 ) {
     val context = LocalContext.current
-    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val currentLanguage = LocalLanguage.current
     val isRussian = currentLanguage == AppLanguage.RUSSIAN
     val hapticScreen = LocalHapticFeedback.current
@@ -269,7 +268,6 @@ fun EmailListScreen(
         deletionController.startDeletion(
             emailIds = emailIds,
             message = deletingSelectedMessage,
-            scope = scope
         ) { ids, onProgress ->
             when (val result = viewModel.deleteEmailsPermanently(ids) { deleted, total -> onProgress(deleted, total) }) {
                 is EasResult.Success -> com.dedovmosol.iwomail.util.SafeToast.short(
@@ -366,7 +364,6 @@ fun EmailListScreen(
                             deletionController.startDeletion(
                                 emailIds = allEmailIds,
                                 message = deletingMessage,
-                                scope = scope
                             ) { ids, onProgress ->
                                 // Удаление с реальным прогрессом (репозиторий инкапсулирован в VM)
                                 when (val result = viewModel.deleteEmailsPermanently(ids) { deleted, total -> onProgress(deleted, total) }) {
