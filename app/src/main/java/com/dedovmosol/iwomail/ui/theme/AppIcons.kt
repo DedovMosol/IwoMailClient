@@ -32,6 +32,7 @@ object AppIcons {
     val ContactPage: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_contact_page)
     val ContactPhone: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_contact_phone)
     val Contacts: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_contacts)
+    val Contrast: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_contrast)
     val ContentCopy: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_content_copy)
     val CreateNewFolder: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_create_new_folder)
     val DateRange: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_date_range)

@@ -192,7 +192,6 @@ class EmailDetailViewModel(
                             bodyType = key.bodyType,
                             emailServerId = key.serverId,
                             folderId = key.folderId,
-                            accountId = key.accountId,
                             attachments = key.attachments
                         )
                     } ?: emptyMap()

@@ -90,7 +90,7 @@ class FolderSyncService(
 
             val client = accountRepo.getEasClientOrError<Unit>(accountId) { return it }
 
-            val syncKey = freshAccount.folderSyncKey ?: "0"
+            val syncKey = freshAccount.folderSyncKey
 
             client.createFolder(folderName, "0", 12, syncKey)
                 .onSuccessResult { response ->
@@ -134,7 +134,7 @@ class FolderSyncService(
 
             val syncKey = account.folderSyncKey
 
-            client.deleteFolder(folder.serverId, syncKey ?: "0")
+            client.deleteFolder(folder.serverId, syncKey)
                 .onSuccessResult { newSyncKey ->
                     database.withTransaction {
                         accountDao.updateFolderSyncKey(accountId, newSyncKey)
@@ -168,7 +168,7 @@ class FolderSyncService(
 
             val syncKey = account.folderSyncKey
 
-            client.renameFolder(folder.serverId, newName, syncKey ?: "0")
+            client.renameFolder(folder.serverId, newName, syncKey)
                 .onSuccessResult { newSyncKey ->
                     accountDao.updateFolderSyncKey(accountId, newSyncKey)
                     folderDao.updateDisplayName(folderId, newName)

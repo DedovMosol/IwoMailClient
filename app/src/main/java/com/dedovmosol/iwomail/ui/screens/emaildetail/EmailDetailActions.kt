@@ -142,7 +142,6 @@ class EmailDetailActions(
         bodyType: Int,
         emailServerId: String,
         folderId: String,
-        accountId: Long,
         attachments: List<AttachmentEntity>
     ): Map<String, String> {
         if (emailBody.isEmpty()) return emptyMap()

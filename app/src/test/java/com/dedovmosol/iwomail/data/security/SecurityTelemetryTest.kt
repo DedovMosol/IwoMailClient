@@ -35,6 +35,8 @@ class SecurityTelemetryTest {
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
+        // Изоляция синглтона: не наследовать состояние от других тест-классов.
+        SecurityTelemetry.resetForTesting()
         context.getSharedPreferences("security_telemetry", Context.MODE_PRIVATE).edit().clear().commit()
         telemetry = SecurityTelemetry.getInstance(context)
     }
@@ -42,6 +44,7 @@ class SecurityTelemetryTest {
     @After
     fun tearDown() {
         context.getSharedPreferences("security_telemetry", Context.MODE_PRIVATE).edit().clear().commit()
+        SecurityTelemetry.resetForTesting()
     }
 
     @Test

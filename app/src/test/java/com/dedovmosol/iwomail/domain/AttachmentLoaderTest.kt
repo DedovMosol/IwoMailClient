@@ -11,6 +11,7 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.google.common.truth.Truth.assertThat
 import io.mockk.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -42,7 +43,7 @@ class AttachmentLoaderTest {
     private lateinit var mockMailRepo: MailRepository
     private lateinit var mockEasClient: EasClient
     private lateinit var loader: AttachmentLoader
-    private lateinit var testDispatcher: UnconfinedTestDispatcher
+    private lateinit var testDispatcher: TestDispatcher
     private lateinit var tempDir: File
 
     @Before
@@ -59,7 +60,11 @@ class AttachmentLoaderTest {
         loader = AttachmentLoader(
             context = context,
             mailRepository = mockMailRepo,
-            dispatcher = testDispatcher
+            dispatcher = testDispatcher,
+            // Детерминированный резолвер: логика загрузчика не должна зависеть
+            // от зарегистрированного в манифесте FileProvider. Прод-поведение
+            // (FileProvider) остаётся дефолтом конструктора.
+            fileUriResolver = { file -> Uri.fromFile(file) }
         )
     }
 
@@ -109,7 +114,6 @@ class AttachmentLoaderTest {
             contentId = null,
             fileReference = "",
             localPath = testFile.absolutePath,
-            accountId = 1
         )
 
         coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(attachment)
@@ -150,7 +154,6 @@ class AttachmentLoaderTest {
             contentId = "image001",
             fileReference = "",
             localPath = testFile.absolutePath,
-            accountId = 1
         )
 
         coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(attachment)
@@ -185,18 +188,17 @@ class AttachmentLoaderTest {
             contentId = null,
             fileReference = "FileRef123",
             localPath = null,
-            accountId = 1
         )
 
         val downloadedBytes = "Excel content".toByteArray()
 
         coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(attachment)
         coEvery {
-            mockEasClient.downloadAttachment("FileRef123", "CollectionId", "ServerId")
+            mockEasClient.downloadAttachment("FileRef123")
         } returns EasResult.Success(downloadedBytes)
 
         val result = loader.loadAttachments(
-            source = AttachmentLoader.AttachmentSource.Draft,
+            source = AttachmentLoader.AttachmentSource.Forward,
             email = email,
             easClient = mockEasClient,
             collectionId = "CollectionId",
@@ -210,7 +212,52 @@ class AttachmentLoaderTest {
         assertThat(success.skippedCount).isEqualTo(0)
 
         coVerify(exactly = 1) {
-            mockEasClient.downloadAttachment("FileRef123", "CollectionId", "ServerId")
+            mockEasClient.downloadAttachment("FileRef123")
+        }
+        coVerify(exactly = 0) { mockEasClient.downloadDraftAttachment(any()) }
+    }
+
+    @Test
+    fun `loadAttachments routes Draft download through downloadDraftAttachment (EWS ItemId support)`() = runTest {
+        // Черновики, созданные в Outlook/OWA на Exchange 2007, хранят вложения
+        // с EWS ItemId в fileReference — их может скачать только
+        // downloadDraftAttachment (роутинг EAS/EWS по наличию ":").
+        val email = createEmail(id = "1")
+        val attachment = AttachmentEntity(
+            id = 1,
+            emailId = "1",
+            displayName = "contract.pdf",
+            estimatedSize = 5000,
+            contentType = "application/pdf",
+            isInline = false,
+            contentId = null,
+            fileReference = "AAMkAGI...EwsItemIdWithoutColon",
+            localPath = null,
+        )
+
+        coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(attachment)
+        coEvery {
+            mockEasClient.downloadDraftAttachment("AAMkAGI...EwsItemIdWithoutColon")
+        } returns EasResult.Success("PDF bytes".toByteArray())
+
+        val result = loader.loadAttachments(
+            source = AttachmentLoader.AttachmentSource.Draft,
+            email = email,
+            easClient = mockEasClient,
+            collectionId = null, // Drafts: collectionId может отсутствовать
+            emailServerId = null
+        )
+
+        assertThat(result).isInstanceOf(AttachmentLoader.LoadResult.Success::class.java)
+        val success = result as AttachmentLoader.LoadResult.Success
+        assertThat(success.fileAttachments).hasSize(1)
+        assertThat(success.fileAttachments[0].name).isEqualTo("contract.pdf")
+
+        coVerify(exactly = 1) {
+            mockEasClient.downloadDraftAttachment("AAMkAGI...EwsItemIdWithoutColon")
+        }
+        coVerify(exactly = 0) {
+            mockEasClient.downloadAttachment(any())
         }
     }
 
@@ -236,7 +283,6 @@ class AttachmentLoaderTest {
                 contentId = "img001",
                 fileReference = "",
                 localPath = inlineFile.absolutePath,
-                accountId = 1
             ),
             AttachmentEntity(
                 id = 2,
@@ -248,7 +294,6 @@ class AttachmentLoaderTest {
                 contentId = null,
                 fileReference = "",
                 localPath = regularFile.absolutePath,
-                accountId = 1
             )
         )
 
@@ -290,7 +335,6 @@ class AttachmentLoaderTest {
                 contentId = "cid$index",
                 fileReference = "",
                 localPath = file.absolutePath,
-                accountId = 1
             )
         }
 
@@ -326,7 +370,6 @@ class AttachmentLoaderTest {
             contentId = "img001",
             fileReference = "",
             localPath = testFile.absolutePath,
-            accountId = 1
         )
 
         coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(attachment)
@@ -359,7 +402,6 @@ class AttachmentLoaderTest {
             contentId = null,
             fileReference = "", // Нет fileReference для скачивания
             localPath = "/nonexistent/path/file.pdf",
-            accountId = 1
         )
 
         coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(attachment)
@@ -391,12 +433,11 @@ class AttachmentLoaderTest {
             contentId = null,
             fileReference = "FileRef123",
             localPath = null,
-            accountId = 1
         )
 
         coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(attachment)
         coEvery {
-            mockEasClient.downloadAttachment("FileRef123", "CollectionId", "ServerId")
+            mockEasClient.downloadAttachment("FileRef123")
         } returns EasResult.Error("Network error")
 
         val result = loader.loadAttachments(
@@ -430,7 +471,6 @@ class AttachmentLoaderTest {
                 contentId = null,
                 fileReference = "",
                 localPath = "/corrupted/path", // Несуществующий файл
-                accountId = 1
             ),
             AttachmentEntity(
                 id = 2,
@@ -442,7 +482,6 @@ class AttachmentLoaderTest {
                 contentId = null,
                 fileReference = "",
                 localPath = validFile.absolutePath,
-                accountId = 1
             )
         )
 
@@ -549,7 +588,6 @@ class AttachmentLoaderTest {
             contentId = contentId,
             fileReference = "",
             localPath = localPath,
-            accountId = 1
         )
     }
 }

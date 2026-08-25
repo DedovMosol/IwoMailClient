@@ -92,7 +92,7 @@ class UserFoldersViewModelTest {
 
     @Test
     fun `auto-sync is skipped when local folders exist`() = runTest(dispatcher) {
-        val vm = createViewModel()
+        createViewModel()
         advanceUntilIdle()
         coVerify(exactly = 0) { mailRepo.syncFolders(any()) }
     }

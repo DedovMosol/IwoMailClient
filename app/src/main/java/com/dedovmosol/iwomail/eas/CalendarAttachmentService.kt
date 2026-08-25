@@ -25,11 +25,10 @@ import kotlinx.coroutines.withContext
  * Compatibility: Exchange 2007 SP1 / EWS
  */
 class CalendarAttachmentService(
-    private val ewsRequest: suspend (ewsUrl: String, soapBody: String, operation: String) -> EasResult<String>,
+    private val ewsRequest: suspend (soapBody: String, operation: String) -> EasResult<String>,
     private val parseEwsAttachments: (String) -> String,
     private val escapeXml: (String) -> String,
-    private val parseEasDate: (String?) -> Long?,
-    private val getEwsUrl: () -> String
+    private val parseEasDate: (String?) -> Long?
 ) {
 
     private data class EwsAttachmentCandidate(
@@ -43,14 +42,13 @@ class CalendarAttachmentService(
     suspend fun deleteCalendarAttachments(attachmentIds: List<String>): EasResult<Boolean> {
         if (attachmentIds.isEmpty()) return EasResult.Success(true)
 
-        val ewsUrl = getEwsUrl()
         var lastError: String? = null
 
         for (attId in attachmentIds) {
             if (attId.isBlank()) continue
             try {
                 val request = buildDeleteAttachmentRequest(attId)
-                val result = ewsRequest(ewsUrl, request, "DeleteAttachment")
+                val result = ewsRequest(request, "DeleteAttachment")
                 if (result is EasResult.Error) {
                     Log.w(TAG, "DeleteAttachment failed for ${attId.take(30)}: ${result.message}")
                     lastError = result.message
@@ -77,7 +75,6 @@ class CalendarAttachmentService(
     }
 
     internal suspend fun attachFilesEws(
-        ewsUrl: String,
         itemId: String,
         changeKey: String?,
         attachments: List<DraftAttachmentData>,
@@ -92,7 +89,7 @@ class CalendarAttachmentService(
         for ((index, att) in attachments.withIndex()) {
             val request = buildCreateAttachmentRequest(itemId, currentChangeKey, att, exchangeVersion)
 
-            val responseResult = ewsRequest(ewsUrl, request, "CreateAttachment")
+            val responseResult = ewsRequest(request, "CreateAttachment")
             if (responseResult is EasResult.Error) {
                 return@withContext EasResult.Error(
                     "Вложение ${index + 1}/${attachments.size} (${att.name}): ${responseResult.message}"
@@ -134,7 +131,6 @@ class CalendarAttachmentService(
     }
 
     suspend fun fetchCalendarAttachmentsEws(
-        ewsUrl: String,
         itemIds: List<String>
     ): Map<String, String> {
         if (itemIds.isEmpty()) return emptyMap()
@@ -164,7 +160,7 @@ class CalendarAttachmentService(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val responseResult = ewsRequest(ewsUrl, getItemRequest, "GetItem")
+            val responseResult = ewsRequest(getItemRequest, "GetItem")
             if (responseResult is EasResult.Error) {
                 Log.w(TAG, "fetchCalendarAttachmentsEws: batch error: ${responseResult.message}")
                 continue
@@ -195,13 +191,6 @@ class CalendarAttachmentService(
         val noAttach = events.filter { it.attachments.isBlank() }
         if (noAttach.isEmpty()) return events
 
-        val ewsUrl = try {
-            getEwsUrl()
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            throw e
-        }
-
         val ewsItems = mutableListOf<EwsAttachmentCandidate>()
         val windows = buildAttachmentCalendarWindows(noAttach)
         if (windows.isEmpty()) {
@@ -211,7 +200,7 @@ class CalendarAttachmentService(
             throw IllegalStateException("Attachment supplement range is too large: ${windows.size} windows")
         }
         for ((startStr, endStr) in windows) {
-            ewsItems.addAll(fetchAttachmentCandidatesViaCalendarView(ewsUrl, startStr, endStr))
+            ewsItems.addAll(fetchAttachmentCandidatesViaCalendarView(startStr, endStr))
         }
 
         var supplemented = 0
@@ -224,7 +213,7 @@ class CalendarAttachmentService(
         } else {
             Log.d(TAG, "supplementAttachmentsViaEws: ${withAtt.size} EWS events have attachments, fetching via GetItem")
 
-            val attMap = fetchCalendarAttachmentsEws(ewsUrl, withAtt.map { it.itemId })
+            val attMap = fetchCalendarAttachmentsEws(withAtt.map { it.itemId })
             if (attMap.isEmpty()) {
                 throw IllegalStateException("GetItem returned no attachment metadata")
             }
@@ -266,7 +255,7 @@ class CalendarAttachmentService(
             if (recurringNoAtt.any { it.uid.isBlank() }) {
                 throw IllegalStateException("Recurring event UID missing; attachment metadata is not reliable")
             }
-            val masterAtt = supplementRecurringMasterAttachments(ewsUrl, recurringNoAtt)
+            val masterAtt = supplementRecurringMasterAttachments(recurringNoAtt)
             if (masterAtt.isNotEmpty()) {
                 val finalResult = intermediateResult.map { event ->
                     if (event.isRecurring && event.attachments.isBlank()) {
@@ -305,7 +294,6 @@ class CalendarAttachmentService(
     }
 
     private suspend fun fetchAttachmentCandidatesViaCalendarView(
-        ewsUrl: String,
         startStr: String,
         endStr: String
     ): List<EwsAttachmentCandidate> {
@@ -335,7 +323,7 @@ class CalendarAttachmentService(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val findResult = ewsRequest(ewsUrl, findRequest, "FindItem")
+        val findResult = ewsRequest(findRequest, "FindItem")
         if (findResult is EasResult.Error) {
             Log.w(TAG, "supplementAttachmentsViaEws: FindItem failed: ${findResult.message}")
             throw IllegalStateException(findResult.message)
@@ -367,7 +355,6 @@ class CalendarAttachmentService(
     }
 
     suspend fun supplementRecurringMasterAttachments(
-        ewsUrl: String,
         recurringEvents: List<EasCalendarEvent>
     ): Map<String, String> {
         val findRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -404,7 +391,7 @@ class CalendarAttachmentService(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val findResult = ewsRequest(ewsUrl, findRequest, "FindItem")
+        val findResult = ewsRequest(findRequest, "FindItem")
         if (findResult is EasResult.Error) {
             throw IllegalStateException(findResult.message)
         }
@@ -440,7 +427,7 @@ class CalendarAttachmentService(
 
         Log.d(TAG, "supplementRecurringMasterAttachments: found ${masterItemIds.size} recurring masters with attachments")
 
-        val attMap = fetchCalendarAttachmentsEws(ewsUrl, masterItemIds)
+        val attMap = fetchCalendarAttachmentsEws(masterItemIds)
         if (attMap.isEmpty()) {
             throw IllegalStateException("Recurring master GetItem returned no attachment metadata")
         }

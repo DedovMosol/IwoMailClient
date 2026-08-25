@@ -4,6 +4,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -11,6 +12,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import com.dedovmosol.iwomail.ui.components.ScrollColumnScrollbar
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -81,6 +83,7 @@ fun OnboardingScreen(
     var selectedLanguage by rememberSaveable { mutableStateOf(settingsRepo.getLanguageSync()) }
     var selectedAnimations by rememberSaveable { mutableStateOf(settingsRepo.getAnimationsEnabledSync()) }
     var selectedTheme by rememberSaveable { mutableStateOf(settingsRepo.getColorThemeSync()) }
+    var selectedThemeMode by rememberSaveable { mutableStateOf(settingsRepo.getThemeModeSync().name) }
     var selectedScrollbarColor by rememberSaveable { mutableStateOf(settingsRepo.getScrollbarColorSync()) }
     var selectedDraftMode by rememberSaveable { mutableStateOf(settingsRepo.getDefaultDraftModeSync()) }
     
@@ -166,8 +169,7 @@ fun OnboardingScreen(
                                         settingsRepo.setLanguage(lang)
                                     }
                                 },
-                                colorTheme = colorTheme,
-                                animationsEnabled = selectedAnimations
+                                colorTheme = colorTheme
                             )
                             1 -> AnimationsSelectionPage(
                                 animationsEnabled = selectedAnimations,
@@ -190,6 +192,13 @@ fun OnboardingScreen(
                                         com.dedovmosol.iwomail.widget.updateMailWidget(context)
                                     }
                                 },
+                                selectedThemeMode = selectedThemeMode,
+                                onThemeModeSelected = { modeName ->
+                                    selectedThemeMode = modeName
+                                    scope.launch {
+                                        settingsRepo.setThemeMode(SettingsRepository.ThemeMode.fromName(modeName))
+                                    }
+                                },
                                 selectedScrollbarColor = selectedScrollbarColor,
                                 onScrollbarColorSelected = { color ->
                                     selectedScrollbarColor = color
@@ -210,8 +219,7 @@ fun OnboardingScreen(
                                     }
                                 },
                                 colorTheme = colorTheme,
-                                isRussian = isRussian,
-                                animationsEnabled = selectedAnimations
+                                isRussian = isRussian
                             )
                             else -> {
                                 val pageData = pages[page - 4]
@@ -328,8 +336,7 @@ fun OnboardingScreen(
 private fun LanguageSelectionPage(
     selectedLanguage: String,
     onLanguageSelected: (String) -> Unit,
-    colorTheme: AppColorTheme,
-    animationsEnabled: Boolean
+    colorTheme: AppColorTheme
 ) {
     val isRussian = selectedLanguage == AppLanguage.RUSSIAN.code
     
@@ -623,6 +630,8 @@ private fun AnimationsSelectionPage(
 private fun ThemeSelectionPage(
     selectedTheme: String,
     onThemeSelected: (String) -> Unit,
+    selectedThemeMode: String = SettingsRepository.ThemeMode.SYSTEM.name,
+    onThemeModeSelected: (String) -> Unit = {},
     selectedScrollbarColor: String = "blue",
     onScrollbarColorSelected: (String) -> Unit = {},
     isRussian: Boolean,
@@ -772,12 +781,78 @@ private fun ThemeSelectionPage(
         
         Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 20.dp))
         
-        // Выбор цвета скроллбара
+        // Выбор режима темы (системный / светлая / тёмная)
         AnimatedVisibility(
             visible = visible,
             enter = fadeIn(animationSpec = tween(500, delayMillis = 500)) + slideInVertically(
                 initialOffsetY = { 50 },
                 animationSpec = tween(500, delayMillis = 500)
+            )
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = OnboardingStrings.themeModeLabel(isRussian),
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsRepository.ThemeMode.entries.forEach { mode ->
+                        val isSelected = mode.name == selectedThemeMode
+                        val modeIcon = when (mode) {
+                            SettingsRepository.ThemeMode.SYSTEM -> AppIcons.Contrast
+                            SettingsRepository.ThemeMode.LIGHT -> AppIcons.LightMode
+                            SettingsRepository.ThemeMode.DARK -> AppIcons.NightsStay
+                        }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .border(
+                                    width = 2.dp,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary
+                                            else Color.Transparent,
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                .clickable { onThemeModeSelected(mode.name) }
+                                .padding(horizontal = 8.dp, vertical = 14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                imageVector = modeIcon,
+                                contentDescription = mode.getDisplayName(isRussian),
+                                modifier = Modifier.size(28.dp),
+                                tint = if (isSelected) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = mode.getDisplayName(isRussian),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                textAlign = TextAlign.Center,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(if (isCompactHeight) 12.dp else 20.dp))
+        
+        // Выбор цвета скроллбара
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(500, delayMillis = 600)) + slideInVertically(
+                initialOffsetY = { 50 },
+                animationSpec = tween(500, delayMillis = 600)
             )
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -832,8 +907,7 @@ private fun DraftModeSelectionPage(
     selectedDraftMode: String,
     onDraftModeSelected: (String) -> Unit,
     colorTheme: AppColorTheme,
-    isRussian: Boolean,
-    animationsEnabled: Boolean
+    isRussian: Boolean
 ) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {

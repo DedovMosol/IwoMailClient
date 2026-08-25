@@ -91,6 +91,9 @@ android {
         // возвращать дефолты для незамоканных методов android.jar (напр. android.util.Log) вместо
         // выброса "not mocked" — нужно для юнит-тестов crash-resistance, где catch логирует через Log.
         unitTests.isReturnDefaultValues = true
+        // Robolectric парсит реальные ресурсы/манифест приложения: нужно для тестов,
+        // завязанных на ресурсы (напр. FileProvider + @xml/file_paths в AttachmentLoader).
+        unitTests.isIncludeAndroidResources = true
         unitTests.all { }
     }
 }
@@ -150,7 +153,10 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     
     // DataStore для настроек
-    implementation("androidx.datastore:datastore-preferences:1.0.0")
+    // 1.1.1: исправлен официальный баг 1.0.0 «Unable to rename» на Windows —
+    // запись использовала File.renameTo, который не умеет заменять существующий
+    // файл; в 1.1.1 применён Files.move с REPLACE_EXISTING (issue 227612077).
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
     
     // Security для хранения паролей
     // NOTE: security-crypto is officially deprecated (no stable release, last alpha 2021)
@@ -179,4 +185,16 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.06.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+}
+
+// Robolectric unit tests run on the JVM. The Android conscrypt AAR ships natives only for
+// Android devices; on the unit test classpath it shadows the same Conscrypt classes that
+// Robolectric pulls from the OpenJDK variant (which has real JVM natives), so every
+// Robolectric test would crash at startup with UnsatisfiedLinkError. Exclude the Android
+// artifact from unit test configurations only; the device APK keeps shipping it for
+// legacy TLS support (Exchange 2007 SP1).
+configurations.all {
+    if (name.contains("UnitTest", ignoreCase = true)) {
+        exclude(group = "org.conscrypt", module = "conscrypt-android")
+    }
 }

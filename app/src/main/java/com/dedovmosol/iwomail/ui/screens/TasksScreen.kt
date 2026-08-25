@@ -76,7 +76,6 @@ fun TasksScreen(
     initialFilter: TaskFilter = TaskFilter.ALL
 ) {
     val context = LocalContext.current
-    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val deletionController = com.dedovmosol.iwomail.ui.components.LocalDeletionController.current
     val haptic = LocalHapticFeedback.current
 
@@ -237,7 +236,6 @@ fun TasksScreen(
                     deletionController.startDeletion(
                         emailIds = listOf(task.id),
                         message = restoringOneTaskText,
-                        scope = scope,
                         isRestore = true
                     ) { _, onProgress ->
                         val result = viewModel.restoreTask(task)
@@ -254,7 +252,6 @@ fun TasksScreen(
                     deletionController.startDeletion(
                         emailIds = listOf(task.id),
                         message = deletingOneTaskText,
-                        scope = scope,
                         isRestore = false
                     ) { _, onProgress ->
                         val result = viewModel.deleteTaskPermanently(task)
@@ -334,7 +331,6 @@ fun TasksScreen(
                     deletionController.startDeletion(
                         emailIds = taskIds,
                         message = deletingMessage,
-                        scope = scope,
                         isRestore = false
                     ) { ids, onProgress ->
                         val result = viewModel.emptyTrash()
@@ -399,7 +395,6 @@ fun TasksScreen(
                                 deletionController.startDeletion(
                                     emailIds = taskIds,
                                     message = deletingTasksMessage,
-                                    scope = scope,
                                     isRestore = false
                                 ) { _, onProgress ->
                                     viewModel.deleteTasksPermanently(tasksToDeleteList, onProgress)
@@ -446,7 +441,6 @@ fun TasksScreen(
                                 deletionController.startDeletion(
                                     emailIds = taskIds,
                                     message = restoringTasksMessage,
-                                    scope = scope,
                                     isRestore = true
                                 ) { _, onProgress ->
                                     viewModel.restoreTasks(tasksToRestore, onProgress)

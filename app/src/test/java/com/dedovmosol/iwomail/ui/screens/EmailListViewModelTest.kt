@@ -112,14 +112,14 @@ class EmailListViewModelTest {
     @Test
     fun `drafts folder auto-syncs exactly once`() = runTest(dispatcher) {
         every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folderMock(DRAFTS_ID, FolderType.DRAFTS)))
-        val vm = createViewModel(folderId = DRAFTS_ID)
+        createViewModel(folderId = DRAFTS_ID)
         advanceUntilIdle()
         coVerify(exactly = 1) { mailRepo.syncEmails(ACCOUNT_ID, DRAFTS_ID, false) }
     }
 
     @Test
     fun `inbox folder does not auto-sync`() = runTest(dispatcher) {
-        val vm = createViewModel()
+        createViewModel()
         advanceUntilIdle()
         coVerify(exactly = 0) { mailRepo.syncEmails(any(), any(), any()) }
     }

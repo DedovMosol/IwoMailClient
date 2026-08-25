@@ -25,7 +25,7 @@ data class ComposeUiState(
     val bcc: String = "",
     val subject: String = "",
     val body: String = "",
-    val importance: Int = 0,
+    val importance: Int = 1, // EAS Importance: 0 = Low, 1 = Normal, 2 = High (MS-ASEMAIL)
 
     // Вложения
     val attachments: List<AttachmentItem> = emptyList(),
@@ -35,6 +35,13 @@ data class ComposeUiState(
     val groupMappings: Map<String, List<String>> = emptyMap(),
     val groupColors: Map<String, Int> = emptyMap(),
     val suggestions: List<EmailSuggestion> = emptyList(),
+
+    // Отложенное добавление получателей с дубликатами (ждёт подтверждения пользователя)
+    val pendingDuplicateAddition: PendingDuplicateAddition? = null,
+
+    // SmartForward: источник пересылки (MS-ASCMD §2.2.1.19)
+    val forwardSourceFolderServerId: String? = null,
+    val forwardSourceEmailServerId: String? = null,
 
     // Флаги состояния
     val isLoading: Boolean = false,
@@ -57,6 +64,9 @@ data class ComposeUiState(
     val ccValid: Boolean = true,
     val bccValid: Boolean = true,
     val hasRecipients: Boolean = false,
+
+    // Диалог подтверждения выхода (есть несохранённые изменения)
+    val showDiscardDialog: Boolean = false,
 )
 
 /**

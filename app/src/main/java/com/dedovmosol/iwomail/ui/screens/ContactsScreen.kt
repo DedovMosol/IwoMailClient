@@ -1,7 +1,5 @@
 ﻿package com.dedovmosol.iwomail.ui.screens
 
-import android.content.Intent
-import android.net.Uri
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -579,15 +577,6 @@ fun ContactsScreen(
             onCopyEmail = { email ->
                 clipboardManager.setText(AnnotatedString(email))
                 SafeToast.short(context, emailCopiedMsg)
-            },
-            onCall = { phone ->
-                try {
-                    context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone")))
-                } catch (_: Exception) {
-                    // Планшет без приложения «Телефон» — копируем номер в буфер обмена
-                    clipboardManager.setText(AnnotatedString(phone))
-                    SafeToast.short(context, if (isRussian) "Номер скопирован" else "Number copied")
-                }
             },
             onEdit = {
                 showContactDetailsId = null

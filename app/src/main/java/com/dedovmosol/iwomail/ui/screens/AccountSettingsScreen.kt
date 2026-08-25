@@ -83,11 +83,6 @@ fun AccountSettingsScreen(
         AccountType.EXCHANGE
     }
 
-    val syncMode = try {
-        SyncMode.valueOf(currentAccount.syncMode)
-    } catch (_: Exception) {
-        SyncMode.PUSH
-    }
 
 
     // Диалоги
@@ -102,7 +97,6 @@ fun AccountSettingsScreen(
     var clientCertPasswordVisible by rememberSaveable { mutableStateOf(false) }
 
     // Пикеры для серверного сертификата
-    val certFileName = currentAccount.certificatePath?.let { java.io.File(it).name } ?: "certificate.cer"
 
     val exportCertificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*")
@@ -195,7 +189,6 @@ fun AccountSettingsScreen(
 
 
     // Пикеры для клиентского сертификата
-    val clientCertFileName = currentAccount.clientCertificatePath?.let { java.io.File(it).name } ?: "client_certificate.p12"
 
     val exportClientCertificatePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*")
@@ -688,7 +681,7 @@ fun AccountSettingsScreen(
                 item {
                     ListItem(
                         headlineContent = { Text(Strings.serverCertificate) },
-                        supportingContent = { Text(currentAccount.certificatePath?.let { java.io.File(it).name } ?: "") },
+                        supportingContent = { Text(java.io.File(currentAccount.certificatePath).name) },
                         leadingContent = { Icon(AppIcons.Lock, null) },
                         trailingContent = { Icon(AppIcons.ChevronRight, null) },
                         modifier = Modifier.clickable { showCertificateDialog = true }
@@ -713,7 +706,7 @@ fun AccountSettingsScreen(
                 item {
                     ListItem(
                         headlineContent = { Text(if (isRu) "Клиентский сертификат" else "Client certificate") },
-                        supportingContent = { Text(currentAccount.clientCertificatePath?.let { java.io.File(it).name } ?: "") },
+                        supportingContent = { Text(java.io.File(currentAccount.clientCertificatePath).name) },
                         leadingContent = { Icon(AppIcons.Lock, null) },
                         trailingContent = { Icon(AppIcons.ChevronRight, null) },
                         modifier = Modifier.clickable { showClientCertificateDialog = true }
@@ -912,7 +905,6 @@ fun CertificatePinningCard(
     isRu: Boolean,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
-    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     var isLoading by remember { mutableStateOf(false) }
 
     // Проверяем наличие изменения сертификата (ключ pinnedCertificateHash гарантирует

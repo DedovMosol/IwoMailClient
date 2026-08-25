@@ -29,7 +29,6 @@ fun ScheduleSendDialog(
     val customDate = remember(customDateMillis) { Calendar.getInstance().apply { timeInMillis = customDateMillis } }
     
     // Кэшируем Calendar и варианты времени для оптимизации recomposition
-    val calendar = remember { Calendar.getInstance() }
     
     // Варианты времени (вычисляются один раз)
     val tomorrowMorning = remember {

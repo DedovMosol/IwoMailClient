@@ -35,7 +35,15 @@ import java.io.File
 class AttachmentLoader(
     private val context: Context,
     private val mailRepository: MailRepository,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * Стратегия получения content-URI для локального файла вложения (DIP).
+     * Прод (дефолт): FileProvider — безопасный обмен между приложениями.
+     * Тесты: детерминированный резолвер без зависимости от провайдера/манифеста.
+     */
+    private val fileUriResolver: (File) -> Uri = { file ->
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }
 ) {
 
     /**
@@ -75,12 +83,16 @@ class AttachmentLoader(
     }
 
     /**
-     * Источник вложений (для логирования).
+     * Источник вложений.
+     *
+     * @param attachmentsDirName Подкаталог filesDir для скачанных вложений.
+     *   Совпадает с эталонным ComposeScreen и с file_paths.xml (files-path):
+     *   файлы переживают очистку кэша ОС и доступны FileProvider для отправки.
      */
-    enum class AttachmentSource {
-        Reply,
-        Forward,
-        Draft
+    enum class AttachmentSource(val attachmentsDirName: String) {
+        Reply("reply_attachments"),
+        Forward("forward_attachments"),
+        Draft("draft_attachments")
     }
 
     /**
@@ -160,13 +172,22 @@ class AttachmentLoader(
                         return@forEachIndexed
                     }
 
-                    // Попытка 2: скачивание через EAS
-                    if (easClient != null && att.fileReference.isNotBlank() && collectionId != null && emailServerId != null) {
-                        val downloaded = downloadAttachment(att, easClient, collectionId, emailServerId, source)
-                        if (downloaded != null) {
-                            processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, fileAttachments, inlineImages)
-                            return@forEachIndexed
-                        }
+                    // Попытка 2: скачивание через EAS/EWS
+                    val downloaded = when {
+                        // Draft: fileReference черновика может быть либо EAS-ссылкой (с ":"),
+                        // либо EWS ItemId (без ":") — требуется роутинг через
+                        // downloadDraftAttachment (эталонное поведение старого ComposeScreen,
+                        // критично для Exchange 2007 SP1/SP2, где ItemOperations для черновиков
+                        // может быть недоступен).
+                        source == AttachmentSource.Draft && easClient != null && att.fileReference.isNotBlank() ->
+                            downloadDraftAttachment(att, easClient, source)
+                        easClient != null && att.fileReference.isNotBlank() && collectionId != null && emailServerId != null ->
+                            downloadAttachment(att, easClient, source)
+                        else -> null
+                    }
+                    if (downloaded != null) {
+                        processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, fileAttachments, inlineImages)
+                        return@forEachIndexed
                     }
 
                     // Вложение недоступно
@@ -220,12 +241,9 @@ class AttachmentLoader(
 
             android.util.Log.d(TAG, "$source: Loaded inline image cid:${att.contentId} (${bytes.size} bytes)")
         } else {
-            // Файловое вложение: получить content URI через FileProvider
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
+            // Файловое вложение: получить content URI через инжектированную
+            // стратегию (прод-дефолт — FileProvider)
+            val uri = fileUriResolver(file)
             val attInfo = AttachmentInfo(
                 uri = uri,
                 name = att.displayName,
@@ -246,34 +264,63 @@ class AttachmentLoader(
     private suspend fun downloadAttachment(
         att: AttachmentEntity,
         easClient: EasClient,
-        collectionId: String,
-        emailServerId: String,
         source: AttachmentSource
     ): File? {
-        val downloadResult = easClient.downloadAttachment(
-            att.fileReference,
-            collectionId,
-            emailServerId
-        )
+        val downloadResult = easClient.downloadAttachment(att.fileReference)
+        return persistDownload(att, downloadResult, source)
+    }
 
-        if (downloadResult is EasResult.Success) {
-            val attachmentsDir = File(context.cacheDir, "attachments")
-            if (!attachmentsDir.exists()) {
-                attachmentsDir.mkdirs()
-            }
+    /**
+     * Скачать вложение черновика через роутинг EAS/EWS ([EasClient.downloadDraftAttachment]).
+     * fileReference черновика хранится как EAS-ссылка (с ":") либо как EWS ItemId (без ":"),
+     * и только этот метод умеет выбирать протокол — критично для черновиков, созданных
+     * в Outlook/OWA на Exchange 2007 SP1/SP2.
+     *
+     * @return Скачанный файл или null при ошибке
+     */
+    private suspend fun downloadDraftAttachment(
+        att: AttachmentEntity,
+        easClient: EasClient,
+        source: AttachmentSource
+    ): File? {
+        val downloadResult = easClient.downloadDraftAttachment(att.fileReference)
+        return persistDownload(att, downloadResult, source)
+    }
 
-            // Безопасное имя файла (без недопустимых символов)
-            val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
-            val file = File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
-
-            file.writeBytes(downloadResult.data)
-
-            android.util.Log.d(TAG, "$source: Downloaded ${att.displayName} (${downloadResult.data.size} bytes)")
-            return file
-        } else {
-            android.util.Log.w(TAG, "$source: Download failed for ${att.displayName} (ref=${att.fileReference})")
+    /**
+     * Записать скачанные байты в файловое хранилище.
+     * Каталог — `filesDir/<source.attachmentsDirName>` (совпадает с эталонным
+     * ComposeScreen и file_paths.xml): файлы НЕ вычищаются ОС как кэш и доступны
+     * FileProvider для последующей отправки.
+     *
+     * @return Файл или null при ошибке скачивания
+     */
+    private fun persistDownload(
+        att: AttachmentEntity,
+        downloadResult: EasResult<ByteArray>,
+        source: AttachmentSource
+    ): File? {
+        if (downloadResult !is EasResult.Success) {
+            android.util.Log.w(
+                TAG,
+                "$source: Download failed for ${att.displayName} (ref=${att.fileReference})"
+            )
             return null
         }
+
+        val attachmentsDir = File(context.filesDir, source.attachmentsDirName)
+        if (!attachmentsDir.exists()) {
+            attachmentsDir.mkdirs()
+        }
+
+        // Безопасное имя файла (без недопустимых символов)
+        val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
+        val file = File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
+
+        file.writeBytes(downloadResult.data)
+
+        android.util.Log.d(TAG, "$source: Downloaded ${att.displayName} (${downloadResult.data.size} bytes)")
+        return file
     }
 
     companion object {

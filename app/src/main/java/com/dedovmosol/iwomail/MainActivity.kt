@@ -6,11 +6,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.dp
@@ -258,6 +261,34 @@ class MainActivity : ComponentActivity() {
             val initialFontSize = remember { settingsRepo.getFontSizeSync() }
             val fontSize by settingsRepo.fontSize.collectAsStateWithLifecycle(initialValue = initialFontSize)
             
+            // Режим темы: системный / светлая / тёмная
+            val initialThemeMode = remember { settingsRepo.getThemeModeSync() }
+            val themeMode by settingsRepo.themeMode.collectAsStateWithLifecycle(initialValue = initialThemeMode)
+            val systemDark = isSystemInDarkTheme()
+            val darkTheme = when (themeMode) {
+                SettingsRepository.ThemeMode.SYSTEM -> systemDark
+                SettingsRepository.ThemeMode.LIGHT -> false
+                SettingsRepository.ThemeMode.DARK -> true
+            }
+            
+            // Контраст иконок системных баров следует теме приложения, а не системы
+            // (официальный паттерн Compose: enableEdgeToEdge + SystemBarStyle)
+            val systemBarStyle = if (darkTheme) {
+                SystemBarStyle.dark(Color.Transparent.toArgb())
+            } else {
+                SystemBarStyle.light(
+                    Color.Transparent.toArgb(),
+                    Color.Black.copy(alpha = 0.3f).toArgb()
+                )
+            }
+            DisposableEffect(darkTheme) {
+                enableEdgeToEdge(
+                    statusBarStyle = systemBarStyle,
+                    navigationBarStyle = systemBarStyle
+                )
+                onDispose {}
+            }
+            
             // Цветовая тема с учётом расписания по дням
             val initialColorTheme = remember { settingsRepo.getCurrentThemeSync() }
             val colorThemeCode by settingsRepo.colorTheme.collectAsStateWithLifecycle(initialValue = initialColorTheme)
@@ -320,7 +351,7 @@ class MainActivity : ComponentActivity() {
                 com.dedovmosol.iwomail.ui.components.LocalSendController provides sendController,
                 androidx.compose.ui.platform.LocalTextToolbar provides customTextToolbar
             ) {
-                ExchangeMailTheme(fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled, scrollbarColor = scrollbarColor) {
+                ExchangeMailTheme(darkTheme = darkTheme, fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled, scrollbarColor = scrollbarColor) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         Surface(
                             modifier = Modifier.fillMaxSize(),

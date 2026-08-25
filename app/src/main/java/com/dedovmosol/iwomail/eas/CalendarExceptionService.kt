@@ -23,8 +23,7 @@ import kotlinx.coroutines.CancellationException
 class CalendarExceptionService(
     private val escapeXml: (String) -> String,
     private val formatEasDate: (Long) -> String,
-    private val ewsRequest: suspend (String, String, String) -> EasResult<String>,
-    private val getEwsUrl: () -> String
+    private val ewsRequest: suspend (String, String) -> EasResult<String>
 ) {
 
     private data class EwsExceptionOccurrence(
@@ -151,13 +150,6 @@ class CalendarExceptionService(
     ): Map<String, String> {
         if (localRecurringEvents.isEmpty()) return emptyMap()
 
-        val ewsUrl = try {
-            getEwsUrl()
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            return emptyMap()
-        }
-
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
         cal.timeInMillis = System.currentTimeMillis() - (90L * 24 * 60 * 60 * 1000)
         cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -214,7 +206,7 @@ class CalendarExceptionService(
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val findResult = ewsRequest(ewsUrl, findRequest, "FindItem")
+        val findResult = ewsRequest(findRequest, "FindItem")
         if (findResult is EasResult.Error) {
             android.util.Log.w(
                 "CalendarExceptionService",

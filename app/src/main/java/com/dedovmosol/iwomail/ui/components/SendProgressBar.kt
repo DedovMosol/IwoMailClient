@@ -79,6 +79,11 @@ class SendController {
 
     /**
      * Запускает отправку с обратным отсчётом
+     *
+     * @param onError вызывается при сбое отправки (ошибка создания клиента или ошибка сервера,
+     *   НЕ сетевая очередь outbox). Позволяет вызывающему (Этап 3: ComposeViewModel) сбросить
+     *   isSending — без него UI зависал в заблокированном состоянии после ошибки.
+     *   Путь сетевой очереди (OutboxWorker) вызывает onSuccess — письмо поставлено в очередь.
      */
     fun startSend(
         email: PendingEmail,
@@ -86,7 +91,8 @@ class SendController {
         context: Context,
         mailRepo: MailRepository,
         onSuccess: () -> Unit,
-        onCancel: () -> Unit
+        onCancel: () -> Unit,
+        onError: () -> Unit = {}
     ) {
         // Отменяем предыдущую отправку если была
         cancel()
@@ -129,6 +135,7 @@ class SendController {
                     withContext(Dispatchers.Main) {
                         SafeToast.long(context, "Failed to create client")
                     }
+                    onError()
                     return@launch
                 }
 
@@ -279,8 +286,8 @@ class SendController {
                                                 // syncResult is Success с data=0 → письмо ещё не на сервере
                                                 // Продолжаем retry с увеличенной задержкой
                                             } else {
-                                                val result = mailRepo.syncEmails(accountId, folder.id)
-                                                if (result is EasResult.Success && result.data > 0) {
+                                                val syncResult = mailRepo.syncEmails(accountId, folder.id)
+                                                if (syncResult is EasResult.Success && syncResult.data > 0) {
                                                     break
                                                 }
                                             }
@@ -328,6 +335,7 @@ class SendController {
                             withContext(Dispatchers.Main) {
                                 SafeToast.long(context, result.message)
                             }
+                            onError()
                         }
                     }
                 }

@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
@@ -34,7 +35,7 @@ import kotlinx.coroutines.launch
  * Получить локализованное название темы
  */
 @Composable
-private fun getThemeDisplayName(theme: AppColorTheme, isRu: Boolean): String {
+private fun getThemeDisplayName(theme: AppColorTheme): String {
     return when (theme) {
         AppColorTheme.PURPLE -> Strings.themePurple
         AppColorTheme.BLUE -> Strings.themeBlue
@@ -50,7 +51,6 @@ private fun getThemeDisplayName(theme: AppColorTheme, isRu: Boolean): String {
 private fun DayThemeRow(
     dayName: String,
     currentThemeCode: String,
-    isRu: Boolean,
     onThemeSelected: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -84,7 +84,7 @@ private fun DayThemeRow(
                 )
 
                 Text(
-                    text = getThemeDisplayName(currentTheme, isRu),
+                    text = getThemeDisplayName(currentTheme),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
@@ -116,7 +116,7 @@ private fun DayThemeRow(
                                         .background(theme.gradientStart)
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text(getThemeDisplayName(theme, isRu))
+                                Text(getThemeDisplayName(theme))
                             }
                         },
                         onClick = {
@@ -242,6 +242,10 @@ fun PersonalizationScreen(
     var showColorThemeDialog by rememberSaveable { mutableStateOf(false) }
     var showScrollbarColorDialog by rememberSaveable { mutableStateOf(false) }
     var showDailyThemesDialog by rememberSaveable { mutableStateOf(false) }
+    
+    // Режим темы (системный / светлая / тёмная)
+    val themeMode by settingsRepo.themeMode.collectAsStateWithLifecycle(initialValue = settingsRepo.getThemeModeSync())
+    var showThemeModeDialog by rememberSaveable { mutableStateOf(false) }
 
     // Темы по дням недели
     val mondayTheme by settingsRepo.getDayTheme(java.util.Calendar.MONDAY).collectAsStateWithLifecycle(initialValue = "purple")
@@ -328,7 +332,7 @@ fun PersonalizationScreen(
                                     .background(theme.gradientStart)
                             )
                             Spacer(modifier = Modifier.width(12.dp))
-                            Text(getThemeDisplayName(theme, isRu))
+                            Text(getThemeDisplayName(theme))
                         }
                     }
                 }
@@ -336,6 +340,46 @@ fun PersonalizationScreen(
             confirmButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                     onClick = { showColorThemeDialog = false },
+                    text = Strings.cancel
+                )
+            }
+        )
+    }
+
+    // Диалог выбора режима темы
+    if (showThemeModeDialog) {
+        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+            onDismissRequest = { showThemeModeDialog = false },
+            title = { Text(Strings.themeMode) },
+            text = {
+                Column {
+                    SettingsRepository.ThemeMode.entries.forEach { mode ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch { settingsRepo.setThemeMode(mode) }
+                                    showThemeModeDialog = false
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = themeMode == mode, onClick = null)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Icon(
+                                themeModeIcon(mode),
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(mode.getDisplayName(isRu))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showThemeModeDialog = false },
                     text = Strings.cancel
                 )
             }
@@ -397,25 +441,25 @@ fun PersonalizationScreen(
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
-                    DayThemeRow(Strings.monday, mondayTheme, isRu) { theme ->
+                    DayThemeRow(Strings.monday, mondayTheme) { theme ->
                         scope.launch { settingsRepo.setDayTheme(java.util.Calendar.MONDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
                     }
-                    DayThemeRow(Strings.tuesday, tuesdayTheme, isRu) { theme ->
+                    DayThemeRow(Strings.tuesday, tuesdayTheme) { theme ->
                         scope.launch { settingsRepo.setDayTheme(java.util.Calendar.TUESDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
                     }
-                    DayThemeRow(Strings.wednesday, wednesdayTheme, isRu) { theme ->
+                    DayThemeRow(Strings.wednesday, wednesdayTheme) { theme ->
                         scope.launch { settingsRepo.setDayTheme(java.util.Calendar.WEDNESDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
                     }
-                    DayThemeRow(Strings.thursday, thursdayTheme, isRu) { theme ->
+                    DayThemeRow(Strings.thursday, thursdayTheme) { theme ->
                         scope.launch { settingsRepo.setDayTheme(java.util.Calendar.THURSDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
                     }
-                    DayThemeRow(Strings.friday, fridayTheme, isRu) { theme ->
+                    DayThemeRow(Strings.friday, fridayTheme) { theme ->
                         scope.launch { settingsRepo.setDayTheme(java.util.Calendar.FRIDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
                     }
-                    DayThemeRow(Strings.saturday, saturdayTheme, isRu) { theme ->
+                    DayThemeRow(Strings.saturday, saturdayTheme) { theme ->
                         scope.launch { settingsRepo.setDayTheme(java.util.Calendar.SATURDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
                     }
-                    DayThemeRow(Strings.sunday, sundayTheme, isRu) { theme ->
+                    DayThemeRow(Strings.sunday, sundayTheme) { theme ->
                         scope.launch { settingsRepo.setDayTheme(java.util.Calendar.SUNDAY, theme); com.dedovmosol.iwomail.widget.updateMailWidget(context) }
                     }
                     
@@ -564,7 +608,7 @@ fun PersonalizationScreen(
                     },
                     supportingContent = { 
                         Text(
-                            if (dailyThemesEnabled) Strings.dailyThemesActive else getThemeDisplayName(currentTheme, isRu),
+                            if (dailyThemesEnabled) Strings.dailyThemesActive else getThemeDisplayName(currentTheme),
                             color = if (isEnabled) MaterialTheme.colorScheme.onSurfaceVariant 
                                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                         ) 
@@ -581,6 +625,21 @@ fun PersonalizationScreen(
                         )
                     },
                     modifier = if (isEnabled) Modifier.clickable { showColorThemeDialog = true } else Modifier
+                )
+            }
+            
+            // Режим темы: системный / светлая / тёмная
+            item {
+                ListItem(
+                    headlineContent = { Text(Strings.themeMode) },
+                    supportingContent = { Text(themeMode.getDisplayName(isRu)) },
+                    leadingContent = {
+                        Icon(
+                            themeModeIcon(themeMode),
+                            null
+                        )
+                    },
+                    modifier = Modifier.clickable { showThemeModeDialog = true }
                 )
             }
             
@@ -655,4 +714,15 @@ fun PersonalizationScreen(
         LazyColumnScrollbar(listState)
         }
     }
+}
+
+/**
+ * Иконка режима темы (единая точка выбора — диалог и строка списка).
+ * DRY: маппинг режима на иконку определён один раз.
+ */
+@Composable
+private fun themeModeIcon(mode: SettingsRepository.ThemeMode): ImageVector = when (mode) {
+    SettingsRepository.ThemeMode.SYSTEM -> AppIcons.Contrast
+    SettingsRepository.ThemeMode.LIGHT -> AppIcons.LightMode
+    SettingsRepository.ThemeMode.DARK -> AppIcons.NightsStay
 }

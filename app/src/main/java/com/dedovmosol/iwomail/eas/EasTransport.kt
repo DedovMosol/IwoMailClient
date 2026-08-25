@@ -194,7 +194,7 @@ class EasTransport(
                     policyKey = null
                     EasResult.Error("PROVISION_REQUIRED")
                 } else {
-                    val errorBody = resp.body?.string() ?: ""
+                    resp.body?.close()
                     EasResult.Error("HTTP ${resp.code}: ${resp.message}")
                 }
             }
@@ -205,6 +205,7 @@ class EasTransport(
         }
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     suspend fun executeRequest(request: Request): Response = suspendCancellableCoroutine { cont ->
         val call = client.newCall(request)
         cont.invokeOnCancellation { call.cancel() }
@@ -329,15 +330,15 @@ class EasTransport(
 
     // ========================= EWS Transport =========================
 
-    suspend fun performNtlmHandshake(ewsUrl: String, soapRequest: String, action: String): String? {
-        return ewsClient.performNtlmHandshake(soapRequest, action)
+    suspend fun performNtlmHandshake(): String? {
+        return ewsClient.performNtlmHandshake()
     }
 
-    suspend fun executeNtlmRequest(ewsUrl: String, soapRequest: String, authHeader: String, action: String): String? {
-        return ewsClient.executeNtlmRequest(soapRequest, authHeader, action)
+    suspend fun executeNtlmRequest(soapRequest: String, action: String): String? {
+        return ewsClient.executeNtlmRequest(soapRequest, action)
     }
 
-    suspend fun tryBasicAuthEws(ewsUrl: String, soapRequest: String, action: String): String? {
+    private suspend fun tryBasicAuthEws(soapRequest: String, action: String): String? {
         return ewsClient.tryBasicAuth(soapRequest, action)
     }
 
@@ -345,11 +346,11 @@ class EasTransport(
      * Basic Auth → NTLM fallback for EWS SOAP requests.
      * DRY: single auth entry point instead of inline repetitions.
      */
-    suspend fun executeEwsWithAuth(ewsUrl: String, soapRequest: String, operation: String): String? {
-        var response = tryBasicAuthEws(ewsUrl, soapRequest, operation)
+    suspend fun executeEwsWithAuth(soapRequest: String, operation: String): String? {
+        var response = tryBasicAuthEws(soapRequest, operation)
         if (response == null) {
-            val ntlmAuth = performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
-            response = executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+            performNtlmHandshake() ?: return null
+            response = executeNtlmRequest(soapRequest, operation)
         }
         return response
     }

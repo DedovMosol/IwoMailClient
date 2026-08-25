@@ -84,7 +84,7 @@ class EwsClient(
      * КРИТИЧНО: Все шаги должны идти в одном TCP соединении!
      * OkHttp connection pool с keep-alive должен это обеспечить.
      */
-    suspend fun executeNtlmRequest(soapRequest: String, authHeader: String, action: String): String? {
+    suspend fun executeNtlmRequest(soapRequest: String, action: String): String? {
         android.util.Log.d("NTM", "executeNtlmRequest START action=$action, url=$ewsUrl")
         return withContext(Dispatchers.IO) {
             var lastException: Exception? = null
@@ -421,7 +421,7 @@ class EwsClient(
      * Реальный 3-step handshake (Type1→Type2→Type3) выполняется внутри executeNtlmRequest,
      * т.к. все шаги ДОЛЖНЫ идти в одном TCP соединении.
      */
-    suspend fun performNtlmHandshake(soapRequest: String, action: String): String? {
+    suspend fun performNtlmHandshake(): String? {
         return ""
     }
 
@@ -429,7 +429,7 @@ class EwsClient(
      * Выполняет запрос с NTLM аутентификацией
      */
     private suspend fun executeNtlm(soapRequest: String, action: String): String? {
-        return executeNtlmRequest(soapRequest, "", action)
+        return executeNtlmRequest(soapRequest, action)
     }
     
     /**

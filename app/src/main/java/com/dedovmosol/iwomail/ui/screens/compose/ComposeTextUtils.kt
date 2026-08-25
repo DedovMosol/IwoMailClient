@@ -55,6 +55,17 @@ internal fun formatHtmlSignature(text: String?, isHtml: Boolean = false): String
 }
 
 /**
+ * Заменяет существующий HTML-блок подписи на новый.
+ *
+ * КРИТИЧНО: используется [Regex.escapeReplacement], потому что в тексте подписи
+ * допустимы символы `$` и `\` (цены, пути), а в replacement-строке Regex.replace
+ * они трактуются как ссылки на группы — без экранирования замена бросает
+ * IllegalArgumentException либо вставляет мусор.
+ */
+internal fun replaceSignatureHtml(body: String, newSignatureHtml: String): String =
+    body.replace(HTML_SIGNATURE_REGEX, Regex.escapeReplacement(newSignatureHtml))
+
+/**
  * Формирует HTML-цитату исходного письма для reply/forward.
  * Метки полей ([fromLabel]/[dateLabel]/[subjectLabel]/[toLabel]) передаются извне
  * для локализации; дефолты — английские (обратная совместимость и безопасный fallback).
@@ -109,4 +120,54 @@ internal fun replaceCidWithDataUrl(html: String, inlineImages: Map<String, Strin
             .replace("cid:${cid.removePrefix("<").removeSuffix(">")}", dataUrl)
     }
     return result
+}
+
+/**
+ * Нормализует строку получателей: разбивает по запятым/точкам с запятой, извлекает валидные
+ * email-адреса (в т.ч. из формата "Name <email>"), убирает дубликаты. Токены групп [GroupName]
+ * сохраняются как есть (раскрываются в адреса при отправке через expandGroupTokens).
+ *
+ * Перенесено из локальной функции ComposeScreen в общий слой (Этап 3, CS-16):
+ * используется и старым экраном, и [ComposeViewModel] — единая логика без дублей (DRY).
+ */
+internal fun normalizeRecipients(value: String): String {
+    val tokens = value.split(",", ";")
+    val result = tokens.mapNotNull { token ->
+        val trimmed = token.trim()
+        if (trimmed.isBlank()) return@mapNotNull null
+        // Сохраняем [GroupName] токены как есть
+        if (com.dedovmosol.iwomail.ui.screens.isGroupToken(trimmed)) return@mapNotNull trimmed
+        val bracket = NORMALIZE_BRACKET_REGEX.find(trimmed)?.groupValues?.get(1)
+        val cleaned = (bracket ?: trimmed).replace("\"", "").trim()
+        // Возвращаем только валидные email адреса
+        NORMALIZE_EMAIL_REGEX.find(cleaned)?.value
+    }
+    return result.distinct().joinToString(", ")
+}
+
+/**
+ * Извлекает последний вводимый адрес из строки получателей (после последней запятой/точки с
+ * запятой/перевода строки) — запрос для автодополнения. Перенесено из ComposeScreen (Этап 3).
+ */
+internal fun extractQueryPart(text: String): String {
+    val separators = charArrayOf(',', ';', '\n')
+    val lastSeparatorIndex = text.lastIndexOfAny(separators)
+    return if (lastSeparatorIndex >= 0) {
+        text.substring(lastSeparatorIndex + 1).trim()
+    } else {
+        text.trim()
+    }
+}
+
+/**
+ * Заменяет последний вводимый токен получателя на выбранный адрес/токен группы.
+ * Перенесено из ComposeScreen (Этап 3).
+ */
+internal fun replaceLastRecipient(text: String, newEmail: String): String {
+    val separators = charArrayOf(',', ';', '\n')
+    val lastSeparatorIndex = text.lastIndexOfAny(separators)
+    if (lastSeparatorIndex < 0) return newEmail
+    val prefix = text.substring(0, lastSeparatorIndex + 1)
+    val normalizedPrefix = if (prefix.endsWith(" ") || prefix.isEmpty()) prefix else "$prefix "
+    return normalizedPrefix + newEmail
 }

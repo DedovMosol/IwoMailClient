@@ -51,9 +51,11 @@ class WbxmlParser {
         val input = ByteArrayInputStream(data)
         val result = StringBuilder()
 
-        val version = input.read()
-        val publicId = readMultiByteInt(input)
-        val charset = readMultiByteInt(input)
+        // Поля заголовка WBXML (version, publicId, charset) парсером не используются,
+        // но чтение обязательно — оно продвигает поток к телу документа.
+        input.read()
+        readMultiByteInt(input)
+        readMultiByteInt(input)
         val stringTableLength = readMultiByteInt(input)
 
         if (stringTableLength > 0) {

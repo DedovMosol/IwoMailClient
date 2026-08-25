@@ -29,7 +29,6 @@ class ScheduledEmailWorker(
         val attachmentDirPath = inputData.getString("attachmentDir") ?: ""
         
         val accountRepo = AccountRepository(applicationContext)
-        val account = accountRepo.getAccount(accountId) ?: return Result.failure()
         
         val client = accountRepo.createEasClient(accountId) ?: return Result.failure()
         

@@ -63,6 +63,9 @@ import com.dedovmosol.iwomail.ui.screens.compose.NON_HTML_TAG_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.SAFE_FILENAME_COMPOSE_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.SIGNATURE_DIV_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_BR_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.extractQueryPart
+import com.dedovmosol.iwomail.ui.screens.compose.normalizeRecipients
+import com.dedovmosol.iwomail.ui.screens.compose.replaceLastRecipient
 import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_DIV_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_P_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.WHITESPACE_COLLAPSE_REGEX
@@ -72,6 +75,7 @@ import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlQuote
 import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlSignature
 import com.dedovmosol.iwomail.ui.screens.compose.looksLikeHtml
 import com.dedovmosol.iwomail.ui.screens.compose.replaceCidWithDataUrl
+import com.dedovmosol.iwomail.ui.screens.compose.replaceSignatureHtml
 import com.dedovmosol.iwomail.util.escapeHtml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -263,23 +267,6 @@ fun ComposeScreen(
     // VisualTransformation для подкраски [GroupName] цветом группы
     val groupColorTransformation = remember(groupColors) { GroupColorVisualTransformation(groupColors) }
 
-    fun normalizeRecipients(value: String): String {
-        val emailRegex = NORMALIZE_EMAIL_REGEX
-        val bracketRegex = NORMALIZE_BRACKET_REGEX
-        val tokens = value.split(",", ";")
-        val result = tokens.mapNotNull { token ->
-            val trimmed = token.trim()
-            if (trimmed.isBlank()) return@mapNotNull null
-            // Сохраняем [GroupName] токены как есть
-            if (isGroupToken(trimmed)) return@mapNotNull trimmed
-            val bracket = bracketRegex.find(trimmed)?.groupValues?.get(1)
-            val cleaned = (bracket ?: trimmed).replace("\"", "").trim()
-            val emailMatch = emailRegex.find(cleaned)?.value
-            // Возвращаем только валидные email адреса
-            emailMatch
-        }
-        return result.distinct().joinToString(", ")
-    }
 
     // Загрузка вложений из Share intent
     var shareAttachmentsLoaded by rememberSaveable { mutableStateOf(false) }
@@ -410,24 +397,7 @@ fun ComposeScreen(
         }
     }
 
-    fun extractQueryPart(text: String): String {
-        val separators = charArrayOf(',', ';', '\n')
-        val lastSeparatorIndex = text.lastIndexOfAny(separators)
-        return if (lastSeparatorIndex >= 0) {
-            text.substring(lastSeparatorIndex + 1).trim()
-        } else {
-            text.trim()
-        }
-    }
 
-    fun replaceLastRecipient(text: String, newEmail: String): String {
-        val separators = charArrayOf(',', ';', '\n')
-        val lastSeparatorIndex = text.lastIndexOfAny(separators)
-        if (lastSeparatorIndex < 0) return newEmail
-        val prefix = text.substring(0, lastSeparatorIndex + 1)
-        val normalizedPrefix = if (prefix.endsWith(" ") || prefix.isEmpty()) prefix else "$prefix "
-        return normalizedPrefix + newEmail
-    }
 
     fun applyGroupsSelection(groups: List<Triple<String, List<String>, Int>>, target: String) {
         val newMappings = groupMappings.toMutableMap()
@@ -645,7 +615,7 @@ fun ComposeScreen(
 
                 // Заменяем старую подпись на новую (HTML формат)
                 if (body.contains("<div class=\"signature\">")) {
-                    body = body.replace(HTML_SIGNATURE_REGEX, newSignatureHtml)
+                    body = replaceSignatureHtml(body, newSignatureHtml)
                 } else if (!signatureInitialized && newSignatureHtml.isNotBlank()) {
                     // Подпись в конце только при ПЕРВОЙ инициализации нового письма.
                     // На повороте (signatureInitialized=true) не возвращаем удалённую подпись.
@@ -805,9 +775,7 @@ fun ComposeScreen(
                                         newAttachmentStrings.add(attInfo.toSaveableString())
                                     }
                                 } else if (easClient != null && att.fileReference.isNotBlank()) {
-                                    val downloadResult = easClient.downloadAttachment(
-                                        att.fileReference, collectionId, emailServerId
-                                    )
+                                    val downloadResult = easClient.downloadAttachment(att.fileReference)
 
                                     if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
                                         val attachmentsDir = java.io.File(context.filesDir, "reply_attachments")
@@ -978,9 +946,7 @@ fun ComposeScreen(
                                         newAttachmentStrings.add(attInfo.toSaveableString())
                                     }
                                 } else if (easClient != null && att.fileReference.isNotBlank()) {
-                                    val downloadResult = easClient.downloadAttachment(
-                                        att.fileReference, collectionId, emailServerId
-                                    )
+                                    val downloadResult = easClient.downloadAttachment(att.fileReference)
 
                                     if (downloadResult is com.dedovmosol.iwomail.eas.EasResult.Success) {
                                         val attachmentsDir = java.io.File(context.filesDir, "forward_attachments")
@@ -1398,8 +1364,7 @@ fun ComposeScreen(
                             // Это предотвращает восстановление старого черновика фоновой синхронизацией
                             // (PushService/SyncWorker) в окне между create нового и delete старого.
                             // Защита действует ~30 сек — достаточно для завершения операции.
-                            val oldEmailId = editDraftId ?: "${account.id}_${email.serverId}"
-                            com.dedovmosol.iwomail.data.repository.EmailSyncService.registerDeletedEmail(oldEmailId, context)
+                            com.dedovmosol.iwomail.data.repository.EmailSyncService.registerDeletedEmail(editDraftId, context)
                             val newServerId = withContext(Dispatchers.IO) {
                                 mailRepo.saveDraft(
     accountId = account.id,
@@ -1732,7 +1697,7 @@ fun ComposeScreen(
                                     val newSignatureHtml = formatHtmlSignature(signature.text, signature.isHtml)
                                     // Заменяем подпись в body (HTML формат)
                                     body = if (body.contains("<div class=\"signature\">")) {
-                                        body.replace(HTML_SIGNATURE_REGEX, newSignatureHtml)
+                                        replaceSignatureHtml(body, newSignatureHtml)
                                     } else {
                                         body + newSignatureHtml
                                     }
@@ -2042,9 +2007,7 @@ fun ComposeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    pendingImageUri?.let { uri ->
-                                        insertImageWithQuality(uri, quality)
-                                    }
+                                    insertImageWithQuality(pendingImageUri, quality)
                                     showImageQualityDialog = false
                                     pendingImageUriString = null
                                 }

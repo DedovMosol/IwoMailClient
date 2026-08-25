@@ -412,6 +412,14 @@ class AccountRepository(private val context: Context) {
         accountDao.setActiveAccount(accountId)
     }
 
+    /**
+     * Подписи аккаунта (для экрана создания письма). Обёртка над DAO для
+     * presentation-слоя (Этап 3, CS-16).
+     */
+    suspend fun getSignaturesForAccount(accountId: Long): List<com.dedovmosol.iwomail.data.database.SignatureEntity> {
+        return database.signatureDao().getSignaturesByAccountList(accountId)
+    }
+
     suspend fun getPassword(accountId: Long): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         passwordStorage.getPassword(accountId)
     }

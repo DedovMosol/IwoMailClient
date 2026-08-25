@@ -190,8 +190,6 @@ class TaskRepository(private val context: Context) {
     ): EasResult<TaskEntity> {
         return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
-                val startTime = System.currentTimeMillis()
-                
                 val result = withEasRetry {
                     easClient.updateTask(
                         serverId = task.serverId,
@@ -252,7 +250,6 @@ class TaskRepository(private val context: Context) {
                             }
                         }
                         
-                        val totalDuration = System.currentTimeMillis() - startTime
                         
                         EasResult.Success(updatedTask)
                     }

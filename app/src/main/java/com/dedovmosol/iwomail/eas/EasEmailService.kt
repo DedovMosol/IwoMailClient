@@ -46,9 +46,8 @@ class EasEmailService internal constructor(
         val wbxmlParser: WbxmlParser,
         val getFromEmail: () -> String,
         val getDeviceId: () -> String,
-        val performNtlmHandshake: suspend (String, String, String) -> String?,
-        val executeNtlmRequest: suspend (String, String, String, String) -> String?,
-        val getEwsUrl: () -> String,
+        val performNtlmHandshake: suspend () -> String?,
+        val executeNtlmRequest: suspend (String, String) -> String?,
         val getDeletedItemsFolderId: suspend () -> String?,
         val isExchange2007: () -> Boolean,
         val buildEwsSoapRequest: (String) -> String,
@@ -819,9 +818,9 @@ $changesXml
      * NTLM-only аутентификация для EWS SOAP запросов.
      * EasEmailService не использует Basic Auth fallback.
      */
-    private suspend fun executeEwsNtlmOnly(ewsUrl: String, soapRequest: String, operation: String): String? {
-        val ntlmAuth = deps.performNtlmHandshake(ewsUrl, soapRequest, operation) ?: return null
-        return deps.executeNtlmRequest(ewsUrl, soapRequest, ntlmAuth, operation)
+    private suspend fun executeEwsNtlmOnly(soapRequest: String, operation: String): String? {
+        deps.performNtlmHandshake() ?: return null
+        return deps.executeNtlmRequest(soapRequest, operation)
     }
 
     /**
@@ -830,7 +829,6 @@ $changesXml
      * Работает на Exchange 2007 SP1+ (надёжнее чем EAS Sync Change для Read).
      */
     private suspend fun markAsReadViaEws(subject: String, read: Boolean) {
-        val ewsUrl = deps.getEwsUrl()
         val escapedSubject = deps.escapeXml(subject)
         val isReadValue = if (read) "true" else "false"
 
@@ -864,7 +862,7 @@ $changesXml
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
 
-        val findResponse = executeEwsNtlmOnly(ewsUrl, findRequest, "FindItem") ?: return
+        val findResponse = executeEwsNtlmOnly(findRequest, "FindItem") ?: return
 
         // Извлекаем все ItemId + ChangeKey
         val itemPattern = """<t:ItemId Id="([^"]+)"\s+ChangeKey="([^"]+)"""".toRegex()
@@ -895,7 +893,7 @@ $itemChanges
 </m:UpdateItem>""".trimIndent()
         val updateRequest = deps.buildEwsSoapRequest(updateBody)
 
-        executeEwsNtlmOnly(ewsUrl, updateRequest, "UpdateItem")
+        executeEwsNtlmOnly(updateRequest, "UpdateItem")
     }
 
     /**
@@ -974,10 +972,9 @@ $itemChanges
         subject: String = ""
     ): EasResult<Unit> = withContext(Dispatchers.IO) {
         try {
-            val ewsUrl = deps.getEwsUrl()
 
             val ewsItemId = if (serverId.length < 50 || serverId.contains(":")) {
-                findEwsEmailItemId(ewsUrl, subject)
+                findEwsEmailItemId(subject)
             } else {
                 serverId
             }
@@ -997,7 +994,7 @@ $itemChanges
 
             val soapEnvelope = deps.buildEwsSoapRequest(deleteBody)
 
-            val responseXml = executeEwsNtlmOnly(ewsUrl, soapEnvelope, "DeleteItem")
+            val responseXml = executeEwsNtlmOnly(soapEnvelope, "DeleteItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
 
             if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
@@ -1016,7 +1013,7 @@ $itemChanges
      * Находит EWS ItemId письма по Subject (EWS FindItem с Restriction).
      * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
      */
-    private suspend fun findEwsEmailItemId(ewsUrl: String, subject: String): String? {
+    private suspend fun findEwsEmailItemId(subject: String): String? {
         if (subject.isBlank()) {
             android.util.Log.w("EasEmailService", "findEwsEmailItemId: empty subject — cannot safely identify email")
             return null
@@ -1040,7 +1037,7 @@ $itemChanges
 </m:FindItem>""".trimIndent()
         val findRequest = deps.buildEwsSoapRequest(findBody)
 
-        val responseXml = executeEwsNtlmOnly(ewsUrl, findRequest, "FindItem") ?: return null
+        val responseXml = executeEwsNtlmOnly(findRequest, "FindItem") ?: return null
 
         val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
         return itemIdPattern.find(responseXml)?.groupValues?.get(1)
@@ -1169,14 +1166,10 @@ $deleteCommands
         // с Subject-based поиском, что безопаснее batch позиционного подхода.
         if (deps.isExchange2007()) {
             android.util.Log.w("EasEmailService", "EAS batch delete failed (${(easResult as? EasResult.Error)?.message}), caller will handle EWS fallback per-item")
-            return when (val resetResult = sync(collectionId, "0")) {
-                is EasResult.Success -> {
-                    EasResult.Error("DELETE_NOT_APPLIED")
-                }
-                is EasResult.Error -> {
-                    EasResult.Error("DELETE_NOT_APPLIED")
-                }
-            }
+            // Результат сброса синхронизации не важен: сообщаем caller'у, что пакетное
+            // удаление не применено — он выполнит безопасный поэлементный EWS fallback.
+            sync(collectionId, "0")
+            return EasResult.Error("DELETE_NOT_APPLIED")
         }
 
         // Для Exchange 2010+ возвращаем оригинальную ошибку

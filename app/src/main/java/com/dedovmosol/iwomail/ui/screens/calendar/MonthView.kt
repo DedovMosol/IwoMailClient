@@ -82,7 +82,6 @@ internal fun MonthView(
         YearView(
             year = currentYear,
             events = events,
-            selectedDate = selectedDate,
             onMonthSelected = { month, year ->
                 currentMonth = month
                 currentYear = year
@@ -396,7 +395,6 @@ private fun DayCell(
 private fun YearView(
     year: Int,
     events: List<CalendarEventEntity>,
-    selectedDate: Date,
     onMonthSelected: (Int, Int) -> Unit,
     onYearChange: (Int) -> Unit,
     onBack: () -> Unit
@@ -456,7 +454,6 @@ private fun YearView(
                     year = year,
                     monthName = monthNames[monthIndex],
                     monthEvents = eventsByMonth[monthIndex],
-                    selectedDate = selectedDate,
                     onClick = { onMonthSelected(monthIndex, year) }
                 )
             }
@@ -471,7 +468,6 @@ private fun MiniMonthCard(
     year: Int,
     monthName: String,
     monthEvents: List<CalendarEventEntity>,
-    selectedDate: Date,
     onClick: () -> Unit
 ) {
     val calendar = Calendar.getInstance()

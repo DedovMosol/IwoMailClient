@@ -26,7 +26,7 @@ class EasCalendarSyncService(
     private val deps: EasCalendarService.CalendarServiceDependencies,
     private val xmlParser: CalendarXmlParser,
     private val attachmentService: CalendarAttachmentService,
-    private val ewsRequest: suspend (String, String, String) -> EasResult<String>
+    private val ewsRequest: suspend (String, String) -> EasResult<String>
 ) {
 
     @Volatile
@@ -318,8 +318,7 @@ class EasCalendarSyncService(
     suspend fun syncCalendarEws(): EasResult<List<EasCalendarEvent>> {
         return withContext(Dispatchers.IO) {
             try {
-                val ewsUrl = deps.getEwsUrl()
-                syncCalendarEwsNtlm(ewsUrl)
+                                syncCalendarEwsNtlm()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 EasResult.Error("Ошибка синхронизации календаря: ${e.message}")
@@ -327,12 +326,10 @@ class EasCalendarSyncService(
         }
     }
 
-    private suspend fun syncCalendarEwsNtlm(
-        ewsUrl: String
-    ): EasResult<List<EasCalendarEvent>> {
+    private suspend fun syncCalendarEwsNtlm(): EasResult<List<EasCalendarEvent>> {
         val findItemRequest = EasXmlTemplates.ewsFindCalendarItems()
 
-        val responseResult = ewsRequest(ewsUrl, findItemRequest, "FindItem")
+        val responseResult = ewsRequest(findItemRequest, "FindItem")
         if (responseResult is EasResult.Error) return EasResult.Error(responseResult.message)
         val response = (responseResult as EasResult.Success).data
 
@@ -362,7 +359,7 @@ class EasCalendarSyncService(
             if (needAttachments.isNotEmpty()) {
                 android.util.Log.d("EasCalendarSyncService",
                     "syncCalendarEwsNtlm: ${needAttachments.size} events need attachment fetch via GetItem")
-                val attachmentMap = attachmentService.fetchCalendarAttachmentsEws(ewsUrl, needAttachments.map { it.serverId })
+                val attachmentMap = attachmentService.fetchCalendarAttachmentsEws(needAttachments.map { it.serverId })
                 if (attachmentMap.size < needAttachments.size) {
                     return EasResult.Error("EWS GetItem returned partial attachment metadata")
                 }

@@ -285,7 +285,6 @@ fun VerificationScreen(
     // Диалог несовпадения email
     if (showMismatchDialog) {
         val colorTheme = com.dedovmosol.iwomail.ui.theme.LocalColorTheme.current
-        val animationsEnabled = com.dedovmosol.iwomail.ui.theme.LocalAnimationsEnabled.current
         
         var visible by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { visible = true }

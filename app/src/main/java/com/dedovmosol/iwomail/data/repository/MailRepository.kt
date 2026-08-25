@@ -271,6 +271,48 @@ class MailRepository(private val context: Context) {
     suspend fun getEmailSync(emailId: String): EmailEntity? {
         return emailDao.getEmail(emailId)
     }
+
+    /**
+     * Записывает тело письма в БД (обёртка над DAO, единая точка записи — инвариант проекта).
+     * Используется ComposeViewModel при открытии черновика: после резолвинга
+     * `cid:` → `data:` тело самодостаточно и не требует повторного сетевого
+     * запроса при каждом открытии (эталонное поведение старого ComposeScreen).
+     */
+    suspend fun updateEmailBody(emailId: String, body: String) {
+        emailDao.updateBody(emailId, body)
+    }
+
+    /**
+     * История получателей для автодополнения (сортировка по частоте использования).
+     * Обёртка над DAO для presentation-слоя (Этап 3, CS-16).
+     */
+    suspend fun searchEmailHistory(accountId: Long, query: String, ownEmail: String, limit: Int = 10): List<EmailHistoryResult> {
+        if (query.isBlank()) return emptyList()
+        return emailDao.searchEmailHistory(accountId, query, ownEmail, limit)
+    }
+
+    /**
+     * Атомарно воссоздаёт запись черновика (email + вложения) в одной транзакции.
+     * Используется как защита в [saveDraft] delete+create-потоке: если фоновый
+     * sync удалил новую запись между её созданием и верификацией — воссоздаём.
+     * Единая точка записи (инвариант проекта): DAO-вызовы только из репозитория.
+     */
+    suspend fun insertDraftRecord(email: EmailEntity, attachments: List<AttachmentEntity>) {
+        database.withTransaction {
+            emailDao.insert(email)
+            if (attachments.isNotEmpty()) {
+                attachmentDao.insertAll(attachments)
+            }
+        }
+    }
+    
+    /**
+     * Синхронное получение папки по локальному ID (паттерн [getEmailSync]).
+     * Используется в presentation layer (ComposeViewModel) для определения коллекции вложений.
+     */
+    suspend fun getFolderSync(folderId: String): FolderEntity? {
+        return folderDao.getFolder(folderId)
+    }
     
     suspend fun getAttachmentsSync(emailId: String): List<AttachmentEntity> {
         return attachmentDao.getAttachmentsList(emailId)
@@ -359,7 +401,6 @@ class MailRepository(private val context: Context) {
                     bcc = bcc,
                     subject = subject,
                     body = serverBody,
-                    draftsFolderId = draftsFolder.serverId,
                     attachments = attachmentFiles
                 )
             }
@@ -397,7 +438,7 @@ if (result is EasResult.Success) {
                 attachmentDao.insertAll(attEntities)
             }
         }
-        updateDraftsFolderCount(accountId, draftsFolder.id)
+        updateDraftsFolderCount(draftsFolder.id)
         return ewsItemId
     }
     
@@ -433,7 +474,7 @@ if (result is EasResult.Success) {
             attachmentDao.insertAll(attEntities)
         }
     }
-    updateDraftsFolderCount(accountId, draftsFolder.id)
+    updateDraftsFolderCount(draftsFolder.id)
     
     // НЕ запускаем sync для reconciliation:
     // EWS ItemId и EAS ServerId — это РАЗНЫЕ системы идентификаторов (Microsoft docs),
@@ -541,7 +582,7 @@ if (result is EasResult.Success) {
                 fromEmail = fromEmail,
                 fromName = fromName
             )
-            updateDraftsFolderCount(accountId, draftsFolder.id)
+            updateDraftsFolderCount(draftsFolder.id)
             
             return EasResult.Success(serverId)
         }
@@ -585,7 +626,7 @@ if (result is EasResult.Success) {
                 fromEmail = fromEmail,
                 fromName = fromName
             )
-            updateDraftsFolderCount(accountId, draftsFolder.id)
+            updateDraftsFolderCount(draftsFolder.id)
             
             // НЕ вызываем syncEmails здесь. Причины:
             // 1. syncEmails может гонять с фоновым PushService/SyncWorker (оба используют
@@ -611,7 +652,7 @@ if (result is EasResult.Success) {
                 fromEmail = fromEmail,
                 fromName = fromName
             )
-            updateDraftsFolderCount(accountId, draftsFolder.id)
+            updateDraftsFolderCount(draftsFolder.id)
             
             return EasResult.Success(serverId)
         }
@@ -639,7 +680,7 @@ if (result is EasResult.Success) {
             cleanupDraftAttachmentFiles(emailId)
             attachmentDao.deleteByEmail(emailId)
             emailDao.delete(emailId)
-            updateDraftsFolderCount(accountId, draftsFolder.id)
+            updateDraftsFolderCount(draftsFolder.id)
             return EasResult.Success(true)
         }
         
@@ -659,7 +700,7 @@ if (result is EasResult.Success) {
             cleanupDraftAttachmentFiles(emailId)
             attachmentDao.deleteByEmail(emailId)
             emailDao.delete(emailId)
-            updateDraftsFolderCount(accountId, draftsFolder.id)
+            updateDraftsFolderCount(draftsFolder.id)
         }
         
         // КРИТИЧНО: Exchange 2007 игнорирует DeletesAsMoves=0 в EAS Sync Delete.
@@ -841,7 +882,7 @@ if (result is EasResult.Success) {
         }
     }
 
-    private suspend fun updateDraftsFolderCount(accountId: Long, folderId: String) {
+    private suspend fun updateDraftsFolderCount(folderId: String) {
         val totalCount = emailDao.getCountByFolder(folderId)
         val unreadCount = emailDao.getUnreadCount(folderId)
         folderDao.updateCounts(folderId, unreadCount, totalCount)

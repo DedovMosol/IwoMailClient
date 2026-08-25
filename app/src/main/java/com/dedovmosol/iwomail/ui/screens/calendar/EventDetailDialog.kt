@@ -43,14 +43,12 @@ private val EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}
 internal fun EventDetailDialog(
     event: CalendarEventEntity,
     calendarRepo: CalendarRepository,
-    currentUserEmail: String = "",
     onDismiss: () -> Unit,
     onComposeClick: (String) -> Unit = {},
     onEditClick: () -> Unit = {},
     onDeleteClick: () -> Unit = {}
 ) {
-    val context = LocalContext.current
-    val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
+        val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
@@ -96,11 +94,6 @@ internal fun EventDetailDialog(
         EMAIL_REGEX.find(event.organizer)?.value ?: ""
     }
 
-    // Проверяем что я не организатор (тогда показываем кнопки ответа)
-    val isOrganizer = remember(organizerEmail, currentUserEmail) {
-        organizerEmail.isNotBlank() && currentUserEmail.isNotBlank() &&
-        organizerEmail.equals(currentUserEmail, ignoreCase = true)
-    }
 
     // Проверяем есть ли что показывать в расширенном виде
     val hasMoreContent = richBody.isNotBlank() || event.organizer.isNotBlank() || event.organizerName.isNotBlank() || attendees.isNotEmpty() || event.hasAttachments || event.onlineMeetingLink.isNotBlank()
