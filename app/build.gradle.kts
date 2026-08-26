@@ -168,6 +168,12 @@ dependencies {
     // Alpha version kept as best available option; migration to alternative pending official recommendation
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     
+    // Биометрическая аутентификация: вход в приложение по отпечатку пальца (цель релиза «пароль + дактилоскопия»).
+    // Стабильный канал androidx.biometric требует FragmentActivity — MainActivity наследует его
+    // (FragmentActivity расширяет ComponentActivity, весь Compose-код работает без изменений).
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.6")
+    
     // Glance для виджетов
     implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("androidx.glance:glance-material3:1.1.1")

@@ -1,6 +1,7 @@
 ﻿package com.dedovmosol.iwomail.ui.screens.contacts
 
 import android.content.Intent
+import com.dedovmosol.iwomail.ui.genericErrorText
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.core.content.FileProvider
 import java.io.File
@@ -21,7 +22,7 @@ internal val GROUP_COLORS = listOf(
     0xFF303F9F.toInt(), 0xFF00796B.toInt(), 0xFFFBC02D.toInt(), 0xFF455A64.toInt()
 )
 
-internal fun shareFile(context: android.content.Context, content: String, fileName: String, mimeType: String) {
+internal fun shareFile(context: android.content.Context, content: String, fileName: String, mimeType: String, isRussian: Boolean) {
     try {
         val file = File(context.cacheDir, fileName)
         file.writeText(content)
@@ -37,6 +38,6 @@ internal fun shareFile(context: android.content.Context, content: String, fileNa
         }
         context.startActivity(Intent.createChooser(intent, null))
     } catch (e: Exception) {
-        SafeToast.long(context, e.message ?: "Error")
+        SafeToast.long(context, e.message ?: genericErrorText(isRussian))
     }
 }

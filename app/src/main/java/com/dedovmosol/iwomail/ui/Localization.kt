@@ -35,7 +35,7 @@ object Strings {
     val back: String @Composable get() = if (isRussian()) "Назад" else "Back"
     val next: String @Composable get() = if (isRussian()) "Далее" else "Next"
     val done: String @Composable get() = if (isRussian()) "Готово" else "Done"
-    val error: String @Composable get() = if (isRussian()) "Ошибка" else "Error"
+    val error: String @Composable get() = genericErrorText(isRussian())
     val success: String @Composable get() = if (isRussian()) "Успешно" else "Success"
     val empty: String @Composable get() = if (isRussian()) "Пусто" else "Empty"
 
@@ -1223,6 +1223,28 @@ object Strings {
             }
         }
     }
+
+    // ─── Блокировка приложения: пароль + отпечаток пальца (цель релиза) ───
+    val appLockSection: String @Composable get() = if (isRussian()) "Безопасность" else "Security"
+    val appLockTitle: String @Composable get() = if (isRussian()) "Блокировка приложения" else "App lock"
+    val appLockDesc: String @Composable get() = if (isRussian()) "Защита входа паролем и отпечатком пальца" else "Protect access with a password and fingerprint"
+    val appLockFingerprintTitle: String @Composable get() = if (isRussian()) "Вход по отпечатку пальца" else "Unlock with fingerprint"
+    val appLockFingerprintDesc: String @Composable get() = if (isRussian()) "Быстрая разблокировка вместо ввода пароля" else "Quick unlock instead of typing the password"
+    val appLockSetPassword: String @Composable get() = if (isRussian()) "Установить пароль" else "Set password"
+    val appLockChangePassword: String @Composable get() = if (isRussian()) "Изменить пароль" else "Change password"
+    val appLockEnterPassword: String @Composable get() = if (isRussian()) "Введите пароль" else "Enter password"
+    val appLockRepeatPassword: String @Composable get() = if (isRussian()) "Повторите пароль" else "Repeat password"
+    val appLockCurrentPassword: String @Composable get() = if (isRussian()) "Текущий пароль" else "Current password"
+    val appLockNewPassword: String @Composable get() = if (isRussian()) "Новый пароль" else "New password"
+    val appLockUnlock: String @Composable get() = if (isRussian()) "Разблокировать" else "Unlock"
+    val appLockWrongPassword: String @Composable get() = if (isRussian()) "Неверный пароль" else "Wrong password"
+    val appLockTooShort: String @Composable get() = if (isRussian()) "Минимум 4 символа" else "At least 4 characters"
+    val appLockMismatch: String @Composable get() = if (isRussian()) "Пароли не совпадают" else "Passwords do not match"
+    val appLockBiometricPromptTitle: String @Composable get() = NotificationStrings.getAppLockBiometricTitle(isRussian())
+    val appLockBiometricPromptSubtitle: String @Composable get() = NotificationStrings.getAppLockBiometricSubtitle(isRussian())
+    val appLockBiometricNegative: String @Composable get() = NotificationStrings.getAppLockBiometricNegative(isRussian())
+    val appLockBiometricUnavailable: String @Composable get() = if (isRussian()) "Отпечаток пальца недоступен на этом устройстве" else "Fingerprint is not available on this device"
+    val appLockRemoveHint: String @Composable get() = if (isRussian()) "Для отключения введите текущий пароль" else "Enter the current password to disable the lock"
 }
 
 /**
@@ -1433,6 +1455,58 @@ object NotificationStrings {
             errorCode.contains("Ошибка сервера") -> if (isRussian) "Ошибка сервера" else "Server error"
             errorCode.contains("Конфликт") -> if (isRussian) "Конфликт при удалении" else "Conflict during deletion"
             errorCode.contains("Требуется синхронизация папок") -> if (isRussian) "Требуется синхронизация папок" else "Folder sync required"
+            // ─── Типовые ошибки репозиториев и EAS-клиента: строки захардкожены
+            // на русском в источнике, здесь переводим на язык интерфейса (цель
+            // «полноценная локализация всех ошибок»). Порядок веток важен: более
+            // специфичные паттерны стоят раньше общих (точное равенство → папки →
+            // общие ошибки синхронизации).
+            errorCode == "Аккаунт не найден" -> if (isRussian) errorCode else "Account not found"
+            errorCode == "Папка не найдена" -> if (isRussian) errorCode else "Folder not found"
+            errorCode == "Синхронизация уже выполняется" -> if (isRussian) errorCode else "Sync is already in progress"
+            errorCode == "Аутентификация не удалась" -> if (isRussian) errorCode else "Authentication failed"
+            errorCode == "NTLM аутентификация не удалась" -> if (isRussian) errorCode else "NTLM authentication failed"
+            errorCode == "Пустой ответ" -> if (isRussian) errorCode else "Empty response"
+            errorCode == "Письмо не найдено" -> if (isRussian) errorCode else "Email not found"
+            errorCode == "Письма не найдены" -> if (isRussian) errorCode else "No emails found"
+            errorCode == "Не удалось получить SyncKey" -> if (isRussian) errorCode else "Failed to obtain SyncKey"
+            errorCode == "Не удалось получить ChangeKey" -> if (isRussian) errorCode else "Failed to obtain ChangeKey"
+            errorCode == "Не удалось создать клиент" -> if (isRussian) errorCode else "Failed to create client"
+            errorCode == "Не удалось создать IMAP клиент" -> if (isRussian) errorCode else "Failed to create IMAP client"
+            errorCode == "Не удалось создать POP3 клиент" -> if (isRussian) errorCode else "Failed to create POP3 client"
+            errorCode == "Не удалось выполнить запрос к EWS" -> if (isRussian) errorCode else "EWS request failed"
+            errorCode == "Не удалось выполнить запрос" -> if (isRussian) errorCode else "Request failed"
+            errorCode == "Ошибка схемы EWS" -> if (isRussian) errorCode else "EWS schema error"
+            errorCode == "Задача не найдена" -> if (isRussian) errorCode else "Task not found"
+            errorCode == "Заметка не найдена" -> if (isRussian) errorCode else "Note not found"
+            errorCode == "Не поддерживается" -> if (isRussian) errorCode else "Not supported"
+            errorCode == "Данные не найдены в ответе" -> if (isRussian) errorCode else "No data found in response"
+            errorCode == "Ошибка авторизации (401)" -> if (isRussian) errorCode else "Authorization error (401)"
+            errorCode == "Требуется повторная авторизация (449)" -> if (isRussian) errorCode else "Re-authentication required (449)"
+            errorCode == "Требуется Provision (449)" -> if (isRussian) errorCode else "Provisioning required (449)"
+            errorCode == "Ошибка декодирования вложения" -> if (isRussian) errorCode else "Attachment decoding error"
+            errorCode == "Нет данных вложения" -> if (isRussian) errorCode else "No attachment data"
+            errorCode == "Нет папок для мониторинга" -> if (isRussian) errorCode else "No folders to monitor"
+            errorCode == "Нельзя удалить системную папку" -> if (isRussian) errorCode else "Cannot delete a system folder"
+            errorCode == "Нельзя переименовать системную папку" -> if (isRussian) errorCode else "Cannot rename a system folder"
+            errorCode == "Удаление папок поддерживается только для Exchange" -> if (isRussian) errorCode else "Folder deletion is supported only for Exchange"
+            errorCode == "Создание папок поддерживается только для Exchange" -> if (isRussian) errorCode else "Folder creation is supported only for Exchange"
+            errorCode == "Переименование папок поддерживается только для Exchange" -> if (isRussian) errorCode else "Folder renaming is supported only for Exchange"
+            errorCode == "MDN поддерживается только для Exchange" -> if (isRussian) errorCode else "MDN is supported only for Exchange"
+            errorCode == "Загрузка тела не поддерживается для этого типа аккаунта" -> if (isRussian) errorCode else "Body loading is not supported for this account type"
+            errorCode == "GetAttachment не поддерживается сервером (HTTP 501)" -> if (isRussian) errorCode else "GetAttachment is not supported by the server (HTTP 501)"
+            errorCode.contains("Папка черновиков не найдена") -> if (isRussian) errorCode else "Drafts folder not found"
+            errorCode.contains("Папка календаря не найдена") -> if (isRussian) errorCode else "Calendar folder not found"
+            errorCode.contains("Папка задач не найдена") -> if (isRussian) errorCode else "Tasks folder not found"
+            errorCode.contains("Папка контактов не найдена") -> if (isRussian) errorCode else "Contacts folder not found"
+            errorCode.contains("Папка Notes (type=10) не найдена") -> if (isRussian) errorCode else "Notes folder (type=10) not found"
+            errorCode.contains("Папка Notes не найдена") -> if (isRussian) errorCode else "Notes folder not found"
+            errorCode.contains("Папка Deleted Items не найдена") -> if (isRussian) errorCode else "Deleted Items folder not found"
+            errorCode.contains("Ошибка синхронизации папки") -> if (isRussian) errorCode else errorCode.replace("Ошибка синхронизации папки:", "Folder sync error:")
+            errorCode.contains("Ошибка синхронизации папок") -> if (isRussian) errorCode else errorCode.replace("Ошибка синхронизации папок:", "Folder sync error:")
+            errorCode.contains("Ошибка синхронизации календаря") -> if (isRussian) errorCode else errorCode.replace("Ошибка синхронизации календаря:", "Calendar sync error:")
+            errorCode.contains("Ошибка синхронизации") -> if (isRussian) errorCode else errorCode.replace("Ошибка синхронизации:", "Sync error:")
+            errorCode.contains("Сервер не поддерживает скачивание вложений через EAS") -> if (isRussian) errorCode else
+                "The server does not support downloading attachments via EAS.\n\nPossible reasons:\n• Security policy blocks downloads\n• The attachment was removed from the server\n\nTry opening the email in OWA."
             errorCode.contains("Не удалось удалить письмо") -> if (isRussian) errorCode else errorCode.replace("Не удалось удалить письмо:", "Failed to delete email:")
             // EasClient ошибки
             errorCode.contains("PolicyKey not found") ||
@@ -1709,6 +1783,18 @@ object NotificationStrings {
     fun getCopiedToPersonalContacts(isRussian: Boolean): String {
         return if (isRussian) "Скопировано в личные контакты" else "Copied to personal contacts"
     }
+
+    // Строки системного диалога BiometricPrompt (несоставные — диалог строится
+    // из Activity, где нет Compose-контекста). DRY: Strings.appLockBiometric*
+    // делегируют сюда.
+    fun getAppLockBiometricTitle(isRussian: Boolean): String =
+        if (isRussian) "Разблокировка" else "Unlock"
+
+    fun getAppLockBiometricSubtitle(isRussian: Boolean): String =
+        if (isRussian) "Приложите палец к датчику" else "Touch the fingerprint sensor"
+
+    fun getAppLockBiometricNegative(isRussian: Boolean): String =
+        if (isRussian) "Ввести пароль" else "Use password"
 }
 
 /**
@@ -1728,6 +1814,13 @@ fun isRussian(): Boolean = LocalLanguage.current == AppLanguage.RUSSIAN
  * Использовать вместо ручного сравнения `getLanguageSync() == "ru"`.
  */
 fun isRussianLanguage(languageCode: String): Boolean = languageCode == AppLanguage.RUSSIAN.code
+
+/**
+ * Универсальное сообщение об ошибке («Ошибка» / «Error») для несоставных контекстов
+ * (toast-фоллбеки в утилитах, фоновые операции). Единая точка истины — `Strings.error`
+ * делегирует сюда, поэтому фоллбеки `e.message ?: ...` не захардкоживают английский.
+ */
+fun genericErrorText(isRussian: Boolean): String = if (isRussian) "Ошибка" else "Error"
 
 
 /**

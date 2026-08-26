@@ -30,6 +30,12 @@
     <!-- Для отката (самоудаления) на API 28+ -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
+    <!-- Вход по отпечатку пальца (цель «пароль + дактилоскопия»):
+         на API 28+ BiometricPrompt использует USE_BIOMETRIC,
+         на API 26-27 legacy FingerprintManager требует USE_FINGERPRINT -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+
     <application
         android:name=".MailApplication"
         android:allowBackup="false"

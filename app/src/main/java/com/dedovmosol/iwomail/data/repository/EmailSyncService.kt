@@ -50,6 +50,31 @@ class EmailSyncService(
     )
 
     companion object {
+        /**
+         * Окно дедупликации черновиков (мс): локальный черновик считается дубликатом
+         * серверного при совпадении темы И разнице дат меньше этого окна.
+         * 120 с покрывает рассинхронизацию часов клиент/сервер при создании.
+         */
+        const val DRAFT_DEDUP_WINDOW_MS = 120_000L
+
+        /**
+         * Чистая эвристика дедупликации черновиков (тестируема без Room).
+         *
+         * Возвращает true, если локальный черновик (`local_draft_`) уже существует
+         * на сервере: тот же субъект и дата в пределах [DRAFT_DEDUP_WINDOW_MS].
+         * Сценарий: createDraftMime() создал черновик на сервере, но ItemId не
+         * удалось извлечь из ответа — синк находит серверный черновик, и локальную
+         * копию нужно удалить вместо повторной загрузки (иначе дубликат).
+         */
+        fun isDraftDuplicate(
+            localSubject: String,
+            localDateReceived: Long,
+            serverDrafts: List<Pair<String, Long>> // (subject, dateReceived) серверных черновиков
+        ): Boolean = serverDrafts.any { (serverSubject, serverDate) ->
+            serverSubject == localSubject &&
+                kotlin.math.abs(serverDate - localDateReceived) < DRAFT_DEDUP_WINDOW_MS
+        }
+
         // КРИТИЧНО: activeSyncs ОБЯЗАН быть общим (companion object / static) для ВСЕХ экземпляров!
         // SyncWorker и PushService создают РАЗНЫЕ экземпляры MailRepository → EmailSyncService.
         // Без общего activeSyncs они могут одновременно синхронизировать одну папку,
@@ -195,10 +220,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         val serverDrafts = allDrafts.filter { !it.serverId.startsWith("local_draft_") }
 
         val trulyLocalDrafts = localDrafts.filter { localDraft ->
-            val hasServerMatch = serverDrafts.any { serverDraft ->
-                serverDraft.subject == localDraft.subject &&
-                        kotlin.math.abs(serverDraft.dateReceived - localDraft.dateReceived) < 120_000
-            }
+            val hasServerMatch = isDraftDuplicate(
+                localSubject = localDraft.subject,
+                localDateReceived = localDraft.dateReceived,
+                serverDrafts = serverDrafts.map { it.subject to it.dateReceived }
+            )
             if (hasServerMatch) {
                 // Дубликат: черновик уже на сервере (sync нашёл его).
                 // Удаляем local_draft_ запись.

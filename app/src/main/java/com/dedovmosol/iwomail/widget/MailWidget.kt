@@ -128,12 +128,13 @@ class MailWidget : GlanceAppWidget() {
         }
         val nextTaskTitle = nextTask?.subject?.take(30) ?: ""
 
+        val noSubjectText = context.getString(R.string.widget_no_subject)
         val recentEmails = try {
             db.emailDao().getRecentUnreadInboxGlobal(3).map { email ->
                 RecentEmail(
                     id = email.id,
                     sender = email.fromName.ifBlank { email.from },
-                    preview = email.preview.ifBlank { email.subject.ifBlank { "(no subject)" } },
+                    preview = email.preview.ifBlank { email.subject.ifBlank { noSubjectText } },
                     folderId = email.folderId,
                     dateReceived = email.dateReceived
                 )

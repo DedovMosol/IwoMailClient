@@ -44,35 +44,18 @@ class PasswordStorage private constructor(
     }
 
     private val storage: StorageBackend by lazy {
-        try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-
-            val encrypted = EncryptedSharedPreferences.create(
-                context,
-                "secure_passwords",
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-
-            StorageBackend.Secure(encrypted)
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "EncryptedSharedPreferences initialization failed, using obfuscated fallback", e)
-
-            val fallbackPrefs = context.getSharedPreferences("passwords_fallback", Context.MODE_PRIVATE)
-            val obfuscated = ObfuscatedSharedPreferences(fallbackPrefs, context)
-
-            // L-7: Record security event
-            val reason = when {
-                e.message?.contains("KeyStore", ignoreCase = true) == true -> "KeyStore unavailable"
-                e.message?.contains("InvalidKey", ignoreCase = true) == true -> "Invalid master key"
-                else -> e.message ?: "Unknown error"
-            }
-            telemetry.recordInsecureStorageUsed(reason)
-
-            StorageBackend.Obfuscated(obfuscated, reason)
+        // Единая фабрика шифрованного хранилища (DRY): выбор бэкенда
+        // EncryptedSharedPreferences → обфусцированный фоллбек + телеметрия
+        // инкапсулированы в EncryptedStoreProvider (общий с AppLockManager).
+        val result = EncryptedStoreProvider.create(
+            context,
+            fileName = "secure_passwords",
+            fallbackFileName = "passwords_fallback"
+        )
+        if (result.insecureReason == null) {
+            StorageBackend.Secure(result.prefs)
+        } else {
+            StorageBackend.Obfuscated(result.prefs, result.insecureReason)
         }
     }
 

@@ -969,6 +969,17 @@ class PushService : Service() {
             settingsRepo.setLastSyncTime(System.currentTimeMillis())
 
             NotificationHelper.checkAndNotifyNewMail(this, database, settingsRepo, account.id, account.email)
+
+            // Виджет обновляется после каждого синка аккаунта: бейджи непрочитанных,
+            // список последних писем и метка «синк» должны отражать свежие данные сразу,
+            // а не ждать следующего периодического обновления (цель «виджет»).
+            // updateMailWidget сам сериализуется через widgetUpdateMutex и глотает ошибки.
+            try {
+                com.dedovmosol.iwomail.widget.updateMailWidget(this)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                android.util.Log.w(TAG, "Failed to update mail widget after sync", e)
+            }
         } finally {
             accountMutex.unlock()
         }

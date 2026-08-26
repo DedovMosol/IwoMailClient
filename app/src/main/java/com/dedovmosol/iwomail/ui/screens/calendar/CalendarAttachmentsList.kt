@@ -21,6 +21,7 @@ import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.genericErrorText
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.util.SafeToast
 import kotlinx.coroutines.Dispatchers
@@ -88,7 +89,7 @@ internal fun CalendarAttachmentsList(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                SafeToast.long(context, e.message ?: "Error")
+                SafeToast.long(context, e.message ?: genericErrorText(isRussian))
             } finally {
                 downloadingRef = null
             }
@@ -298,7 +299,7 @@ internal fun CalendarAttachmentsList(
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
-                                    SafeToast.long(context, e.message ?: "Error")
+                                    SafeToast.long(context, e.message ?: genericErrorText(isRussian))
                                 } finally {
                                     downloadingRef = null
                                 }

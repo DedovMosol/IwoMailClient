@@ -5,7 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -170,7 +170,16 @@ private fun PermissionDialog(
     }
 }
 
-class MainActivity : ComponentActivity() {
+/**
+ * Главная Activity.
+ *
+ * Суперкласс [FragmentActivity] (а не ComponentActivity): стабильный канал
+ * androidx.biometric:1.1.0 конструирует BiometricPrompt только из
+ * FragmentActivity/Fragment (проверено в исходниках библиотеки).
+ * FragmentActivity расширяет ComponentActivity, поэтому весь Compose-код
+ * (setContent, enableEdgeToEdge, registerForActivityResult) работает без изменений.
+ */
+class MainActivity : FragmentActivity() {
     
     companion object {
         const val EXTRA_OPEN_INBOX_UNREAD = "open_inbox_unread"
@@ -188,6 +197,8 @@ class MainActivity : ComponentActivity() {
         // Keys for savedInstanceState
         private const val KEY_PERMISSIONS_CHECKED = "permissions_checked"
         private const val KEY_PERMISSIONS_DIALOGS_SHOWN = "permissions_dialogs_shown"
+        
+        private const val TAG = "MainActivity"
     }
     
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -315,6 +326,44 @@ class MainActivity : ComponentActivity() {
             // Анимации
             val animationsEnabled by settingsRepo.animationsEnabled.collectAsStateWithLifecycle(initialValue = true)
             
+            // ─── Блокировка приложения: пароль + отпечаток пальца (цель релиза) ───
+            // Гейт поверх всей навигации: пока заблокировано, контент не виден и не доступен.
+            // Состояние сессии живёт в процесс-синглтоне AppLockManager — поворот экрана
+            // его НЕ сбрасывает (в отличие от remember), fail-closed при смерти процесса.
+            val appLockEnabled by settingsRepo.appLockEnabled.collectAsStateWithLifecycle(
+                initialValue = settingsRepo.getAppLockEnabledSync()
+            )
+            val appLockBiometricEnabled by settingsRepo.appLockBiometricEnabled.collectAsStateWithLifecycle(
+                initialValue = settingsRepo.getAppLockBiometricEnabledSync()
+            )
+            val appLocked by com.dedovmosol.iwomail.data.security.AppLockManager.locked.collectAsState()
+            // Защита от soft-lock: блокировка активна только если пароль реально задан
+            // (иначе при рассинхроне настроек и хранилища экран невозможно пройти).
+            val isLocked = appLocked && appLockEnabled &&
+                com.dedovmosol.iwomail.data.security.AppLockManager.isPasswordSet()
+            
+            // Доступность биометрии на устройстве — проверяется один раз на конфигурацию,
+            // системный диалог не нужен для самой проверки.
+            val biometricAvailable = remember {
+                androidx.biometric.BiometricManager.from(this@MainActivity)
+                    .canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
+                    androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
+            }
+            
+            // Защита содержимого на экране блокировки: FLAG_SECURE запрещает скриншоты
+            // и показ контента в списке недавних приложений, пока пароль не введён.
+            DisposableEffect(isLocked) {
+                if (isLocked) {
+                    window.setFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_SECURE,
+                        android.view.WindowManager.LayoutParams.FLAG_SECURE
+                    )
+                } else {
+                    window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+                }
+                onDispose { }
+            }
+            
             val currentLanguage = remember(languageCode) {
                 AppLanguage.entries.find { it.code == languageCode } ?: AppLanguage.RUSSIAN
             }
@@ -357,6 +406,15 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxSize(),
                             color = MaterialTheme.colorScheme.background
                         ) {
+                            // Гейт блокировки (пароль + отпечаток): замещает всю навигацию,
+                            // пока сессия заблокирована. Кнопка «назад» внутри перехвачена.
+                            if (isLocked) {
+                                com.dedovmosol.iwomail.ui.screens.LockScreen(
+                                    biometricAvailable = biometricAvailable,
+                                    biometricEnabled = appLockBiometricEnabled,
+                                    onBiometricRequest = { showBiometricPrompt() }
+                                )
+                            } else {
                             AppNavigation(
                                 openInboxUnreadIntentId = currentOpenInboxUnreadIntentId,
                                 openEmailId = emailIdToOpen,
@@ -396,6 +454,7 @@ class MainActivity : ComponentActivity() {
                                     checkPermissionsForDialogs()
                                 }
                             )
+                            }
                         }
                         
                         // Плашка прогресса удаления (внизу экрана)
@@ -628,6 +687,51 @@ class MainActivity : ComponentActivity() {
                 appWidgetManager.requestPinAppWidget(widgetProvider, null, null)
             }
         }
+    }
+    
+    /**
+     * Системный диалог биометрической разблокировки (цель релиза «дактилоскопия»).
+     *
+     * Требования стабильного androidx.biometric: конструктор из FragmentActivity
+     * (MainActivity наследует его), аутентификаторы задаются в PromptInfo.
+     * Игнорируем запрос, если биометрия недоступна или блокировка уже снята
+     * (защита от повторных промптов при быстрых тапах).
+     *
+     * Локализация строк промпта: язык берём из настроек синк-чтением
+     * (несоставной контекст — Compose LocalLanguage недоступен).
+     */
+    private fun showBiometricPrompt() {
+        if (!com.dedovmosol.iwomail.data.security.AppLockManager.isLocked()) return
+        
+        val settingsRepo = SettingsRepository.getInstance(applicationContext)
+        val isRussian = com.dedovmosol.iwomail.ui.isRussianLanguage(settingsRepo.getLanguageSync())
+        
+        val promptInfo = androidx.biometric.BiometricPrompt.PromptInfo.Builder()
+            .setTitle(com.dedovmosol.iwomail.ui.NotificationStrings.getAppLockBiometricTitle(isRussian))
+            .setSubtitle(com.dedovmosol.iwomail.ui.NotificationStrings.getAppLockBiometricSubtitle(isRussian))
+            .setNegativeButtonText(com.dedovmosol.iwomail.ui.NotificationStrings.getAppLockBiometricNegative(isRussian))
+            .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            .build()
+        
+        val prompt = androidx.biometric.BiometricPrompt(
+            this,
+            androidx.core.content.ContextCompat.getMainExecutor(this),
+            object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: androidx.biometric.BiometricPrompt.AuthenticationResult) {
+                    // Успех биометрии = разблокировка сессии (гейт реактивно уберёт лок-экран).
+                    com.dedovmosol.iwomail.data.security.AppLockManager.unlock()
+                }
+                
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    // Критичные ошибки (датчик недоступен, отмена): НЕ разблокируем.
+                    // Ошибка пользователя (неверный палец) обрабатывается системным
+                    // диалогом самостоятельно — здесь только лог для диагностики.
+                    android.util.Log.w(TAG, "Biometric auth error: $errorCode $errString")
+                }
+            }
+        )
+        
+        prompt.authenticate(promptInfo)
     }
     
     private fun parseMailtoUri(uri: android.net.Uri) {

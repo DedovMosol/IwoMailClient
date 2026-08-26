@@ -72,6 +72,8 @@ class SettingsRepository private constructor(
     private val themeModeWrittenBySetter = AtomicBoolean(false)
     private val colorThemeWrittenBySetter = AtomicBoolean(false)
     private val dayThemesWrittenBySetter = AtomicBoolean(false)
+    private val appLockEnabledWrittenBySetter = AtomicBoolean(false)
+    private val appLockBiometricWrittenBySetter = AtomicBoolean(false)
     
     // Кэшированные значения для часто используемых настроек UI (thread-safe)
     private val cachedFontSize = AtomicReference<FontSize?>(null)
@@ -92,6 +94,10 @@ class SettingsRepository private constructor(
     private val cachedSoundEnabled = AtomicReference<Boolean?>(null)
     private val cachedScrollbarColor = AtomicReference<String?>(null)
     private val cachedDefaultDraftMode = AtomicReference<String?>(null)
+    
+    // Кэшированные флаги блокировки приложения (синк-чтение для гейта в окне/сервисах)
+    private val cachedAppLockEnabled = AtomicReference<Boolean?>(null)
+    private val cachedAppLockBiometricEnabled = AtomicReference<Boolean?>(null)
     
     // Кэшированные цвета скроллбара по дням недели
     private val cachedDayScrollbarColors = java.util.concurrent.ConcurrentHashMap<Int, String>()
@@ -143,6 +149,15 @@ class SettingsRepository private constructor(
                     cachedUpdateDismissedVersion.set(prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0)
                     cachedSoundEnabled.set(prefs[Keys.SOUND_ENABLED] ?: true)
                     cachedScrollbarColor.set(prefs[Keys.SCROLLBAR_COLOR] ?: "blue")
+                    // Флаги блокировки: гвард «сеттер → устаревшая эмиссия» (паттерн
+                    // themeMode) — после записи сеттера коллектор не откатывает кэш
+                    // асинхронным эхом с промежуточным значением.
+                    if (!appLockEnabledWrittenBySetter.get()) {
+                        cachedAppLockEnabled.set(prefs[Keys.APP_LOCK_ENABLED] ?: false)
+                    }
+                    if (!appLockBiometricWrittenBySetter.get()) {
+                        cachedAppLockBiometricEnabled.set(prefs[Keys.APP_LOCK_BIOMETRIC_ENABLED] ?: false)
+                    }
                     
                     // Темы по дням недели
                     if (!dayThemesWrittenBySetter.get()) {
@@ -208,6 +223,12 @@ class SettingsRepository private constructor(
         val SCROLLBAR_SUNDAY = stringPreferencesKey("scrollbar_sunday")
         
         val DEFAULT_DRAFT_MODE = stringPreferencesKey("default_draft_mode")
+
+        // Блокировка приложения паролем + отпечатком пальца (цель релиза).
+        // Флаги в DataStore; сам секрет (хеш пароля) — в шифрованном хранилище
+        // AppLockManager, НЕ в DataStore (SOC: секреты отдельно от настроек).
+        val APP_LOCK_ENABLED = booleanPreferencesKey("app_lock_enabled")
+        val APP_LOCK_BIOMETRIC_ENABLED = booleanPreferencesKey("app_lock_biometric_enabled")
 
         val AUTO_CLEANUP_DOWNLOADS_DAYS = intPreferencesKey("auto_cleanup_downloads_days")
         val AUTO_CLEANUP_ROLLBACK_DAYS = intPreferencesKey("auto_cleanup_rollback_days")
@@ -530,6 +551,45 @@ class SettingsRepository private constructor(
             prefs[Keys.SCROLLBAR_COLOR] = colorCode
         }
     }
+    
+    // ─── Блокировка приложения паролем + отпечатком пальца (цель релиза) ───
+    // Флаги настроек; секрет (хеш пароля) хранит AppLockManager в шифрованном
+    // хранилище — сюда секреты не попадают (SOC).
+    
+    /** Включена ли блокировка приложения при входе. */
+    val appLockEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[Keys.APP_LOCK_ENABLED] ?: false
+    }
+    
+    suspend fun setAppLockEnabled(enabled: Boolean) {
+        // Паттерн themeMode: флаг «сеттер записал» + кэш обновляется сразу —
+        // синк-геттеры (решение гейта/окна) видят новое значение мгновенно,
+        // а коллектор не откатывает кэш асинхронным эхом собственных записей.
+        appLockEnabledWrittenBySetter.set(true)
+        cachedAppLockEnabled.set(enabled)
+        dataStore.edit { prefs ->
+            prefs[Keys.APP_LOCK_ENABLED] = enabled
+        }
+    }
+    
+    /** Синк-срез для несоставных контекстов (решение окна/сервисов без корутин). */
+    fun getAppLockEnabledSync(): Boolean = cachedAppLockEnabled.get() ?: false
+    
+    /** Разрешён ли вход по отпечатку пальца (действует только при включённой блокировке). */
+    val appLockBiometricEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[Keys.APP_LOCK_BIOMETRIC_ENABLED] ?: false
+    }
+    
+    suspend fun setAppLockBiometricEnabled(enabled: Boolean) {
+        appLockBiometricWrittenBySetter.set(true)
+        cachedAppLockBiometricEnabled.set(enabled)
+        dataStore.edit { prefs ->
+            prefs[Keys.APP_LOCK_BIOMETRIC_ENABLED] = enabled
+        }
+    }
+    
+    /** Синк-срез флага биометрии. */
+    fun getAppLockBiometricEnabledSync(): Boolean = cachedAppLockBiometricEnabled.get() ?: false
     
     fun getScrollbarColorSync(): String {
         return cachedScrollbarColor.get() ?: "blue"

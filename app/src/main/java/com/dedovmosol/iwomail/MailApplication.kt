@@ -44,6 +44,21 @@ class MailApplication : Application() {
         // sync при возврате из фона (см. AppForegroundTracker / PushService).
         com.dedovmosol.iwomail.sync.AppForegroundTracker.init()
         settingsRepository = SettingsRepository.getInstance(this)
+        
+        // Блокировка приложения паролем + отпечатком (цель релиза).
+        // Fail-closed: холодный старт с заданным паролем = заблокировано.
+        com.dedovmosol.iwomail.data.security.AppLockManager.init(this)
+        // Re-lock при уходе всего процесса в фон: единственная точка решения —
+        // AppForegroundTracker (ON_STOP диспатчится один раз на процесс, ~700 мс
+        // задержка исключает ложные блокировки при смене Activity/повороте).
+        // Подписка живёт весь процесс (не отменяется) — сбор при смерти процесса.
+        applicationScope.launch(Dispatchers.Main.immediate) {
+            com.dedovmosol.iwomail.sync.AppForegroundTracker.inForeground.collect { inForeground ->
+                if (!inForeground && settingsRepository.getAppLockEnabledSync()) {
+                    com.dedovmosol.iwomail.data.security.AppLockManager.lock()
+                }
+            }
+        }
         createNotificationChannels()
         cleanupStaleTempFiles()
         cleanupDuplicateEmails()

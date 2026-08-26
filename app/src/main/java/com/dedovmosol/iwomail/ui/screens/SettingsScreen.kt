@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.AccountType
@@ -60,6 +61,26 @@ fun SettingsScreen(
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
     var accountToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
     val accountToDelete = accountToDeleteId?.let { id -> accounts.find { it.id == id } }
+    
+    // ─── Блокировка приложения: пароль + отпечаток пальца (цель релиза) ───
+    val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
+    val appLockEnabled by settingsRepo.appLockEnabled.collectAsStateWithLifecycle(
+        initialValue = settingsRepo.getAppLockEnabledSync()
+    )
+    val appLockBiometricEnabled by settingsRepo.appLockBiometricEnabled.collectAsStateWithLifecycle(
+        initialValue = settingsRepo.getAppLockBiometricEnabledSync()
+    )
+    // Пароль задан — читаем синхронно из шифрованного хранилища (дёшево: чтение строки).
+    var lockPasswordSet by remember { mutableStateOf(com.dedovmosol.iwomail.data.security.AppLockManager.isPasswordSet()) }
+    // Какой диалог пароля открыт: установка / смена / отключение.
+    var lockDialog by remember { mutableStateOf<LockDialogType?>(null) }
+    
+    // Доступность биометрии на устройстве (для переключателя).
+    val biometricAvailable = remember {
+        androidx.biometric.BiometricManager.from(context)
+            .canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
+            androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
+    }
 
     // Диалог подтверждения удаления — стиль единый с удалением писем, событий, задач и т.д.
     accountToDelete?.let { account ->
@@ -86,6 +107,54 @@ fun SettingsScreen(
                 )
             }
         )
+    }
+    
+    // Диалоги пароля блокировки (установка / смена / отключение).
+    // Единый компонент — разница только в наборе полей и финальном действии (DRY).
+    when (lockDialog) {
+        LockDialogType.SetPassword -> LockPasswordDialog(
+            title = Strings.appLockSetPassword,
+            requireCurrentPassword = false,
+            requireNewPassword = true,
+            onCancel = { lockDialog = null },
+            onSubmit = { _, newPassword ->
+                // Диалог уже проверил длину и совпадение — здесь только коммит.
+                if (com.dedovmosol.iwomail.data.security.AppLockManager.setPassword(newPassword)) {
+                    lockPasswordSet = true
+                    lockDialog = null
+                    scope.launch { settingsRepo.setAppLockEnabled(true) }
+                }
+            }
+        )
+        LockDialogType.ChangePassword -> LockPasswordDialog(
+            title = Strings.appLockChangePassword,
+            requireCurrentPassword = true,
+            requireNewPassword = true,
+            onCancel = { lockDialog = null },
+            onSubmit = { _, newPassword ->
+                // Текущий пароль уже проверен диалогом (один проход PBKDF2) — коммит.
+                com.dedovmosol.iwomail.data.security.AppLockManager.setPassword(newPassword)
+                lockDialog = null
+            }
+        )
+        LockDialogType.Disable -> LockPasswordDialog(
+            title = Strings.appLockTitle,
+            requireCurrentPassword = true,
+            requireNewPassword = false,
+            hint = Strings.appLockRemoveHint,
+            onCancel = { lockDialog = null },
+            onSubmit = { _, _ ->
+                // Текущий пароль уже проверен диалогом — снимаем блокировку полностью.
+                com.dedovmosol.iwomail.data.security.AppLockManager.removePassword()
+                lockPasswordSet = false
+                lockDialog = null
+                scope.launch {
+                    settingsRepo.setAppLockBiometricEnabled(false)
+                    settingsRepo.setAppLockEnabled(false)
+                }
+            }
+        )
+        null -> Unit
     }
 
     Scaffold(
@@ -190,6 +259,84 @@ fun SettingsScreen(
                     },
                     modifier = Modifier.clickable { onNavigateToPersonalization() }
                 )
+            }
+            
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            }
+            
+            // === СЕКЦИЯ: БЕЗОПАСНОСТЬ (блокировка паролем + отпечаток пальца) ===
+            item {
+                Text(
+                    text = Strings.appLockSection,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+            
+            // Главный переключатель блокировки приложения.
+            // Включение открывает диалог установки пароля (блокировка без пароля
+            // не имеет смысла); отключение требует подтверждения текущим паролем.
+            item {
+                ListItem(
+                    headlineContent = { Text(Strings.appLockTitle) },
+                    supportingContent = { Text(Strings.appLockDesc) },
+                    leadingContent = { Icon(AppIcons.Lock, null) },
+                    trailingContent = {
+                        Switch(
+                            checked = appLockEnabled,
+                            onCheckedChange = { enabled ->
+                                if (enabled) {
+                                    if (lockPasswordSet) {
+                                        // Пароль уже задан (остался от прошлого включения) —
+                                        // сразу включаем без повторного ввода.
+                                        scope.launch { settingsRepo.setAppLockEnabled(true) }
+                                    } else {
+                                        lockDialog = LockDialogType.SetPassword
+                                    }
+                                } else {
+                                    lockDialog = LockDialogType.Disable
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+            
+            // Кнопка смены пароля — видна только при включённой блокировке.
+            if (appLockEnabled) {
+                item {
+                    ListItem(
+                        headlineContent = { Text(Strings.appLockChangePassword) },
+                        leadingContent = { Icon(AppIcons.Security, null) },
+                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
+                        modifier = Modifier.clickable { lockDialog = LockDialogType.ChangePassword }
+                    )
+                }
+                
+                // Переключатель входа по отпечатку пальца.
+                item {
+                    ListItem(
+                        headlineContent = { Text(Strings.appLockFingerprintTitle) },
+                        supportingContent = {
+                            Text(
+                                if (biometricAvailable) Strings.appLockFingerprintDesc
+                                else Strings.appLockBiometricUnavailable
+                            )
+                        },
+                        leadingContent = { Icon(AppIcons.Fingerprint, null) },
+                        trailingContent = {
+                            Switch(
+                                checked = appLockBiometricEnabled,
+                                enabled = biometricAvailable,
+                                onCheckedChange = { enabled ->
+                                    scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
+                                }
+                            )
+                        }
+                    )
+                }
             }
 
         }
@@ -1110,6 +1257,166 @@ private fun SignatureEditDialog(
         dismissButton = {
             com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
                 onClick = onDismiss,
+                text = Strings.cancel
+            )
+        }
+    )
+}
+
+// ─── Блокировка приложения: диалог пароля (установка / смена / отключение) ───
+
+/** Какой режим диалога пароля блокировки открыт. */
+private enum class LockDialogType { SetPassword, ChangePassword, Disable }
+
+/**
+ * Единый диалог пароля блокировки приложения (цель релиза «пароль + дактилоскопия»).
+ *
+ * Режимы (комбинируются флагами, без дублирования трёх экранов — DRY):
+ *  - [requireCurrentPassword] = текущий пароль обязателен и проверяется ДО коммита;
+ *  - [requireNewPassword] = новый пароль + подтверждение, длина ≥
+ *    [com.dedovmosol.iwomail.data.security.AppLockManager.MIN_PASSWORD_LENGTH].
+ *
+ * Производительность: все тяжёлые операции (проверка текущего пароля и коммит
+ * нового — 600k итераций PBKDF2, ~0.5–1 с) выполняются на [Dispatchers.IO],
+ * а не на главном потоке (защита от джанка). Запись в Compose-state из
+ * колбэка на IO безопасна (снапшот-система потокобезопасна).
+ */
+@Composable
+private fun LockPasswordDialog(
+    title: String,
+    requireCurrentPassword: Boolean,
+    requireNewPassword: Boolean,
+    hint: String? = null,
+    onCancel: () -> Unit,
+    onSubmit: (currentPassword: String, newPassword: String) -> Unit
+) {
+    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
+    // Строки — захватываем из композабельного контекста в замыкания:
+    // @Composable-геттеры нельзя вызывать из несоставного submit().
+    val tooShortMsg = Strings.appLockTooShort
+    val mismatchMsg = Strings.appLockMismatch
+    val wrongPasswordMsg = Strings.appLockWrongPassword
+    var currentPassword by rememberSaveable { mutableStateOf("") }
+    var newPassword by rememberSaveable { mutableStateOf("") }
+    var confirmPassword by rememberSaveable { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isChecking by remember { mutableStateOf(false) }
+
+    fun submit() {
+        if (isChecking) return
+        error = null
+
+        // Валидация нового пароля — дешёвые проверки до тяжёлого хеширования.
+        if (requireNewPassword) {
+            if (newPassword.length < com.dedovmosol.iwomail.data.security.AppLockManager.MIN_PASSWORD_LENGTH) {
+                error = tooShortMsg
+                return
+            }
+            if (newPassword != confirmPassword) {
+                error = mismatchMsg
+                return
+            }
+        }
+
+        isChecking = true
+        scope.launch {
+            // Текущий пароль: тяжёлая проверка PBKDF2 строго на IO-диспатчере.
+            if (requireCurrentPassword) {
+                val valid = withContext(Dispatchers.IO) {
+                    com.dedovmosol.iwomail.data.security.AppLockManager.checkPassword(currentPassword)
+                }
+                if (!valid) {
+                    isChecking = false
+                    error = wrongPasswordMsg
+                    return@launch
+                }
+            }
+            // Коммит (установка/смена/удаление пароля — тоже PBKDF2) на IO.
+            withContext(Dispatchers.IO) {
+                onSubmit(currentPassword, newPassword)
+            }
+            isChecking = false
+        }
+    }
+
+    com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+        onDismissRequest = onCancel,
+        icon = { Icon(AppIcons.Lock, null) },
+        title = { Text(title) },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (hint != null) {
+                    Text(hint, style = MaterialTheme.typography.bodyMedium)
+                }
+                if (requireCurrentPassword) {
+                    OutlinedTextField(
+                        value = currentPassword,
+                        onValueChange = {
+                            currentPassword = it
+                            if (error != null) error = null
+                        },
+                        label = { Text(Strings.appLockCurrentPassword) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (requireNewPassword) {
+                    OutlinedTextField(
+                        value = newPassword,
+                        onValueChange = {
+                            newPassword = it
+                            if (error != null) error = null
+                        },
+                        label = { Text(Strings.appLockNewPassword) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = confirmPassword,
+                        onValueChange = {
+                            confirmPassword = it
+                            if (error != null) error = null
+                        },
+                        label = { Text(Strings.appLockRepeatPassword) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (error != null) {
+                    Text(
+                        text = error!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = { submit() },
+                text = Strings.save,
+                enabled = !isChecking &&
+                    (!requireCurrentPassword || currentPassword.isNotEmpty()) &&
+                    (!requireNewPassword || (newPassword.isNotEmpty() && confirmPassword.isNotEmpty()))
+            )
+        },
+        dismissButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = onCancel,
                 text = Strings.cancel
             )
         }
