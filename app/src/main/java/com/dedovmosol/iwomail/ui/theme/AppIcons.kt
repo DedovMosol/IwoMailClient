@@ -51,6 +51,7 @@ object AppIcons {
     val Favorite: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_favorite)
     val FileOpen: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_file_open)
     val FilterList: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_filter_list)
+    val Fingerprint: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_fingerprint)
     val Folder: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_folder)
     val FormatAlignLeft: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_align_left)
     val FormatAlignCenter: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_format_align_center)

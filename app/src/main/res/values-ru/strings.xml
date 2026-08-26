@@ -22,6 +22,8 @@
     
     <!-- Widget -->
     <string name="loading">Загрузка…</string>
+    <string name="widget_description">Обзор почты, календаря и задач</string>
+    <string name="widget_no_subject">(Без темы)</string>
     <string name="widget_add_account">Добавьте аккаунт</string>
     <string name="widget_search_mail">Поиск в почте</string>
     <string name="widget_calendar">Календарь</string>

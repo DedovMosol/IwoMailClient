@@ -39,6 +39,7 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.genericErrorText
 import com.dedovmosol.iwomail.ui.screens.contacts.OrganizationContactsList
 import com.dedovmosol.iwomail.ui.screens.contacts.PersonalContactsList
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
@@ -307,7 +308,7 @@ fun ContactsScreen(
                     val count = contactRepo.importFromVCard(accountId, content)
                     SafeToast.short(context, "$importedMessage $count")
                 } catch (e: Exception) {
-                    SafeToast.long(context, e.message ?: "Error")
+                    SafeToast.long(context, e.message ?: genericErrorText(isRussian))
                 }
             }
         }
@@ -327,7 +328,7 @@ fun ContactsScreen(
                     val count = contactRepo.importFromCSV(accountId, content)
                     SafeToast.short(context, "$importedMessage $count")
                 } catch (e: Exception) {
-                    SafeToast.long(context, e.message ?: "Error")
+                    SafeToast.long(context, e.message ?: genericErrorText(isRussian))
                 }
             }
         }
@@ -619,7 +620,7 @@ fun ContactsScreen(
                         return@launch
                     }
                     val vcardData = contactRepo.exportToVCard(contacts)
-                    shareFile(context, vcardData, "contacts.vcf", "text/vcard")
+                    shareFile(context, vcardData, "contacts.vcf", "text/vcard", isRussian)
                 }
                 showExportDialog = false
             },
@@ -631,7 +632,7 @@ fun ContactsScreen(
                         return@launch
                     }
                     val csvData = contactRepo.exportToCSV(contacts)
-                    shareFile(context, csvData, "contacts.csv", "text/csv")
+                    shareFile(context, csvData, "contacts.csv", "text/csv", isRussian)
                 }
                 showExportDialog = false
             }
