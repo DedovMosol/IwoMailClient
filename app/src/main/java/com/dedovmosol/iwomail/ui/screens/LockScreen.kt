@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -64,9 +63,12 @@ fun LockScreen(
     // это разблокировка (защита от обхода гейта).
     BackHandler(enabled = true) { /* намеренно пусто */ }
 
-    var password by rememberSaveable { mutableStateOf("") }
+    // БЕЗОПАСНОСТЬ: введённый пароль хранится только в памяти композабля (remember),
+    // а НЕ в rememberSaveable — сохранение секрета в instance-state bundle означало бы
+    // его утечку в сериализованное состояние при смерти процесса/снимке системы.
+    var password by remember { mutableStateOf("") }
     var showWrongPassword by remember { mutableStateOf(false) }
-    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    var passwordVisible by remember { mutableStateOf(false) }
     var isChecking by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
 

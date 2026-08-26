@@ -50,8 +50,8 @@ class SettingsRepositoryAppLockTest {
         }
     }
 
-    private fun newRepo(): SettingsRepository = runBlocking {
-        SettingsRepository.createForTesting(testContext, newIsolatedStore())
+    private fun newRepo(startCacheCollector: Boolean = true): SettingsRepository = runBlocking {
+        SettingsRepository.createForTesting(testContext, newIsolatedStore(), startCacheCollector)
     }
 
     private fun finish() {
@@ -61,11 +61,20 @@ class SettingsRepositoryAppLockTest {
 
     @Test
     fun `app lock flags default to disabled`() = runTest {
-        val repo = newRepo()
+        // Контракт синк-геттеров на ХОЛОДНОМ кэше проверяется с отключённым
+        // коллектором (шов [SettingsRepository.createForTesting] с
+        // startCacheCollector = false): коллектор согревает кэш асинхронно на
+        // Dispatchers.IO и создал бы гонку с ассертом (недетерминизм).
+        // Потоковые дефолты проверяются через тот же репозиторий — на них
+        // коллектор не влияет.
+        val repo = newRepo(startCacheCollector = false)
         assertThat(repo.appLockEnabled.first()).isFalse()
         assertThat(repo.appLockBiometricEnabled.first()).isFalse()
-        // Холодный кэш до первого эмитта — тоже выключено (детерминированный дефолт).
-        assertThat(repo.getAppLockEnabledSync()).isFalse()
+        // Холодный кэш до первого эмитта: блок — FAIL-CLOSED (true: без прочитанного
+        // флага не показываем контент за паролем, гейт закрывает «вспышку» на холодном
+        // старте), биометрия — FAIL-OPEN (false: биометрия не разрешается до явного
+        // подтверждения из DataStore — «лишний запрет» безопаснее «лишнего разрешения»).
+        assertThat(repo.getAppLockEnabledSync()).isTrue()
         assertThat(repo.getAppLockBiometricEnabledSync()).isFalse()
         repo.cleanup()
         finish()
