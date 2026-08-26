@@ -354,11 +354,18 @@ object HttpClientProvider {
             .connectTimeout(connectTimeout, TimeUnit.SECONDS)
             .readTimeout(readTimeout, TimeUnit.SECONDS)
             .writeTimeout(writeTimeout, TimeUnit.SECONDS)
-            // Hostname verification: отключаем для самоподписанных или пользовательских сертификатов,
-            // т.к. CN в самоподписанном серте часто не совпадает с hostname сервера
+            // L-5: Hostname verification по режиму доверия.
+            // - acceptAllCerts: явно небезопасный режим по выбору пользователя — verifier off.
+            // - certificatePath (pinned-серт): ВОЗВРАЩАЕМ hostname-проверку — раньше она была
+            //   безусловно отключена, и MITM с ЛЮБЫМ валидным CA-сертом на чужой домен проходил,
+            //   т.к. имя хоста не сверялось. Теперь OkHostnameVerifier (RFC 2818: SAN, затем CN,
+            //   wildcard) проверяет имя хоста по сертификату, который предъявил сервер.
+            //   Для self-signed с CN=hostname проверка пройдёт; с несовпадающим CN — упадёт.
             .apply {
-                if (acceptAllCerts || certificatePath != null) {
+                if (acceptAllCerts) {
                     hostnameVerifier { _, _ -> true }
+                } else if (certificatePath != null) {
+                    hostnameVerifier(okhttp3.internal.tls.OkHostnameVerifier)
                 }
             }
         
