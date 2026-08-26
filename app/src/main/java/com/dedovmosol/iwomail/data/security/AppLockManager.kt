@@ -40,8 +40,13 @@ object AppLockManager {
 
     private const val TAG = "AppLockManager"
 
-    /** Ключ хеша пароля блокировки в шифрованном хранилище. */
-    private const val KEY_LOCK_HASH = "app_lock_password_hash"
+    /**
+     * Ключ хеша пароля блокировки в шифрованном хранилище.
+     * Видимость internal — тесты сажают хеш с низкими итерациями напрямую
+     * (600k итераций в каждом юнит-тесте = секунды на тест).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal const val KEY_LOCK_HASH = "app_lock_password_hash"
 
     /** Версия формата хеша — для будущей миграции алгоритма. */
     private const val HASH_VERSION = "v1"
@@ -160,6 +165,27 @@ object AppLockManager {
     private fun evaluateInitialState() {
         _locked.value = isPasswordSet()
     }
+
+    /**
+     * Единая чистая логика гейта «показывать ли экран блокировки» (SOC + тестируемость):
+     * сессия заблокирована И блокировка включена в настройках И пароль реально задан.
+     * Третий член — защита от soft-lock: при рассинхроне настроек и хранилища
+     * (флаг включён, хеш отсутствует) экран невозможно пройти вводом.
+     */
+    fun shouldShowLockScreen(sessionLocked: Boolean, lockSettingEnabled: Boolean): Boolean =
+        sessionLocked && lockSettingEnabled && isPasswordSet()
+
+    /**
+     * Чистый гейт запроса биометрической разблокировки (SOC + юнит-тестируемость):
+     * сессия заблокирована И отпечаток включён в настройках И устройство поддерживает
+     * биометрию. Вызывается из MainActivity перед показом системного промпта —
+     * защита от промпта при выключенном флаге и от краша на «мёртвой» Activity.
+     */
+    fun canRequestBiometricUnlock(
+        sessionLocked: Boolean,
+        biometricEnabledFlag: Boolean,
+        biometricAvailable: Boolean
+    ): Boolean = sessionLocked && biometricEnabledFlag && biometricAvailable
 
     /** Только для тестов: сброс синглтона (паттерн [PasswordStorage.resetForTesting]). */
     @androidx.annotation.VisibleForTesting

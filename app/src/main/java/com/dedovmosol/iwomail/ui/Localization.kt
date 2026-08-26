@@ -1237,12 +1237,10 @@ object Strings {
     val appLockCurrentPassword: String @Composable get() = if (isRussian()) "Текущий пароль" else "Current password"
     val appLockNewPassword: String @Composable get() = if (isRussian()) "Новый пароль" else "New password"
     val appLockUnlock: String @Composable get() = if (isRussian()) "Разблокировать" else "Unlock"
+    val appLockDisable: String @Composable get() = if (isRussian()) "Отключить блокировку" else "Disable lock"
     val appLockWrongPassword: String @Composable get() = if (isRussian()) "Неверный пароль" else "Wrong password"
     val appLockTooShort: String @Composable get() = if (isRussian()) "Минимум 4 символа" else "At least 4 characters"
     val appLockMismatch: String @Composable get() = if (isRussian()) "Пароли не совпадают" else "Passwords do not match"
-    val appLockBiometricPromptTitle: String @Composable get() = NotificationStrings.getAppLockBiometricTitle(isRussian())
-    val appLockBiometricPromptSubtitle: String @Composable get() = NotificationStrings.getAppLockBiometricSubtitle(isRussian())
-    val appLockBiometricNegative: String @Composable get() = NotificationStrings.getAppLockBiometricNegative(isRussian())
     val appLockBiometricUnavailable: String @Composable get() = if (isRussian()) "Отпечаток пальца недоступен на этом устройстве" else "Fingerprint is not available on this device"
     val appLockRemoveHint: String @Composable get() = if (isRussian()) "Для отключения введите текущий пароль" else "Enter the current password to disable the lock"
 }

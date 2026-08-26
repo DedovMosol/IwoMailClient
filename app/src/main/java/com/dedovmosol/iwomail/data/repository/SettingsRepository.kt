@@ -32,7 +32,8 @@ private val Context.settingsDataStore: DataStore<Preferences> by preferencesData
  */
 class SettingsRepository private constructor(
     private val context: Context,
-    private val dataStore: DataStore<Preferences>
+    private val dataStore: DataStore<Preferences>,
+    private val startCacheCollector: Boolean = true
 ) {
     
     companion object {
@@ -53,10 +54,18 @@ class SettingsRepository private constructor(
         /**
          * Только для тестов: экземпляр с изолированным DataStore.
          * Не трогает прод-синглтон [INSTANCE].
+         *
+         * [startCacheCollector] = false даёт детерминированный «холодный кэш»
+         * (контракт fail-closed синк-геттеров): с коллектором кэш согревается
+         * асинхронно и гонка с ассертом делает тест недетерминированным.
          */
         @androidx.annotation.VisibleForTesting
-        fun createForTesting(context: Context, dataStore: DataStore<Preferences>): SettingsRepository {
-            return SettingsRepository(context.applicationContext, dataStore)
+        fun createForTesting(
+            context: Context,
+            dataStore: DataStore<Preferences>,
+            startCacheCollector: Boolean = true
+        ): SettingsRepository {
+            return SettingsRepository(context.applicationContext, dataStore, startCacheCollector)
         }
     }
     
@@ -124,7 +133,12 @@ class SettingsRepository private constructor(
         // поздний запуск мог перезаписать кэш значением из файла ПОСЛЕ того,
         // как сеттер уже обновил его (тест «sync cache reflects value
         // immediately after set»). DRY + корректность.
-        cacheScope.launch {
+        //
+        // Гвард [startCacheCollector] — тестовый шов для детерминированного
+        // «холодного кэша» (контракт fail-closed синк-геттеров): коллектор
+        // согревает кэш асинхронно на Dispatchers.IO, что в тестах создаёт
+        // гонку с ассертом. Прод всегда проходит с коллектором (значение по умолчанию).
+        if (startCacheCollector) cacheScope.launch {
             try {
                 dataStore.data.collect { prefs ->
                     // UI настройки
@@ -572,8 +586,15 @@ class SettingsRepository private constructor(
         }
     }
     
-    /** Синк-срез для несоставных контекстов (решение окна/сервисов без корутин). */
-    fun getAppLockEnabledSync(): Boolean = cachedAppLockEnabled.get() ?: false
+    /**
+     * Синк-срез для несоставных контекстов (решение окна/сервисов без корутин).
+     *
+     * Fail-closed: до первой эмиссии DataStore (холодный старт, кэш пуст) возвращаем
+     * true — если пароль задан, гейт показывает экран блокировки сразу, без «вспышки»
+     * главного экрана на ~100 мс инициализации DataStore. Для пользователей БЕЗ пароля
+     * флаг безвреден: сессия разблокирована (evaluateInitialState), гейт закрыт.
+     */
+    fun getAppLockEnabledSync(): Boolean = cachedAppLockEnabled.get() ?: true
     
     /** Разрешён ли вход по отпечатку пальца (действует только при включённой блокировке). */
     val appLockBiometricEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
@@ -588,7 +609,13 @@ class SettingsRepository private constructor(
         }
     }
     
-    /** Синк-срез флага биометрии. */
+    /**
+     * Синк-срез флага биометрии.
+     *
+     * Fail-OPEN (false): биометрическая разблокировка не разрешается, пока флаг
+     * явно не подтверждён чтением из DataStore — в отличие от флага блокировки,
+     * здесь «лишний запрет» безопаснее «лишнего разрешения».
+     */
     fun getAppLockBiometricEnabledSync(): Boolean = cachedAppLockBiometricEnabled.get() ?: false
     
     fun getScrollbarColorSync(): String {

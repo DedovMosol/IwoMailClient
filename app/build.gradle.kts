@@ -186,8 +186,19 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("io.mockk:mockk:1.13.8")
     testImplementation("com.google.truth:truth:1.1.5")
-    testImplementation("org.robolectric:robolectric:4.11.1")
+    // Robolectric 4.12+ обязателен для Compose-UI-тестов на Windows-хосте:
+    // нативный графический рантайм (GraphicsMode.NATIVE) поддерживает
+    // Windows x86_64 только начиная с 4.12 (официальный фикс
+    // "robolectric-nativeruntime.dll not found", robolectric#8312).
+    testImplementation("org.robolectric:robolectric:4.12.2")
     testImplementation("androidx.test:core:1.5.0")
+    // Compose UI-тесты под Robolectric (best practice: createComposeRule + RobolectricTestRunner):
+    // платформа тестов юнит-тестов на JVM запускает реальный Compose-рантайм без эмулятора.
+    // ui-test-manifest декларрует ComponentActivity, которую создаёт createComposeRule —
+    // без неё тесты не стартуют ни на JVM, ни на эмуляторе.
+    testImplementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.compose.ui:ui-test-manifest")
     
     // Android Testing
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

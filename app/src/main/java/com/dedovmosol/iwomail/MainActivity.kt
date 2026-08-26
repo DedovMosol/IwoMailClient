@@ -337,10 +337,12 @@ class MainActivity : FragmentActivity() {
                 initialValue = settingsRepo.getAppLockBiometricEnabledSync()
             )
             val appLocked by com.dedovmosol.iwomail.data.security.AppLockManager.locked.collectAsState()
-            // Защита от soft-lock: блокировка активна только если пароль реально задан
-            // (иначе при рассинхроне настроек и хранилища экран невозможно пройти).
-            val isLocked = appLocked && appLockEnabled &&
-                com.dedovmosol.iwomail.data.security.AppLockManager.isPasswordSet()
+            // Единая чистая логика гейта (SOC + юнит-тестируемость): сессия заблокирована
+            // И блокировка включена И пароль реально задан (защита от soft-lock при рассинхроне).
+            // Синглтон хранит состояние переживающее поворот; кэш настроек — без «вспышки»
+            // контента на холодном старте (см. fail-closed getAppLockEnabledSync).
+            val isLocked = com.dedovmosol.iwomail.data.security.AppLockManager
+                .shouldShowLockScreen(appLocked, appLockEnabled)
             
             // Доступность биометрии на устройстве — проверяется один раз на конфигурацию,
             // системный диалог не нужен для самой проверки.
@@ -412,7 +414,12 @@ class MainActivity : FragmentActivity() {
                                 com.dedovmosol.iwomail.ui.screens.LockScreen(
                                     biometricAvailable = biometricAvailable,
                                     biometricEnabled = appLockBiometricEnabled,
-                                    onBiometricRequest = { showBiometricPrompt() }
+                                    // Флаги передаются в промпт из актуального состояния —
+                                    // защита от гонки «флаг выключен в настройках между
+                                    // показом лок-экрана и тапом по отпечатку».
+                                    onBiometricRequest = {
+                                        showBiometricPrompt(appLockBiometricEnabled, biometricAvailable)
+                                    }
                                 )
                             } else {
                             AppNavigation(
@@ -692,46 +699,65 @@ class MainActivity : FragmentActivity() {
     /**
      * Системный диалог биометрической разблокировки (цель релиза «дактилоскопия»).
      *
+     * Вход через чистый гейт [com.dedovmosol.iwomail.data.security.AppLockManager.canRequestBiometricUnlock]
+     * (юнит-тестируемый): сессия заблокирована И флаг включён И устройство поддерживает
+     * биометрию. Флаги приходят из актуального Compose-состояния вызывающего лок-экрана,
+     * поэтому промпт невозможен после выключения отпечатка в настройках (гонка закрыта).
+     *
+     * Краш-защита: [androidx.biometric.BiometricPrompt.authenticate] бросает
+     * IllegalStateException на finishing/destroyed Activity — проверяем состояние
+     * и дополнительно оборачиваем вызов (промпт — опциональное удобство, его потеря
+     * не должна ронять приложение; пароль всегда остаётся запасным путём).
+     *
      * Требования стабильного androidx.biometric: конструктор из FragmentActivity
      * (MainActivity наследует его), аутентификаторы задаются в PromptInfo.
-     * Игнорируем запрос, если биометрия недоступна или блокировка уже снята
-     * (защита от повторных промптов при быстрых тапах).
      *
      * Локализация строк промпта: язык берём из настроек синк-чтением
      * (несоставной контекст — Compose LocalLanguage недоступен).
      */
-    private fun showBiometricPrompt() {
-        if (!com.dedovmosol.iwomail.data.security.AppLockManager.isLocked()) return
-        
+    private fun showBiometricPrompt(biometricEnabled: Boolean, biometricAvailable: Boolean) {
+        if (!com.dedovmosol.iwomail.data.security.AppLockManager.canRequestBiometricUnlock(
+                com.dedovmosol.iwomail.data.security.AppLockManager.isLocked(),
+                biometricEnabled,
+                biometricAvailable
+            )
+        ) return
+        if (isFinishing || isDestroyed) return
+
         val settingsRepo = SettingsRepository.getInstance(applicationContext)
         val isRussian = com.dedovmosol.iwomail.ui.isRussianLanguage(settingsRepo.getLanguageSync())
-        
+
         val promptInfo = androidx.biometric.BiometricPrompt.PromptInfo.Builder()
             .setTitle(com.dedovmosol.iwomail.ui.NotificationStrings.getAppLockBiometricTitle(isRussian))
             .setSubtitle(com.dedovmosol.iwomail.ui.NotificationStrings.getAppLockBiometricSubtitle(isRussian))
             .setNegativeButtonText(com.dedovmosol.iwomail.ui.NotificationStrings.getAppLockBiometricNegative(isRussian))
             .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK)
             .build()
-        
-        val prompt = androidx.biometric.BiometricPrompt(
-            this,
-            androidx.core.content.ContextCompat.getMainExecutor(this),
-            object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: androidx.biometric.BiometricPrompt.AuthenticationResult) {
-                    // Успех биометрии = разблокировка сессии (гейт реактивно уберёт лок-экран).
-                    com.dedovmosol.iwomail.data.security.AppLockManager.unlock()
+
+        try {
+            val prompt = androidx.biometric.BiometricPrompt(
+                this,
+                androidx.core.content.ContextCompat.getMainExecutor(this),
+                object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: androidx.biometric.BiometricPrompt.AuthenticationResult) {
+                        // Успех биометрии = разблокировка сессии (гейт реактивно уберёт лок-экран).
+                        com.dedovmosol.iwomail.data.security.AppLockManager.unlock()
+                    }
+
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                        // Критичные ошибки (датчик недоступен, отмена): НЕ разблокируем.
+                        // Ошибка пользователя (неверный палец) обрабатывается системным
+                        // диалогом самостоятельно — здесь только лог для диагностики.
+                        android.util.Log.w(TAG, "Biometric auth error: $errorCode $errString")
+                    }
                 }
-                
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    // Критичные ошибки (датчик недоступен, отмена): НЕ разблокируем.
-                    // Ошибка пользователя (неверный палец) обрабатывается системным
-                    // диалогом самостоятельно — здесь только лог для диагностики.
-                    android.util.Log.w(TAG, "Biometric auth error: $errorCode $errString")
-                }
-            }
-        )
-        
-        prompt.authenticate(promptInfo)
+            )
+            prompt.authenticate(promptInfo)
+        } catch (e: Exception) {
+            // IllegalStateException (Activity уходит) и пр.: пароль остаётся доступным
+            // путём разблокировки — не крашим приложение из-за опционального пути.
+            android.util.Log.w(TAG, "Biometric prompt failed to start", e)
+        }
     }
     
     private fun parseMailtoUri(uri: android.net.Uri) {

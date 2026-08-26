@@ -65,7 +65,7 @@ fun SettingsScreen(
     // ─── Блокировка приложения: пароль + отпечаток пальца (цель релиза) ───
     val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
     val appLockEnabled by settingsRepo.appLockEnabled.collectAsStateWithLifecycle(
-        initialValue = settingsRepo.getAppLockEnabledSync()
+        initialValue = false
     )
     val appLockBiometricEnabled by settingsRepo.appLockBiometricEnabled.collectAsStateWithLifecycle(
         initialValue = settingsRepo.getAppLockBiometricEnabledSync()
@@ -138,7 +138,7 @@ fun SettingsScreen(
             }
         )
         LockDialogType.Disable -> LockPasswordDialog(
-            title = Strings.appLockTitle,
+            title = Strings.appLockDisable,
             requireCurrentPassword = true,
             requireNewPassword = false,
             hint = Strings.appLockRemoveHint,
@@ -1296,9 +1296,13 @@ private fun LockPasswordDialog(
     val tooShortMsg = Strings.appLockTooShort
     val mismatchMsg = Strings.appLockMismatch
     val wrongPasswordMsg = Strings.appLockWrongPassword
-    var currentPassword by rememberSaveable { mutableStateOf("") }
-    var newPassword by rememberSaveable { mutableStateOf("") }
-    var confirmPassword by rememberSaveable { mutableStateOf("") }
+    // БЕЗОПАСНОСТЬ: пароли хранятся только в памяти композабля (remember), а НЕ в
+    // rememberSaveable — сериализация секрета в instance-state недопустима. При
+    // смерти процесса/конфигурации диалог закроется и пользователь введёт заново —
+    // это правильный безопасный компромисс.
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var isChecking by remember { mutableStateOf(false) }
 

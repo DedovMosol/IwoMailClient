@@ -188,4 +188,38 @@ class AppLockManagerTest {
         // Но оба проверяются одинаково.
         assertThat(AppLockManager.checkPassword("same-pass")).isTrue()
     }
+
+    // ─── Чистые гейты (таблицы истинности) ───
+
+    @Test
+    fun `shouldShowLockScreen truth table`() {
+        // Без пароля экран никогда не показывается (защита от soft-lock) —
+        // независимо от остальных членов.
+        assertThat(AppLockManager.shouldShowLockScreen(true, true)).isFalse()
+        assertThat(AppLockManager.shouldShowLockScreen(true, false)).isFalse()
+        assertThat(AppLockManager.shouldShowLockScreen(false, true)).isFalse()
+        assertThat(AppLockManager.shouldShowLockScreen(false, false)).isFalse()
+
+        // С паролем: экран только когда сессия заблокирована И флаг включён.
+        AppLockManager.setPassword("gate-pass")
+        assertThat(AppLockManager.shouldShowLockScreen(true, true)).isTrue()
+        assertThat(AppLockManager.shouldShowLockScreen(true, false)).isFalse() // флаг выключен
+        assertThat(AppLockManager.shouldShowLockScreen(false, true)).isFalse() // сессия открыта
+        assertThat(AppLockManager.shouldShowLockScreen(false, false)).isFalse()
+    }
+
+    @Test
+    fun `canRequestBiometricUnlock truth table`() {
+        // Все три члена обязательны: сессия заблокирована И флаг включён И
+        // устройство поддерживает биометрию.
+        assertThat(AppLockManager.canRequestBiometricUnlock(true, true, true)).isTrue()
+
+        assertThat(AppLockManager.canRequestBiometricUnlock(false, true, true)).isFalse()
+        assertThat(AppLockManager.canRequestBiometricUnlock(true, false, true)).isFalse()
+        assertThat(AppLockManager.canRequestBiometricUnlock(true, true, false)).isFalse()
+        assertThat(AppLockManager.canRequestBiometricUnlock(false, false, true)).isFalse()
+        assertThat(AppLockManager.canRequestBiometricUnlock(false, true, false)).isFalse()
+        assertThat(AppLockManager.canRequestBiometricUnlock(true, false, false)).isFalse()
+        assertThat(AppLockManager.canRequestBiometricUnlock(false, false, false)).isFalse()
+    }
 }
