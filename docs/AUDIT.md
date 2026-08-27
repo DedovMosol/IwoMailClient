@@ -34,7 +34,7 @@
 | N-10 | `PushService.startForeground` без try/catch (краш Android 12+) | Low | Trivial | Сред. | 1 ✅ |
 | N-11 | Дубль-отправка `OutboxWorker` при retry (нет стабильного ClientId) | Low-Med | M | Выс. | 2 ✅ |
 | L-3 | Редактор `RichTextEditor`: JS без CSP, `stripDangerousTags` не режет `on*=` | Low | S | Сред. | 2 ✅ |
-| L-5 | Кастомный серт: hostname off + system-fallback (MITM opt-in) | Low | M | Сред. | 2 |
+| L-5 | Кастомный серт: hostname off + system-fallback (MITM opt-in) | Low | M | Сред. | 2 ✅ |
 | N-7 | Гонка lifecycle `Mutex` в кэше `EasClient` | Low | S | Низ. | 2 ✅ |
 | N-13 | ✅ NSC `cleartext=false` vs опция `useHttps=false` — исправлено | Low | S | Низ. | ✅ |
 | N-1 | ✅ Протокол не валидирует cc/bcc (UI митигирует) — исправлено | Low | Trivial | Низ. | ✅ |
@@ -293,6 +293,8 @@
 
 **Рекомендация:** при желании — сузить критическую секцию до кэширования challenge или перейти на неблокирующий `enqueue` как в `EasTransport.executeRequest`. Не критично.
 
+**✅ НЕ ДЕФЕКТ (2026-08-27, зафиксировано тестом):** заголовок вводил в заблуждение — лок `ntlmLock` является `private val` поля `EwsClient`, т.е. **локом на экземпляр, а не глобальным статическим**. Сериализация NTLM-handshake происходит только в пределах одного аккаунта. Это корректная необходимость протокола: обмен Type1/Type3 должен идти по одному и тому же TCP-соединению. Кэширование challenge небезопасно. Тест `EwsClientNtlmLockTest` защищает поведение: два разных `EwsClient` → два разных `ntlmLock`; блокировка не утекает в статическое поле.
+
 ---
 
 ## LOW
@@ -317,11 +319,20 @@
 **✅ ИСПРАВЛЕНО (2026-07-01):** ключ переведён на `GROUP BY folderId, internetMessageId` (канонический RFC 5322 Message-ID — глобально уникален, распознаёт только настоящие дубли). Письма с `internetMessageId` NULL/пусто исключены из группировки И из удаления (`WHERE internetMessageId IS NOT NULL AND != ''`) — не трогаются вовсе. Флаг `duplicates_cleaned_v35` НЕ бампался: на существующих установках очистка уже отработала, правка лишь устраняет латентный дефект логики дремлющего запроса (повторный прогон не нужен и не запускается).
 
 ### L-5. Кастомный серверный сертификат: отключение hostname-проверки + fallback на системный trust
-**Где:** `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt:360` (hostnameVerifier off при `certificatePath != null`) и `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt:444` (`checkServerTrusted` → fallback на `certTm`/`systemTm`).
 
-**Суть:** в режиме импортированного серверного сертификата hostname-проверка выключается, а `checkServerTrusted` при несовпадении pinned-серта откатывается на системный trust. Комбинация «hostname off + system-fallback» означает: MITM с любым валидным CA-сертификатом (на любой домен) пройдёт, т.к. имя хоста не сверяется. Это opt-in путь (пользователь сам импортировал серт самоподписанного Exchange), поэтому риск ограничен, но шире необходимого.
+**Где:** `app/src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt` (hostnameVerifier off при `certificatePath != null`) и `checkServerTrusted` → fallback на `certTm`/`systemTm`.
 
-**Рекомендация:** при наличии pinned-серта НЕ откатываться на системный trust (строгий пиннинг), либо сохранять hostname-проверку. Не трогать `acceptAllCerts` (явно небезопасный режим по выбору пользователя).
+**Суть:** в режиме импортированного серверного сертификата hostname-проверка выключалась, а `checkServerTrusted` при несовпадении pinned-серта откатывался на системный trust. Комбинация «hostname off + system-fallback» означала: MITM с любым валидным CA-сертификатом (на любой домен) пройдёт, т.к. имя хоста не сверяется. Это opt-in путь (пользователь сам импортировал серт самоподписанного Exchange), поэтому риск ограничен, но шире необходимого.
+
+**✅ ИСПРАВЛЕНО (2026-08-27, коммиты `00e05a4` + этот):**
+1. hostname-проверка в `certificatePath`-режиме восстановлена (коммит `00e05a4`).
+2. Эмпирическая самопроверка `00e05a4` (2026-08-27) нашла два дефекта собственного фикса и устранила их по бестпрактик:
+   - `okhttp3.internal.tls.OkHostnameVerifier` — internal API OkHttp (нестабильный контракт) — заменён на **собственный `Rfc6125HostnameVerifier`** (новый файл, только публичные JCA-апи: `X509Certificate`, `HostnameVerifier`, `javax.security.auth.x500.X500Principal`, `InetAddress`).
+   - Дефолтный верификатор `OkHttpClient.Builder()` (тот же `OkHostnameVerifier`) **не выполняет CN-fallback**: отклоняет сертификаты без SAN — а самоподписанный сертификат, который Exchange 2007 SP1/SP2 создаёт по умолчанию при установке, выпускается именно так (без SAN). Прямая регрессия совместимости. `Rfc6125HostnameVerifier` реализует полный алгоритм **по последнему действующему RFC 6125**: SAN даётся приоритет; при отсутствии подходящего SAN — CN-fallback (разрешён §6.4.4 для совместимости); wildcard `*` допускается только в левом ярлыке; для IP-адресов — только `iPAddress` SAN (DNS/CN для IP не считаются).
+3. Кэш-ключ `getCertificateClient` дополнен `accountId`/`serverUrl` (используются в `CertificateChangeDetector` — без них возможна неверная атрибуция диалога смены сертификата).
+4. **НЕ заменено** на `HttpsURLConnection.getDefaultHostnameVerifier()`: эмпирически доказано, что на JVM он возвращает заглушку `return false` (deny-all), реальный верификатор ставится только после первой загрузки https-URL-обработчика, которой в OkHttp-only приложении не происходит → весь TLS ломался.
+5. `acceptAllCerts` оставлен без изменений — явно небезопасный режим по осознанному выбору пользователя.
+6. Тесты: `HttpClientProviderL5Test` переписан поведенческим — 12 тестов на 6 реальных X.509-сертификатах (генерируются `keytool`, лежат в `app/src/test/resources/certs/`): CN-точное совпадение, CN-несовпадение, SAN-точное, wildcard, IP-SAN, нет-ни-CN-ни-совпадающего-SAN (fail-closed), приоритет режимов, изоляция кэша по ключу.
 
 ### L-6. TLS 1.0/1.1 и все cipher suites включены глобально (by-design для Exchange 2007 SP1)
 **Где:** `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt:593` (`preferredProtocols` включает `TLSv1`) и `@/V:/1.6.3b on prodaction Finally/ExchangeMailClient/app/src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt:637` (`enabledCipherSuites = supportedCipherSuites`).

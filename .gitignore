@@ -119,6 +119,10 @@ keystore.properties
 *.crt
 *.der
 
+# Исключение: публичные тестовые сертификаты (без приватных ключей, сгенерированы
+# keytool для поведенческих тестов hostname-верификации — Rfc6125HostnameVerifier).
+!app/src/test/resources/certs/*.pem
+
 # Environment variables
 *.env
 .env.*

@@ -173,6 +173,14 @@ object HttpClientProvider {
             append(writeTimeout)
             append(":")
             append(pinnedCertInfo?.hash ?: "none")
+            append(":")
+            // Аудит 2026-08-27: accountId/serverUrl участвуют в CertificateChangeDetector
+            // (диалог смены сертификата при несовпадении пина), но раньше не входили в ключ —
+            // два аккаунта с одинаковым путём пина получали ОДИН клиент, и диалог показывал
+            // чужой хост/аккаунт. Теперь ключ полностью определяет конфигурацию клиента.
+            append(accountId ?: "none")
+            append(":")
+            append(serverUrl.ifEmpty { "none" })
         }
         
         // Проверяем кэш с защитой от race condition
@@ -356,16 +364,23 @@ object HttpClientProvider {
             .writeTimeout(writeTimeout, TimeUnit.SECONDS)
             // L-5: Hostname verification по режиму доверия.
             // - acceptAllCerts: явно небезопасный режим по выбору пользователя — verifier off.
-            // - certificatePath (pinned-серт): ВОЗВРАЩАЕМ hostname-проверку — раньше она была
-            //   безусловно отключена, и MITM с ЛЮБЫМ валидным CA-сертом на чужой домен проходил,
-            //   т.к. имя хоста не сверялось. Теперь OkHostnameVerifier (RFC 2818: SAN, затем CN,
-            //   wildcard) проверяет имя хоста по сертификату, который предъявил сервер.
-            //   Для self-signed с CN=hostname проверка пройдёт; с несовпадающим CN — упадёт.
+            // - certificatePath (pinned-серт): строгая сверка имени хоста через
+            //   Rfc6125HostnameVerifier (RFC 6125: SAN dnsName/iPAddress; откат на CN только
+            //   при отсутствии SAN — необходим для самоподписанных сертификатов Exchange 2007
+            //   SP1/SP2, которые часто выпускаются без SAN). Раньше здесь была безусловная
+            //   лямбда { _, _ -> true }: комбинация с системным trust-fallback давала
+            //   MITM-окно с любым валидным CA-сертом на чужой домен (имя хоста не сверялось).
+            //   Временный фикс через внутренний класс библиотеки убран аудитором 2026-08-27;
+            //   стандартный верификатор HttpsURLConnection здесь неприменим (см. KDoc
+            //   Rfc6125HostnameVerifier). Покрыто поведенческими тестами с реальными
+            //   X.509-сертификатами: см. HttpClientProviderL5Test.
+            // - Системный режим (нет импортированного серта): дефолтный верификатор билдера —
+            //   публичный контракт строгой проверки (современные публичные CA всегда выдают SAN).
             .apply {
                 if (acceptAllCerts) {
                     hostnameVerifier { _, _ -> true }
                 } else if (certificatePath != null) {
-                    hostnameVerifier(okhttp3.internal.tls.OkHostnameVerifier)
+                    hostnameVerifier(Rfc6125HostnameVerifier)
                 }
             }
         
@@ -676,77 +691,32 @@ object HttpClientProvider {
      * Использует RFC2253 формат для парсинга DN
      */
     fun extractCertificateInfo(cert: X509Certificate): CertificateInfo {
-        // Используем RFC2253 формат для надёжного парсинга DN
+        // Используем RFC2253 формат для надёжного парсинга DN.
+        // Парсер общий с Rfc6125HostnameVerifier (DRY): parseRfc2253Components/findDnComponentValue.
         val subjectDN = cert.subjectX500Principal.getName(javax.security.auth.x500.X500Principal.RFC2253)
         
-        var cn = "Unknown"
-        var org = "Unknown"
-        
-        try {
-            // Парсим DN вручную с учётом escaped символов
-            val components = mutableListOf<Pair<String, String>>()
-            var currentKey = ""
-            var currentValue = StringBuilder()
-            var inValue = false
-            var escaped = false
-            
-            for (i in subjectDN.indices) {
-                val char = subjectDN[i]
-                
-                when {
-                    escaped -> {
-                        currentValue.append(char)
-                        escaped = false
-                    }
-                    char == '\\' -> {
-                        escaped = true
-                    }
-                    char == '=' && !inValue -> {
-                        currentKey = currentValue.toString().trim()
-                        currentValue.clear()
-                        inValue = true
-                    }
-                    char == ',' && !escaped -> {
-                        if (currentKey.isNotEmpty()) {
-                            components.add(currentKey to currentValue.toString().trim())
-                        }
-                        currentKey = ""
-                        currentValue.clear()
-                        inValue = false
-                    }
-                    else -> {
-                        currentValue.append(char)
-                    }
-                }
-            }
-            
-            // Добавляем последний компонент
-            if (currentKey.isNotEmpty()) {
-                components.add(currentKey to currentValue.toString().trim())
-            }
-            
-            // Извлекаем CN и O
-            for ((key, value) in components) {
-                when (key.uppercase()) {
-                    "CN" -> cn = value
-                    "O" -> org = value
-                }
-            }
+        val (cn, org) = try {
+            val components = parseRfc2253Components(subjectDN)
+            Pair(
+                findDnComponentValue(components, "CN") ?: "Unknown",
+                findDnComponentValue(components, "O") ?: "Unknown"
+            )
         } catch (e: Exception) {
             // Fallback на простой парсинг
             android.util.Log.w("HttpClientProvider", "Failed to parse DN, using fallback: ${e.message}")
             
             val components = subjectDN.split(",").map { it.trim() }
             
-            cn = components
-                .find { it.startsWith("CN=", ignoreCase = true) }
-                ?.substringAfter("=")
-                ?.trim() ?: "Unknown"
-            
-            org = components
-                .find { it.startsWith("O=", ignoreCase = true) }
-                ?.substringAfter("=")
-                ?.trim() ?: "Unknown"
+            Pair(
+                components
+                    .find { it.startsWith("CN=", ignoreCase = true) }
+                    ?.substringAfter("=")
+                    ?.trim() ?: "Unknown",
+                components
+                    .find { it.startsWith("O=", ignoreCase = true) }
+                    ?.substringAfter("=")
+                    ?.trim() ?: "Unknown"
+            )
         }
         
         return CertificateInfo(
