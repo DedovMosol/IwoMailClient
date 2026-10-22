@@ -11,7 +11,6 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -19,7 +18,10 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.PopupProperties
@@ -1238,6 +1240,10 @@ fun RichTextToolbar(
                     else
                         Modifier
                 )
+                .semantics {
+                    contentDescription = if (isRu) "Полужирный" else "Bold"
+                    role = Role.Button
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = LocalIndication.current,
@@ -1264,6 +1270,10 @@ fun RichTextToolbar(
                     else
                         Modifier
                 )
+                .semantics {
+                    contentDescription = if (isRu) "Курсив" else "Italic"
+                    role = Role.Button
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = LocalIndication.current,
@@ -1290,6 +1300,10 @@ fun RichTextToolbar(
                     else
                         Modifier
                 )
+                .semantics {
+                    contentDescription = if (isRu) "Подчёркнутый" else "Underline"
+                    role = Role.Button
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = LocalIndication.current,
@@ -1313,14 +1327,18 @@ fun RichTextToolbar(
                 modifier = Modifier
                     .size(36.dp)
                     .focusProperties { canFocus = false }
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                controller.saveSelection()
-                                showFontMenu = true
-                            }
-                        )
-                    },
+                    .semantics {
+                        contentDescription = if (isRu) "Шрифт и размер" else "Font and size"
+                        role = Role.Button
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = LocalIndication.current,
+                        onClick = {
+                            controller.saveSelection()
+                            showFontMenu = true
+                        }
+                    ),
                 contentAlignment = androidx.compose.ui.Alignment.Center
                 ) {
                     Icon(AppIcons.FormatSize, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -1419,14 +1437,18 @@ fun RichTextToolbar(
                         else
                             Modifier
                     )
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                controller.saveSelection()
-                                showTextColorMenu = true
-                            }
-                        )
-                    },
+                    .semantics {
+                        contentDescription = if (isRu) "Цвет текста" else "Text color"
+                        role = Role.Button
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = LocalIndication.current,
+                        onClick = {
+                            controller.saveSelection()
+                            showTextColorMenu = true
+                        }
+                    ),
                 contentAlignment = androidx.compose.ui.Alignment.Center
             ) {
                 // Буква A с цветной полоской снизу (как в Word/Google Docs)
@@ -1529,14 +1551,18 @@ fun RichTextToolbar(
                         else
                             Modifier
                     )
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                controller.saveSelection() // Сохраняем выделение перед открытием меню
-                                showHighlightMenu = true
-                            }
-                        )
-                    },
+                    .semantics {
+                        contentDescription = if (isRu) "Цвет выделения" else "Highlight color"
+                        role = Role.Button
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = LocalIndication.current,
+                        onClick = {
+                            controller.saveSelection() // Сохраняем выделение перед открытием меню
+                            showHighlightMenu = true
+                        }
+                    ),
                 contentAlignment = androidx.compose.ui.Alignment.Center
             ) {
                 // Иконка маркера с цветной полоской снизу
@@ -1648,14 +1674,18 @@ fun RichTextToolbar(
                 modifier = Modifier
                     .size(36.dp)
                     .focusProperties { canFocus = false }
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                controller.saveSelection()
-                                showAlignMenu = true
-                            }
-                        )
-                    },
+                    .semantics {
+                        contentDescription = if (isRu) "Выравнивание" else "Alignment"
+                        role = Role.Button
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = LocalIndication.current,
+                        onClick = {
+                            controller.saveSelection()
+                            showAlignMenu = true
+                        }
+                    ),
                 contentAlignment = androidx.compose.ui.Alignment.Center
             ) {
                 Icon(alignIcon, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -1780,6 +1810,10 @@ fun RichTextToolbar(
                 modifier = Modifier
                     .size(36.dp)
                     .focusProperties { canFocus = false }
+                    .semantics {
+                        contentDescription = if (isRu) "Вставить изображение" else "Insert image"
+                        role = Role.Button
+                    }
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = LocalIndication.current,
