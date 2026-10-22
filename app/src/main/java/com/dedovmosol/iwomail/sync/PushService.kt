@@ -644,6 +644,33 @@ class PushService : Service() {
             var lastAccountRefreshTime = System.currentTimeMillis()
             val accountCacheTtl = 300_000L // 5 минут
 
+            // DRY: единый «хвост» обработки сбоя Ping (ошибочный статус ИЛИ исключение).
+            // Локальная suspend-fun — замыкание над изменяемыми heartbeat/consecutiveErrors/
+            // consecutiveSuccesses/pingNotSupported (метод класса их не захватил бы). Вызов
+            // reportSyncOutcome ОСТАЁТСЯ на площадках: он различается (статус vs исключение;
+            // currentAccount vs cachedAccount для hasAlternateUrl). Прежний `continue` заменён
+            // на if/else — семантика та же: после error-блока в теле while ничего нет, а при
+            // успешном fallback мы и так не делаем backoff и уходим на новую итерацию.
+            suspend fun onPingFailure() {
+                consecutiveErrors++
+                consecutiveSuccesses = 0
+                if (heartbeat > MIN_HEARTBEAT) {
+                    heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
+                    saveHeartbeat(accountId, heartbeat)
+                }
+                if (consecutiveErrors >= 3) {
+                    if (tryPushFallback(accountId)) {
+                        consecutiveErrors = 0
+                    } else {
+                        pingNotSupported = true
+                        savePingNotSupported(accountId)
+                        consecutiveErrors = 0
+                    }
+                } else {
+                    delay(if (consecutiveErrors == 1) 10_000L else 30_000L)
+                }
+            }
+
             while (isActive) {
                 try {
                     // Если сети нет — выходим из цикла
@@ -773,37 +800,18 @@ class PushService : Service() {
                             )
                         }
                         else -> {
-                            consecutiveErrors++
-                            consecutiveSuccesses = 0
                             AccountServerHealthRepository.reportSyncOutcome(
                                 accountId, success = false, errorKind = ErrorKind.Network,
                                 errorMessage = "Ping status=$result",
                                 hasAlternateUrl = hasAlt
                             )
-                            if (heartbeat > MIN_HEARTBEAT) {
-                                heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
-                                saveHeartbeat(accountId, heartbeat)
-                            }
-                            if (consecutiveErrors >= 3) {
-                                if (tryPushFallback(accountId)) {
-                                    consecutiveErrors = 0
-                                    continue
-                                }
-                                pingNotSupported = true
-                                savePingNotSupported(accountId)
-                                consecutiveErrors = 0
-                            } else {
-                                val backoffMs = if (consecutiveErrors == 1) 10_000L else 30_000L
-                                delay(backoffMs)
-                            }
+                            onPingFailure()
                         }
                     }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
                     android.util.Log.e("PushService", "ERROR in ping loop for account $accountId", e)
-                    consecutiveErrors++
-                    consecutiveSuccesses = 0
                     val hasAltForCatch = cachedAccount?.alternateServerUrl?.isNotBlank() == true
                     AccountServerHealthRepository.reportSyncOutcome(
                         accountId, success = false,
@@ -811,22 +819,7 @@ class PushService : Service() {
                         errorMessage = e.message,
                         hasAlternateUrl = hasAltForCatch
                     )
-                    if (heartbeat > MIN_HEARTBEAT) {
-                        heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
-                        saveHeartbeat(accountId, heartbeat)
-                    }
-                    if (consecutiveErrors >= 3) {
-                        if (tryPushFallback(accountId)) {
-                            consecutiveErrors = 0
-                            continue
-                        }
-                        pingNotSupported = true
-                        savePingNotSupported(accountId)
-                        consecutiveErrors = 0
-                    } else {
-                        val backoffMs = if (consecutiveErrors == 1) 10_000L else 30_000L
-                        delay(backoffMs)
-                    }
+                    onPingFailure()
                 }
             }
         }
