@@ -1073,8 +1073,8 @@ $itemIdsXml
             val getItemResponse = executeEwsWithAuth(getItemRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
 
-            val changeKeyMatch = REGEX_ITEM_CHANGE_KEY.find(getItemResponse)
-            val changeKey = changeKeyMatch?.groupValues?.get(1) ?: ""
+            // EWS-1: ChangeKey извлекается независимо от порядка атрибутов/префикса.
+            val changeKey = EwsIds.parseChangeKey(getItemResponse) ?: ""
             
             val escapedItemId = deps.escapeXml(ewsItemId)
             val escapedChangeKey = deps.escapeXml(changeKey)
@@ -1192,7 +1192,10 @@ $itemIdsXml
 
         val responseXml = executeEwsWithAuth(findRequest, "FindItem") ?: return null
 
-        return REGEX_ITEM_ID_T.find(responseXml)?.groupValues?.get(1)
+        // EWS-4: при неоднозначности (несколько задач с одинаковой темой) НЕ выбираем первую —
+        // раньше это приводило к операции над ЧУЖОЙ задачей. null → resolveEwsTaskItemId
+        // откатывается к сохранённому EWS ItemId конкретной задачи (однозначно и корректно).
+        return singleTaskItemIdOrNull(responseXml)
     }
 
     private suspend fun resolveEwsTaskItemId(serverId: String, subject: String? = null): String? {
@@ -1865,8 +1868,17 @@ $itemIdsXml
         private val REGEX_TOTAL_COUNT = "<(?:t:)?TotalCount>(\\d+)</(?:t:)?TotalCount>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val REGEX_CHILD_FOLDER_COUNT = "<(?:t:)?ChildFolderCount>(\\d+)</(?:t:)?ChildFolderCount>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val REGEX_RESPONSE_CODE = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val REGEX_ITEM_CHANGE_KEY = """<t:ItemId Id="[^"]+" ChangeKey="([^"]+)"""".toRegex()
+        // EWS-1: REGEX_ITEM_CHANGE_KEY удалён — ChangeKey извлекается через EwsIds (order/prefix-устойчиво).
         private val REGEX_ITEM_ID_T = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
+
+        /**
+         * EWS-4: возвращает ItemId ТОЛЬКО если в ответе FindItem ровно одно совпадение.
+         * Несколько (одинаковая тема у разных задач) или ноль → null, чтобы не выбрать чужую
+         * задачу. Чистая функция — покрыта EasTasksItemIdResolutionTest.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun singleTaskItemIdOrNull(findItemResponseXml: String): String? =
+            REGEX_ITEM_ID_T.findAll(findItemResponseXml).map { it.groupValues[1] }.toList().singleOrNull()
 
         // removeDuplicateLines
         private val REGEX_BR = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)

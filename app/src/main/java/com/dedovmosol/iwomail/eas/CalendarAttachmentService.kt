@@ -67,7 +67,11 @@ class CalendarAttachmentService(
             }
         }
 
-        return if (lastError != null && attachmentIds.size == 1) {
+        // EWS-5: не маскировать частичный отказ. Если хоть одно вложение не удалилось —
+        // возвращаем Error (вызывающий код логирует это как предупреждение и продолжает
+        // обновление события; см. CalendarRepository.updateEvent / updateSingleOccurrenceEws).
+        // Раньше Error возвращался ТОЛЬКО при единственном id → при нескольких id сбои терялись.
+        return if (lastError != null) {
             EasResult.Error(lastError)
         } else {
             EasResult.Success(true)

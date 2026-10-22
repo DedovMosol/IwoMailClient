@@ -14,9 +14,12 @@
     <!-- Уведомления (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     
-    <!-- Для точных alarm'ов (синхронизация на Xiaomi и др.) -->
+    <!-- Для точных alarm'ов (синхронизация на Xiaomi и др.).
+         SYNC-7: только SCHEDULE_EXACT_ALARM (с проверкой canScheduleExactAlarms() во всех
+         точках планирования + fallback на setExactAndAllowWhileIdle/WorkManager). USE_EXACT_ALARM
+         убран: это ограниченное Google Play разрешение (будильники/календари) — для почтового
+         клиента грозит отклонением публикации, а функциональной нужды в нём нет. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     
     <!-- Для работы в фоне без ограничений батареи -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />

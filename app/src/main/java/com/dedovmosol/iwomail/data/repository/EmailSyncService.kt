@@ -183,12 +183,10 @@ class EmailSyncService(
             return syncDraftsFull(accountId, folderId, skipRecentEditCheck)
         }
 
-        if (forceFullSync && AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
-            folderDao.updateSyncKey(folderId, "0")
-        }
-
         return when (AccountType.valueOf(account.accountType)) {
-            AccountType.EXCHANGE -> syncEmailsEas(accountId, folderId)
+            // SYNC-2: сброс SyncKey для forceFullSync перенесён ВНУТРЬ syncEmailsEas (в секцию
+            // activeSyncs), чтобы устранить гонку обнуления ключа между конкурентными синками.
+            AccountType.EXCHANGE -> syncEmailsEas(accountId, folderId, forceFullSync = forceFullSync)
             AccountType.IMAP -> syncEmailsImap(accountId, folderId)
             AccountType.POP3 -> syncEmailsPop3(accountId, folderId)
         }
@@ -569,7 +567,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
     /**
      * Синхронизация писем через EAS
      */
-    suspend fun syncEmailsEas(accountId: Long, folderId: String, skipRecentEditCheck: Boolean = false, retryCount: Int = 0): EasResult<Int> {
+    suspend fun syncEmailsEas(accountId: Long, folderId: String, skipRecentEditCheck: Boolean = false, retryCount: Int = 0, forceFullSync: Boolean = false): EasResult<Int> {
         if (retryCount > 1) {
             return EasResult.Error("Ошибка синхронизации: слишком много попыток")
         }
@@ -591,6 +589,16 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         try {
             val client = accountRepo.createEasClient(accountId)
                 ?: return EasResult.Error("Аккаунт не найден")
+
+            // SYNC-2: полный ресинк (forceFullSync) сбрасывает SyncKey ВНУТРИ критической секции
+            // activeSyncs — до чтения folder. Иначе два конкурентных вызова (push + периодический/
+            // ручной sync) могли обнулить ключ ВНЕ секции и разъехаться по SyncKey на EAS 12.1
+            // (Exchange 2007 SP2: ServerId могут меняться после SyncKey=0). Только на первичном
+            // вызове (retryCount==0); рекурсивный ресинк по Status 3/12 управляет ключом сам.
+            if (forceFullSync && retryCount == 0) {
+                folderDao.updateSyncKey(folderId, "0")
+            }
+
             val folder = folderDao.getFolder(folderId)
                 ?: return EasResult.Error("Папка не найдена")
 

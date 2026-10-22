@@ -865,14 +865,13 @@ $changesXml
         val findResponse = executeEwsNtlmOnly(findRequest, "FindItem") ?: return
 
         // Извлекаем все ItemId + ChangeKey
-        val itemPattern = """<t:ItemId Id="([^"]+)"\s+ChangeKey="([^"]+)"""".toRegex()
-        val matches = itemPattern.findAll(findResponse).toList()
+        val matches = EwsIds.parseAllItemIdsAndChangeKeys(findResponse)
         if (matches.isEmpty()) return
 
-        // 2. UpdateItem для каждого найденного письма
-        val itemChanges = matches.joinToString("") { match ->
-            val itemId = deps.escapeXml(match.groupValues[1])
-            val changeKey = deps.escapeXml(match.groupValues[2])
+        // 2. UpdateItem для каждого найденного письма (EWS-1: order/prefix-устойчивый разбор)
+        val itemChanges = matches.joinToString("") { (rawItemId, rawChangeKey) ->
+            val itemId = deps.escapeXml(rawItemId)
+            val changeKey = deps.escapeXml(rawChangeKey)
             """<t:ItemChange>
     <t:ItemId Id="$itemId" ChangeKey="$changeKey"/>
     <t:Updates>
@@ -1211,9 +1210,8 @@ $deleteCommands
 
     // ==================== Private methods ====================
 
-    // N-11 (DRY): единый источник уникального токена отправки — используется как fallback, когда
-    // стабильный ClientId не задан (обычная отправка / SmartForward без дедупликации).
-    private fun freshSendToken(): String = "${System.currentTimeMillis()}.${System.nanoTime()}"
+    // N-11 (DRY): токен отправки берётся из единого источника freshSendToken() (EasSendIdentity.kt),
+    // чтобы формат совпадал во всех путях отправки.
 
     private fun buildMimeMessageBytes(
         to: String,
@@ -1228,9 +1226,10 @@ $deleteCommands
     ): ByteArray {
         val fromEmail = deps.getFromEmail()
         val deviceId = deps.getDeviceId()
-        // N-11: стабильный Message-ID из clientId (если задан), иначе уникальный millis.nano —
-        // чтобы повторная отправка одной записи очереди не порождала новый Message-ID.
-        val messageId = "<${clientId ?: freshSendToken()}@$deviceId>"
+        // N-11/SYNC-6: Message-ID из единого источника buildStableMessageId — тот же помощник, что
+        // и в пути с вложениями (DRY). Стабилен при заданном clientId (переживает retry воркера),
+        // иначе уникален → повторная отправка одной записи очереди не порождает новый Message-ID.
+        val messageId = buildStableMessageId(clientId, deviceId)
 
         val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
         val date = dateFormat.format(java.util.Date())

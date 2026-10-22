@@ -19,7 +19,9 @@ class EasProvisioning(
     data class ProvisionResponse(
         val policyKey: String?,
         val provisionStatus: Int?,
-        val policyStatus: Int?
+        val policyStatus: Int?,
+        /** EAS-2: сервер прислал директиву удалённой очистки (MS-ASPROV 2.2.2.44). */
+        val remoteWipeRequested: Boolean = false
     )
     
     /**
@@ -122,7 +124,24 @@ class EasProvisioning(
                 .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
         }
         
-        return ProvisionResponse(policyKey, provisionStatus, policyStatus)
+        // EAS-2: детекция директивы RemoteWipe (точное совпадение элемента, не AccountOnlyRemoteWipe).
+        val remoteWipeRequested = REMOTE_WIPE_REGEX.containsMatchIn(responseXml)
+
+        return ProvisionResponse(policyKey, provisionStatus, policyStatus, remoteWipeRequested)
+    }
+
+    /**
+     * EAS-2: подтверждение директивы RemoteWipe (MS-ASPROV 3.2.5.1).
+     * Клиент обязан ответить Provision-запросом со статусом применения очистки.
+     * Status=1 — успешно применено. Отправляется ТОЛЬКО после фактической локальной очистки.
+     */
+    fun buildRemoteWipeAck(): String {
+        return """<?xml version="1.0" encoding="UTF-8"?>
+<Provision xmlns="Provision">
+    <RemoteWipe>
+        <Status>1</Status>
+    </RemoteWipe>
+</Provision>""".trimIndent()
     }
     
     /**
@@ -228,5 +247,11 @@ class EasProvisioning(
     companion object {
         /** Фиктивный PolicyKey когда сервер не требует политик */
         const val NO_POLICY_KEY = "0"
+
+        /**
+         * EAS-2: директива удалённой очистки (MS-ASPROV 2.2.2.44). Матчит именно элемент
+         * `<RemoteWipe>`/`<RemoteWipe/>`, НЕ `<AccountOnlyRemoteWipe>` (символ после `<` — 'R').
+         */
+        private val REMOTE_WIPE_REGEX = Regex("<RemoteWipe\\s*/?>")
     }
 }

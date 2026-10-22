@@ -35,7 +35,13 @@ class NtlmAuthenticator(
      * Создаёт NTLM Type 1 (Negotiate) сообщение
      */
     fun createType1Message(): ByteArray {
-        val domainBytes = domain.uppercase(java.util.Locale.ROOT).toByteArray(Charsets.US_ASCII)
+        // NET-4: домен пишется КАК ЕСТЬ (без uppercase), чтобы байт-в-байт совпадать
+        // с UserDom в NTOWFv2 (createNtlmv2Hash). Сервер/DC по [MS-NLMP] 3.2.5.1.2
+        // пересчитывает ключ по DomainName ИЗ сообщения, поэтому расхождение регистра
+        // между хешем и полем сообщения ломает NTLM на доменах со строчным/смешанным
+        // регистром. Поле Type 1 сервером игнорируется (флаг OEM_DOMAIN_SUPPLIED не
+        // выставлен), но держим регистр единообразным с Type 3.
+        val domainBytes = domain.toByteArray(Charsets.US_ASCII)
         val workstationBytes = WORKSTATION.toByteArray(Charsets.US_ASCII)
         
         val flags = NTLM_FLAG_NEGOTIATE_UNICODE or
@@ -95,7 +101,12 @@ class NtlmAuthenticator(
         val targetInfo = extractTargetInfo(type2Message)
         
         // Подготавливаем данные
-        val domainUnicode = domain.uppercase(java.util.Locale.ROOT).toByteArray(Charsets.UTF_16LE)
+        // NET-4: DomainName в AUTHENTICATE пишется КАК ЕСТЬ. По [MS-NLMP] 3.2.5.1.2 сервер
+        // извлекает UserName/DomainName из сообщения и ими же пересчитывает NTOWFv2
+        // (единственный fallback — NIL-домен, не смена регистра). Значит строка домена здесь
+        // ДОЛЖНА совпадать байт-в-байт с доменом в createNtlmv2Hash, иначе HMAC-ключи
+        // клиента и DC разойдутся и NTLM-аутентификация упадёт.
+        val domainUnicode = domain.toByteArray(Charsets.UTF_16LE)
         val userUnicode = username.toByteArray(Charsets.UTF_16LE)
         val workstationUnicode = WORKSTATION.toByteArray(Charsets.UTF_16LE)
         
@@ -240,8 +251,17 @@ class NtlmAuthenticator(
         return type2Message.copyOfRange(targetInfoOffset, targetInfoOffset + targetInfoLen)
     }
     
-    private fun createNtlmv2Hash(ntlmHash: ByteArray, user: String, domain: String): ByteArray {
-        val identity = (user.uppercase(java.util.Locale.ROOT) + domain.uppercase(java.util.Locale.ROOT)).toByteArray(Charsets.UTF_16LE)
+    /**
+     * NTOWFv2 (MS-NLMP 3.3.2): HMAC_MD5(ntlmHash, UNICODE(ConcatenationOf(Uppercase(User), UserDom))).
+     *
+     * NET-4: В верхний регистр переводится ТОЛЬКО username; домен (UserDom) используется
+     * КАК ЕСТЬ. Прежний код поднимал регистр и домена — это давало неверный ключ HMAC и
+     * провал EWS-NTLM на серверах со строчным/смешанным регистром домена. Проверено эталонным
+     * вектором MS-NLMP 4.2.4.1.1 (User/Domain/Password → 0c868a403bfd7a93a3001ef22ef02e3f).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun createNtlmv2Hash(ntlmHash: ByteArray, user: String, domain: String): ByteArray {
+        val identity = (user.uppercase(java.util.Locale.ROOT) + domain).toByteArray(Charsets.UTF_16LE)
         return hmacMd5(ntlmHash, identity)
     }
     
@@ -294,7 +314,8 @@ class NtlmAuthenticator(
         return mac.doFinal(data)
     }
     
-    private fun createNtlmHash(password: String): ByteArray {
+    @androidx.annotation.VisibleForTesting
+    internal fun createNtlmHash(password: String): ByteArray {
         val passwordUnicode = password.toByteArray(Charsets.UTF_16LE)
         
         return try {

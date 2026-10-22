@@ -463,7 +463,7 @@ class EasCalendarCrudService(
 
                 for (itemMatch in EWS_CALENDAR_ITEM.findAll(findResponse)) {
                     val itemXml = itemMatch.groupValues[1]
-                    val idMatch = EWS_ITEM_ID_WITH_CHANGE_KEY.find(itemXml) ?: continue
+                    val idPair = EwsIds.parseItemIdAndChangeKey(itemXml) ?: continue
                     val itemSubject = EWS_SUBJECT.find(itemXml)?.groupValues?.get(1) ?: ""
                     val itemStartStr = EWS_START.find(itemXml)?.groupValues?.get(1)
                     val itemStartMs = CalendarDateUtils.parseEwsDateTime(itemStartStr) ?: continue
@@ -472,8 +472,8 @@ class EasCalendarCrudService(
                     if (timeDiff > oneDayMs) continue
 
                     if (itemSubject.equals(searchSubject, ignoreCase = true) && timeDiff < bestTimeDiff) {
-                        bestItemId = idMatch.groupValues[1]
-                        bestChangeKey = idMatch.groupValues[2]
+                        bestItemId = idPair.first
+                        bestChangeKey = idPair.second
                         bestTimeDiff = timeDiff
                     }
                 }
@@ -1815,19 +1815,10 @@ $itemIdsXml
         if (deleteResult is EasResult.Error) return EasResult.Error((deleteResult).message)
         val response = (deleteResult as EasResult.Success).data
 
-        val successCount = EWS_RESPONSE_SUCCESS.findAll(response).count()
-        val itemNotFoundCount = EWS_ERROR_ITEM_NOT_FOUND.findAll(response).count()
-        val totalOk = successCount + itemNotFoundCount
-
+        val result = evaluateBatchDeleteResponse(response, itemIds.size)
         android.util.Log.d("EasCalendarCrudService",
-            "deleteCalendarEventsBatchEws: ${itemIds.size} items, ok=$totalOk (success=$successCount, notFound=$itemNotFoundCount)")
-
-        return if (totalOk > 0) {
-            EasResult.Success(totalOk)
-        } else {
-            val errorCode = CalendarXmlParser.EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)?.trim()
-            EasResult.Error("EWS batch DeleteItem: $errorCode")
-        }
+            "deleteCalendarEventsBatchEws: requested=${itemIds.size}, result=$result")
+        return result
     }
 
     // ======================== Helpers ========================
@@ -1924,9 +1915,9 @@ $itemIdsXml
                         true
                     }
                     if (subjectMatch.equals(subject, ignoreCase = true) && startMatches) {
-                        val idMatch = EWS_ITEM_ID_WITH_CHANGE_KEY.find(itemXml)
-                        if (idMatch != null) {
-                            return@withContext EasResult.Success("${idMatch.groupValues[1]}|${idMatch.groupValues[2]}")
+                        val idPair = EwsIds.parseItemIdAndChangeKey(itemXml)
+                        if (idPair != null) {
+                            return@withContext EasResult.Success("${idPair.first}|${idPair.second}")
                         }
                     }
                 }
@@ -1999,10 +1990,10 @@ $itemIdsXml
                     if (calItemType == "RecurringMaster" &&
                         itemSubject.equals(subject, ignoreCase = true)
                     ) {
-                        val idMatch = EWS_ITEM_ID_WITH_CHANGE_KEY.find(itemXml)
-                        if (idMatch != null) {
+                        val idPair = EwsIds.parseItemIdAndChangeKey(itemXml)
+                        if (idPair != null) {
                             return@withContext EasResult.Success(
-                                "${idMatch.groupValues[1]}|${idMatch.groupValues[2]}"
+                                "${idPair.first}|${idPair.second}"
                             )
                         }
                     }
@@ -2019,8 +2010,7 @@ $itemIdsXml
     companion object {
         private val EWS_CALENDAR_ITEM = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
             .toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val EWS_ITEM_ID_WITH_CHANGE_KEY = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\""
-            .toRegex()
+        // EWS-1: EWS_ITEM_ID_WITH_CHANGE_KEY удалён — заменён на order/prefix-устойчивый EwsIds.
         private val EWS_ITEM_ID_ONLY = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\""
             .toRegex()
         private val EWS_SUBJECT = "<(?:t:)?Subject>(.*?)</(?:t:)?Subject>"
@@ -2031,5 +2021,30 @@ $itemIdsXml
             .toRegex()
         private val EWS_ERROR_ITEM_NOT_FOUND = "ErrorItemNotFound"
             .toRegex()
+
+        /**
+         * EWS-5: строгая оценка ответа пакетного DeleteItem.
+         *
+         * Success ТОЛЬКО если учтены ВСЕ запрошенные id (реально удалённые + ErrorItemNotFound,
+         * который идемпотентен — элемента уже нет). Частичный успех (0 < ok < requested) →
+         * Error: иначе вызывающий слой пометит всё удалённым и сотрёт локально то, что осталось
+         * на сервере → «воскрешение» события при следующей синхронизации.
+         *
+         * Чистая функция (без сети/IO) — покрыта юнит-тестами EasCalendarBatchDeleteTest.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun evaluateBatchDeleteResponse(response: String, requestedCount: Int): EasResult<Int> {
+            if (requestedCount <= 0) return EasResult.Success(0)
+            val okCount = EWS_RESPONSE_SUCCESS.findAll(response).count() +
+                EWS_ERROR_ITEM_NOT_FOUND.findAll(response).count()
+            return when {
+                okCount >= requestedCount -> EasResult.Success(okCount)
+                okCount > 0 -> EasResult.Error("EWS batch DeleteItem: частично удалено $okCount из $requestedCount")
+                else -> {
+                    val errorCode = CalendarXmlParser.EWS_RESPONSE_CODE.find(response)?.groupValues?.get(1)?.trim()
+                    EasResult.Error("EWS batch DeleteItem: ${errorCode ?: "неизвестная ошибка"}")
+                }
+            }
+        }
     }
 }

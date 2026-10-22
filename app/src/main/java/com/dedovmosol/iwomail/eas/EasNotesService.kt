@@ -775,10 +775,8 @@ class EasNotesService internal constructor(
                 return@withContext EasResult.Error("Аутентификация не удалась")
             }
             
-            // Извлекаем ChangeKey из ответа
-            val changeKeyPattern = """<t:ItemId Id="[^"]+" ChangeKey="([^"]+)"""".toRegex()
-            val changeKeyMatch = changeKeyPattern.find(getItemResponse)
-            val changeKey = changeKeyMatch?.groupValues?.get(1) ?: ""
+            // EWS-1: ChangeKey извлекается независимо от порядка атрибутов/префикса.
+            val changeKey = EwsIds.parseChangeKey(getItemResponse) ?: ""
             
             val escapedItemId = deps.escapeXml(ewsItemId)
             val escapedChangeKey = deps.escapeXml(changeKey)

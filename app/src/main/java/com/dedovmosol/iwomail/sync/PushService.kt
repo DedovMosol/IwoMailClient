@@ -109,6 +109,11 @@ class PushService : Service() {
 
         const val ACTION_SYNC_ALARM = "com.dedovmosol.iwomail.SYNC_ALARM"
 
+        // SYNC-1: одноразовый флаг «нас остановила система по тайм-ауту dataSync-FGS» (Android 15+).
+        // onDestroy по нему пропускает немедленный 60-сек рестарт (он снова упрётся в суточный
+        // лимит FGS); возобновление push берут на себя периодический SyncWorker + alarm.
+        private const val KEY_FGS_TIMEOUT = "fgs_timeout"
+
         fun start(context: Context) {
             val intent = Intent(context, PushService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -281,7 +286,10 @@ class PushService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSharedPreferences("push_service", Context.MODE_PRIVATE)
-            .edit().putBoolean("explicit_stop", false).apply()
+            .edit()
+            .putBoolean("explicit_stop", false)
+            .putBoolean(KEY_FGS_TIMEOUT, false) // SYNC-1: свежий старт сбрасывает «после тайм-аута»
+            .apply()
 
         database = MailDatabase.getInstance(applicationContext)
         mailRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getMailRepository(applicationContext)
@@ -450,11 +458,41 @@ class PushService : Service() {
         return START_STICKY
     }
 
+    /**
+     * SYNC-1: Android 15+ (API 35) ограничивает суммарное время dataSync-FGS 6 часами в сутки.
+     * По достижении лимита система вызывает onTimeout, и сервис ОБЯЗАН немедленно снять foreground
+     * и сам остановиться, иначе бросается RemoteServiceException (ANR/краш). Переключаемся на
+     * периодическую синхронизацию: PeriodicWork SyncWorker (он же на своих запусках пытается
+     * поднять push снова, когда это разрешено) + alarm-пинг. Немедленный 60-сек рестарт в onDestroy
+     * подавляем флагом KEY_FGS_TIMEOUT — иначе снова упрёмся в суточный лимит и получим петлю.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        android.util.Log.w(TAG, "dataSync FGS timeout (startId=$startId, type=$fgsType) — switching to periodic sync")
+        getSharedPreferences("push_service", Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_FGS_TIMEOUT, true).apply()
+        try {
+            SyncWorker.schedule(applicationContext, cachedMinSyncIntervalMinutes.toLong(), false)
+            scheduleSyncAlarm(applicationContext, cachedMinSyncIntervalMinutes)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w(TAG, "onTimeout fallback scheduling failed", e)
+        }
+        // ОБЯЗАТЕЛЬНО: быстро снять foreground и остановиться (иначе RemoteServiceException).
+        // stopSelf() (без startId) — по документации onTimeout: гарантированно останавливаем сервис
+        // целиком, не оставляя его «висеть» фоном при наличии более позднего startId.
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
         android.util.Log.i(TAG, "Service being destroyed")
 
-        val wasExplicitStop = getSharedPreferences("push_service", Context.MODE_PRIVATE)
-            .getBoolean("explicit_stop", false)
+        val prefs = getSharedPreferences("push_service", Context.MODE_PRIVATE)
+        val wasExplicitStop = prefs.getBoolean("explicit_stop", false)
+        // SYNC-1: одноразовый флаг тайм-аута dataSync-FGS — потребляем (читаем и сбрасываем) здесь.
+        val wasFgsTimeout = prefs.getBoolean(KEY_FGS_TIMEOUT, false)
+        if (wasFgsTimeout) prefs.edit().putBoolean(KEY_FGS_TIMEOUT, false).apply()
 
         unregisterNetworkCallback()
         heartbeatJob?.cancel()
@@ -464,13 +502,14 @@ class PushService : Service() {
         easClientCache.clear()
         serviceScope.cancel()
 
-        // КРИТИЧНО: Перезапускаем сервис если это не явная остановка
-        // Это защита от убийства процесса системой
-        if (!wasExplicitStop) {
+        // КРИТИЧНО: Перезапускаем сервис если это не явная остановка и не тайм-аут dataSync-FGS.
+        // Это защита от убийства процесса системой. При тайм-ауте (SYNC-1) немедленный рестарт
+        // бесполезен (снова упрётся в суточный лимит) — возобновление делают periodic SyncWorker + alarm.
+        if (!wasExplicitStop && !wasFgsTimeout) {
             android.util.Log.i(TAG, "Service destroyed unexpectedly - scheduling restart")
             scheduleRestart()
         } else {
-            android.util.Log.i(TAG, "Service stopped explicitly - not restarting")
+            android.util.Log.i(TAG, "Service stopped explicitly or after FGS timeout - not scheduling immediate restart")
         }
 
         super.onDestroy()

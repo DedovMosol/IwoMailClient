@@ -1038,9 +1038,10 @@ class EasClient(
         attachments: List<Triple<String, String, ByteArray>>,
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false,
-        importance: Int = 1
+        importance: Int = 1,
+        stableClientId: String? = null
     ): EasResult<Boolean> = attachmentService.sendMailWithAttachments(
-        to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance
+        to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance, stableClientId
     )
 
     /**
@@ -1715,10 +1716,9 @@ $foldersXml
             if (ntlmAuth != null) {
                 val responseXml = executeNtlmRequest(getItemRequest, "GetItem")
                 if (responseXml != null) {
-                    val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
-                    val match = itemIdPattern.find(responseXml)
-                    if (match != null) {
-                        return Pair(match.groupValues[1], match.groupValues[2])
+                    val idPair = EwsIds.parseItemIdAndChangeKey(responseXml)
+                    if (idPair != null) {
+                        return idPair
                     }
                 }
             }
@@ -1764,9 +1764,7 @@ $foldersXml
         val responseXml = executeNtlmRequest(findRequest, "FindItem")
             ?: return null
 
-        val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"\\s+ChangeKey=\"([^\"]+)\"".toRegex()
-        val match = itemIdPattern.find(responseXml)
-        return match?.let { Pair(it.groupValues[1], it.groupValues[2]) }
+        return EwsIds.parseItemIdAndChangeKey(responseXml)
     }
 
     /**

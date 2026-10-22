@@ -108,7 +108,11 @@ class UpdateChecker(context: Context) {
     }
 
     // Используем общий HttpClient для предотвращения утечек памяти
-    private val client = com.dedovmosol.iwomail.network.HttpClientProvider.getClient()
+    // NET-2: канал обновлений (update.json + APK) идёт на НЕ-Exchange хост (GitHub, публичный CA),
+    // поэтому доверяем ТОЛЬКО системным корням — без user-CA. Иначе подсунутый пользовательский CA
+    // мог бы подменить обновление/APK (RCE). Exchange-подключения это не затрагивает.
+    // updateClient/downloadClient ниже наследуют этот trust через newBuilder().
+    private val client = com.dedovmosol.iwomail.network.HttpClientProvider.getSystemTrustOnlyClient()
 
     // Клиент с увеличенными таймаутами для проверки обновлений (для медленного мобильного интернета)
     private val updateClient = client.newBuilder()

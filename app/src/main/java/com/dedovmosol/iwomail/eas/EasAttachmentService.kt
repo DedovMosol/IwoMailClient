@@ -63,7 +63,8 @@ class EasAttachmentService internal constructor(
         attachments: List<Triple<String, String, ByteArray>>,
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false,
-        importance: Int = 1
+        importance: Int = 1,
+        stableClientId: String? = null
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         val totalSize = attachments.sumOf { it.third.size }
         val maxAttachmentSize = 7 * 1024 * 1024
@@ -73,7 +74,10 @@ class EasAttachmentService internal constructor(
         }
 
         try {
-            val mimeBytes = buildMimeWithAttachments(to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance)
+            // SYNC-6: стабильный идентификатор отправки (переживает retry через inputData воркера).
+            // Токен из единого источника freshSendToken() (EasSendIdentity.kt) — DRY с путём без вложений.
+            val clientId = stableClientId ?: freshSendToken()
+            val mimeBytes = buildMimeWithAttachments(to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
 
             val maxMimeSize = 10 * 1024 * 1024
             if (mimeBytes.size > maxMimeSize) {
@@ -88,7 +92,6 @@ class EasAttachmentService internal constructor(
 
             // Для EAS 14.0+ используем WBXML формат, для 12.x - message/rfc822
             val (requestBody, contentType) = if (majorVersion >= 14) {
-                val clientId = System.currentTimeMillis().toString()
                 val wbxml = deps.wbxmlGenerateSendMail(clientId, mimeBytes)
                 Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
             } else {
@@ -221,12 +224,13 @@ class EasAttachmentService internal constructor(
         attachments: List<Triple<String, String, ByteArray>>,
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false,
-        importance: Int = 1
+        importance: Int = 1,
+        clientId: String? = null
     ): ByteArray {
         val fromEmail = deps.getFromEmail()
         val deviceId = deps.getDeviceId()
 
-        val messageId = "<${System.currentTimeMillis()}.${System.nanoTime()}@$deviceId>"
+        val messageId = buildStableMessageId(clientId, deviceId)
         val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
         val date = dateFormat.format(java.util.Date())
         val boundary = "----=_Part_${System.currentTimeMillis()}_${System.nanoTime()}"

@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.room.*
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
@@ -243,9 +244,20 @@ abstract class MailDatabase : RoomDatabase() {
                     "mail_database"
                 )
                 .addMigrations(*ALL_MIGRATIONS)
-                // Если миграция не найдена — пересоздать БД (данные потеряются, но не крашнется)
-                .fallbackToDestructiveMigration()
-                // При откате на старую версию — пересоздать БД (данные синхронизируются с сервера)
+                // DATA-1: деструктивная пересборка при ОТСУТСТВУЮЩЕЙ миграции (upgrade) включается
+                // ТОЛЬКО в debug — для быстрой итерации схемы при разработке. В release НЕ включаем:
+                // иначе забытая миграция ТИХО стирает локальные данные (оффлайн-черновики
+                // `local_draft_`, настройки) и маскирует баги миграций. В release отсутствие
+                // миграции даст явный сбой при открытии БД — это ловится тестами/CI до релиза
+                // (схемы экспортируются в app/schemas, цепочка 23→42 полная).
+                .apply {
+                    if (BuildConfig.DEBUG) {
+                        fallbackToDestructiveMigration()
+                    }
+                }
+                // Downgrade (установка более старого APK) — редкий контролируемый случай: схему
+                // «из будущего» мигрировать назад нечем, поэтому пересоздаём (серверные данные
+                // ресинкнутся). Намеренно отдельная ветка, не зависящая от build type.
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .addCallback(object : Callback() {
                     override fun onDestructiveMigration(db: SupportSQLiteDatabase) {

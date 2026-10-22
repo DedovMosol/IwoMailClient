@@ -254,6 +254,15 @@ class SyncWorker(
     }
     
     /**
+     * SYNC-4: при expedited-работе (`syncNow` → `setExpedited`) на API 26–30 WorkManager бэкает
+     * задачу foreground-сервисом и запрашивает ForegroundInfo ДО `doWork()`. Дефолтный
+     * `CoroutineWorker.getForegroundInfo()` бросает `IllegalStateException` → воркер падает
+     * (а `RUN_AS_NON_EXPEDITED` покрывает лишь исчерпание квоты, не отсутствие foreground-info).
+     * Возвращаем тот же ForegroundInfo, что и `setForeground(...)` внутри `doWork()`.
+     */
+    override suspend fun getForegroundInfo(): ForegroundInfo = createForegroundInfo()
+
+    /**
      * Создаёт ForegroundInfo для отображения уведомления о синхронизации
      */
     private fun createForegroundInfo(): ForegroundInfo {

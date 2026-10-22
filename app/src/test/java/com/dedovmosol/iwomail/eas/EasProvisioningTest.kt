@@ -123,4 +123,32 @@ class EasProvisioningTest {
         assertThat(p.validatePhase2(resp, "temp")).isNull()
         assertThat(p.validatePhase2(resp, null)).isNotNull()
     }
+
+    // ===================== EAS-2: RemoteWipe =====================
+
+    @Test
+    fun `parseResponse detects RemoteWipe directive`() {
+        val xml = "<Provision><Status>1</Status><RemoteWipe/></Provision>"
+        assertThat(provisioning("12.1").parseResponse(xml).remoteWipeRequested).isTrue()
+    }
+
+    @Test
+    fun `parseResponse no RemoteWipe on normal response`() {
+        val xml = "<Provision><Status>1</Status><Policies><Policy><Status>1</Status><PolicyKey>1</PolicyKey></Policy></Policies></Provision>"
+        assertThat(provisioning("12.1").parseResponse(xml).remoteWipeRequested).isFalse()
+    }
+
+    @Test
+    fun `parseResponse does not treat AccountOnlyRemoteWipe as RemoteWipe`() {
+        val xml = "<Provision><Status>1</Status><AccountOnlyRemoteWipe/></Provision>"
+        assertThat(provisioning("12.1").parseResponse(xml).remoteWipeRequested).isFalse()
+    }
+
+    @Test
+    fun `buildRemoteWipeAck acknowledges with status 1`() {
+        val xml = provisioning("12.1").buildRemoteWipeAck()
+        assertThat(xml).contains("<RemoteWipe>")
+        assertThat(xml).contains("<Status>1</Status>")
+        assertThat(xml).contains("<Provision xmlns=\"Provision\">")
+    }
 }

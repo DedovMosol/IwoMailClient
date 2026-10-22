@@ -134,6 +134,31 @@ object HttpClientProvider {
             writeTimeout = 120
         )
     }
+
+    /**
+     * NET-2: клиент с доверием ТОЛЬКО системным корням (без user-CA). Для не-Exchange HTTPS —
+     * проверки/скачивания обновлений. Наследует пул соединений baseClient и строгий дефолтный
+     * hostname-verifier; переопределяет только TrustManager на system-only.
+     */
+    private val systemOnlyClient: OkHttpClient by lazy {
+        val builder = baseClient.newBuilder()
+        try {
+            val trustManager = createSystemOnlyTrustManager()
+            val sslContext = createSslContext()
+            sslContext.init(null, arrayOf(trustManager), SecureRandom())
+            builder.sslSocketFactory(TlsSocketFactory(sslContext.socketFactory), trustManager)
+        } catch (_: Exception) {
+            // Дефолты OkHttp (system trust) — тоже без user-CA.
+        }
+        builder.build()
+    }
+
+    /**
+     * NET-2: возвращает клиент, доверяющий ТОЛЬКО системным корням (для обновлений и прочих
+     * не-Exchange HTTPS). Exchange-пути (`getClient`/`getAttachmentClient`) НЕ меняются — у них
+     * сохраняется fallback на user-CA для самоподписанного Exchange 2007 SP2.
+     */
+    fun getSystemTrustOnlyClient(): OkHttpClient = systemOnlyClient
     
     /**
      * Возвращает клиент с пользовательскими сертификатами
@@ -495,10 +520,50 @@ object HttpClientProvider {
         }
     }
     
-    private fun createTrustAllManager(): X509TrustManager {
+    /**
+     * NET-1: наблюдатель за режимом «доверять всем». Хранит отпечаток последнего сертификата,
+     * принятого БЕЗ аутентификации — чтобы UI/диагностика могли показать пользователю, чему он
+     * доверяет вслепую (прозрачность вместо молчаливого доверия).
+     */
+    object TrustAllObserver {
+        @Volatile
+        var lastTrusted: CertificateInfo? = null
+            private set
+
+        fun record(info: CertificateInfo) { lastTrusted = info }
+        fun reset() { lastTrusted = null }
+    }
+
+    /**
+     * NET-1: фиксирует отпечаток (SPKI SHA-256) и CN «слепо» принятого серверного сертификата +
+     * пишет предупреждение в лог. Вынесено отдельной функцией для прямого покрытия тестом
+     * (проверяем РЕАЛЬНУЮ проводку checkServerTrusted → запись, а не изолированный хелпер).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun observeTrustAllServerChain(chain: Array<X509Certificate>?) {
+        val leaf = chain?.firstOrNull() ?: return
+        val info = try { extractCertificateInfo(leaf) } catch (_: Exception) { return }
+        TrustAllObserver.record(info)
+        android.util.Log.w(
+            "HttpClientProvider",
+            "NET-1 trust-all: принят НЕаутентифицированный сертификат CN=${info.cn}, SPKI=${info.hash.take(16)}… — соединение не аутентифицировано (MITM-риск; режим включён пользователем)"
+        )
+    }
+
+    /**
+     * NET-1: TrustManager режима «доверять всем» (opt-in `acceptAllCerts`). Поведение — принимает
+     * ЛЮБОЙ серверный сертификат — НЕ меняется: пользователи самоподписанного Exchange 2007 SP2 на
+     * это полагаются. Но теперь доверие не МОЛЧАЛИВОЕ: фиксируем отпечаток принятого сертификата
+     * (`TrustAllObserver`) и предупреждаем в логе (см. [observeTrustAllServerChain]).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun createTrustAllManager(): X509TrustManager {
         return object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+                observeTrustAllServerChain(chain)
+                // Намеренно НЕ бросаем: acceptAllCerts — явный выбор пользователя (opt-in).
+            }
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
         }
     }
@@ -606,6 +671,20 @@ object HttpClientProvider {
                 return issuers.toTypedArray()
             }
         }
+    }
+
+    /**
+     * NET-2: TrustManager ТОЛЬКО с системными корнями (без user-CA из `AndroidCAStore`).
+     * Для HTTPS к НЕ-Exchange хостам (проверка/скачивание обновлений). user-CA там не нужен и
+     * опасен: пользовательский/подсунутый CA не должен позволять MITM канала обновлений
+     * (подмена `update.json`/APK = удалённое выполнение кода). Exchange-пути это не затрагивает —
+     * они по-прежнему идут через `createSystemTrustManager()` (system + user-CA fallback).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun createSystemOnlyTrustManager(): X509TrustManager {
+        val systemTmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+        systemTmf.init(null as java.security.KeyStore?)
+        return systemTmf.trustManagers.filterIsInstance<X509TrustManager>().first()
     }
     
     /**

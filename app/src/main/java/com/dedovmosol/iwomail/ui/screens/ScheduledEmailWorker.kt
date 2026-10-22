@@ -27,6 +27,9 @@ class ScheduledEmailWorker(
         val requestDeliveryReceipt = inputData.getBoolean("requestDeliveryReceipt", false)
         val importance = inputData.getInt("importance", 1)
         val attachmentDirPath = inputData.getString("attachmentDir") ?: ""
+        // SYNC-6: стабильный clientId из inputData (WorkManager сохраняет inputData неизменным
+        // при retry) → повтор после потерянного ACK не порождает новый Message-ID/ClientId.
+        val clientId = inputData.getString("clientId")
         
         val accountRepo = AccountRepository(applicationContext)
         
@@ -38,14 +41,16 @@ class ScheduledEmailWorker(
             if (attachments.isNotEmpty()) {
                 client.sendMailWithAttachments(
                     to, subject, body, cc, bcc, attachments,
-                    requestReadReceipt, requestDeliveryReceipt, importance
+                    requestReadReceipt, requestDeliveryReceipt, importance,
+                    stableClientId = clientId
                 )
             } else {
                 client.sendMail(
                     to, subject, body, cc, bcc,
                     importance = importance,
                     requestReadReceipt = requestReadReceipt,
-                    requestDeliveryReceipt = requestDeliveryReceipt
+                    requestDeliveryReceipt = requestDeliveryReceipt,
+                    stableClientId = clientId
                 )
             }
         } else {
@@ -53,7 +58,8 @@ class ScheduledEmailWorker(
                 to, subject, body, cc, bcc,
                 importance = importance,
                 requestReadReceipt = requestReadReceipt,
-                requestDeliveryReceipt = requestDeliveryReceipt
+                requestDeliveryReceipt = requestDeliveryReceipt,
+                stableClientId = clientId
             )
         }
         
@@ -160,7 +166,9 @@ fun scheduleEmail(
         "requestReadReceipt" to requestReadReceipt,
         "requestDeliveryReceipt" to requestDeliveryReceipt,
         "importance" to importance,
-        "attachmentDir" to (attachmentDir ?: "")
+        "attachmentDir" to (attachmentDir ?: ""),
+        // SYNC-6: стабильный clientId на всю жизнь задачи (переживает retry) → без дубля отправки.
+        "clientId" to java.util.UUID.randomUUID().toString().replace("-", "")
     )
     
     val request = OneTimeWorkRequestBuilder<ScheduledEmailWorker>()

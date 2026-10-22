@@ -40,7 +40,14 @@ class EasTransport(
     private val ntlmAuth: NtlmAuthenticator,
     val ewsClient: EwsClient,
     private val certificatePath: String? = null,
-    initialPolicyKey: String? = null
+    initialPolicyKey: String? = null,
+    /**
+     * EAS-2: колбэк фактической локальной очистки данных аккаунта при RemoteWipe.
+     * null (по умолчанию) ⇒ директива детектируется и сигнализируется (REMOTE_WIPE), но
+     * деструктивная очистка НЕ выполняется и серверу НЕ подтверждается (честно). Приложение
+     * может внедрить сюда удаление аккаунта — это продуктовое решение (удаление данных пользователя).
+     */
+    private val onRemoteWipe: (suspend () -> Unit)? = null
 ) {
     @Volatile var policyKey: String? = initialPolicyKey
     @Volatile var easVersion: String = "12.1"
@@ -193,6 +200,14 @@ class EasTransport(
                     resp.body?.close()
                     policyKey = null
                     EasResult.Error("PROVISION_REQUIRED")
+                } else if (resp.code == 503) {
+                    // EAS-3: троттлинг Exchange. Уважаем Retry-After (секунды, cap 30с): держим
+                    // паузу ПЕРЕД возвратом ошибки, чтобы немедленный повтор верхнего слоя
+                    // (SyncHelper/EmailSyncService) не бил по серверу до истечения интервала.
+                    val retryAfterMs = parseRetryAfterMs(resp.header("Retry-After"))
+                    resp.body?.close()
+                    if (retryAfterMs > 0) kotlinx.coroutines.delay(retryAfterMs)
+                    EasResult.Error("HTTP 503: ${resp.message}")
                 } else {
                     resp.body?.close()
                     EasResult.Error("HTTP ${resp.code}: ${resp.message}")
@@ -254,6 +269,13 @@ class EasTransport(
                         policyKey = savedPolicyKey
                         EasResult.Error("Failed to parse Provision response")
                     }
+
+                    // EAS-2: сервер прислал директиву удалённой очистки (MS-ASPROV 3.2.5.1).
+                    if (response.remoteWipeRequested) {
+                        policyKey = savedPolicyKey
+                        return handleRemoteWipe()
+                    }
+
                     if (response.policyStatus == 2) {
                         policyKey = EasProvisioning.NO_POLICY_KEY
                         return EasResult.Success(EasProvisioning.NO_POLICY_KEY)
@@ -323,6 +345,31 @@ class EasTransport(
         return result
     }
 
+    /**
+     * EAS-2: обработка директивы RemoteWipe (MS-ASPROV 3.2.5.1).
+     *
+     * Если внедрён [onRemoteWipe] — выполняем локальную очистку данных аккаунта и ТОЛЬКО ПОСЛЕ
+     * этого подтверждаем серверу (`<RemoteWipe><Status>1</Status>`), т.к. Status=1 означает
+     * «очистка применена». Если колбэк не внедрён — НЕ подтверждаем (честно) и лишь сигнализируем
+     * вызывающему слою сентинелом "REMOTE_WIPE" (решение об удалении данных — за приложением).
+     */
+    private suspend fun handleRemoteWipe(): EasResult<String> {
+        android.util.Log.w("EasTransport", "RemoteWipe directive received (MS-ASPROV)")
+        val wipe = onRemoteWipe
+        if (wipe != null) {
+            try {
+                wipe()
+                executeEasCommand("Provision", provisioning.buildRemoteWipeAck()) { }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.e("EasTransport", "RemoteWipe local wipe failed: ${e.message}")
+            }
+        } else {
+            android.util.Log.w("EasTransport", "RemoteWipe: обработчик очистки не внедрён — только сигнал (без подтверждения серверу)")
+        }
+        return EasResult.Error("REMOTE_WIPE")
+    }
+
     private suspend fun sendDeviceSettings(): EasResult<Unit> {
         val xml = provisioning.buildSettingsRequest()
         return executeEasCommand("Settings", xml) { }
@@ -373,6 +420,22 @@ ${EasXmlTemplates.SOAP_ENVELOPE_END}"""
     companion object {
         internal const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
         internal const val CONTENT_TYPE_XML = "text/xml; charset=utf-8"
+
+        /** EAS-3: верхняя граница паузы по Retry-After (мс). */
+        internal const val MAX_RETRY_AFTER_MS = 30_000L
+
+        /**
+         * EAS-3: парсит заголовок Retry-After формы «число секунд» ([MS-ASHTTP] / RFC 9110)
+         * в миллисекунды с ограничением сверху [maxMs]. HTTP-date-форма, пустое/нечисловое и
+         * неположительное значение → 0 (паузу тогда делает верхний слой со своим backoff).
+         * Чистая функция — покрыта EasTransportRetryAfterTest.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun parseRetryAfterMs(header: String?, maxMs: Long = MAX_RETRY_AFTER_MS): Long {
+            val seconds = header?.trim()?.toLongOrNull() ?: return 0L
+            if (seconds <= 0L) return 0L
+            return (seconds * 1000L).coerceAtMost(maxMs)
+        }
         private const val EMPTY_SYNC_RESPONSE =
             """<?xml version="1.0" encoding="UTF-8"?><Sync><Collections><Collection><Status>1</Status></Collection></Collections></Sync>"""
         private val EWS_MESSAGE_TEXT_REGEX get() = EasPatterns.EWS_MESSAGE_TEXT
