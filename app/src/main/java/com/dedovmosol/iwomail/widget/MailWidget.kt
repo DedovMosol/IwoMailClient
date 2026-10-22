@@ -404,7 +404,10 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
             Spacer(modifier = GlanceModifier.defaultWeight())
             
             // Календарь
-            Row(
+            // Box (FrameLayout) — clickable-цель. В Glance клик по Row/Column с детьми Image/Text
+            // ловится только на «пустом» месте вокруг контента (сами иконка и текст не кликабельны).
+            // Box ловит клик по всей области — как строка поиска и кнопки ниже (рабочий паттерн).
+            Box(
                 modifier = GlanceModifier
                     .fillMaxWidth()
                     .clickable(actionStartActivity(
@@ -413,7 +416,10 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                             setData(android.net.Uri.parse("iwomail://widget/calendar"))
                             putExtra("calendar", true)
                         }
-                    )),
+                    ))
+            ) {
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
@@ -441,12 +447,15 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     )
                 }
             }
+            }
             
             Spacer(modifier = GlanceModifier.defaultWeight())
             
             // Задачи
             val taskCount = if (data.todayTasksCount > 0) data.todayTasksCount else data.activeTasksCount
-            Row(
+            // Box (FrameLayout) — clickable-цель (см. комментарий у «Календарь»): клик по всей
+            // области, а не только по «пустому» месту вокруг иконки/текста.
+            Box(
                 modifier = GlanceModifier
                     .fillMaxWidth()
                     .clickable(actionStartActivity(
@@ -455,7 +464,10 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                             setData(android.net.Uri.parse("iwomail://widget/tasks"))
                             putExtra("tasks", true)
                         }
-                    )),
+                    ))
+            ) {
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
@@ -485,11 +497,14 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                     )
                 }
             }
+            }
             
             Spacer(modifier = GlanceModifier.defaultWeight())
             
             // Заметки
-            Row(
+            // Box (FrameLayout) — clickable-цель (см. комментарий у «Календарь»): клик по всей
+            // области, а не только по «пустому» месту вокруг иконки/текста.
+            Box(
                 modifier = GlanceModifier
                     .fillMaxWidth()
                     .clickable(actionStartActivity(
@@ -498,7 +513,10 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                             setData(android.net.Uri.parse("iwomail://widget/notes"))
                             putExtra("notes", true)
                         }
-                    )),
+                    ))
+            ) {
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
@@ -519,6 +537,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                         style = TextStyle(color = ColorProvider(textDimmed), fontSize = primaryFontSize)
                     )
                 }
+            }
             }
         }
         
@@ -555,18 +574,24 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                             isSameLocalDay(email.dateReceived, nowMillis) -> emailTimeFmt.format(Date(email.dateReceived))
                             else -> emailDayFmt.format(Date(email.dateReceived))
                         }
-                        Row(
+                        // Box (FrameLayout) — clickable-цель (см. комментарий у «Календарь»):
+                        // открытие письма по клику в любом месте строки, а не только по отступам.
+                        Box(
                             modifier = GlanceModifier
                                 .fillMaxWidth()
                                 .background(ColorProvider(rowBg))
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
                                 .clickable(actionStartActivity(
                                     Intent(context, MainActivity::class.java).apply {
                                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                                         this.data = android.net.Uri.parse("iwomail://email/${email.id}")
                                         putExtra(MainActivity.EXTRA_OPEN_EMAIL_ID, email.id)
                                     }
-                                )),
+                                ))
+                        ) {
+                        Row(
+                            modifier = GlanceModifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
@@ -584,6 +609,7 @@ private fun FullWidgetView(data: WidgetData, context: Context) {
                                 style = TextStyle(color = ColorProvider(textLightAlpha), fontSize = emailPreviewSize),
                                 maxLines = 1
                             )
+                        }
                         }
                     }
                 }
