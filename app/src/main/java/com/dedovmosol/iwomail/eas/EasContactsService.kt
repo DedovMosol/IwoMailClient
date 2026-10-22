@@ -18,10 +18,9 @@ class EasContactsService internal constructor(
     private val syncKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     companion object {
-        private val ADD_PATTERN = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val APPLICATION_DATA_PATTERN = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val RESULT_PATTERN = "<Result>(.*?)</Result>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val PROPERTIES_PATTERN = "<Properties>(.*?)</Properties>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        // Блочные XML-regex (Add/ApplicationData/Result/Properties) заменены потоковым
+        // EasXmlParser (forEachElement/collectElements). Остаются ТОЛЬКО regex разбора
+        // email-СТРОКИ (не XML): RFC 2822 `"Name" <addr>` и простой адрес.
         private val BRACKET_EMAIL = Regex("<([^>]+@[^>]+)>")
         private val SIMPLE_EMAIL = Regex("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}")
 
@@ -254,17 +253,15 @@ class EasContactsService internal constructor(
         }
     }
     
-    private fun parseContactsSyncResponse(xml: String): List<GalContact> {
+    internal fun parseContactsSyncResponse(xml: String): List<GalContact> {
         val contacts = mutableListOf<GalContact>()
         
-        ADD_PATTERN.findAll(xml).forEach { match ->
-            val addXml = match.groupValues[1]
+        EasXmlParser.forEachElement(xml, "Add") { addXml ->
             val easServerId = extractContactValue(addXml, "ServerId") ?: ""
 
-            val dataMatch = APPLICATION_DATA_PATTERN.find(addXml)
-            if (dataMatch != null) {
-                val dataXml = dataMatch.groupValues[1]
-
+            // Поля контакта — внутри ApplicationData (сохраняем прежнее скоупирование).
+            val dataXml = EasXmlParser.collectElements(addXml, "ApplicationData").firstOrNull()
+            if (dataXml != null) {
                 val displayName = extractContactValue(dataXml, "FileAs")
                     ?: extractContactValue(dataXml, "DisplayName")
                     ?: ""
@@ -293,24 +290,21 @@ class EasContactsService internal constructor(
     }
     
     private fun extractContactValue(xml: String, tag: String): String? {
-        return XmlValueExtractor.extractContact(xml, tag)
+        return EasXmlParser.contact(xml, tag)
     }
     
-    private fun parseGalSearchResponse(xml: String): List<GalContact> {
+    internal fun parseGalSearchResponse(xml: String): List<GalContact> {
         val contacts = mutableListOf<GalContact>()
         
-        val status = extractValue(xml, "Status")?.toIntOrNull() ?: 0
+        val status = EasXmlParser.extractValue(xml, "Status")?.toIntOrNull() ?: 0
         if (status != 1) {
             return emptyList()
         }
-        
-        RESULT_PATTERN.findAll(xml).forEach { match ->
-            val resultXml = match.groupValues[1]
-            
-            val propsMatch = PROPERTIES_PATTERN.find(resultXml)
-            if (propsMatch != null) {
-                val propsXml = propsMatch.groupValues[1]
-                
+
+        EasXmlParser.forEachElement(xml, "Result") { resultXml ->
+            // Свойства контакта GAL — внутри Properties (сохраняем прежнее скоупирование).
+            val propsXml = EasXmlParser.collectElements(resultXml, "Properties").firstOrNull()
+            if (propsXml != null) {
                 val displayName = extractGalValue(propsXml, "DisplayName") ?: ""
                 val rawGalEmail = extractGalValue(propsXml, "EmailAddress") ?: ""
                 val email = extractEmailOnly(rawGalEmail)
@@ -336,6 +330,6 @@ class EasContactsService internal constructor(
     }
     
     private fun extractGalValue(xml: String, tag: String): String? {
-        return XmlValueExtractor.extractGal(xml, tag)
+        return EasXmlParser.gal(xml, tag)
     }
 }
