@@ -41,9 +41,15 @@ class EmailDetailActions(
 ) {
 
     /**
-     * Downloads attachment bytes from local cache or EAS server.
+     * Downloads attachment bytes from local cache or EAS/EWS server.
      * Returns EasResult.Success(ByteArray) or EasResult.Error.
-     * EAS 12.1: uses GetAttachment command (MS-ASCMD §2.2.1.7).
+     *
+     * Exchange (EAS 12.1 … 2013): скачивание по FileReference через GetAttachment
+     * (MS-ASCMD §2.2.1.7) и ItemOperations Fetch (MS-ASCMD §2.2.1.10). Если первая попытка
+     * падает, выполняется self-heal ([refreshedFileReferenceOrNull]): заново запрашиваем свежий
+     * FileReference и повторяем загрузку один раз. Это устраняет баг «иногда вложение не
+     * открывается/не скачивается, помогает ручное обновление письма» — обновление ссылки теперь
+     * происходит автоматически.
      */
     suspend fun fetchAttachmentBytes(att: AttachmentEntity): EasResult<ByteArray> {
         if (att.downloaded && att.localPath != null) {
@@ -53,11 +59,20 @@ class EmailDetailActions(
                 return EasResult.Success(bytes)
             }
         }
+
+        val first = downloadAttachmentBytesOnce(att.fileReference)
+        if (first is EasResult.Success) return first
+
+        val freshRef = refreshedFileReferenceOrNull(att) ?: return first
+        return downloadAttachmentBytesOnce(freshRef)
+    }
+
+    private suspend fun downloadAttachmentBytesOnce(fileReference: String): EasResult<ByteArray> {
         val account = accountRepo.getActiveAccountSync()
         val easClient = account?.let { accountRepo.createEasClient(it.id) }
             ?: return EasResult.Error("NO_CLIENT")
         val result = withContext(Dispatchers.IO) {
-            easClient.downloadAttachment(att.fileReference)
+            easClient.downloadAttachment(fileReference)
         }
         if (result is EasResult.Success) {
             easClient.policyKey?.let { newKey ->
@@ -70,16 +85,55 @@ class EmailDetailActions(
     }
 
     /**
-     * Downloads attachment to a file via streaming.
-     * Returns the EAS result.
+     * Downloads attachment to a file via streaming, with the same self-heal retry as
+     * [fetchAttachmentBytes] (used by the "Save as…" document-picker path).
      */
     suspend fun downloadAttachmentToFile(att: AttachmentEntity, destFile: File): EasResult<Unit> {
+        val first = downloadAttachmentToFileOnce(att.fileReference, destFile)
+        if (first is EasResult.Success) return first.toUnit()
+
+        val freshRef = refreshedFileReferenceOrNull(att) ?: return first.toUnit()
+        return downloadAttachmentToFileOnce(freshRef, destFile).toUnit()
+    }
+
+    private suspend fun downloadAttachmentToFileOnce(fileReference: String, destFile: File): EasResult<File> {
         val account = accountRepo.getActiveAccountSync()
         val easClient = account?.let { accountRepo.createEasClient(it.id) }
             ?: return EasResult.Error("NO_CLIENT")
         return withContext(Dispatchers.IO) {
-            easClient.downloadAttachmentToFile(att.fileReference, destFile)
-        }.toUnit()
+            easClient.downloadAttachmentToFile(fileReference, destFile)
+        }
+    }
+
+    /**
+     * Self-heal для скачивания вложений Exchange: повторно получает свежие метаданные вложения
+     * ([MailRepository.refreshAttachmentMetadata] → ItemOperations Fetch метаданных) и возвращает
+     * ОБНОВЛЁННЫЙ FileReference, если он изменился.
+     *
+     * На Exchange (EAS 12.1 … 2013) FileReference, используемый GetAttachment и ItemOperations
+     * Fetch, привязан к текущему состоянию синхронизации письма и инвалидируется при ресинке; он
+     * также может быть пустым, если письмо синхронизировалось до первого refresh. В обоих случаях
+     * первая загрузка падает — ровно это пользователь раньше чинил вручную «обновлением письма».
+     * Возвращаем non-null ТОЛЬКО когда ссылка реально изменилась (стала непустой и отличается от
+     * прежней): иначе повтор бессмыслен (вложение действительно недоступно / удалено на сервере)
+     * и создавал бы лишнюю нагрузку.
+     *
+     * @return новый непустой FileReference, отличный от [AttachmentEntity.fileReference], либо null.
+     */
+    private suspend fun refreshedFileReferenceOrNull(att: AttachmentEntity): String? {
+        return try {
+            withContext(Dispatchers.IO) {
+                mailRepo.refreshAttachmentMetadata(att.emailId)
+                val fresh = mailRepo.getAttachmentsSync(att.emailId)
+                val match = fresh.firstOrNull { it.id == att.id }
+                    ?: fresh.firstOrNull { it.displayName == att.displayName }
+                match?.fileReference?.takeIf { it.isNotBlank() && it != att.fileReference }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
     }
 
     suspend fun markAsRead(emailId: String, read: Boolean): EasResult<Unit> =
