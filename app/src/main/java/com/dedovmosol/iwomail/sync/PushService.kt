@@ -184,6 +184,16 @@ class PushService : Service() {
          */
         fun requestRestart(context: Context, delaySeconds: Long = 60) {
             val appContext = context.applicationContext
+            // SYNC-3: единый circuit breaker — не допускаем шторм авто-перезапусков.
+            val effectiveDelay = PushRestartPolicy.nextRestartDelaySec(appContext, delaySeconds)
+            if (effectiveDelay == null) {
+                android.util.Log.w(TAG, "SYNC-3: circuit breaker перезапусков РАЗОМКНУТ (слишком много попыток за окно) — восстановление отдаём периодическому SyncWorker")
+                try { SyncWorker.schedule(appContext) } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.w(TAG, "SYNC-3 fallback schedule failed", e)
+                }
+                return
+            }
             // Стратегия 1: AlarmManager + getForegroundService()
             try {
                 val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
@@ -199,7 +209,7 @@ class PushService : Service() {
                         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                     )
                 }
-                val triggerTime = System.currentTimeMillis() + delaySeconds * 1000L
+                val triggerTime = System.currentTimeMillis() + effectiveDelay * 1000L
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                     alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -214,7 +224,7 @@ class PushService : Service() {
             // Стратегия 2: WorkManager fallback (работает без SCHEDULE_EXACT_ALARM)
             try {
                 val restartWork = androidx.work.OneTimeWorkRequestBuilder<PushRestartWorker>()
-                    .setInitialDelay(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .setInitialDelay(effectiveDelay, java.util.concurrent.TimeUnit.SECONDS)
                     .setConstraints(
                         androidx.work.Constraints.Builder()
                             .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
@@ -424,6 +434,9 @@ class PushService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+
+        // SYNC-3: успешный выход в foreground — замыкаем circuit breaker перезапусков.
+        PushRestartPolicy.onForegroundStarted(applicationContext)
 
         // Проверяем наличие PUSH аккаунтов в фоне
         serviceScope.launch {
