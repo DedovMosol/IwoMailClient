@@ -34,7 +34,11 @@ class DeletedIdsTracker(
                 for (id in saved) {
                     ids[id] = now
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                // DATA-7/DATA-9: не крашим (защита от «воскрешения» — best-effort), но не молчим:
+                // при сбое чтения трекер стартует пустым, и удалённые элементы могут временно вернуться.
+                android.util.Log.w("DeletedIdsTracker", "init($prefsName) failed — starting empty", e)
+            }
             initialized = true
         }
     }
@@ -50,7 +54,10 @@ class DeletedIdsTracker(
                 }
                 context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
                     .edit().putStringSet(prefsKey, snapshot).apply()
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                // DATA-7/DATA-9: сбой персиста не должен ронять операцию удаления, но логируем причину.
+                android.util.Log.w("DeletedIdsTracker", "persist($prefsName) failed", e)
+            }
         }
     }
 
