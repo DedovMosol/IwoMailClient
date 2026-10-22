@@ -51,15 +51,28 @@ class WbxmlParser {
         val input = ByteArrayInputStream(data)
         val result = StringBuilder()
 
-        // Поля заголовка WBXML (version, publicId, charset) парсером не используются,
-        // но чтение обязательно — оно продвигает поток к телу документа.
-        input.read()
-        readMultiByteInt(input)
-        readMultiByteInt(input)
+        // Поля заголовка WBXML (version, publicId, charset) — чтение обязательно, оно
+        // продвигает поток к телу документа.
+        input.read()                              // version
+        readMultiByteInt(input)                   // publicId
+        val charset = readMultiByteInt(input)     // charset
+        // EAS-7: EAS всегда UTF-8 (0x6A). Иной charset не ожидается; декодируем UTF-8 best-effort,
+        // но сигнализируем — чтобы не молчать при нештатном сервере.
+        if (charset != WBXML_CHARSET_UTF8) {
+            android.util.Log.w("WbxmlParser", "Unexpected WBXML charset=$charset (expected 0x6A UTF-8)")
+        }
         val stringTableLength = readMultiByteInt(input)
 
-        if (stringTableLength > 0) {
-            input.skip(stringTableLength.toLong())
+        // EAS-7: InputStream.skip() НЕ гарантирует пропуск ровно N байт (может меньше) —
+        // повторяем до полного пропуска строковой таблицы, иначе тело разберётся со сдвигом.
+        var remaining = stringTableLength.toLong()
+        while (remaining > 0) {
+            val skipped = input.skip(remaining)
+            when {
+                skipped > 0 -> remaining -= skipped
+                input.read() < 0 -> remaining = 0 // EOF — дальше пропускать нечего
+                else -> remaining -= 1            // skip вернул 0, но байт прочитан
+            }
         }
 
         result.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
