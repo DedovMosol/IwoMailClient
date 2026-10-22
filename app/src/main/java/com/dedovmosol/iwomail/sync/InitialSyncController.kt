@@ -314,6 +314,9 @@ object InitialSyncController {
     }
 
     private suspend fun syncNonEmailData(context: Context, accountId: Long, includeGal: Boolean = true) {
+        // SYNC-5: нормализуем к application-контексту — корутины синка живут сотни секунд,
+        // нельзя удерживать Activity/Composable-контекст (утечка на время синхронизации).
+        @Suppress("NAME_SHADOWING") val context = context.applicationContext
         withContext(Dispatchers.IO) {
             supervisorScope {
                 launch {
@@ -368,6 +371,8 @@ object InitialSyncController {
         settingsRepo: SettingsRepository,
         onComplete: () -> Unit = {}
     ) {
+        // SYNC-5: application-контекст для долгоживущих корутин синка (нет утечки Activity).
+        @Suppress("NAME_SHADOWING") val context = context.applicationContext
         if (!isNetworkAvailable(context)) {
             noNetwork = true
             onComplete()

@@ -127,13 +127,15 @@ private fun PermissionDialog(
                     )
                     
                     // Разбиваем текст на абзацы с красной строкой
+                    // UI-6: сплит абзацев один раз (мемоизирован), а не дважды на каждую рекомпозицию.
+                    val paragraphs = remember(text) { text.split("\n\n") }
                     Column(
                         modifier = Modifier.padding(top = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        text.split("\n\n").forEachIndexed { index, paragraph ->
+                        paragraphs.forEachIndexed { index, paragraph ->
                             if (paragraph.isNotBlank()) {
-                                val isLastParagraph = index == text.split("\n\n").lastIndex
+                                val isLastParagraph = index == paragraphs.lastIndex
                                 Text(
                                     text = paragraph,
                                     style = if (isLastParagraph) {
@@ -336,7 +338,7 @@ class MainActivity : FragmentActivity() {
             val appLockBiometricEnabled by settingsRepo.appLockBiometricEnabled.collectAsStateWithLifecycle(
                 initialValue = settingsRepo.getAppLockBiometricEnabledSync()
             )
-            val appLocked by com.dedovmosol.iwomail.data.security.AppLockManager.locked.collectAsState()
+            val appLocked by com.dedovmosol.iwomail.data.security.AppLockManager.locked.collectAsStateWithLifecycle() // UI-6: lifecycle-aware, единообразно с остальным экраном
             // Единая чистая логика гейта (SOC + юнит-тестируемость): сессия заблокирована
             // И блокировка включена И пароль реально задан (защита от soft-lock при рассинхроне).
             // Синглтон хранит состояние переживающее поворот; кэш настроек — без «вспышки»

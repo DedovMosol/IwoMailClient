@@ -59,6 +59,7 @@ class ImapClient(
             }
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e // NET-5: structured concurrency — не глушим отмену
             Result.failure(e)
         }
     }
@@ -100,6 +101,7 @@ class ImapClient(
             
             Result.success(folders)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e // NET-5: structured concurrency — не глушим отмену
             Result.failure(e)
         }
     }
@@ -129,6 +131,7 @@ class ImapClient(
                 unreadCount = 0
             ))
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e // NET-5: structured concurrency — не глушим отмену
             Result.failure(e)
         }
     }
@@ -153,6 +156,7 @@ class ImapClient(
             
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e // NET-5: structured concurrency — не глушим отмену
             Result.failure(e)
         }
     }
@@ -191,6 +195,7 @@ class ImapClient(
                 unreadCount = 0
             ))
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e // NET-5: structured concurrency — не глушим отмену
             Result.failure(e)
         }
     }
@@ -227,6 +232,7 @@ class ImapClient(
             
             Result.success(emails)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e // NET-5: structured concurrency — не глушим отмену
             Result.failure(e)
         }
     }
