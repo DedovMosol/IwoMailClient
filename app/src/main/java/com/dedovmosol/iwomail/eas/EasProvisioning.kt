@@ -101,31 +101,25 @@ class EasProvisioning(
      * Парсит ответ сервера на Provision запрос
      */
     fun parseResponse(responseXml: String): ProvisionResponse {
-        // PolicyKey всегда внутри Policy
-        val policyKey = extractValue(responseXml, "PolicyKey")
-        
-        // Парсим Policy Status внутри блока Policy
-        var policyStatus: Int? = null
-        val policyBlock = "<Policy>(.*?)</Policy>".toRegex(RegexOption.DOT_MATCHES_ALL)
-            .find(responseXml)?.groupValues?.get(1)
-        if (policyBlock != null) {
-            policyStatus = "<Status>(\\d+)</Status>".toRegex()
-                .find(policyBlock)?.groupValues?.get(1)?.toIntOrNull()
-        }
-        
-        // Парсим Provision Status — первый Status вне Policy блока
-        val withoutPolicy = responseXml.replace("<Policy>.*?</Policy>".toRegex(RegexOption.DOT_MATCHES_ALL), "")
-        var provisionStatus = "<Status>(\\d+)</Status>".toRegex()
-            .find(withoutPolicy)?.groupValues?.get(1)?.toIntOrNull()
-        
-        // Fallback: если не нашли Provision Status, берём первый из всех
-        if (provisionStatus == null) {
-            provisionStatus = "<Status>(\\d+)</Status>".toRegex()
-                .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
-        }
-        
-        // EAS-2: детекция директивы RemoteWipe (точное совпадение элемента, не AccountOnlyRemoteWipe).
-        val remoteWipeRequested = REMOTE_WIPE_REGEX.containsMatchIn(responseXml)
+        // Миграция на потоковый [EasXmlParser] (XmlPullParser) взамен regex/подстрок — устойчивее
+        // к namespace, самозакрывающимся тегам и экранированию. Семантика сохранена и закреплена
+        // EasProvisioningTest (в т.ч. РАЗНЫЕ Provision-level и Policy-level Status).
+
+        // PolicyKey — лист внутри Policy.
+        val policyKey = EasXmlParser.extractValue(responseXml, "PolicyKey")
+
+        // Policy-level Status — Status ПЕРВОГО блока <Policy> (как прежний <Policy>(.*?)</Policy>).
+        val policyStatus = EasXmlParser.collectElements(responseXml, "Policy")
+            .firstOrNull()?.let { EasXmlParser.extractValue(it, "Status")?.toIntOrNull() }
+
+        // Provision-level Status — верхний Status. По MS-ASPROV он идёт ПЕРВЫМ (до Policies),
+        // т.е. это первый Status в документе; для валидных ответов Exchange 2007 SP2…2013 это
+        // эквивалент прежнему «Status вне блока Policy, иначе первый Status вообще».
+        val provisionStatus = EasXmlParser.extractValue(responseXml, "Status")?.toIntOrNull()
+
+        // EAS-2: директива удалённой очистки — именно элемент <RemoteWipe>. hasElement сверяет имя
+        // элемента целиком, поэтому <AccountOnlyRemoteWipe> НЕ срабатывает (как и прежняя regex).
+        val remoteWipeRequested = EasXmlParser.hasElement(responseXml, "RemoteWipe")
 
         return ProvisionResponse(policyKey, provisionStatus, policyStatus, remoteWipeRequested)
     }
@@ -236,22 +230,8 @@ class EasProvisioning(
         else -> "Unknown error"
     }
     
-    /**
-     * Извлекает значение XML тега
-     */
-    private fun extractValue(xml: String, tag: String): String? {
-        val pattern = "<$tag>([^<]*)</$tag>".toRegex()
-        return pattern.find(xml)?.groupValues?.get(1)
-    }
-    
     companion object {
         /** Фиктивный PolicyKey когда сервер не требует политик */
         const val NO_POLICY_KEY = "0"
-
-        /**
-         * EAS-2: директива удалённой очистки (MS-ASPROV 2.2.2.44). Матчит именно элемент
-         * `<RemoteWipe>`/`<RemoteWipe/>`, НЕ `<AccountOnlyRemoteWipe>` (символ после `<` — 'R').
-         */
-        private val REMOTE_WIPE_REGEX = Regex("<RemoteWipe\\s*/?>")
     }
 }

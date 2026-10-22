@@ -2,6 +2,9 @@ package com.dedovmosol.iwomail.eas
 
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * Юнит-тесты EasProvisioning.
@@ -11,7 +14,12 @@ import org.junit.Test
  * ответить Status=2 (protocol error), на 12.x (Exchange 2007 SP1/SP2)
  * элемент не поддерживается вовсе. Для версий < 14.1 информация об устройстве
  * передаётся отдельной командой Settings (buildSettingsRequest).
+ *
+ * Robolectric: parseResponse разбирает ответ через EasXmlParser (android.util.Xml),
+ * который в чистом JUnit вернул бы null-заглушку.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class EasProvisioningTest {
 
     private fun provisioning(version: String) = EasProvisioning("ABCDEF1234567890", version)
@@ -93,6 +101,29 @@ class EasProvisioningTest {
         assertThat(resp.policyKey).isEqualTo("3942919513")
         assertThat(resp.provisionStatus).isEqualTo(1)
         assertThat(resp.policyStatus).isEqualTo(1)
+    }
+
+    @Test
+    fun `parseResponse distinguishes provision-level Status from policy-level Status`() {
+        // Характеризация перед миграцией на EasXmlParser: верхний (Provision-level) Status и
+        // Policy-level Status РАЗНЫЕ — ловим, что их не перепутали. MS-ASPROV: верхний Status
+        // идёт первым (до Policies). 2 = protocol error, 3 = unknown PolicyType — разные коды.
+        val xml = """
+            <Provision>
+                <Status>2</Status>
+                <Policies>
+                    <Policy>
+                        <PolicyType>MS-EAS-Provisioning-WBXML</PolicyType>
+                        <Status>3</Status>
+                        <PolicyKey>777</PolicyKey>
+                    </Policy>
+                </Policies>
+            </Provision>
+        """.trimIndent()
+        val resp = provisioning("12.1").parseResponse(xml)
+        assertThat(resp.provisionStatus).isEqualTo(2)
+        assertThat(resp.policyStatus).isEqualTo(3)
+        assertThat(resp.policyKey).isEqualTo("777")
     }
 
     @Test
