@@ -1,7 +1,11 @@
 package com.dedovmosol.iwomail.eas
 
+import com.dedovmosol.iwomail.eas.EasSyncStream.children
+import com.dedovmosol.iwomail.eas.EasSyncStream.leafMap
+import com.dedovmosol.iwomail.eas.EasSyncStream.leafText
+import com.dedovmosol.iwomail.eas.EasSyncStream.readBody
+import com.dedovmosol.iwomail.eas.EasSyncStream.readCategories
 import org.xmlpull.v1.XmlPullParser
-import org.xmlpull.v1.XmlPullParserException
 
 /**
  * XML parsing for EAS/EWS Calendar responses.
@@ -60,87 +64,17 @@ class CalendarXmlParser(
      * CalendarRepository/RecurrenceHelper/UI).
      */
     fun parseCalendarEvents(xml: String): List<EasCalendarEvent> {
-        val p = EasXmlParser.createParser(xml) // единая усиленная фабрика (DOCTYPE/XXE отключены)
         val events = mutableListOf<EasCalendarEvent>()
-        var commandsDepth = -1
-        var type = p.eventType
-        while (type != XmlPullParser.END_DOCUMENT) {
-            when (type) {
-                XmlPullParser.START_TAG -> when {
-                    commandsDepth < 0 && p.name == "Commands" -> commandsDepth = p.depth
-                    commandsDepth > 0 && p.depth == commandsDepth + 1 && (p.name == "Add" || p.name == "Change") ->
-                        readSyncItem(p)?.let { events.add(it) }
-                }
-                XmlPullParser.END_TAG -> if (p.depth == commandsDepth) commandsDepth = -1
-            }
-            type = p.next()
+        EasSyncStream.forEachCommand(xml, EasSyncStream.ADD_CHANGE) { _, p ->
+            readSyncItem(p)?.let { events.add(it) }
         }
-        if (p.depth > 0) throw XmlPullParserException("Truncated EAS Sync response: unclosed elements at depth ${p.depth}")
         return events
     }
 
     // ---------- скоупированное чтение (парсер стоит на START_TAG, выходит на его END_TAG) ----------
-
-    /** Полный текст элемента (вся вложенность), сущности развёрнуты; trim; пустой → null. */
-    private fun leafText(p: XmlPullParser): String? {
-        val sb = StringBuilder()
-        var depth = 1
-        while (depth > 0) {
-            when (p.next()) {
-                XmlPullParser.START_TAG -> depth++
-                XmlPullParser.END_TAG -> depth--
-                XmlPullParser.TEXT, XmlPullParser.CDSECT, XmlPullParser.ENTITY_REF -> sb.append(p.text)
-                XmlPullParser.END_DOCUMENT -> throw XmlPullParserException("Unexpected end of document")
-            }
-        }
-        return sb.toString().trim().ifEmpty { null }
-    }
-
-    /** Обходит ПРЯМЫХ детей текущего элемента; [onChild] обязан дочитать ребёнка (или вызвать skip). */
-    private inline fun children(p: XmlPullParser, onChild: (String) -> Unit) {
-        val parentDepth = p.depth
-        while (true) {
-            when (p.next()) {
-                XmlPullParser.START_TAG -> onChild(p.name)
-                XmlPullParser.END_TAG -> if (p.depth == parentDepth) return
-                XmlPullParser.END_DOCUMENT -> throw XmlPullParserException("Unexpected end of document")
-            }
-        }
-    }
-
-    /** Карта «имя прямого ребёнка → текст» (первое вхождение); вложенные контейнеры пропускаются. */
-    private fun leafMap(p: XmlPullParser): Map<String, String> {
-        val map = HashMap<String, String>()
-        children(p) { name ->
-            val value = leafText(p)
-            if (value != null && name !in map) map[name] = value
-        }
-        return map
-    }
-
-    /**
-     * `<Body>`: текст `Data` (AirSyncBase: `<Body><Type/><Data>…</Data></Body>`), иначе — собственный
-     * текст элемента (EAS 2.5: тело прямо в `<Body>`). Прочие дети (`Type`, `EstimatedDataSize`…)
-     * пропускаются. Значение тримится — как прежде (`trim()` перед unescape в старом regex-коде).
-     * (Альтернативы `Organizer_Email`/`Organizer_Name` старого кода не перенесены: таких тегов нет
-     * ни в одной WBXML code page — декодер их выдать не может.)
-     */
-    private fun readBody(p: XmlPullParser): String? {
-        if (p.isEmptyElementTag) { p.next(); return null }
-        val parentDepth = p.depth
-        val ownText = StringBuilder()
-        var data: String? = null
-        while (true) {
-            when (p.next()) {
-                XmlPullParser.START_TAG ->
-                    if (p.name == "Data" && data == null) data = leafText(p) else EasXmlParser.skip(p)
-                XmlPullParser.TEXT, XmlPullParser.CDSECT, XmlPullParser.ENTITY_REF -> ownText.append(p.text)
-                XmlPullParser.END_TAG -> if (p.depth == parentDepth) break
-                XmlPullParser.END_DOCUMENT -> throw XmlPullParserException("Unexpected end of document")
-            }
-        }
-        return data ?: ownText.toString().trim().ifEmpty { null }
-    }
+    // Общие примитивы (children/leafText/leafMap/readBody/readCategories) — в EasSyncStream.
+    // Альтернативы `Organizer_Email`/`Organizer_Name` старого кода не перенесены: таких тегов нет
+    // ни в одной WBXML code page — декодер их выдать не может.
 
     private fun readSyncItem(p: XmlPullParser): EasCalendarEvent? {
         var serverId: String? = null
@@ -233,12 +167,6 @@ class CalendarXmlParser(
             val email = f["Email"] ?: return@children
             result.add(EasAttendee(email, f["Name"] ?: "", f["AttendeeStatus"]?.toIntOrNull() ?: 0))
         }
-        return result
-    }
-
-    private fun readCategories(p: XmlPullParser): List<String> {
-        val result = mutableListOf<String>()
-        children(p) { name -> if (name == "Category") leafText(p)?.let { result.add(it) } else EasXmlParser.skip(p) }
         return result
     }
 

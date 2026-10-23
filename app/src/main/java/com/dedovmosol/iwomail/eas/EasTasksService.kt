@@ -1693,55 +1693,40 @@ $itemIdsXml
     
     // ==================== Parsing ====================
     
+    /**
+     * EAS Sync задач (MS-ASTASK) — один потоковый проход ([EasSyncStream]): поля — прямые дети
+     * `ApplicationData`. Порядок как прежде: сначала все Add, затем все Change.
+     * Оборванный или битый ответ — исключение (см. [EasSyncStream]).
+     */
     internal fun parseTaskSyncResponse(xml: String): List<EasTask> {
-        val tasks = mutableListOf<EasTask>()
-
-        // Порядок как в прежнем regex-коде: сначала все <Add>, затем все <Change>.
-        EasXmlParser.forEachElement(xml, "Add") { itemXml ->
-            parseTaskFromXml(itemXml)?.let { tasks.add(it) }
+        val adds = mutableListOf<EasTask>()
+        val changes = mutableListOf<EasTask>()
+        EasSyncStream.forEachCommand(xml, EasSyncStream.ADD_CHANGE) { command, p ->
+            val item = EasSyncStream.readItem(p, TASK_FIELDS, withBody = true, withCategories = true)
+            item?.let(::toTask)?.let { if (command == "Add") adds += it else changes += it }
         }
-        EasXmlParser.forEachElement(xml, "Change") { itemXml ->
-            parseTaskFromXml(itemXml)?.let { tasks.add(it) }
-        }
-
-        return tasks
+        return adds + changes
     }
     
-    private fun parseTaskFromXml(itemXml: String): EasTask? {
-        val serverId = EasXmlParser.extractValue(itemXml, "ServerId") ?: return null
-
-        // Поля задачи — внутри ApplicationData (сохраняем прежнее скоупирование).
-        val dataXml = EasXmlParser.collectElements(itemXml, "ApplicationData").firstOrNull() ?: return null
-
-        val subject = EasXmlParser.task(dataXml, "Subject") ?: ""
-        val body = extractTaskBody(dataXml)
-        val startDate = parseDate(EasXmlParser.task(dataXml, "StartDate")
-            ?: EasXmlParser.task(dataXml, "UtcStartDate"))
-        val dueDate = parseDate(EasXmlParser.task(dataXml, "DueDate")
-            ?: EasXmlParser.task(dataXml, "UtcDueDate"))
-        val complete = EasXmlParser.task(dataXml, "Complete") == "1"
-        val dateCompleted = parseDate(EasXmlParser.task(dataXml, "DateCompleted"))
-        val importance = EasXmlParser.task(dataXml, "Importance")?.toIntOrNull() ?: 1
-        val sensitivity = EasXmlParser.task(dataXml, "Sensitivity")?.toIntOrNull() ?: 0
-        val reminderSet = EasXmlParser.task(dataXml, "ReminderSet") == "1"
-        val reminderTime = parseDate(EasXmlParser.task(dataXml, "ReminderTime"))
-        val categories = extractTaskCategories(dataXml)
-        val owner = EasXmlParser.task(dataXml, "OwnerId") ?: ""
-        
+    private fun toTask(item: EasSyncStream.SyncItem): EasTask? {
+        val serverId = item.serverId ?: return null
+        val f = item.fields
         return EasTask(
             serverId = serverId,
-            subject = subject,
-            body = body,
-            startDate = startDate,
-            dueDate = dueDate,
-            complete = complete,
-            dateCompleted = dateCompleted,
-            importance = importance,
-            sensitivity = sensitivity,
-            reminderSet = reminderSet,
-            reminderTime = reminderTime,
-            categories = categories,
-            owner = owner
+            subject = f["Subject"] ?: "",
+            // AirSyncBase Body/Data (EAS 12+). Тело прямо в <Body> бывает только в EAS 2.5: прежний
+            // код его отбрасывал, общий readBody берёт — вне поддерживаемых версий разницы нет.
+            body = item.body?.let(::removeDuplicateLines) ?: "",
+            startDate = parseDate(f["StartDate"] ?: f["UtcStartDate"]),
+            dueDate = parseDate(f["DueDate"] ?: f["UtcDueDate"]),
+            complete = f["Complete"] == "1",
+            dateCompleted = parseDate(f["DateCompleted"]),
+            importance = f["Importance"]?.toIntOrNull() ?: 1,
+            sensitivity = f["Sensitivity"]?.toIntOrNull() ?: 0,
+            reminderSet = f["ReminderSet"] == "1",
+            reminderTime = parseDate(f["ReminderTime"]),
+            categories = item.categories,
+            owner = f["OwnerId"] ?: ""
         )
     }
     
@@ -1831,20 +1816,6 @@ $itemIdsXml
         )
     }
     
-    private fun extractTaskBody(xml: String): String {
-        // EAS 14.0+: тело приходит как AirSyncBase <Body><Type/><Data>…</Data></Body> (голые теги,
-        // см. EasCodePages). Берём текст Data. Прежний код НЕ имел fallback на «тело прямо в <Body>»
-        // (все паттерны требовали <Data> либо были префиксными), поэтому и мы берём ТОЛЬКО Data:
-        // голый <Body>text</Body> без Data прежде давал "" — эквивалентность сохранена.
-        // EasXmlParser.extractValue уже снимает экранирование и тримит.
-        val raw = EasXmlParser.extractValue(xml, "Data") ?: return ""
-        return removeDuplicateLines(raw)
-    }
-
-    // Прежний regex искал ПРЕФИКСНЫЙ <tasks:Categories>, а декодер выдаёт голый <Categories> —
-    // категории EAS-задач (Exchange 2010/2013) терялись всегда. Хелпер матчит оба варианта.
-    private fun extractTaskCategories(xml: String): List<String> = EasXmlParser.categories(xml, "tasks")
-
     private fun extractEwsCategories(xml: String): List<String> {
         val categories = mutableListOf<String>()
         val outerMatch = Companion.REGEX_EWS_CATEGORIES_OUTER.find(xml) ?: return categories
@@ -1911,9 +1882,15 @@ $itemIdsXml
             "<(?:t:)?Message\\b[^>]*>(.*?)</(?:t:)?Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
         )
 
-        // EAS Sync разбор (Add/Change/ApplicationData/тело/категории) — на EasXmlParser.
+        // EAS Sync разбор (Add/Change/ApplicationData/тело/категории) — один проход EasSyncStream.
         // EWS-путь ниже намеренно оставлен на regex: позиционный fallback для Exchange 2007 SP1
         // режет произвольные подстроки по смещениям ItemId — XmlPullParser их не разберёт.
+
+        /** Листья ApplicationData задачи (MS-ASTASK), которые читает [parseTaskSyncResponse]. */
+        private val TASK_FIELDS = setOf(
+            "Subject", "StartDate", "UtcStartDate", "DueDate", "UtcDueDate", "Complete", "DateCompleted",
+            "Importance", "Sensitivity", "ReminderSet", "ReminderTime", "OwnerId"
+        )
 
         // extractEwsCategories
         private val REGEX_EWS_CATEGORIES_OUTER = "<(?:t:)?Categories>(.*?)</(?:t:)?Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)

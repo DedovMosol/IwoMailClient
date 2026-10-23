@@ -21,10 +21,13 @@ class EasNotesService internal constructor(
     private val syncKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     companion object {
-        // Разбор полей/тела/категорий — на EasXmlParser (потоковый XmlPullParser).
+        // EAS Sync — один потоковый проход EasSyncStream. EWS-поля — на EasXmlParser.
         // Намеренно оставлен EWS_ITEM_PATTERN: один проход по <t:PostItem>|<t:Message> сохраняет
         // ДОКУМЕНТНЫЙ порядок элементов (два раздельных forEachElement дали бы все PostItem, затем все Message).
         private val EWS_ITEM_PATTERN = "<t:(?:PostItem|Message)[^>]*>(.*?)</t:(?:PostItem|Message)>".toRegex(RegexOption.DOT_MATCHES_ALL)
+
+        /** Листья ApplicationData заметки (MS-ASNOTE), которые читает [parseNotesResponse]. */
+        private val NOTE_FIELDS = setOf("Subject", "MessageClass", "LastModifiedDate")
     }
     
     interface EasCommandExecutor {
@@ -1034,32 +1037,26 @@ $itemIdsXml
     
     // ==================== Parsing ====================
     
+    /**
+     * EAS Sync заметок (MS-ASNOTE) — один потоковый проход ([EasSyncStream]): поля — прямые дети
+     * `ApplicationData`, тело — `Body/Data`. Порядок как прежде: сначала все Add, затем все Change.
+     * Оборванный или битый ответ — исключение (см. [EasSyncStream]).
+     */
     internal fun parseNotesResponse(xml: String): List<EasNote> {
-        val notes = mutableListOf<EasNote>()
-
-        // Порядок как в прежнем regex-коде: сначала все <Add>, затем все <Change>.
-        EasXmlParser.forEachElement(xml, "Add") { itemXml ->
-            parseNoteFromXml(itemXml)?.let { notes.add(it) }
+        val adds = mutableListOf<EasNote>()
+        val changes = mutableListOf<EasNote>()
+        EasSyncStream.forEachCommand(xml, EasSyncStream.ADD_CHANGE) { command, p ->
+            val item = EasSyncStream.readItem(p, NOTE_FIELDS, withBody = true, withCategories = true)
+            item?.let(::toNote)?.let { if (command == "Add") adds += it else changes += it }
         }
-        EasXmlParser.forEachElement(xml, "Change") { itemXml ->
-            parseNoteFromXml(itemXml)?.let { notes.add(it) }
-        }
-
-        return notes
+        return adds + changes
     }
     
-    private fun parseNoteFromXml(itemXml: String): EasNote? {
-        val serverId = EasXmlParser.extractValue(itemXml, "ServerId") ?: return null
-
-        // Поля заметки — внутри ApplicationData (сохраняем прежнее скоупирование).
-        val dataXml = EasXmlParser.collectElements(itemXml, "ApplicationData").firstOrNull() ?: return null
-
-        val subject = EasXmlParser.note(dataXml, "Subject") ?: ""
-        val body = extractNoteBody(dataXml)
-        val messageClass = EasXmlParser.note(dataXml, "MessageClass") ?: "IPM.StickyNote"
-        val lastModified = parseNoteDate(EasXmlParser.note(dataXml, "LastModifiedDate"))
-        val categories = extractNoteCategories(dataXml)
-
+    private fun toNote(item: EasSyncStream.SyncItem): EasNote? {
+        val serverId = item.serverId ?: return null
+        val subject = item.fields["Subject"] ?: ""
+        // EAS 14.0+: тело в AirSyncBase Body/Data; без Data — собственный текст Body (EAS 2.5).
+        val body = item.body?.let(::stripHtmlIfNeeded) ?: ""
         if (subject.isEmpty() && body.isEmpty()) {
             return null
         }
@@ -1068,9 +1065,9 @@ $itemIdsXml
             serverId = serverId,
             subject = subject.ifEmpty { "No subject" },
             body = body,
-            messageClass = messageClass,
-            lastModified = lastModified,
-            categories = categories,
+            messageClass = item.fields["MessageClass"] ?: "IPM.StickyNote",
+            lastModified = parseNoteDate(item.fields["LastModifiedDate"]),
+            categories = item.categories,
             isDeleted = false
         )
     }
@@ -1189,23 +1186,9 @@ $itemIdsXml
         return stripHtmlIfNeeded(raw)
     }
     
-    private fun extractNoteBody(xml: String): String {
-        // EAS 14.0+: тело приходит как AirSyncBase <Body><Type/><Data>…</Data></Body> (голые теги
-        // после WBXML-декодирования, см. EasCodePages). Берём текст Data; если Body без Data —
-        // текст самого Body. EasXmlParser.extractValue уже снимает экранирование и тримит.
-        val raw = EasXmlParser.extractValue(xml, "Data")
-            ?: EasXmlParser.extractValue(xml, "Body")
-            ?: return ""
-        return stripHtmlIfNeeded(raw)
-    }
-
     private fun stripHtmlIfNeeded(text: String): String =
         com.dedovmosol.iwomail.util.stripHtmlIfNeeded(text)
 
-    // Прежний regex искал ПРЕФИКСНЫЙ <notes:Categories>, а декодер выдаёт голый <Categories> —
-    // категории EAS-заметок (Exchange 2010/2013) терялись всегда. Хелпер матчит оба варианта.
-    private fun extractNoteCategories(xml: String): List<String> = EasXmlParser.categories(xml, "notes")
-    
     private fun parseNoteDate(dateStr: String?): Long {
         if (dateStr.isNullOrBlank()) return System.currentTimeMillis()
         return try {

@@ -18,9 +18,18 @@ class EasContactsService internal constructor(
     private val syncKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     companion object {
-        // Блочные XML-regex (Add/ApplicationData/Result/Properties) заменены потоковым
-        // EasXmlParser (forEachElement/collectElements). Остаются ТОЛЬКО regex разбора
-        // email-СТРОКИ (не XML): RFC 2822 `"Name" <addr>` и простой адрес.
+        // Sync контактов — один потоковый проход EasSyncStream; GAL Search — EasXmlParser.
+        // Остаются ТОЛЬКО regex разбора email-СТРОКИ (не XML): RFC 2822 `"Name" <addr>` и простой адрес.
+        private val ADD_ONLY = setOf("Add")
+        private const val PICTURE_OPEN = "<Picture>"
+        private const val PICTURE_CLOSE = "</Picture>"
+
+        /** Листья ApplicationData контакта (MS-ASCNTC), которые читает [parseContactsSyncResponse]. */
+        private val CONTACT_FIELDS = setOf(
+            "FileAs", "DisplayName", "Email1Address", "FirstName", "LastName", "CompanyName",
+            "Department", "JobTitle", "BusinessPhoneNumber", "HomePhoneNumber", "MobilePhoneNumber"
+        )
+
         private val BRACKET_EMAIL = Regex("<([^>]+@[^>]+)>")
         private val SIMPLE_EMAIL = Regex("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}")
 
@@ -253,44 +262,61 @@ class EasContactsService internal constructor(
         }
     }
     
+    /**
+     * EAS Sync контактов (MS-ASCNTC) — один потоковый проход ([EasSyncStream]) по `Commands/Add`:
+     * поля — прямые дети `ApplicationData`. Фото (`Picture`, base64) и тело пропускаются без
+     * накопления текста. Оборванный или битый ответ — исключение (см. [EasSyncStream]).
+     */
     internal fun parseContactsSyncResponse(xml: String): List<GalContact> {
         val contacts = mutableListOf<GalContact>()
         
-        EasXmlParser.forEachElement(xml, "Add") { addXml ->
-            val easServerId = extractContactValue(addXml, "ServerId") ?: ""
+        EasSyncStream.forEachCommand(withoutPictures(xml), ADD_ONLY) { _, p ->
+            val item = EasSyncStream.readItem(p, CONTACT_FIELDS, withBody = false, withCategories = false)
+                ?: return@forEachCommand
+            val f = item.fields
+            val displayName = f["FileAs"] ?: f["DisplayName"] ?: ""
+            val email = extractEmailOnly(f["Email1Address"] ?: "")
 
-            // Поля контакта — внутри ApplicationData (сохраняем прежнее скоупирование).
-            val dataXml = EasXmlParser.collectElements(addXml, "ApplicationData").firstOrNull()
-            if (dataXml != null) {
-                val displayName = extractContactValue(dataXml, "FileAs")
-                    ?: extractContactValue(dataXml, "DisplayName")
-                    ?: ""
-                val rawEmail = extractContactValue(dataXml, "Email1Address") ?: ""
-                val email = extractEmailOnly(rawEmail)
-
-                if (displayName.isNotEmpty() || email.isNotEmpty()) {
-                    contacts.add(GalContact(
-                        displayName = displayName,
-                        email = email,
-                        firstName = extractContactValue(dataXml, "FirstName") ?: "",
-                        lastName = extractContactValue(dataXml, "LastName") ?: "",
-                        company = extractContactValue(dataXml, "CompanyName") ?: "",
-                        department = extractContactValue(dataXml, "Department") ?: "",
-                        jobTitle = extractContactValue(dataXml, "JobTitle") ?: "",
-                        phone = extractContactValue(dataXml, "BusinessPhoneNumber")
-                            ?: extractContactValue(dataXml, "HomePhoneNumber") ?: "",
-                        mobilePhone = extractContactValue(dataXml, "MobilePhoneNumber") ?: "",
-                        easServerId = easServerId
-                    ))
-                }
+            if (displayName.isNotEmpty() || email.isNotEmpty()) {
+                contacts.add(GalContact(
+                    displayName = displayName,
+                    email = email,
+                    firstName = f["FirstName"] ?: "",
+                    lastName = f["LastName"] ?: "",
+                    company = f["CompanyName"] ?: "",
+                    department = f["Department"] ?: "",
+                    jobTitle = f["JobTitle"] ?: "",
+                    phone = f["BusinessPhoneNumber"] ?: f["HomePhoneNumber"] ?: "",
+                    mobilePhone = f["MobilePhoneNumber"] ?: "",
+                    easServerId = item.serverId ?: ""
+                ))
             }
         }
         
         return contacts
     }
-    
-    private fun extractContactValue(xml: String, tag: String): String? {
-        return EasXmlParser.contact(xml, tag)
+
+    /**
+     * Вырезает элементы `<Picture>…</Picture>` (фото контакта, base64 до сотен КБ) до разбора.
+     * Фото здесь не используется, а XmlPullParser материализует текст любого элемента, даже
+     * пропускаемого: окно 100 контактов с фото 48K давало 17 МБ временных строк вместо 0,4 МБ.
+     * В тексте декодированного WBXML `<` всегда экранирован, поэтому `<Picture>` — только тег.
+     * Нет закрывающего тега (обрыв) — хвост остаётся как есть, и парсер честно сообщит об обрыве.
+     */
+    private fun withoutPictures(xml: String): String {
+        var start = xml.indexOf(PICTURE_OPEN)
+        if (start < 0) return xml
+        // Без предвыделения xml.length: без фото результат в разы меньше исходника.
+        val out = StringBuilder()
+        var from = 0
+        while (start >= 0) {
+            val end = xml.indexOf(PICTURE_CLOSE, start + PICTURE_OPEN.length)
+            if (end < 0) break
+            out.append(xml, from, start)
+            from = end + PICTURE_CLOSE.length
+            start = xml.indexOf(PICTURE_OPEN, from)
+        }
+        return out.append(xml, from, xml.length).toString()
     }
     
     internal fun parseGalSearchResponse(xml: String): List<GalContact> {

@@ -254,32 +254,5 @@ class EasXmlParserTest {
         assertThat(key).isEqualTo("7")
     }
 
-    // ───────────────── categories(): EAS <Categories><Category> ─────────────────
-
-    @Test
-    fun `categories reads bare tags as emitted by the WBXML decoder`() {
-        val xml = "<Subject>S</Subject><Categories><Category>Work</Category><Category>Home</Category></Categories>"
-        assertThat(EasXmlParser.categories(xml, "notes")).containsExactly("Work", "Home").inOrder()
-    }
-
-    @Test
-    fun `categories reads prefixed tags too`() {
-        val xml = "<tasks:Categories><tasks:Category>Work</tasks:Category></tasks:Categories>"
-        assertThat(EasXmlParser.categories(xml, "tasks")).containsExactly("Work")
-    }
-
-    @Test
-    fun `categories unescapes entities, trims, drops empty, empty when absent`() {
-        val xml = "<Categories><Category> R&amp;D </Category><Category/><Category></Category></Categories>"
-        assertThat(EasXmlParser.categories(xml, "notes")).containsExactly("R&D")
-        assertThat(EasXmlParser.categories("<Subject>S</Subject>", "notes")).isEmpty()
-        assertThat(EasXmlParser.categories("<Categories/>", "notes")).isEmpty()
-    }
-
-    @Test
-    fun `categories takes the first Categories block only`() {
-        val xml = "<Categories><Category>Main</Category></Categories>" +
-            "<Exceptions><Exception><Categories><Category>Other</Category></Categories></Exception></Exceptions>"
-        assertThat(EasXmlParser.categories(xml, "calendar")).containsExactly("Main")
-    }
+    // Категории EAS (<Categories><Category>) читает EasSyncStream.readCategories — см. EasSyncStreamTest.
 }

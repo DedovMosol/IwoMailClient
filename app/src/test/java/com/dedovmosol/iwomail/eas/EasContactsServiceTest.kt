@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.eas
 
 import com.google.common.truth.Truth.assertThat
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -69,6 +70,40 @@ class EasContactsServiceTest {
         assertThat(c2.displayName).isEqualTo("Petrov Petr") // fallback на DisplayName
         assertThat(c2.email).isEqualTo("petr@contoso.com")
         assertThat(c2.phone).isEqualTo("+1-555-0200")       // fallback на Home
+    }
+
+    @Test
+    fun `parseContactsSyncResponse skips contact photos and keeps the fields around them`() {
+        // Реальный WBXML round-trip: фото (base64) до и после полей, пустое фото, контакт без фото.
+        val wbxml = WbxmlParser()
+        val photo = "QUJD".repeat(2_000)
+        val sent = """<?xml version="1.0" encoding="utf-8"?><Sync xmlns="AirSync" xmlns:contacts="Contacts">""" +
+            "<Collections><Collection><SyncKey>5</SyncKey><CollectionId>9</CollectionId><Status>1</Status><Commands>" +
+            "<Add><ServerId>9:1</ServerId><ApplicationData><contacts:Picture>$photo</contacts:Picture>" +
+            "<contacts:FileAs>Ivanov</contacts:FileAs><contacts:Email1Address>ivan@corp.local</contacts:Email1Address>" +
+            "<contacts:Picture>$photo</contacts:Picture><contacts:MobilePhoneNumber>+7 900</contacts:MobilePhoneNumber></ApplicationData></Add>" +
+            "<Add><ServerId>9:2</ServerId><ApplicationData><contacts:Picture/><contacts:FileAs>Petrov</contacts:FileAs></ApplicationData></Add>" +
+            "<Add><ServerId>9:3</ServerId><ApplicationData><contacts:FileAs>Sidorov</contacts:FileAs></ApplicationData></Add>" +
+            "</Commands></Collection></Collections></Sync>"
+        val decoded = wbxml.parse(wbxml.generate(sent))
+        assertThat(decoded).contains("<Picture>")
+
+        val contacts = service().parseContactsSyncResponse(decoded)
+
+        assertThat(contacts.map { it.easServerId }).containsExactly("9:1", "9:2", "9:3").inOrder()
+        assertThat(contacts[0].displayName).isEqualTo("Ivanov")
+        assertThat(contacts[0].email).isEqualTo("ivan@corp.local")
+        assertThat(contacts[0].mobilePhone).isEqualTo("+7 900")
+        assertThat(contacts[1].displayName).isEqualTo("Petrov")
+        assertThat(contacts[2].displayName).isEqualTo("Sidorov")
+    }
+
+    @Test
+    fun `parseContactsSyncResponse rejects a response cut inside a photo`() {
+        val xml = "<Sync><Collections><Collection><SyncKey>5</SyncKey><Status>1</Status><Commands>" +
+            "<Add><ServerId>9:1</ServerId><ApplicationData><FileAs>Ivanov</FileAs><Picture>QUJDQUJD"
+
+        assertThrows(org.xmlpull.v1.XmlPullParserException::class.java) { service().parseContactsSyncResponse(xml) }
     }
 
     @Test
