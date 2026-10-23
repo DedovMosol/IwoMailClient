@@ -5,8 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.MailDatabase
-import com.dedovmosol.iwomail.data.model.AccountServerHealth
-import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.sync.PushService
@@ -14,10 +12,7 @@ import com.dedovmosol.iwomail.sync.ServerHealthNotifier
 import com.dedovmosol.iwomail.sync.SyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.conscrypt.Conscrypt
@@ -346,45 +341,19 @@ class MailApplication : Application() {
      * [flatMapLatest] переподписывает health-flow при изменении списка аккаунтов (добавление/удаление).
      * Процесс-lifetime подписка (не отменяется) — сбор при смерти процесса, как и остальные здесь.
      */
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun observeServerConnectionHealth() {
         applicationScope.launch(Dispatchers.IO) {
             val accountDao = MailDatabase.getInstance(this@MailApplication).accountDao()
-            accountDao.getAllAccounts()
-                // Нужен только набор (id, email); не реагируем на прочие апдейты строки аккаунта
-                // (folderSyncKey/policyKey пишутся при каждом синке → иначе лишние переподписки).
-                .map { accounts -> accounts.map { it.id to it.email } }
-                .distinctUntilChanged()
-                .flatMapLatest { idEmails ->
-                    if (idEmails.isEmpty()) {
-                        flowOf(emptyList<Triple<Long, String, AccountServerHealth>>())
-                    } else {
-                        AccountServerHealthRepository.aggregatedHealthFlow(idEmails.map { it.first })
-                            .map { healthMap ->
-                                idEmails.mapNotNull { (id, email) ->
-                                    healthMap[id]?.let { Triple(id, email, it) }
-                                }
-                            }
-                    }
-                }
-                .collect { triples ->
-                    val enabled = settingsRepository.notificationsEnabled.first()
-                    val isRussian = settingsRepository.language.first() == "ru"
-                    triples.forEach { (id, email, health) ->
-                        ServerHealthNotifier.sync(
-                            context = this@MailApplication,
-                            accountId = id,
-                            accountEmail = email,
-                            health = health,
-                            notificationsEnabled = enabled,
-                            isRussian = isRussian
-                        )
-                    }
-                    ServerHealthNotifier.cancelStale(
-                        this@MailApplication,
-                        triples.map { it.first }.toSet()
-                    )
-                }
+            ServerHealthNotifier.connectionStates(
+                accountDao.getAllAccounts().map { accounts -> accounts.map { it.id to it.email } }
+            ).collect { states ->
+                ServerHealthNotifier.reconcile(
+                    context = this@MailApplication,
+                    states = states,
+                    notificationsEnabled = settingsRepository.notificationsEnabled.first(),
+                    isRussian = settingsRepository.language.first() == "ru"
+                )
+            }
         }
     }
     

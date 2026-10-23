@@ -9,7 +9,14 @@ import com.dedovmosol.iwomail.MailApplication
 import com.dedovmosol.iwomail.MainActivity
 import com.dedovmosol.iwomail.R
 import com.dedovmosol.iwomail.data.model.AccountServerHealth
+import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.ui.NotificationStrings
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -18,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap
  * Зачем: состояние проблемы сервера ([AccountServerHealth]) раньше было видно только ВНУТРИ
  * приложения (ServerStatusBanner/drawer/настройки). Пока клиент в фоне/закрыт, пользователь не
  * узнавал, что почта перестала синхронизироваться (сервер недоступен, протухли креды, таймаут,
- * ошибка сертификата, 5xx). Этот нотифаер наблюдает тот же health и всплывает системным
+ * ошибка сертификата, 5xx). Этот компонент наблюдает тот же health и всплывает системным
  * уведомлением — закрывает дыру «пока не зайдёшь, не узнаешь».
  *
  * Условие показа = [AccountServerHealth.showBanner] (ТА ЖЕ логика, что у баннера): проблема
@@ -27,8 +34,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Антиспам:
  *  - Гистерезис (3 последовательных сбоя ≈ 1 мин для сетевых ошибок) заложен в
- *    [com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository]; Auth/Cert — сразу
- *    (детерминированные). Это естественный дебаунс против кратких миганий сети.
+ *    [AccountServerHealthRepository]; Auth/Cert — сразу (детерминированные).
  *  - Одно уведомление на переход «ок → плохо»; при восстановлении снимается.
  *  - Уважает свайп: пока проблема та же, повторно не навязываемся ([notified]).
  *
@@ -44,13 +50,59 @@ object ServerHealthNotifier {
 
     private const val NOTIFICATION_ID_BASE = 300_000
 
+    /** Снимок «аккаунт → его здоровье сервера» для одной сверки. */
+    data class AccountConnState(
+        val accountId: Long,
+        val email: String,
+        val health: AccountServerHealth
+    )
+
     // Аккаунты, для которых уведомление уже показано (процесс-lifetime). Анти-навязчивость + анти-дубль.
     private val notified = ConcurrentHashMap.newKeySet<Long>()
 
     private fun notificationId(accountId: Long): Int = NOTIFICATION_ID_BASE + accountId.toInt()
 
     /**
-     * Идемпотентно приводит уведомление аккаунта в соответствие с [health]:
+     * Строит поток снимков здоровья по потоку списка аккаунтов (id, email).
+     *
+     * [distinctUntilChanged] — реагируем только на смену НАБОРА (id,email), а не на прочие апдейты
+     * строки аккаунта (folderSyncKey/policyKey пишутся при каждом синке → иначе лишние переподписки).
+     * [flatMapLatest] — при изменении набора переподписываем health-flow (добавление/удаление аккаунта).
+     * Пустой список → один эмит пустого снимка (наблюдатель снимет уведомления удалённых аккаунтов).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun connectionStates(idEmailsFlow: Flow<List<Pair<Long, String>>>): Flow<List<AccountConnState>> =
+        idEmailsFlow
+            .distinctUntilChanged()
+            .flatMapLatest { idEmails ->
+                if (idEmails.isEmpty()) {
+                    flowOf(emptyList())
+                } else {
+                    AccountServerHealthRepository.aggregatedHealthFlow(idEmails.map { it.first })
+                        .map { healthMap ->
+                            idEmails.mapNotNull { (id, email) ->
+                                healthMap[id]?.let { AccountConnState(id, email, it) }
+                            }
+                        }
+                }
+            }
+
+    /**
+     * Приводит ВСЕ уведомления в соответствие со снимком [states]: показывает/снимает по каждому
+     * аккаунту и снимает уведомления аккаунтов, которых больше нет в снимке (удаление/отключение).
+     */
+    fun reconcile(
+        context: Context,
+        states: List<AccountConnState>,
+        notificationsEnabled: Boolean,
+        isRussian: Boolean
+    ) {
+        states.forEach { sync(context, it.accountId, it.email, it.health, notificationsEnabled, isRussian) }
+        cancelStale(context, states.mapTo(HashSet()) { it.accountId })
+    }
+
+    /**
+     * Идемпотентно приводит уведомление ОДНОГО аккаунта в соответствие с [health]:
      * показывает при переходе в проблемное состояние, снимает при восстановлении.
      *
      * @param notificationsEnabled мастер-тумблер уведомлений (SettingsRepository.notificationsEnabled)
