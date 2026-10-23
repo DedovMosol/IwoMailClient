@@ -1602,39 +1602,40 @@ $itemIdsXml
     
     // ==================== Parsing ====================
     
-    private fun parseTaskSyncResponse(xml: String): List<EasTask> {
+    internal fun parseTaskSyncResponse(xml: String): List<EasTask> {
         val tasks = mutableListOf<EasTask>()
-        
-        for (pattern in Companion.REGEX_TASK_SYNC_PATTERNS) {
-            pattern.findAll(xml).forEach { match ->
-                val itemXml = match.groupValues[1]
-                val task = parseTaskFromXml(itemXml)
-                if (task != null) tasks.add(task)
-            }
+
+        // Порядок как в прежнем regex-коде: сначала все <Add>, затем все <Change>.
+        EasXmlParser.forEachElement(xml, "Add") { itemXml ->
+            parseTaskFromXml(itemXml)?.let { tasks.add(it) }
         }
-        
+        EasXmlParser.forEachElement(xml, "Change") { itemXml ->
+            parseTaskFromXml(itemXml)?.let { tasks.add(it) }
+        }
+
         return tasks
     }
     
     private fun parseTaskFromXml(itemXml: String): EasTask? {
-        val serverId = deps.extractValue(itemXml, "ServerId") ?: return null
-        
-        val dataXml = Companion.REGEX_APPLICATION_DATA.find(itemXml)?.groupValues?.get(1) ?: return null
-        
-        val subject = XmlValueExtractor.extractTask(dataXml, "Subject") ?: ""
+        val serverId = EasXmlParser.extractValue(itemXml, "ServerId") ?: return null
+
+        // Поля задачи — внутри ApplicationData (сохраняем прежнее скоупирование).
+        val dataXml = EasXmlParser.collectElements(itemXml, "ApplicationData").firstOrNull() ?: return null
+
+        val subject = EasXmlParser.task(dataXml, "Subject") ?: ""
         val body = extractTaskBody(dataXml)
-        val startDate = parseDate(XmlValueExtractor.extractTask(dataXml, "StartDate") 
-            ?: XmlValueExtractor.extractTask(dataXml, "UtcStartDate"))
-        val dueDate = parseDate(XmlValueExtractor.extractTask(dataXml, "DueDate")
-            ?: XmlValueExtractor.extractTask(dataXml, "UtcDueDate"))
-        val complete = XmlValueExtractor.extractTask(dataXml, "Complete") == "1"
-        val dateCompleted = parseDate(XmlValueExtractor.extractTask(dataXml, "DateCompleted"))
-        val importance = XmlValueExtractor.extractTask(dataXml, "Importance")?.toIntOrNull() ?: 1
-        val sensitivity = XmlValueExtractor.extractTask(dataXml, "Sensitivity")?.toIntOrNull() ?: 0
-        val reminderSet = XmlValueExtractor.extractTask(dataXml, "ReminderSet") == "1"
-        val reminderTime = parseDate(XmlValueExtractor.extractTask(dataXml, "ReminderTime"))
+        val startDate = parseDate(EasXmlParser.task(dataXml, "StartDate")
+            ?: EasXmlParser.task(dataXml, "UtcStartDate"))
+        val dueDate = parseDate(EasXmlParser.task(dataXml, "DueDate")
+            ?: EasXmlParser.task(dataXml, "UtcDueDate"))
+        val complete = EasXmlParser.task(dataXml, "Complete") == "1"
+        val dateCompleted = parseDate(EasXmlParser.task(dataXml, "DateCompleted"))
+        val importance = EasXmlParser.task(dataXml, "Importance")?.toIntOrNull() ?: 1
+        val sensitivity = EasXmlParser.task(dataXml, "Sensitivity")?.toIntOrNull() ?: 0
+        val reminderSet = EasXmlParser.task(dataXml, "ReminderSet") == "1"
+        val reminderTime = parseDate(EasXmlParser.task(dataXml, "ReminderTime"))
         val categories = extractTaskCategories(dataXml)
-        val owner = XmlValueExtractor.extractTask(dataXml, "OwnerId") ?: ""
+        val owner = EasXmlParser.task(dataXml, "OwnerId") ?: ""
         
         return EasTask(
             serverId = serverId,
@@ -1653,7 +1654,7 @@ $itemIdsXml
         )
     }
     
-    private fun parseEwsTasksResponse(xml: String): List<EasTask> {
+    internal fun parseEwsTasksResponse(xml: String): List<EasTask> {
         val tasks = mutableListOf<EasTask>()
         val seenIds = mutableSetOf<String>()
 
@@ -1740,13 +1741,13 @@ $itemIdsXml
     }
     
     private fun extractTaskBody(xml: String): String {
-        for (regex in Companion.REGEX_TASK_BODY_PATTERNS) {
-            val match = regex.find(xml)
-            if (match != null && match.groupValues[1].isNotBlank()) {
-                return removeDuplicateLines(XmlUtils.unescape(match.groupValues[1].trim()))
-            }
-        }
-        return ""
+        // EAS 14.0+: тело приходит как AirSyncBase <Body><Type/><Data>…</Data></Body> (голые теги,
+        // см. EasCodePages). Берём текст Data. Прежний код НЕ имел fallback на «тело прямо в <Body>»
+        // (все паттерны требовали <Data> либо были префиксными), поэтому и мы берём ТОЛЬКО Data:
+        // голый <Body>text</Body> без Data прежде давал "" — эквивалентность сохранена.
+        // EasXmlParser.extractValue уже снимает экранирование и тримит.
+        val raw = EasXmlParser.extractValue(xml, "Data") ?: return ""
+        return removeDuplicateLines(raw)
     }
 
     private fun extractTaskCategories(xml: String): List<String> {
@@ -1827,22 +1828,11 @@ $itemIdsXml
             "<(?:t:)?Message\\b[^>]*>(.*?)</(?:t:)?Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
         )
 
-        // parseTaskSyncResponse (precompiled list)
-        private val REGEX_TASK_SYNC_PATTERNS = listOf(
-            "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL),
-            "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        )
-
-        // parseTaskFromXml
-        private val REGEX_APPLICATION_DATA = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
-
-        // extractTaskBody (precompiled list)
-        private val REGEX_TASK_BODY_PATTERNS = listOf(
-            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>".toRegex(RegexOption.DOT_MATCHES_ALL),
-            "<Body>.*?<Data>(.*?)</Data>.*?</Body>".toRegex(RegexOption.DOT_MATCHES_ALL),
-            "<tasks:Body>.*?<Data>(.*?)</Data>.*?</tasks:Body>".toRegex(RegexOption.DOT_MATCHES_ALL),
-            "<tasks:Body>(.*?)</tasks:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        )
+        // EAS Sync разбор (Add/Change/ApplicationData/тело) мигрирован на EasXmlParser —
+        // соответствующие regex удалены. EWS-путь и EAS-категории ниже намеренно оставлены на regex
+        // (EWS: позиционный fallback для 2007 SP1 режет произвольные подстроки, XmlPullParser их не
+        //  разберёт; EAS-категории: паттерн <tasks:Categories> против голого <Categories> из декодера
+        //  не срабатывает — перевод на EasXmlParser ИЗМЕНИЛ бы поведение, поэтому сохраняем).
 
         // extractTaskCategories
         private val REGEX_TASKS_CATEGORIES = "<tasks:Categories>(.*?)</tasks:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
