@@ -73,6 +73,7 @@ class EasTasksParserTest {
 <Categories><Category>Work</Category></Categories>
 <OwnerId>Andrey</OwnerId>
 </ApplicationData></Add>
+<!-- OwnerId выше — НЕ элемент класса Tasks (MS-ASTASK): сервер его не присылает, а мы игнорируем. -->
 <Change><ServerId>12:2</ServerId><ApplicationData>
 <Subject>Call client</Subject>
 </ApplicationData></Change>
@@ -94,7 +95,8 @@ class EasTasksParserTest {
         assertThat(t1.sensitivity).isEqualTo(2)
         assertThat(t1.reminderSet).isTrue()
         assertThat(t1.reminderTime).isEqualTo(utcMillis("2026-01-20T08:00:00.000Z", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"))
-        assertThat(t1.owner).isEqualTo("Andrey")
+        // MS-ASTASK: у класса Tasks нет Owner — по EAS владелец не приходит, OwnerId игнорируется.
+        assertThat(t1.owner).isEqualTo("")
         // Голый <Categories> (как выдаёт декодер) теперь извлекается (раньше терялся — баг исправлен).
         assertThat(t1.categories).containsExactly("Work")
 

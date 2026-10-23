@@ -541,8 +541,16 @@ class TaskRepository internal constructor(
                         // Определяем какие задачи удалены на сервере (нет ни в Tasks, ни в Deleted Items).
                         // Задачи, существование которых сервер подтвердил без деталей (EWS GetItem), сохраняем.
                         val serverIds = serverTasks.map { it.serverId }.toSet() + snapshot.unresolvedServerIds
-                        val allExistingServerIds = currentExistingTasks.map { it.serverId }.toSet()
-                        val deletedServerIds = allExistingServerIds - serverIds
+                        // Диффом можно удалять только то, что снимок реально охватывает. EAS Sync читает
+                        // лишь активную папку Tasks (includesDeletedItems=false) — локально-удалённой
+                        // задачи в нём нет ПО ПОСТРОЕНИЮ, и её отсутствие ничего не доказывает. Иначе
+                        // локальная корзина стиралась бы на каждом EAS-синке. EWS синкает deleteditems.
+                        val deletionDomain = if (snapshot.includesDeletedItems) {
+                            currentExistingTasks
+                        } else {
+                            currentExistingTasks.filter { !it.isDeleted }
+                        }
+                        val deletedServerIds = deletionDomain.map { it.serverId }.toSet() - serverIds
                         
                         val activeLocalTasks = currentExistingTasks.filter { !it.isDeleted && !it.serverId.startsWith("pending_sync_") }
                         val activeServerTasks = serverTasks.filter { !it.isDeleted }

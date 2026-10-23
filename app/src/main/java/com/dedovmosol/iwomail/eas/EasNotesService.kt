@@ -1101,7 +1101,8 @@ $itemIdsXml
                     body = bodyRaw,
                     messageClass = itemClass,
                     lastModified = System.currentTimeMillis(),
-                    categories = emptyList(),
+                    // FindItem AllProperties отдаёт <t:Categories><t:String>…; раньше терялись (всегда []).
+                    categories = extractEwsCategories(itemXml),
                     isDeleted = false
                 ))
             } else {
@@ -1111,6 +1112,16 @@ $itemIdsXml
         
         if (BuildConfig.DEBUG) android.util.Log.d("NOT", "parseEwsNotesResponse: Returning ${notes.size} notes")
         return notes
+    }
+
+    /**
+     * EWS-категории заметки: `<t:Categories><t:String>…</t:String></t:Categories>` (как у задач по EWS).
+     * Берётся первый блок Categories в элементе; пустые строки отбрасываются, сущности разворачиваются.
+     */
+    private fun extractEwsCategories(itemXml: String): List<String> {
+        val block = EasXmlParser.collectElements(itemXml, "Categories", listOf("t")).firstOrNull()
+            ?: return emptyList()
+        return EasXmlParser.extractAll(block, "String", listOf("t"))
     }
 
     /** Заметки с телами из GetItem и ItemId тех, чьё тело получить не удалось. */

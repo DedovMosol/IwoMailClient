@@ -461,7 +461,8 @@ class EasTasksService internal constructor(
             // Сбой до первой задачи — ошибка синка, а не «пустая папка».
             if (allTasks.isEmpty()) return EasResult.Error("Синхронизация задач прервана: $incompleteReason")
         }
-        return EasResult.Success(TasksSyncResult(allTasks, isAuthoritative = incompleteReason == null))
+        // includesDeletedItems=false: EAS Sync читает только активную папку Tasks, корзину — нет.
+        return EasResult.Success(TasksSyncResult(allTasks, isAuthoritative = incompleteReason == null, includesDeletedItems = false))
     }
     
     private suspend fun createTaskEas(
@@ -734,7 +735,9 @@ class EasTasksService internal constructor(
             }
             val parsedIds = allTasks.mapTo(HashSet()) { it.serverId }
             val unresolved = (activeFolders + deleted).flatMap { it.unresolvedIds }.filterTo(HashSet()) { it !in parsedIds }
-            EasResult.Success(TasksSyncResult(allTasks, isAuthoritative, unresolved))
+            // includesDeletedItems=true: папка deleteditems синкается явно (deleted), поэтому
+            // отсутствие локально-удалённой задачи в снимке означает её удаление с сервера.
+            EasResult.Success(TasksSyncResult(allTasks, isAuthoritative, unresolved, includesDeletedItems = true))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("EasTasksService", "syncTasksEws: exception: ${e.message}")
@@ -1726,7 +1729,9 @@ $itemIdsXml
             reminderSet = f["ReminderSet"] == "1",
             reminderTime = parseDate(f["ReminderTime"]),
             categories = item.categories,
-            owner = f["OwnerId"] ?: ""
+            // MS-ASTASK (schema 2.5–16.1): у класса Tasks НЕТ элемента Owner — по EAS владелец
+            // задачи не передаётся в принципе. Owner заполняется только EWS-путём (<t:Owner>).
+            owner = ""
         )
     }
     
@@ -1886,10 +1891,13 @@ $itemIdsXml
         // EWS-путь ниже намеренно оставлен на regex: позиционный fallback для Exchange 2007 SP1
         // режет произвольные подстроки по смещениям ItemId — XmlPullParser их не разберёт.
 
-        /** Листья ApplicationData задачи (MS-ASTASK), которые читает [parseTaskSyncResponse]. */
+        /**
+         * Листья ApplicationData задачи (MS-ASTASK), которые читает [parseTaskSyncResponse].
+         * Owner в класс Tasks протоколом не входит (schema 2.5–16.1), поэтому его здесь нет.
+         */
         private val TASK_FIELDS = setOf(
             "Subject", "StartDate", "UtcStartDate", "DueDate", "UtcDueDate", "Complete", "DateCompleted",
-            "Importance", "Sensitivity", "ReminderSet", "ReminderTime", "OwnerId"
+            "Importance", "Sensitivity", "ReminderSet", "ReminderTime"
         )
 
         // extractEwsCategories

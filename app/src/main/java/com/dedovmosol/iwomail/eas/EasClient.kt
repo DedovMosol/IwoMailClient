@@ -2737,11 +2737,16 @@ data class EasTask(
  *   обнаружены без ошибок.
  * @property unresolvedServerIds EWS: задачи, существование которых подтвердил FindItem, но детали
  *   (GetItem) получить не удалось. В [tasks] их нет, но удалять их локально нельзя.
+ * @property includesDeletedItems снимок охватывает и корзину (папку Deleted Items), то есть
+ *   отсутствие локально-удалённой задачи в снимке доказывает её исчезновение с сервера. EWS —
+ *   true (папка deleteditems синкается явно). EAS — false (Sync читает только активную папку
+ *   Tasks; локальную корзину по такому снимку чистить нельзя, иначе она стирается на каждом синке).
  */
 data class TasksSyncResult(
     val tasks: List<EasTask>,
     val isAuthoritative: Boolean,
-    val unresolvedServerIds: Set<String> = emptySet()
+    val unresolvedServerIds: Set<String> = emptySet(),
+    val includesDeletedItems: Boolean = false
 )
 
 /**

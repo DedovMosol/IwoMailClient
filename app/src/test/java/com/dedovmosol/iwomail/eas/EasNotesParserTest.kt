@@ -191,4 +191,36 @@ class EasNotesParserTest {
 </m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse></soap:Body></soap:Envelope>""".trimIndent()
         assertThat(service().parseEwsNotesResponse(xml)).isEmpty()
     }
+
+    @Test
+    fun `parseEwsNotesResponse extracts categories from AllProperties FindItem`() {
+        // FindItem AllProperties отдаёт <t:Categories><t:String>…. Раньше категории EWS-заметок
+        // всегда терялись (categories = emptyList()). Теперь извлекаются; пустые String отброшены.
+        val xml = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+<soap:Body><m:FindItemResponse><m:ResponseMessages><m:FindItemResponseMessage>
+<m:RootFolder><t:Items>
+<t:Message>
+  <t:ItemId Id="N1" ChangeKey="CK1"/>
+  <t:Subject>Categorized note</t:Subject>
+  <t:ItemClass>IPM.StickyNote</t:ItemClass>
+  <t:Categories><t:String>Work</t:String><t:String/><t:String>R&amp;D</t:String></t:Categories>
+  <t:Body BodyType="Text">body</t:Body>
+</t:Message>
+<t:Message>
+  <t:ItemId Id="N2" ChangeKey="CK2"/>
+  <t:Subject>No categories</t:Subject>
+  <t:ItemClass>IPM.StickyNote</t:ItemClass>
+</t:Message>
+</t:Items></m:RootFolder>
+</m:FindItemResponseMessage></m:ResponseMessages></m:FindItemResponse></soap:Body></soap:Envelope>""".trimIndent()
+
+        val notes = service().parseEwsNotesResponse(xml)
+
+        assertThat(notes.map { it.serverId }).containsExactly("N1", "N2").inOrder()
+        assertThat(notes[0].categories).containsExactly("Work", "R&D").inOrder()
+        assertThat(notes[1].categories).isEmpty()
+    }
 }

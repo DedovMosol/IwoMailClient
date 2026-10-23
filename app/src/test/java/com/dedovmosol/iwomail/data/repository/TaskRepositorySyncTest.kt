@@ -67,6 +67,7 @@ class TaskRepositorySyncTest {
     )
 
     private fun server(serverId: String) = EasTask(serverId = serverId, subject = "Task $serverId")
+    private fun serverDeleted(serverId: String) = EasTask(serverId = serverId, subject = "Task $serverId", isDeleted = true)
 
     private fun seed(vararg tasks: TaskEntity) = runBlocking { db.taskDao().insertAll(tasks.toList()) }
 
@@ -108,6 +109,43 @@ class TaskRepositorySyncTest {
         repo.syncTasks(accountId)
 
         assertThat(localServerIds()).containsExactly("t1", "t2")
+    }
+
+    @Test
+    fun `EAS authoritative snapshot never wipes the local task trash`() = runBlocking<Unit> {
+        // Регресс: EAS Sync читает только активную папку Tasks (includesDeletedItems=false), поэтому
+        // локально-удалённая d1 отсутствует в снимке ПО ПОСТРОЕНИЮ. Раньше её стирали на каждом синке.
+        seed(local("t1"), local("t2"), local("d1", isDeleted = true), local("d2", isDeleted = true))
+        serverReturns(TasksSyncResult(listOf(server("t1")), isAuthoritative = true, includesDeletedItems = false))
+
+        repo.syncTasks(accountId)
+
+        // t2 исчезла из активной папки → удалена; корзина (d1, d2) нетронута и остаётся удалённой.
+        assertThat(localServerIds()).containsExactly("t1", "d1", "d2")
+        assertThat(db.taskDao().getTask("${accountId}_d1")!!.isDeleted).isTrue()
+    }
+
+    @Test
+    fun `EWS authoritative snapshot purges a trashed task gone from server Deleted Items`() = runBlocking<Unit> {
+        // EWS синкает deleteditems (includesDeletedItems=true): d1 нет ни в активных, ни в корзине
+        // сервера → удалена окончательно и локально.
+        seed(local("t1"), local("d1", isDeleted = true))
+        serverReturns(TasksSyncResult(listOf(server("t1")), isAuthoritative = true, includesDeletedItems = true))
+
+        repo.syncTasks(accountId)
+
+        assertThat(localServerIds()).containsExactly("t1")
+    }
+
+    @Test
+    fun `EWS authoritative snapshot keeps a trashed task still in server Deleted Items`() = runBlocking<Unit> {
+        seed(local("t1"), local("d1", isDeleted = true))
+        serverReturns(TasksSyncResult(listOf(server("t1"), serverDeleted("d1")), isAuthoritative = true, includesDeletedItems = true))
+
+        repo.syncTasks(accountId)
+
+        assertThat(localServerIds()).containsExactly("t1", "d1")
+        assertThat(db.taskDao().getTask("${accountId}_d1")!!.isDeleted).isTrue()
     }
 
     @Test
