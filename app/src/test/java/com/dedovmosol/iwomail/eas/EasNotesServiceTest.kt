@@ -6,11 +6,17 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * Юнит-тесты для EasNotesService
- * Проверяем корректность работы с заметками через моки зависимостей
+ * Проверяем корректность работы с заметками через моки зависимостей.
+ * Robolectric — ради настоящего XmlPullParser (android.util.Xml): тест синка гоняет прод-парсер.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class EasNotesServiceTest {
     
     private lateinit var service: EasNotesService
@@ -216,44 +222,38 @@ class EasNotesServiceTest {
         coEvery { folderSync("0") } returns EasResult.Success(
             FolderSyncResponse("1", folders)
         )
-        
-        // Mock initial SyncKey requests
-        coEvery {
-            executeEasCommand.invoke<String>(
-                "Sync",
-                match { it.contains("<SyncKey>0</SyncKey>") },
-                any()
-            )
-        } answers {
-            val parser = thirdArg<(String) -> String>()
-            every { extractValue(any(), "SyncKey") } returns "key123"
-            EasResult.Success(parser("<SyncKey>key123</SyncKey>"))
+        // Реальный extractValue (как в EasClient), ответы разбирает ПРОДОВЫЙ парсер-лямбда сервиса.
+        every { extractValue(any(), any()) } answers { XmlUtils.extractTagValue(firstArg(), secondArg()) }
+        coEvery { executeEasCommand.invoke<Any?>("Sync", any(), any()) } answers {
+            val request = secondArg<String>()
+            val parser = thirdArg<(String) -> Any?>()
+            val response = when {
+                request.contains("<SyncKey>0</SyncKey>") ->
+                    "<Sync><Collections><Collection><SyncKey>key123</SyncKey><Status>1</Status></Collection></Collections></Sync>"
+                request.contains("notes123") -> """<Sync><Collections><Collection><SyncKey>key124</SyncKey><CollectionId>notes123</CollectionId><Status>1</Status><Commands>
+<Add><ServerId>n:1</ServerId><ApplicationData><Subject>Active note</Subject><MessageClass>IPM.StickyNote</MessageClass></ApplicationData></Add>
+</Commands></Collection></Collections></Sync>"""
+                else -> """<Sync><Collections><Collection><SyncKey>key125</SyncKey><CollectionId>deleted456</CollectionId><Status>1</Status><Commands>
+<Add><ServerId>d:1</ServerId><ApplicationData><Subject>Deleted note</Subject><MessageClass>IPM.StickyNote</MessageClass></ApplicationData></Add>
+<Add><ServerId>d:2</ServerId><ApplicationData><Subject>Some mail</Subject><MessageClass>IPM.Note</MessageClass></ApplicationData></Add>
+</Commands></Collection></Collections></Sync>"""
+            }
+            EasResult.Success(parser(response))
         }
-        
-        // Полная синхронизация Notes-папки: продакшн возвращает Pair(notes, moreAvailable).
-        coEvery {
-            executeEasCommand.invoke<Pair<List<EasNote>, Boolean>>(
-                "Sync",
-                match { it.contains("<SyncKey>key123</SyncKey>") && it.contains("notes123") },
-                any()
-            )
-        } returns EasResult.Success(Pair(emptyList(), false))
-        // Синхронизация папки Deleted Items: продакшн возвращает List<EasNote>.
-        coEvery {
-            executeEasCommand.invoke<List<EasNote>>(
-                "Sync",
-                match { it.contains("<SyncKey>key123</SyncKey>") && it.contains("deleted456") },
-                any()
-            )
-        } returns EasResult.Success(emptyList())
         
         // Act
         val result = service.syncNotes()
         
-        // Assert
+        // Assert: активная заметка, удалённая (письмо из Deleted Items отфильтровано), обе выдачи полны.
         assertThat(result).isInstanceOf(EasResult.Success::class.java)
+        val data = (result as EasResult.Success).data
+        assertThat(data.notes.filter { !it.isDeleted }.map { it.serverId }).containsExactly("n:1")
+        assertThat(data.notes.filter { it.isDeleted }.map { it.serverId }).containsExactly("d:1")
+        assertThat(data.isActiveAuthoritative).isTrue()
+        assertThat(data.isDeletedAuthoritative).isTrue()
+        assertThat(data.isUnchanged).isFalse()
         coVerify { folderSync("0") }
-        coVerify(atLeast = 2) {
+        coVerify(exactly = 4) {
             executeEasCommand.invoke<Any>(eq("Sync"), any(), any())
         }
     }

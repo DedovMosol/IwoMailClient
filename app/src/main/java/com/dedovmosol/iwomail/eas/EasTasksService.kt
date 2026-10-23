@@ -46,9 +46,11 @@ class EasTasksService internal constructor(
     @Volatile private var cachedTasksFolderId: String? = null
     
     /**
-     * Синхронизация задач из папки Tasks на сервере Exchange
+     * Синхронизация задач из папки Tasks на сервере Exchange.
+     * Полнота снимка — в [TasksSyncResult.isAuthoritative]: только полный снимок даёт право
+     * удалять локальные задачи, которых в нём нет.
      */
-    suspend fun syncTasks(): EasResult<List<EasTask>> {
+    suspend fun syncTasks(): EasResult<TasksSyncResult> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
@@ -317,7 +319,27 @@ class EasTasksService internal constructor(
         }
     }
     
-    private suspend fun syncTasksEas(tasksFolderId: String): EasResult<List<EasTask>> {
+    /** Страница полного EAS-пересинка задач. */
+    private class TaskSyncPage(
+        val status: String,
+        val syncKey: String?,
+        val tasks: List<EasTask>,
+        val moreAvailable: Boolean
+    )
+
+    private fun parseTaskSyncPage(responseXml: String): TaskSyncPage {
+        // MS-ASCMD: Status коллекции обязателен; пустое тело ответа транспорт подменяет на Status=1.
+        val status = deps.extractValue(responseXml, "Status") ?: "1"
+        if (status != "1") return TaskSyncPage(status, syncKey = null, tasks = emptyList(), moreAvailable = false)
+        return TaskSyncPage(
+            status = status,
+            syncKey = deps.extractValue(responseXml, "SyncKey"),
+            tasks = parseTaskSyncResponse(responseXml),
+            moreAvailable = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
+        )
+    }
+
+    private suspend fun syncTasksEas(tasksFolderId: String): EasResult<TasksSyncResult> {
         val safeFolderId = deps.escapeXml(tasksFolderId)
         val initialXml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
@@ -329,21 +351,24 @@ class EasTasksService internal constructor(
     </Collections>
 </Sync>""".trimIndent()
         
-        var syncKey = "0"
         val initialResult = deps.executeEasCommand("Sync", initialXml) { responseXml ->
             deps.extractValue(responseXml, "SyncKey") ?: "0"
         }
-        
-        when (initialResult) {
-            is EasResult.Success -> syncKey = initialResult.data
-            is EasResult.Error -> return EasResult.Success(emptyList())
+        // Сбой первичного Sync раньше выдавался за пустую папку (Success(emptyList())),
+        // и репозиторий удалял по нему локальные задачи.
+        var syncKey = when (initialResult) {
+            is EasResult.Success -> initialResult.data
+            is EasResult.Error -> return initialResult
         }
-        
         if (syncKey == "0") {
-            return EasResult.Success(emptyList())
+            return EasResult.Error("Sync задач: сервер не выдал SyncKey")
         }
         
         val allTasks = mutableListOf<EasTask>()
+        // Снимок полон, только если сервер сам сообщил конец выдачи: Status=1 на каждой странице
+        // и MoreAvailable исчерпан. Любой досрочный выход записывает причину сюда.
+        var incompleteReason: String? = null
+        var keyInvalidated = false
         var hasMore = true
         var iteration = 0
         val maxIterations = 50 // До 5000 задач (windowSize=100)
@@ -352,12 +377,15 @@ class EasTasksService internal constructor(
         var previousSyncKey = syncKey
         var sameKeyCount = 0
         
-        while (hasMore && iteration < maxIterations) {
+        while (hasMore) {
+            if (iteration >= maxIterations) {
+                incompleteReason = "лимит $maxIterations страниц"
+                break
+            }
             iteration++
             
-            // Проверка timeout
             if (System.currentTimeMillis() - syncStartTime > maxSyncDurationMs) {
-                android.util.Log.w("EasTasksService", "Tasks sync timeout after ${iteration} iterations")
+                incompleteReason = "таймаут после ${iteration - 1} страниц"
                 break
             }
             
@@ -382,55 +410,58 @@ class EasTasksService internal constructor(
     </Collections>
 </Sync>""".trimIndent()
             
-            val result = deps.executeEasCommand("Sync", syncXml) { responseXml ->
-                val status = deps.extractValue(responseXml, "Status")
-                if (status == "12") {
-                    return@executeEasCommand Triple("0", emptyList<EasTask>(), false)
+            val page = when (val result = deps.executeEasCommand("Sync", syncXml) { parseTaskSyncPage(it) }) {
+                is EasResult.Success -> result.data
+                is EasResult.Error -> {
+                    incompleteReason = result.message
+                    break
                 }
-
-                val newSyncKey = deps.extractValue(responseXml, "SyncKey") ?: syncKey
-                val moreAvailable = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
-                val tasks = parseTaskSyncResponse(responseXml)
-                Triple(newSyncKey, tasks, moreAvailable)
             }
-            
-            when (result) {
-                is EasResult.Success -> {
-                    val (newSyncKey, tasks, moreAvailable) = result.data
-                    
-                    syncKey = newSyncKey
-                    allTasks.addAll(tasks)
-                    hasMore = moreAvailable
-
-                    // Защита от зацикливания: если сервер возвращает тот же syncKey
-                    // 3 раза подряд — принудительно останавливаем цикл.
-                    // Присваиваем hasMore ДО проверки, чтобы защита могла переопределить.
-                    if (newSyncKey == previousSyncKey) {
-                        sameKeyCount++
-                        if (sameKeyCount >= 3) {
-                            android.util.Log.w("EasTasksService", "SyncKey not changing, breaking loop")
-                            hasMore = false
-                        }
-                    } else {
-                        sameKeyCount = 0
-                        previousSyncKey = newSyncKey
-                    }
-                    
-                    // Если сервер говорит moreAvailable но не отдаёт данные - прерываем
-                    if (moreAvailable && tasks.isEmpty()) {
-                        android.util.Log.w("EasTasksService", "Server says moreAvailable but no tasks, breaking")
-                        hasMore = false
-                    }
+            if (page.status != "1") {
+                // 3 — Invalid SyncKey, 12 — иерархия папок изменилась: ключ недействителен.
+                // Следующий синк всё равно начнётся с SyncKey=0; кэш для create/update сбрасываем.
+                if (page.status == "3" || page.status == "12") {
+                    syncKeyCache.remove(tasksFolderId)
+                    keyInvalidated = true
                 }
-                is EasResult.Error -> hasMore = false
+                incompleteReason = "Status=${page.status}"
+                break
+            }
+
+            syncKey = page.syncKey ?: syncKey
+            allTasks.addAll(page.tasks)
+            hasMore = page.moreAvailable
+
+            // Защита от зацикливания: сервер 3 раза подряд отдаёт тот же SyncKey и обещает ещё.
+            if (syncKey == previousSyncKey) {
+                sameKeyCount++
+                if (sameKeyCount >= 3 && hasMore) {
+                    incompleteReason = "SyncKey не меняется"
+                    break
+                }
+            } else {
+                sameKeyCount = 0
+                previousSyncKey = syncKey
+            }
+
+            // MoreAvailable без данных: сервер обещает продолжение, но не отдаёт его.
+            if (hasMore && page.tasks.isEmpty()) {
+                incompleteReason = "MoreAvailable без данных"
+                break
             }
         }
         
-        if (syncKey != "0") {
+        if (!keyInvalidated && syncKey != "0") {
             syncKeyCache[tasksFolderId] = syncKey
         }
 
-        return EasResult.Success(allTasks)
+        if (incompleteReason != null) {
+            android.util.Log.w("EasTasksService",
+                "Tasks sync incomplete ($incompleteReason): ${allTasks.size} tasks, deletions disabled")
+            // Сбой до первой задачи — ошибка синка, а не «пустая папка».
+            if (allTasks.isEmpty()) return EasResult.Error("Синхронизация задач прервана: $incompleteReason")
+        }
+        return EasResult.Success(TasksSyncResult(allTasks, isAuthoritative = incompleteReason == null))
     }
     
     private suspend fun createTaskEas(
@@ -624,45 +655,51 @@ class EasTasksService internal constructor(
         return responseXml
     }
     
-    private suspend fun syncTasksEws(): EasResult<List<EasTask>> = withContext(Dispatchers.IO) {
-        try {
-            val allActiveTasks = mutableListOf<EasTask>()
+    /** Итог EWS-выборки одной папки задач. */
+    private class EwsTaskFolder(
+        val tasks: List<EasTask>,
+        /** FindItem дошёл до последней страницы (IncludesLastItemInRange) без ошибок. */
+        val isComplete: Boolean,
+        /** ItemId, которые подтвердил FindItem, но не вернул GetItem. */
+        val unresolvedIds: Set<String> = emptySet()
+    )
 
+    private suspend fun syncTasksEws(): EasResult<TasksSyncResult> = withContext(Dispatchers.IO) {
+        try {
             // 0. Диагностика: GetFolder на tasks → TotalCount + ChildFolderCount
             val folderInfo = getTasksFolderInfo()
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "syncTasksEws: GetFolder tasks → totalCount=${folderInfo.first}, childFolders=${folderInfo.second}")
 
             // 1. Синхронизация из корневой папки Tasks (DistinguishedFolderId)
-            val rootTasks = syncTasksFromFolderEws("tasks", isDeleted = false) { offset, pageSize ->
+            val root = syncTasksFromFolderEws("tasks", isDeleted = false) { offset, pageSize ->
                 buildEwsFindTasksRequest(offset, pageSize)
             }
-            allActiveTasks.addAll(rootTasks)
-            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: root tasks folder: ${rootTasks.size}")
+            val activeFolders = mutableListOf(root)
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: root tasks folder: ${root.tasks.size}")
             
             // 2. Обнаруживаем подпапки Tasks и ищем в каждой.
+            // null — обнаружение не удалось: задачи подпапок неизвестны, снимок неполный.
             val subfolderIds = discoverTaskSubfolderIds()
-            if (subfolderIds.isNotEmpty()) {
+            if (!subfolderIds.isNullOrEmpty()) {
                 if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: discovered ${subfolderIds.size} task subfolders")
                 for (subfolderId in subfolderIds) {
-                    val subTasks = syncTasksFromFolderEws("tasks-sub-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
+                    activeFolders += syncTasksFromFolderEws("tasks-sub-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
                         buildEwsFindTasksByFolderIdRequest(subfolderId, offset, pageSize)
                     }
-                    allActiveTasks.addAll(subTasks)
                 }
             }
 
             // 2b. Подпапки непосредственно внутри "tasks" (Deep от msgfolderroot может пропустить)
             val directSubfolders = discoverDirectTaskSubfolders()
-            if (directSubfolders.isNotEmpty()) {
+            if (!directSubfolders.isNullOrEmpty()) {
                 if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                     "syncTasksEws: ${directSubfolders.size} direct subfolders under tasks")
                 for (subfolderId in directSubfolders) {
-                    if (subfolderIds.contains(subfolderId)) continue
-                    val subTasks = syncTasksFromFolderEws("tasks-direct-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
+                    if (subfolderIds?.contains(subfolderId) == true) continue
+                    activeFolders += syncTasksFromFolderEws("tasks-direct-${subfolderId.take(8)}", isDeleted = false) { offset, pageSize ->
                         buildEwsFindTasksByFolderIdRequest(subfolderId, offset, pageSize)
                     }
-                    allActiveTasks.addAll(subTasks)
                 }
             }
 
@@ -673,21 +710,36 @@ class EasTasksService internal constructor(
                 "syncTasksEws: skipping todosearch (not supported on Exchange 2007 SP1)")
 
             // 3. Дедупликация по serverId
+            val allActiveTasks = activeFolders.flatMap { it.tasks }
             val uniqueActive = allActiveTasks.distinctBy { it.serverId }
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: active tasks total: ${uniqueActive.size} (before dedup: ${allActiveTasks.size})")
             
             // 4. Синхронизация удалённых задач
-            val deletedTasks = syncTasksFromFolderEws("deleteditems", isDeleted = true) { offset, pageSize ->
+            val deleted = syncTasksFromFolderEws("deleteditems", isDeleted = true) { offset, pageSize ->
                 buildEwsFindDeletedTasksRequest(offset, pageSize)
             }
-            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: deleted tasks: ${deletedTasks.size}")
+            if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", "syncTasksEws: deleted tasks: ${deleted.tasks.size}")
             
-            val allTasks = uniqueActive + deletedTasks
-            EasResult.Success(allTasks)
+            val allTasks = uniqueActive + deleted.tasks
+            val isAuthoritative = subfolderIds != null && directSubfolders != null &&
+                activeFolders.all { it.isComplete } && deleted.isComplete
+            if (!isAuthoritative) {
+                android.util.Log.w("EasTasksService",
+                    "syncTasksEws: snapshot incomplete (root=${root.isComplete}, subfolders=${subfolderIds != null}, " +
+                        "direct=${directSubfolders != null}, deleted=${deleted.isComplete}), deletions disabled")
+                // Корневая папка не прочиталась и задач нет вовсе — это ошибка синка, а не «пусто».
+                if (!root.isComplete && allTasks.isEmpty()) {
+                    return@withContext EasResult.Error("EWS: не удалось получить задачи")
+                }
+            }
+            val parsedIds = allTasks.mapTo(HashSet()) { it.serverId }
+            val unresolved = (activeFolders + deleted).flatMap { it.unresolvedIds }.filterTo(HashSet()) { it !in parsedIds }
+            EasResult.Success(TasksSyncResult(allTasks, isAuthoritative, unresolved))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("EasTasksService", "syncTasksEws: exception: ${e.message}")
-            EasResult.Success(emptyList())
+            // Раньше: Success(emptyList()) — репозиторий принимал сбой за пустой сервер.
+            EasResult.Error("EWS: ошибка синхронизации задач: ${e.message}")
         }
     }
     
@@ -695,7 +747,7 @@ class EasTasksService internal constructor(
         folderLabel: String, 
         isDeleted: Boolean,
         buildRequest: (offset: Int, pageSize: Int) -> String
-    ): List<EasTask> {
+    ): EwsTaskFolder {
         try {
             // ЭТАП 1: FindItem с IdOnly — получаем ВСЕ ItemId из папки.
             // Exchange 2007 SP1 при AllProperties/IdOnly+task:* может фильтровать items.
@@ -703,26 +755,31 @@ class EasTasksService internal constructor(
             val allItemIds = mutableListOf<String>()
             var offset = 0
             val pageSize = 200
-            var hasMore = true
+            // Папка выдана целиком, только если сервер сам подтвердил последнюю страницу.
+            var isComplete = false
             
-            while (hasMore) {
+            while (true) {
                 yield()
                 val findRequest = buildRequest(offset, pageSize)
                 
-                val responseXml = executeEwsWithAuth(findRequest, "FindItem") ?: break
+                val responseXml = executeEwsWithAuth(findRequest, "FindItem")
+                if (responseXml == null) {
+                    android.util.Log.w("EasTasksService", "syncTasksFromFolderEws($folderLabel): no FindItem response at offset=$offset")
+                    break
+                }
+                // Ошибка, не-EWS ответ (SOAP fault, страница прокси) или оборванный ответ. Fault без
+                // ResponseClass="Error" раньше принимался за пустую страницу, и папка считалась пустой.
+                if (!EwsClient.isEwsSuccess(responseXml) || !EwsClient.isCompleteEnvelope(responseXml)) {
+                    android.util.Log.w("EasTasksService",
+                        "syncTasksFromFolderEws($folderLabel): FindItem failed or truncated at offset=$offset")
+                    break
+                }
 
                 val totalItemsMatch = Companion.REGEX_TOTAL_ITEMS_IN_VIEW.find(responseXml)
                 val totalItems = totalItemsMatch?.groupValues?.get(1)?.toIntOrNull() ?: -1
                 val indexedPagingOffsetMatch = Companion.REGEX_INDEXED_PAGING_OFFSET.find(responseXml)
                 val nextOffset = indexedPagingOffsetMatch?.groupValues?.get(1)?.toIntOrNull()
                 val includesLast = responseXml.contains("IncludesLastItemInRange=\"true\"")
-                val hasError = responseXml.contains("ResponseClass=\"Error\"")
-                
-                if (hasError) {
-                    android.util.Log.w("EasTasksService",
-                        "syncTasksFromFolderEws($folderLabel): FindItem returned error at offset=$offset")
-                    break
-                }
                 
                 val pageIds = Companion.REGEX_ITEM_ID_ATTR.findAll(responseXml).map { it.groupValues[1] }.toList()
                 allItemIds.addAll(pageIds)
@@ -731,32 +788,45 @@ class EasTasksService internal constructor(
                     "syncTasksFromFolderEws($folderLabel): offset=$offset, totalItemsInView=$totalItems, " +
                     "pageItemIds=${pageIds.size}, includesLast=$includesLast")
                 
-                if (includesLast || pageIds.isEmpty()) {
-                    hasMore = false
-                } else if (nextOffset != null && nextOffset > offset) {
-                    offset = nextOffset
-                    if (offset > 5000) {
-                        android.util.Log.w("EasTasksService", "syncTasksFromFolderEws($folderLabel): stopping at offset=$offset")
-                        hasMore = false
-                    }
-                } else {
-                    hasMore = false
+                if (includesLast) {
+                    isComplete = true
+                    break
                 }
+                // Не последняя страница, но листать дальше нельзя: пустая страница или нет
+                // продвижения смещения — выдача оборвана.
+                if (pageIds.isEmpty() || nextOffset == null || nextOffset <= offset) {
+                    android.util.Log.w("EasTasksService",
+                        "syncTasksFromFolderEws($folderLabel): paging stalled at offset=$offset (next=$nextOffset)")
+                    break
+                }
+                if (nextOffset > 5000) {
+                    android.util.Log.w("EasTasksService", "syncTasksFromFolderEws($folderLabel): stopping at offset=$nextOffset")
+                    break
+                }
+                offset = nextOffset
             }
             
             val uniqueIds = allItemIds.distinct()
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService", 
-                "syncTasksFromFolderEws($folderLabel): FindItem complete, ${uniqueIds.size} unique ItemIds")
+                "syncTasksFromFolderEws($folderLabel): FindItem complete=$isComplete, ${uniqueIds.size} unique ItemIds")
             
-            if (uniqueIds.isEmpty()) return emptyList()
+            if (uniqueIds.isEmpty()) return EwsTaskFolder(emptyList(), isComplete)
             
             // ЭТАП 2: GetItem с AllProperties — получаем ВСЕ свойства задач (включая Body).
-            val tasks = getTaskDetailsEws(uniqueIds, folderLabel)
-            return tasks.map { it.copy(isDeleted = isDeleted) }
+            val tasks = getTaskDetailsEws(uniqueIds, folderLabel).map { it.copy(isDeleted = isDeleted) }
+            // Задачи без деталей (GetItem-батч не пришёл или элемент не разобран) существуют на
+            // сервере — их нельзя удалять локально, хотя обновить сейчас нечем.
+            val resolvedIds = tasks.mapTo(HashSet()) { it.serverId }
+            val unresolvedIds = uniqueIds.filterTo(LinkedHashSet()) { it !in resolvedIds }
+            if (unresolvedIds.isNotEmpty()) {
+                android.util.Log.w("EasTasksService",
+                    "syncTasksFromFolderEws($folderLabel): ${unresolvedIds.size} items without GetItem details, kept as-is")
+            }
+            return EwsTaskFolder(tasks, isComplete, unresolvedIds)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("EasTasksService", "syncTasksFromFolderEws($folderLabel): exception: ${e.message}")
-            return emptyList()
+            return EwsTaskFolder(emptyList(), isComplete = false)
         }
     }
     
@@ -797,7 +867,9 @@ class EasTasksService internal constructor(
             
             val responseXml = executeEwsWithAuth(getItemRequest, "GetItem") ?: continue
 
-            if (responseXml.isBlank()) continue
+            // Оборванный ответ не разбираем: позиционный fallback ниже собрал бы задачу из обрубка
+            // (с усечённым телом). Задачи батча останутся неразрешёнными — их не тронут.
+            if (responseXml.isBlank() || !EwsClient.isCompleteEnvelope(responseXml)) continue
             
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "getTaskDetailsEws($label): batch ${batch.size} ids, response len=${responseXml.length}")
@@ -1271,8 +1343,9 @@ $itemIdsXml
      * Поиск от msgfolderroot (а не от "tasks") гарантирует обнаружение
      * задач в нестандартных расположениях (Outlook "My Tasks", пользовательские списки).
      * Возвращает folderIds включая TotalCount каждой папки для диагностики.
+     * null — обнаружение не удалось (нет ответа, ошибка EWS, исключение): это не «подпапок нет».
      */
-    private suspend fun discoverTaskSubfolderIds(): List<String> {
+    private suspend fun discoverTaskSubfolderIds(): List<String>? {
         try {
             val request = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -1298,7 +1371,11 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
             
-            val responseXml = executeEwsWithAuth(request, "FindFolder") ?: return emptyList()
+            val responseXml = executeEwsWithAuth(request, "FindFolder") ?: return null
+            if (!isCompleteFolderListing(responseXml)) {
+                android.util.Log.w("EasTasksService", "discoverTaskSubfolderIds: FindFolder failed or truncated")
+                return null
+            }
 
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverTaskSubfolderIds: response len=${responseXml.length}")
@@ -1328,9 +1405,18 @@ $itemIdsXml
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w("EasTasksService", "discoverTaskSubfolderIds: ${e.message}")
-            return emptyList()
+            return null
         }
     }
+
+    /**
+     * FindFolder без пагинации: список полон, если ответ успешен, цел и сервер не сообщил
+     * `IncludesLastItemInRange="false"`. Отсутствие атрибута не считаем обрывом — иначе
+     * удаления задач не доходили бы никогда.
+     */
+    private fun isCompleteFolderListing(responseXml: String): Boolean =
+        EwsClient.isEwsSuccess(responseXml) && EwsClient.isCompleteEnvelope(responseXml) &&
+            !responseXml.contains("IncludesLastItemInRange=\"false\"")
     
     /**
      * GetFolder на "tasks" → TotalCount + ChildFolderCount для диагностики.
@@ -1374,8 +1460,9 @@ $itemIdsXml
     /**
      * FindFolder Shallow непосредственно под "tasks" — ищет дочерние папки,
      * которые Deep-поиск от msgfolderroot мог пропустить.
+     * null — обнаружение не удалось (нет ответа, ошибка EWS, исключение).
      */
-    private suspend fun discoverDirectTaskSubfolders(): List<String> {
+    private suspend fun discoverDirectTaskSubfolders(): List<String>? {
         try {
             val request = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -1401,7 +1488,11 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-            val responseXml = executeEwsWithAuth(request, "FindFolder") ?: return emptyList()
+            val responseXml = executeEwsWithAuth(request, "FindFolder") ?: return null
+            if (!isCompleteFolderListing(responseXml)) {
+                android.util.Log.w("EasTasksService", "discoverDirectTaskSubfolders: FindFolder failed or truncated")
+                return null
+            }
             if (BuildConfig.DEBUG) android.util.Log.d("EasTasksService",
                 "discoverDirectTaskSubfolders: response len=${responseXml.length}, first 600: ${responseXml.take(600)}")
 
@@ -1420,7 +1511,7 @@ $itemIdsXml
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w("EasTasksService", "discoverDirectTaskSubfolders: ${e.message}")
-            return emptyList()
+            return null
         }
     }
 

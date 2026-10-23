@@ -164,6 +164,16 @@ class WbxmlParser {
                 }
             }
         }
+
+        // WAP-192: каждый элемент с контентом закрывается токеном END. Поток кончился раньше —
+        // документ оборван (обрыв связи, прокси). Отдавать «обрубок» нельзя: Sync-разбор принял бы
+        // его за полную страницу (без MoreAvailable), а неполный снимок — за полный. Так же
+        // поступает AOSP Exchange (EodException). Все вызовы parse() обёрнуты в catch → Error.
+        if (tagStack.isNotEmpty()) {
+            throw IOException(
+                "Truncated WBXML: ${tagStack.size} unclosed element(s), innermost <${tagStack.last()}>"
+            )
+        }
     }
 
 

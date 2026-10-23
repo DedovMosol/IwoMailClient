@@ -451,6 +451,23 @@ class EwsClient(
 
         fun isEwsSuccessOrNotFound(xml: String): Boolean =
             isEwsSuccess(xml) || xml.contains("ErrorItemNotFound")
+
+        private val ENVELOPE_END = Regex("</(?:[A-Za-z_][\\w.-]*:)?Envelope\\s*>")
+
+        /**
+         * SOAP-конверт дошёл целиком: закрывающий тег Envelope на месте. Обрыв без ошибки
+         * HTTP-уровня (соединение закрыто без длины) иначе выглядит успешным ответом:
+         * `ResponseClass`, `ResponseCode` и атрибуты `RootFolder` стоят в начале, обрезан хвост.
+         */
+        fun isCompleteEnvelope(xml: String): Boolean = ENVELOPE_END.containsMatchIn(xml)
+
+        /**
+         * Ответ FindItem/FindFolder успешен, цел и содержит последний элемент выборки. MS: при
+         * `RootFolder@IncludesLastItemInRange="true"` дальше листать не нужно. Без этого
+         * признака «первые N элементов» нельзя считать всей папкой.
+         */
+        fun isEwsLastPage(xml: String): Boolean =
+            isEwsSuccess(xml) && isCompleteEnvelope(xml) && xml.contains("IncludesLastItemInRange=\"true\"")
     }
     
     /**

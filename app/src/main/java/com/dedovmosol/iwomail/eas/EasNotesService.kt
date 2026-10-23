@@ -54,8 +54,6 @@ class EasNotesService internal constructor(
     // Кэш ID папки заметок
     @Volatile private var cachedNotesFolderId: String? = null
 
-    @Volatile var lastSyncWasIncrementalNoChanges: Boolean = false
-
     private class InvalidSyncKeyException(status: String) : Exception("InvalidSyncKey: Status=$status")
 
     /**
@@ -97,8 +95,9 @@ class EasNotesService internal constructor(
      * Синхронизация заметок
      * EAS 14.1+ — стандартный Notes sync
      * EAS 12.x — fallback через EWS
+     * Полнота снимка — в [NotesSyncResult]: удалять локальные заметки можно только по полной выдаче.
      */
-    suspend fun syncNotes(): EasResult<List<EasNote>> {
+    suspend fun syncNotes(): EasResult<NotesSyncResult> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
@@ -244,9 +243,7 @@ class EasNotesService internal constructor(
     
     // ==================== Private EAS methods ====================
     
-    private suspend fun syncNotesStandard(folders: List<EasFolder>): EasResult<List<EasNote>> {
-        lastSyncWasIncrementalNoChanges = false
-
+    private suspend fun syncNotesStandard(folders: List<EasFolder>): EasResult<NotesSyncResult> {
         val notesFolderId = folders.find { it.type == FolderType.NOTES }?.serverId
             ?: return EasResult.Error("Папка Notes (type=10) не найдена")
         
@@ -283,10 +280,14 @@ class EasNotesService internal constructor(
                                 responseXml.contains("<MoreAvailable")
                         if (!hasCommands) {
                             if (newKey != null) syncKeyCache[notesFolderId] = newKey
-                            lastSyncWasIncrementalNoChanges = true
                             if (BuildConfig.DEBUG) android.util.Log.d("EasNotesService",
                                 "syncNotesStandard: No changes detected (probe), skipping full sync")
-                            return EasResult.Success(emptyList())
+                            return EasResult.Success(NotesSyncResult(
+                                notes = emptyList(),
+                                isActiveAuthoritative = false,
+                                isDeletedAuthoritative = false,
+                                isUnchanged = true
+                            ))
                         }
                     }
                     status == "3" || status == "12" -> {
@@ -296,104 +297,141 @@ class EasNotesService internal constructor(
             }
         }
         
-        val allNotes = mutableListOf<EasNote>()
-        
-        // Активные заметки (полная синхронизация)
-        val activeNotes = syncNotesFromFolder(notesFolderId, isDeleted = false)
-        if (activeNotes is EasResult.Success) {
-            allNotes.addAll(activeNotes.data)
+        // Активные заметки (полная синхронизация). Сбой основной папки — ошибка синка: раньше он
+        // глотался, и пустой список помечал удалёнными ВСЕ локальные заметки.
+        val active = when (val result = syncNotesFromFolder(notesFolderId)) {
+            is EasResult.Success -> result.data
+            is EasResult.Error -> return result
         }
         
-        // Удалённые заметки из Deleted Items
+        // Удалённые заметки из Deleted Items. Сбой здесь синк не валит: корзину просто не сверяем.
         val deletedItemsFolderId = folders.find { it.type == FolderType.DELETED_ITEMS }?.serverId
-        if (deletedItemsFolderId != null) {
-            val deletedNotes = syncDeletedNotesFromFolder(deletedItemsFolderId)
-            if (deletedNotes is EasResult.Success) {
-                allNotes.addAll(deletedNotes.data)
+        val deleted = deletedItemsFolderId?.let { folderId ->
+            when (val result = syncDeletedNotesFromFolder(folderId)) {
+                is EasResult.Success -> result.data
+                is EasResult.Error -> {
+                    android.util.Log.w("EasNotesService", "syncNotesStandard: Deleted Items sync failed: ${result.message}")
+                    null
+                }
             }
         }
         
-        return EasResult.Success(allNotes)
+        return EasResult.Success(NotesSyncResult(
+            notes = active.notes + deleted?.notes.orEmpty(),
+            isActiveAuthoritative = active.isComplete,
+            isDeletedAuthoritative = deleted?.isComplete == true
+        ))
     }
 
-    private suspend fun syncNotesFromFolder(folderId: String, isDeleted: Boolean): EasResult<List<EasNote>> {
+    /** Выборка одной папки заметок; [isComplete] — сервер подтвердил конец выдачи. */
+    private class FolderNotes(val notes: List<EasNote>, val isComplete: Boolean)
+
+    /** Страница EAS Sync заметок. */
+    private class NotesSyncPage(
+        val status: String,
+        val syncKey: String?,
+        val notes: List<EasNote>,
+        val moreAvailable: Boolean
+    )
+
+    private fun parseNotesSyncPage(responseXml: String): NotesSyncPage {
+        // MS-ASCMD: Status коллекции обязателен; пустое тело ответа транспорт подменяет на Status=1.
+        val status = deps.extractValue(responseXml, "Status") ?: "1"
+        if (status != "1") return NotesSyncPage(status, syncKey = null, notes = emptyList(), moreAvailable = false)
+        return NotesSyncPage(
+            status = status,
+            syncKey = deps.extractValue(responseXml, "SyncKey"),
+            notes = parseNotesResponse(responseXml),
+            moreAvailable = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
+        )
+    }
+
+    private suspend fun syncNotesFromFolder(folderId: String): EasResult<FolderNotes> {
         val initialXml = EasXmlTemplates.syncInitial(folderId)
         
-        var syncKey = "0"
-        when (val result = deps.executeEasCommand("Sync", initialXml) { deps.extractValue(it, "SyncKey") ?: "0" }) {
-            is EasResult.Success -> syncKey = result.data
-            is EasResult.Error -> return EasResult.Error(result.message)
+        var syncKey = when (val result = deps.executeEasCommand("Sync", initialXml) { deps.extractValue(it, "SyncKey") ?: "0" }) {
+            is EasResult.Success -> result.data
+            is EasResult.Error -> return result
         }
-        
-        if (syncKey == "0") return EasResult.Success(emptyList())
+        if (syncKey == "0") return EasResult.Error("Sync заметок: сервер не выдал SyncKey")
         
         val allNotes = mutableListOf<EasNote>()
-        var moreAvailable = true
+        // Папка выдана целиком, только если сервер сам сообщил конец выдачи (MoreAvailable исчерпан).
+        var incompleteReason: String? = null
+        var keyInvalidated = false
         var iterations = 0
         val maxIterations = 50 // До 5000 заметок (windowSize=100)
         
-        while (moreAvailable && iterations < maxIterations) {
+        while (true) {
+            if (iterations >= maxIterations) {
+                incompleteReason = "лимит $maxIterations страниц"
+                break
+            }
             iterations++
             val syncXml = EasXmlTemplates.syncWithBody(syncKey, folderId)
             
-            val result = deps.executeEasCommand("Sync", syncXml) { responseXml ->
-                val status = deps.extractValue(responseXml, "Status")
-                if (status == "3" || status == "12") {
-                    syncKeyCache.remove(folderId)
-                    throw InvalidSyncKeyException(status)
+            val page = when (val result = deps.executeEasCommand("Sync", syncXml) { parseNotesSyncPage(it) }) {
+                is EasResult.Success -> result.data
+                is EasResult.Error -> {
+                    incompleteReason = result.message
+                    break
                 }
-
-                val newSyncKey = deps.extractValue(responseXml, "SyncKey")
-                if (newSyncKey != null) syncKey = newSyncKey
-                
-                val more = responseXml.contains("<MoreAvailable/>") || responseXml.contains("<MoreAvailable>")
-                val notes = parseNotesResponse(responseXml)
-                Pair(notes, more)
+            }
+            if (page.status != "1") {
+                // 3 — Invalid SyncKey, 12 — иерархия папок изменилась: ключ недействителен.
+                if (page.status == "3" || page.status == "12") {
+                    syncKeyCache.remove(folderId)
+                    keyInvalidated = true
+                }
+                incompleteReason = "Status=${page.status}"
+                break
             }
             
-            when (result) {
-                is EasResult.Success -> {
-                    val (notes, more) = result.data
-                    val processed = if (isDeleted) notes.map { it.copy(isDeleted = true) } else notes
-                    allNotes.addAll(processed)
-                    moreAvailable = more
-                    if (notes.isEmpty()) moreAvailable = false
-                }
-                is EasResult.Error -> {
-                    if (result.message.contains("InvalidSyncKey")) {
-                        syncKeyCache.remove(folderId)
-                    }
-                    if (allNotes.isNotEmpty()) break
-                    return EasResult.Error(result.message)
-                }
+            page.syncKey?.let { syncKey = it }
+            allNotes.addAll(page.notes)
+            if (!page.moreAvailable) break
+            // MoreAvailable без данных: сервер обещает продолжение, но не отдаёт его.
+            if (page.notes.isEmpty()) {
+                incompleteReason = "MoreAvailable без данных"
+                break
             }
         }
 
-        if (syncKey != "0") {
+        if (!keyInvalidated && syncKey != "0") {
             syncKeyCache[folderId] = syncKey
         }
-        
-        return EasResult.Success(allNotes)
+
+        if (incompleteReason != null) {
+            android.util.Log.w("EasNotesService",
+                "syncNotesFromFolder: incomplete ($incompleteReason), ${allNotes.size} notes, deletions disabled")
+            // Сбой до первой заметки — ошибка синка, а не «пустая папка».
+            if (allNotes.isEmpty()) return EasResult.Error("Синхронизация заметок прервана: $incompleteReason")
+        }
+        return EasResult.Success(FolderNotes(allNotes, isComplete = incompleteReason == null))
     }
     
-    private suspend fun syncDeletedNotesFromFolder(deletedItemsFolderId: String): EasResult<List<EasNote>> {
+    private suspend fun syncDeletedNotesFromFolder(deletedItemsFolderId: String): EasResult<FolderNotes> {
         val initialXml = EasXmlTemplates.syncInitial(deletedItemsFolderId)
         
-        var syncKey = "0"
-        when (val result = deps.executeEasCommand("Sync", initialXml) { deps.extractValue(it, "SyncKey") ?: "0" }) {
-            is EasResult.Success -> syncKey = result.data
-            is EasResult.Error -> return EasResult.Success(emptyList())
+        val syncKey = when (val result = deps.executeEasCommand("Sync", initialXml) { deps.extractValue(it, "SyncKey") ?: "0" }) {
+            is EasResult.Success -> result.data
+            is EasResult.Error -> return result
         }
+        if (syncKey == "0") return EasResult.Error("Sync Deleted Items: сервер не выдал SyncKey")
         
-        if (syncKey == "0") return EasResult.Success(emptyList())
-        
+        // Одно окно (WindowSize=100) без пагинации: в Deleted Items обычно тысячи писем, листать их
+        // ради заметок дорого. Окно полно, только если сервер не сообщил MoreAvailable.
         val syncXml = EasXmlTemplates.syncWithBody(syncKey, deletedItemsFolderId)
-        
-        return deps.executeEasCommand("Sync", syncXml) { responseXml ->
-            parseNotesResponse(responseXml)
-                .filter { it.messageClass == "IPM.StickyNote" || it.messageClass.isBlank() }
-                .map { it.copy(isDeleted = true) }
+        val page = when (val result = deps.executeEasCommand("Sync", syncXml) { parseNotesSyncPage(it) }) {
+            is EasResult.Success -> result.data
+            is EasResult.Error -> return result
         }
+        if (page.status != "1") return EasResult.Error("Sync Deleted Items: Status=${page.status}")
+        
+        val notes = page.notes
+            .filter { it.messageClass == "IPM.StickyNote" || it.messageClass.isBlank() }
+            .map { it.copy(isDeleted = true) }
+        return EasResult.Success(FolderNotes(notes, isComplete = !page.moreAvailable))
     }
     
     private suspend fun createNoteEas(subject: String, body: String): EasResult<String> {
@@ -615,7 +653,7 @@ class EasNotesService internal constructor(
         return responseXml
     }
     
-    private suspend fun syncNotesEws(): EasResult<List<EasNote>> = withContext(Dispatchers.IO) {
+    private suspend fun syncNotesEws(): EasResult<NotesSyncResult> = withContext(Dispatchers.IO) {
         try {
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: START - syncing ACTIVE notes")
             
@@ -623,43 +661,57 @@ class EasNotesService internal constructor(
             val findRequest = EasXmlTemplates.ewsSoapRequest(EasXmlTemplates.ewsFindItem("notes"))
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: FindItem (notes) request length=${findRequest.length}")
             
+            // Сбой основной папки — ошибка синка. Раньше он давал Success(emptyList()),
+            // и репозиторий помечал удалёнными ВСЕ локальные заметки.
             val responseXml = executeEwsWithAuth(findRequest, "FindItem")
             if (responseXml == null) {
                 android.util.Log.e("NOT", "syncNotesEws: Auth FAILED for notes")
-                return@withContext EasResult.Success(emptyList())
+                return@withContext EasResult.Error("EWS FindItem (notes): нет ответа сервера")
+            }
+            if (!EwsClient.isEwsSuccess(responseXml)) {
+                val code = EasPatterns.EWS_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1) ?: "ошибка"
+                android.util.Log.e("NOT", "syncNotesEws: FindItem (notes) failed: $code")
+                return@withContext EasResult.Error("EWS FindItem (notes): $code")
             }
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Response length=${responseXml.length}")
-            val activeNotes = parseEwsNotesResponse(responseXml).toMutableList()
-            val activeWithBodies = fillNoteBodiesEws(activeNotes).toMutableList()
-            if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${activeNotes.size} ACTIVE notes")
+            val active = fillNoteBodiesEws(parseEwsNotesResponse(responseXml))
+            if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${active.notes.size} ACTIVE notes")
             
             // === 2. Синхронизация УДАЛЁННЫХ заметок из папки "deleteditems" ===
+            // Сбой здесь синк не валит: корзину просто не сверяем (isDeletedAuthoritative=false).
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: START - syncing DELETED notes")
             val findDeletedRequest = EasXmlTemplates.ewsSoapRequest(EasXmlTemplates.ewsFindItem("deleteditems"))
             
             val deletedResponseXml = executeEwsWithAuth(findDeletedRequest, "FindItem")
-            if (deletedResponseXml != null) {
-                val deletedNotesRaw = parseEwsNotesResponse(deletedResponseXml)
-                val deletedNotes = fillNoteBodiesEws(deletedNotesRaw)
-                    .map { it.copy(isDeleted = true) }
-                if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${deletedNotes.size} DELETED notes")
-                activeWithBodies.addAll(deletedNotes)
+                ?.takeIf { EwsClient.isEwsSuccess(it) }
+            val deleted = if (deletedResponseXml != null) {
+                fillNoteBodiesEws(parseEwsNotesResponse(deletedResponseXml))
             } else {
-                android.util.Log.e("NOT", "syncNotesEws: Auth FAILED for deleteditems")
+                android.util.Log.e("NOT", "syncNotesEws: FindItem (deleteditems) failed")
+                null
             }
+            val deletedNotes = deleted?.notes.orEmpty().map { it.copy(isDeleted = true) }
+            if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Parsed ${deletedNotes.size} DELETED notes")
             
-            // === 3. Вывод всех заметок ===
-            activeWithBodies.forEach { note ->
+            val allNotes = active.notes + deletedNotes
+            allNotes.forEach { note ->
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: Note serverId=${note.serverId.take(20)}..., bodyLen=${note.body.length}, isDeleted=${note.isDeleted}")
             }
+            if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: TOTAL ${allNotes.size} notes (active + deleted)")
             
-            if (BuildConfig.DEBUG) android.util.Log.d("NOT", "syncNotesEws: TOTAL ${activeWithBodies.size} notes (active + deleted)")
-            EasResult.Success(activeWithBodies)
+            // FindItem без пагинации (MaxEntriesReturned=1000): папка полна только при
+            // IncludesLastItemInRange="true", иначе это лишь первая тысяча элементов.
+            EasResult.Success(NotesSyncResult(
+                notes = allNotes,
+                isActiveAuthoritative = EwsClient.isEwsLastPage(responseXml),
+                isDeletedAuthoritative = deletedResponseXml != null && EwsClient.isEwsLastPage(deletedResponseXml),
+                unresolvedServerIds = active.unresolvedIds + deleted?.unresolvedIds.orEmpty()
+            ))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("NOT", "syncNotesEws: EXCEPTION ${e.message}", e)
-            EasResult.Success(emptyList())
+            EasResult.Error("EWS: ошибка синхронизации заметок: ${e.message}")
         }
     }
     
@@ -1064,21 +1116,35 @@ $itemIdsXml
         return notes
     }
 
-    private suspend fun fillNoteBodiesEws(notes: List<EasNote>): List<EasNote> {
-        if (notes.isEmpty()) return notes
-        val bodies = getNoteBodiesEws(notes.map { it.serverId })
-        if (bodies.isEmpty()) return notes
-        return notes.map { note ->
+    /** Заметки с телами из GetItem и ItemId тех, чьё тело получить не удалось. */
+    private class ResolvedNotes(val notes: List<EasNote>, val unresolvedIds: Set<String>)
+
+    /**
+     * FindItem тел не отдаёт, тело приходит только из GetItem. Заметку, которой нет в ответе
+     * GetItem, не возвращаем, а помечаем неразрешённой: иначе она ушла бы в БД с ПУСТЫМ телом
+     * и затёрла бы локальное.
+     */
+    private suspend fun fillNoteBodiesEws(notes: List<EasNote>): ResolvedNotes {
+        if (notes.isEmpty()) return ResolvedNotes(notes, emptySet())
+        val bodies = getNoteBodiesEws(notes.map { it.serverId }).orEmpty()
+        val resolved = ArrayList<EasNote>(notes.size)
+        val unresolved = LinkedHashSet<String>()
+        for (note in notes) {
             val body = bodies[note.serverId]
-            if (!body.isNullOrBlank()) {
-                note.copy(body = body)
-            } else {
-                note
+            when {
+                body == null -> unresolved += note.serverId
+                body.isNotBlank() -> resolved += note.copy(body = body)
+                else -> resolved += note
             }
         }
+        if (unresolved.isNotEmpty()) {
+            android.util.Log.w("NOT", "fillNoteBodiesEws: ${unresolved.size} notes without GetItem body, kept as-is")
+        }
+        return ResolvedNotes(resolved, unresolved)
     }
 
-    private suspend fun getNoteBodiesEws(itemIds: List<String>): Map<String, String> {
+    /** ItemId → тело (пустое, если у заметки его нет) для каждого элемента ответа; null — запрос не удался. */
+    private suspend fun getNoteBodiesEws(itemIds: List<String>): Map<String, String>? {
         if (itemIds.isEmpty()) return emptyMap()
         val itemIdsXml = itemIds.joinToString("") { """<t:ItemId Id="${deps.escapeXml(it)}"/>""" }
         val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -1102,18 +1168,16 @@ $itemIdsXml
     </soap:Body>
 </soap:Envelope>""".trimIndent()
 
-        val responseXml = executeEwsWithAuth(getItemRequest, "GetItem") ?: return emptyMap()
+        val responseXml = executeEwsWithAuth(getItemRequest, "GetItem") ?: return null
+        if (!EwsClient.isCompleteEnvelope(responseXml)) return null
 
         val result = mutableMapOf<String, String>()
         EWS_ITEM_PATTERN.findAll(responseXml).forEach { match ->
             val itemXml = match.groupValues[1]
             val itemId = EasXmlParser.extractAttribute(itemXml, "ItemId", "Id", listOf("t")) ?: return@forEach
-            val body = extractEwsBody(itemXml)
+            result[itemId] = extractEwsBody(itemXml)
                 ?: EasXmlParser.ews(itemXml, "Body")
                 ?: ""
-            if (body.isNotBlank()) {
-                result[itemId] = body
-            }
         }
         return result
     }
@@ -1137,50 +1201,6 @@ $itemIdsXml
 
     private fun stripHtmlIfNeeded(text: String): String =
         com.dedovmosol.iwomail.util.stripHtmlIfNeeded(text)
-
-    private suspend fun syncDeletedNotesEws(): EasResult<List<EasNote>> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val findRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="Exchange2007_SP1"/>
-    </soap:Header>
-    <soap:Body>
-        <m:FindItem Traversal="Shallow">
-            <m:ItemShape>
-                <t:BaseShape>AllProperties</t:BaseShape>
-                <t:BodyType>Text</t:BodyType>
-            </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="100" Offset="0" BasePoint="Beginning"/>
-            <m:Restriction>
-                <t:IsEqualTo>
-                    <t:FieldURI FieldURI="item:ItemClass"/>
-                    <t:FieldURIOrConstant>
-                        <t:Constant Value="IPM.StickyNote"/>
-                    </t:FieldURIOrConstant>
-                </t:IsEqualTo>
-            </m:Restriction>
-            <m:ParentFolderIds>
-                <t:DistinguishedFolderId Id="deleteditems"/>
-            </m:ParentFolderIds>
-        </m:FindItem>
-    </soap:Body>
-</soap:Envelope>""".trimIndent()
-
-                val responseXml = executeEwsWithAuth(findRequest, "FindItem")
-                    ?: return@withContext EasResult.Success(emptyList())
-
-                val notes = parseEwsNotesResponse(responseXml).map { it.copy(isDeleted = true) }
-                EasResult.Success(notes)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Success(emptyList())
-            }
-        }
-    }
 
     // Прежний regex искал ПРЕФИКСНЫЙ <notes:Categories>, а декодер выдаёт голый <Categories> —
     // категории EAS-заметок (Exchange 2010/2013) терялись всегда. Хелпер матчит оба варианта.

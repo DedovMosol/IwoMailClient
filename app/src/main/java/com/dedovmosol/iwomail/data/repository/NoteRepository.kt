@@ -12,11 +12,17 @@ import kotlinx.coroutines.withContext
 /**
  * Репозиторий для работы с заметками Exchange
  */
-class NoteRepository(private val context: Context) {
+class NoteRepository internal constructor(
+    database: MailDatabase,
+    private val accountRepo: AccountRepository
+) {
 
-    private val database = MailDatabase.getInstance(context)
+    constructor(context: Context) : this(
+        MailDatabase.getInstance(context),
+        RepositoryProvider.getAccountRepository(context)
+    )
+
     private val noteDao = database.noteDao()
-    private val accountRepo = RepositoryProvider.getAccountRepository(context)
 
     companion object {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
@@ -679,13 +685,18 @@ class NoteRepository(private val context: Context) {
 
                 when (result) {
                     is EasResult.Success -> {
-                        val serverNotes = result.data
+                        val snapshot = result.data
 
-                        if (easClient.notesIncrementalNoChanges) {
+                        if (snapshot.isUnchanged) {
                             return@withContext EasResult.Success(
                                 noteDao.getAllNotesByAccountList(accountId).size
                             )
                         }
+
+                        val serverNotes = snapshot.notes
+                        // Заметки, существование которых сервер подтвердил без тела (EWS GetItem):
+                        // их не трогаем — ни upsert'ом (затёр бы тело пустым), ни удалением.
+                        val unresolvedServerIds = snapshot.unresolvedServerIds
 
                         // Получаем ВСЕ существующие заметки
                         val existingNotes = noteDao.getAllNotesByAccountList(accountId)
@@ -699,12 +710,18 @@ class NoteRepository(private val context: Context) {
                         val activeServerIds = activeServerNotes.map { it.serverId }.toSet()
 
                         // Заметки, которые были активными локально, но исчезли с сервера (удалены в Outlook)
-                        val missingServerIds = existingActiveServerIds - activeServerIds
+                        val missingServerIds = existingActiveServerIds - activeServerIds - unresolvedServerIds
 
-                        // Помечаем их как удалённые локально (не полностью удаляем)
-                        for (serverId in missingServerIds) {
-                            val noteId = "${accountId}_${serverId}"
-                            markNoteAsDeleted(noteId)
+                        // Помечаем их как удалённые локально (не полностью удаляем) — ТОЛЬКО по полному
+                        // снимку папки Notes: частичная выдача (обрыв, ошибка, лимит страниц) не доказывает,
+                        // что заметки нет на сервере.
+                        if (snapshot.isActiveAuthoritative) {
+                            for (serverId in missingServerIds) {
+                                val noteId = "${accountId}_${serverId}"
+                                markNoteAsDeleted(noteId)
+                            }
+                        } else if (missingServerIds.isNotEmpty()) {
+                            android.util.Log.w("NoteRepository", "syncNotes: active snapshot incomplete, keeping ${missingServerIds.size} local notes absent from it")
                         }
 
                         // Добавляем/обновляем АКТИВНЫЕ заметки с сервера
@@ -713,19 +730,25 @@ class NoteRepository(private val context: Context) {
                         val syncTime = System.currentTimeMillis()
                         val RECENT_EDIT_THRESHOLD = 10_000L // 10 секунд
 
-                        // Phase 1: Collect duplicate IDs to delete
+                        // Phase 1: Collect duplicate IDs to delete.
+                        // Дубль = локальная копия с другим serverId (сервер сменил id при перемещении).
+                        // Вывод «старого id больше нет» верен только при полном снимке: в неполном
+                        // отсутствовать может и отдельная заметка с тем же текстом.
                         val activeDuplicateIdsToDelete = mutableSetOf<String>()
-                        for (note in activeServerNotes) {
-                            val duplicate = existingNotes.find {
-                                it.serverId != note.serverId &&
-                                    noteContentMatches(it.subject, it.body, note.subject, note.body)
-                            }
-                            if (duplicate != null) {
-                                if (duplicate.isDeleted && !skipRecentDeleteCheck) {
-                                    val timeSinceDelete = syncTime - duplicate.lastModified
-                                    if (timeSinceDelete < 30_000) continue
+                        if (snapshot.isActiveAuthoritative) {
+                            for (note in activeServerNotes) {
+                                val duplicate = existingNotes.find {
+                                    it.serverId != note.serverId &&
+                                        it.serverId !in unresolvedServerIds &&
+                                        noteContentMatches(it.subject, it.body, note.subject, note.body)
                                 }
-                                activeDuplicateIdsToDelete.add(duplicate.id)
+                                if (duplicate != null) {
+                                    if (duplicate.isDeleted && !skipRecentDeleteCheck) {
+                                        val timeSinceDelete = syncTime - duplicate.lastModified
+                                        if (timeSinceDelete < 30_000) continue
+                                    }
+                                    activeDuplicateIdsToDelete.add(duplicate.id)
+                                }
                             }
                         }
                         // Phase 2: Delete duplicates
@@ -790,20 +813,26 @@ class NoteRepository(private val context: Context) {
                         // (заметка была окончательно удалена на сервере, либо удалена другим клиентом)
                         // НЕ удаляем заметки, которые всё ещё есть в активных на сервере (ожидают перемещения в корзину)
                         // ТАКЖЕ НЕ удаляем свежеудалённые заметки (< 30 сек) - даём серверу время обработать
-                        val missingDeletedServerIds = existingDeletedServerIds - deletedServerIds - activeServerIds
-                        val currentTime = System.currentTimeMillis()
-                        for (serverId in missingDeletedServerIds) {
-                            val noteId = "${accountId}_${serverId}"
-                            val note = existingDeletedNotes.find { it.serverId == serverId }
+                        // И только если ОБЕ выдачи полны: окно Deleted Items без пагинации часто неполно,
+                        // тогда отсутствие в нём ничего не доказывает и корзину не трогаем.
+                        val missingDeletedServerIds = existingDeletedServerIds - deletedServerIds - activeServerIds - unresolvedServerIds
+                        if (snapshot.isActiveAuthoritative && snapshot.isDeletedAuthoritative) {
+                            val currentTime = System.currentTimeMillis()
+                            for (serverId in missingDeletedServerIds) {
+                                val noteId = "${accountId}_${serverId}"
+                                val note = existingDeletedNotes.find { it.serverId == serverId }
 
-                            // Проверяем: прошло ли достаточно времени с момента последнего изменения
-                            val timeSinceModified = currentTime - (note?.lastModified ?: 0)
-                            if (timeSinceModified < 30_000) {
-                                // Заметка изменена менее 30 секунд назад - даём серверу время
-                                continue
+                                // Проверяем: прошло ли достаточно времени с момента последнего изменения
+                                val timeSinceModified = currentTime - (note?.lastModified ?: 0)
+                                if (timeSinceModified < 30_000) {
+                                    // Заметка изменена менее 30 секунд назад - даём серверу время
+                                    continue
+                                }
+
+                                noteDao.delete(noteId)
                             }
-
-                            noteDao.delete(noteId)
+                        } else if (missingDeletedServerIds.isNotEmpty()) {
+                            android.util.Log.w("NoteRepository", "syncNotes: snapshot incomplete, keeping ${missingDeletedServerIds.size} notes in local trash")
                         }
 
                         val freshNotesForDeletedPhase = noteDao.getAllNotesByAccountList(accountId)
@@ -818,6 +847,7 @@ class NoteRepository(private val context: Context) {
                                 it.isDeleted &&
                                     it.serverId != note.serverId &&
                                     it.serverId !in deletedServerIds &&
+                                    it.serverId !in unresolvedServerIds &&
                                     noteContentKey(it.subject, it.body, it.categories) == serverNoteKey
                             }
                             if (duplicate != null) {

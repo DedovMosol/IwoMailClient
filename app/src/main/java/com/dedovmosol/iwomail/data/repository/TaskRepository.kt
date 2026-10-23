@@ -14,11 +14,19 @@ import kotlinx.coroutines.withContext
 /**
  * Репозиторий для работы с задачами Exchange
  */
-class TaskRepository(private val context: Context) {
+class TaskRepository internal constructor(
+    private val context: Context,
+    private val database: MailDatabase,
+    private val accountRepo: AccountRepository
+) {
+
+    constructor(context: Context) : this(
+        context,
+        MailDatabase.getInstance(context),
+        RepositoryProvider.getAccountRepository(context)
+    )
     
-    private val database = MailDatabase.getInstance(context)
     private val taskDao = database.taskDao()
-    private val accountRepo = RepositoryProvider.getAccountRepository(context)
     private val consecutiveEmptySyncs = java.util.concurrent.ConcurrentHashMap<Long, Int>()
     
     companion object {
@@ -520,7 +528,8 @@ class TaskRepository(private val context: Context) {
                 
                 when (result) {
                     is EasResult.Success -> {
-                        val serverTasks = result.data
+                        val snapshot = result.data
+                        val serverTasks = snapshot.tasks
                         
                         // КРИТИЧНО: НЕ делаем повторный запрос - используем уже полученные данные
                         // Но нужно учесть что pending_sync могли быть удалены выше
@@ -529,15 +538,24 @@ class TaskRepository(private val context: Context) {
                             (now - (it.serverId.removePrefix("pending_sync_").toLongOrNull() ?: 0) <= PENDING_TIMEOUT)
                         }
                         
-                        // Определяем какие задачи удалены на сервере (нет ни в Tasks, ни в Deleted Items)
-                        val serverIds = serverTasks.map { it.serverId }.toSet()
+                        // Определяем какие задачи удалены на сервере (нет ни в Tasks, ни в Deleted Items).
+                        // Задачи, существование которых сервер подтвердил без деталей (EWS GetItem), сохраняем.
+                        val serverIds = serverTasks.map { it.serverId }.toSet() + snapshot.unresolvedServerIds
                         val allExistingServerIds = currentExistingTasks.map { it.serverId }.toSet()
                         val deletedServerIds = allExistingServerIds - serverIds
                         
                         val activeLocalTasks = currentExistingTasks.filter { !it.isDeleted && !it.serverId.startsWith("pending_sync_") }
                         val activeServerTasks = serverTasks.filter { !it.isDeleted }
                         val emptyCount = consecutiveEmptySyncs[accountId] ?: 0
-                        val shouldDeleteFromServer = if (activeLocalTasks.size > 3 && activeServerTasks.isEmpty() && emptyCount < 1) {
+                        // Отсутствие задачи в снимке доказывает её удаление только при полной выдаче.
+                        // Неполный снимок (обрыв, ошибка, лимит) удаления не разрешает; эвристики ниже —
+                        // вторая линия защиты для полных снимков.
+                        val shouldDeleteFromServer = if (!snapshot.isAuthoritative) {
+                            if (deletedServerIds.isNotEmpty()) {
+                                android.util.Log.w("TaskRepository", "syncTasks: snapshot incomplete (${serverTasks.size} tasks), keeping ${deletedServerIds.size} local tasks absent from it")
+                            }
+                            false
+                        } else if (activeLocalTasks.size > 3 && activeServerTasks.isEmpty() && emptyCount < 1) {
                             android.util.Log.w("TaskRepository", "syncTasks: server returned 0 active tasks but local has ${activeLocalTasks.size}, skipping deletion (attempt ${emptyCount + 1})")
                             consecutiveEmptySyncs[accountId] = emptyCount + 1
                             false

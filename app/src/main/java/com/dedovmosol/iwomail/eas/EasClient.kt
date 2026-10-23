@@ -1483,12 +1483,9 @@ $foldersXml
      * Синхронизация заметок из папки Notes на сервере Exchange
      * @see EasNotesService.syncNotes
      */
-    suspend fun syncNotes(): EasResult<List<EasNote>> {
+    suspend fun syncNotes(): EasResult<NotesSyncResult> {
         return notesService.syncNotes()
     }
-
-    val notesIncrementalNoChanges: Boolean
-        get() = notesService.lastSyncWasIncrementalNoChanges
 
     private suspend fun performNtlmHandshake(): String? =
         transport.performNtlmHandshake()
@@ -1977,7 +1974,7 @@ $foldersXml
      * Синхронизация задач из папки Tasks на сервере Exchange
      * @see EasTasksService.syncTasks
      */
-    suspend fun syncTasks(): EasResult<List<EasTask>> {
+    suspend fun syncTasks(): EasResult<TasksSyncResult> {
         return tasksService.syncTasks()
     }
 
@@ -2620,6 +2617,34 @@ data class EasNote(
 )
 
 /**
+ * Снимок заметок: активные (папка Notes) + удалённые (Deleted Items).
+ *
+ * Синк заметок — полный снимок, и репозиторий удаляет по нему локальные записи, которых в снимке
+ * нет. Делать это можно ТОЛЬКО по подтверждённо полной выдаче: иначе ошибка, обрыв или лимит
+ * страниц превращаются в массовое удаление реальных заметок.
+ *
+ * Признаков полноты два: Deleted Items читается одним окном без пагинации (там тысячи писем),
+ * поэтому при общем признаке удаления заметок в Outlook не доходили бы до приложения никогда.
+ *
+ * @property notes заметки для upsert; удалённые — с `isDeleted = true`.
+ * @property isActiveAuthoritative папка Notes выдана целиком: можно пометить удалёнными
+ *   локальные активные заметки, которых нет в снимке.
+ * @property isDeletedAuthoritative Deleted Items просмотрена целиком: вместе с
+ *   [isActiveAuthoritative] разрешает убрать из локальной корзины то, чего нет нигде на сервере.
+ * @property unresolvedServerIds EWS: заметки, существование которых подтвердил FindItem, но тело
+ *   (GetItem) получить не удалось. В [notes] их нет; локальные копии нельзя ни перезаписывать,
+ *   ни удалять.
+ * @property isUnchanged EAS: пробный Sync показал «изменений нет», локальные данные актуальны.
+ */
+data class NotesSyncResult(
+    val notes: List<EasNote>,
+    val isActiveAuthoritative: Boolean,
+    val isDeletedAuthoritative: Boolean,
+    val unresolvedServerIds: Set<String> = emptySet(),
+    val isUnchanged: Boolean = false
+)
+
+/**
  * Черновик из Exchange Drafts
  */
 data class EasDraft(
@@ -2698,6 +2723,25 @@ data class EasTask(
     val lastModified: Long = System.currentTimeMillis(),
     val isDeleted: Boolean = false,
     val owner: String = ""
+)
+
+/**
+ * Снимок задач: EAS — полный пересинк с SyncKey=0, EWS — FindItem по всем папкам задач.
+ *
+ * Репозиторий удаляет локальные задачи, которых нет в снимке, только при [isAuthoritative].
+ * Иначе ошибка, обрыв или лимит на середине выдачи превращаются в массовое удаление реальных задач.
+ *
+ * @property tasks задачи для upsert; EWS — вместе с Deleted Items (`isDeleted = true`).
+ * @property isAuthoritative сервер подтвердил выдачу всей коллекции. EAS: Status=1 на каждой
+ *   странице и MoreAvailable исчерпан. EWS: IncludesLastItemInRange по каждой папке, подпапки
+ *   обнаружены без ошибок.
+ * @property unresolvedServerIds EWS: задачи, существование которых подтвердил FindItem, но детали
+ *   (GetItem) получить не удалось. В [tasks] их нет, но удалять их локально нельзя.
+ */
+data class TasksSyncResult(
+    val tasks: List<EasTask>,
+    val isAuthoritative: Boolean,
+    val unresolvedServerIds: Set<String> = emptySet()
 )
 
 /**

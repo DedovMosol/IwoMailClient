@@ -50,15 +50,20 @@ class EasClientNotesIntegrationTest {
                 isDeleted = false
             )
         )
-        coEvery { notesService.syncNotes() } returns EasResult.Success(expectedNotes)
+        val expected = NotesSyncResult(
+            notes = expectedNotes,
+            isActiveAuthoritative = true,
+            isDeletedAuthoritative = false
+        )
+        coEvery { notesService.syncNotes() } returns EasResult.Success(expected)
         
         // Act
         val result = client.syncNotes()
         
-        // Assert
+        // Assert: снимок (заметки + оба признака полноты) доходит до вызывающего без искажений.
         assertThat(result).isInstanceOf(EasResult.Success::class.java)
-        assertThat((result as EasResult.Success).data).hasSize(1)
-        assertThat(result.data[0].serverId).isEqualTo("note1")
+        assertThat((result as EasResult.Success).data).isEqualTo(expected)
+        assertThat(result.data.notes.single().serverId).isEqualTo("note1")
         
         coVerify(exactly = 1) { notesService.syncNotes() }
     }
