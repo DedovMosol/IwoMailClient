@@ -1412,18 +1412,12 @@ $foldersXml
      *
      * @see EasContactsService.syncContacts
      */
-    suspend fun syncContacts(): EasResult<List<GalContact>> {
+    suspend fun syncContacts(): EasResult<ContactsSyncResult> {
         if (!versionDetected) {
             detectEasVersion()
         }
         return contactsService.syncContacts()
     }
-
-    val contactsIncrementalNoChanges: Boolean
-        get() = contactsService.lastSyncWasIncrementalNoChanges
-
-    val contactsSyncWasAuthoritative: Boolean
-        get() = contactsService.lastSyncWasAuthoritative
 
     /**
      * Создание заметки на сервере Exchange
@@ -2601,6 +2595,23 @@ data class GalContact(
     val mobilePhone: String = "",
     val alias: String = "",
     val easServerId: String = ""
+)
+
+/**
+ * Снимок контактов папки Contacts (EAS Sync). Симметрично [TasksSyncResult]/NotesSyncResult:
+ * полнота несётся значением, а не @Volatile-флагом на сервисе (без временной связности).
+ *
+ * @property contacts контакты для upsert.
+ * @property isAuthoritative выдана вся коллекция (Status=1 на каждой странице, MoreAvailable
+ *   исчерпан, лимит страниц не достигнут). Только тогда репозиторий удаляет локальные контакты,
+ *   которых нет в снимке.
+ * @property isUnchanged проба по кэшированному SyncKey показала «изменений нет»; [contacts] пуст,
+ *   локальные данные актуальны, удалять ничего нельзя.
+ */
+data class ContactsSyncResult(
+    val contacts: List<GalContact>,
+    val isAuthoritative: Boolean,
+    val isUnchanged: Boolean = false
 )
 
 /**

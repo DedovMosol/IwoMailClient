@@ -38,7 +38,15 @@ private fun stableHash(input: String): String {
 /**
  * Репозиторий для работы с контактами
  */
-class ContactRepository(context: Context) {
+class ContactRepository internal constructor(
+    private val database: MailDatabase,
+    private val accountRepo: AccountRepository
+) {
+
+    constructor(context: Context) : this(
+        MailDatabase.getInstance(context),
+        RepositoryProvider.getAccountRepository(context)
+    )
     
     companion object {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
@@ -46,10 +54,8 @@ class ContactRepository(context: Context) {
             syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
     }
     
-    private val database = MailDatabase.getInstance(context)
     private val contactDao = database.contactDao()
     private val groupDao = database.contactGroupDao()
-    private val accountRepo = RepositoryProvider.getAccountRepository(context)
     
     // === Получение контактов ===
     
@@ -152,9 +158,10 @@ class ContactRepository(context: Context) {
                 
                 when (result) {
                     is EasResult.Success -> {
-                        val serverContacts = result.data
+                        val snapshot = result.data
+                        val serverContacts = snapshot.contacts
 
-                        if (easClient.contactsIncrementalNoChanges) {
+                        if (snapshot.isUnchanged) {
                             val existingCount = contactDao.getExchangeContactsList(accountId)
                                 .count { it.id.startsWith("${accountId}_exchange_") }
                             return@withContext EasResult.Success(existingCount)
@@ -169,7 +176,7 @@ class ContactRepository(context: Context) {
                             .filter { it.isNotEmpty() }
                             .toSet()
 
-                        if (easClient.contactsSyncWasAuthoritative) {
+                        if (snapshot.isAuthoritative) {
                             val deletedServerIds = existingServerIds - serverServerIds
                             for (sid in deletedServerIds) {
                                 val contactId = "${accountId}_exchange_${stableHash(sid)}"

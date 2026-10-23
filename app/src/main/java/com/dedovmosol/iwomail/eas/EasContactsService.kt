@@ -43,17 +43,11 @@ class EasContactsService internal constructor(
         }
     }
 
-    @Volatile var lastSyncWasIncrementalNoChanges: Boolean = false
-    @Volatile var lastSyncWasAuthoritative: Boolean = true
-
     /**
-     * Синхронизация контактов из папки Contacts на сервере Exchange
-     * Возвращает список контактов
+     * Синхронизация контактов из папки Contacts на сервере Exchange.
+     * Полнота снимка — в [ContactsSyncResult], как у задач/заметок (без @Volatile-флагов).
      */
-    suspend fun syncContacts(): EasResult<List<GalContact>> {
-        lastSyncWasIncrementalNoChanges = false
-        lastSyncWasAuthoritative = true
-
+    suspend fun syncContacts(): EasResult<ContactsSyncResult> {
         val foldersResult = folderSync("0")
         val contactsFolderId = when (foldersResult) {
             is EasResult.Success -> {
@@ -99,8 +93,8 @@ class EasContactsService internal constructor(
                 when {
                     (probeStatus == "1" || probeStatus == null) && !probeHasChanges -> {
                         if (probeNewKey != null) syncKeyCache[contactsFolderId] = probeNewKey!!
-                        lastSyncWasIncrementalNoChanges = true
-                        return EasResult.Success(emptyList())
+                        // Изменений нет: снимок не авторитетен (ничего не удаляем), данные актуальны.
+                        return EasResult.Success(ContactsSyncResult(emptyList(), isAuthoritative = false, isUnchanged = true))
                     }
                     probeStatus == "3" || probeStatus == "12" -> {
                         syncKeyCache.remove(contactsFolderId)
@@ -132,12 +126,13 @@ class EasContactsService internal constructor(
         }
         
         if (syncKey == "0") {
-            lastSyncWasAuthoritative = false
-            return EasResult.Success(emptyList())
+            // Сервер не выдал SyncKey — снимок неполный, удаления запрещаем.
+            return EasResult.Success(ContactsSyncResult(emptyList(), isAuthoritative = false))
         }
         
         val easVersion = getEasVersion()
         val allContacts = mutableListOf<GalContact>()
+        var isAuthoritative = true
         var moreAvailable = true
         var iterations = 0
         val maxIterations = 10
@@ -169,7 +164,7 @@ class EasContactsService internal constructor(
                         syncKeyCache.remove(contactsFolderId)
                     }
                     if (allContacts.isNotEmpty()) {
-                        lastSyncWasAuthoritative = false
+                        isAuthoritative = false
                         break
                     }
                     return EasResult.Error(batchResult.message)
@@ -177,15 +172,16 @@ class EasContactsService internal constructor(
             }
         }
 
+        // MoreAvailable ещё выставлен (упёрлись в лимит страниц) → выдача неполная.
         if (moreAvailable) {
-            lastSyncWasAuthoritative = false
+            isAuthoritative = false
         }
 
         if (syncKey != "0") {
             syncKeyCache[contactsFolderId] = syncKey
         }
         
-        return EasResult.Success(allContacts)
+        return EasResult.Success(ContactsSyncResult(allContacts, isAuthoritative = isAuthoritative))
     }
     
     /**
