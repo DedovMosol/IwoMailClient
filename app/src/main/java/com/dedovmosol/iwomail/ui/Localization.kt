@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui
 
 import androidx.compose.runtime.*
+import com.dedovmosol.iwomail.data.model.ServerProblemType
 
 /**
  * Поддерживаемые языки приложения
@@ -1401,6 +1402,27 @@ object NotificationStrings {
 
     fun getPushServiceText(isRussian: Boolean): String {
         return if (isRussian) "Ожидание новых писем..." else "Waiting for new emails..."
+    }
+
+    // Уведомление о потере связи с сервером (фоновый мониторинг здоровья аккаунта).
+    // Формулировки совпадают с in-app баннером ServerStatusBanner (единый язык проблемы).
+    fun getConnectionProblemTitle(isRussian: Boolean): String {
+        return if (isRussian) "Нет связи с сервером" else "No server connection"
+    }
+
+    fun getConnectionProblemText(problemType: ServerProblemType, isRussian: Boolean): String = when (problemType) {
+        ServerProblemType.AuthError ->
+            if (isRussian) "Ошибка авторизации на сервере" else "Server authorization error"
+        ServerProblemType.CertError ->
+            if (isRussian) "Ошибка сертификата сервера" else "Server certificate error"
+        ServerProblemType.ServerError ->
+            if (isRussian) "Сервер возвращает ошибку" else "Server is returning an error"
+        ServerProblemType.Timeout ->
+            if (isRussian) "Сервер не отвечает" else "Server is not responding"
+        ServerProblemType.BothServersDown ->
+            if (isRussian) "Оба сервера недоступны" else "Both servers unavailable"
+        else ->
+            if (isRussian) "Сервер недоступен" else "Server unavailable"
     }
 
     // Сообщения об удалении для Toast
