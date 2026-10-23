@@ -95,9 +95,8 @@ class EasTasksParserTest {
         assertThat(t1.reminderSet).isTrue()
         assertThat(t1.reminderTime).isEqualTo(utcMillis("2026-01-20T08:00:00.000Z", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"))
         assertThat(t1.owner).isEqualTo("Andrey")
-        // Пре-существующая особенность: ГОЛЫЙ <Categories> не матчится паттерном <tasks:Categories>,
-        // поэтому категории EAS-задач сейчас НЕ извлекаются (фиксируем текущее поведение).
-        assertThat(t1.categories).isEmpty()
+        // Голый <Categories> (как выдаёт декодер) теперь извлекается (раньше терялся — баг исправлен).
+        assertThat(t1.categories).containsExactly("Work")
 
         val t2 = tasks[1]
         assertThat(t2.subject).isEqualTo("Call client")
@@ -109,6 +108,32 @@ class EasTasksParserTest {
         assertThat(t2.sensitivity).isEqualTo(0)  // дефолт
         assertThat(t2.reminderSet).isFalse()
         assertThat(t2.owner).isEqualTo("")
+    }
+
+    @Test
+    fun `real WBXML round-trip - task fields and categories survive the actual decoder`() {
+        // XML с префиксами → РЕАЛЬНЫЙ WbxmlParser.generate → РЕАЛЬНЫЙ parse (как в проде) → разбор.
+        val wbxml = WbxmlParser()
+        val sent = """<?xml version="1.0" encoding="utf-8"?>
+<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks"><Collections><Collection><SyncKey>5</SyncKey><CollectionId>12</CollectionId><Status>1</Status><Commands>
+<Add><ServerId>12:1</ServerId><ApplicationData><tasks:Subject>Prepare report</tasks:Subject><airsyncbase:Body><airsyncbase:Type>1</airsyncbase:Type><airsyncbase:Data>Draft &amp; review</airsyncbase:Data></airsyncbase:Body><tasks:Importance>2</tasks:Importance><tasks:Sensitivity>2</tasks:Sensitivity><tasks:Complete>1</tasks:Complete><tasks:DateCompleted>2026-01-19T12:00:00.000Z</tasks:DateCompleted><tasks:UtcDueDate>2026-01-20T17:00:00.000Z</tasks:UtcDueDate><tasks:ReminderSet>1</tasks:ReminderSet><tasks:ReminderTime>2026-01-20T08:00:00.000Z</tasks:ReminderTime><tasks:Categories><tasks:Category>Work</tasks:Category><tasks:Category>Urgent</tasks:Category></tasks:Categories></ApplicationData></Add>
+</Commands></Collection></Collections></Sync>"""
+        val decoded = wbxml.parse(wbxml.generate(sent))
+        assertThat(decoded).doesNotContain("tasks:")
+
+        val t = service().parseTaskSyncResponse(decoded).single()
+        val iso = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        assertThat(t.serverId).isEqualTo("12:1")
+        assertThat(t.subject).isEqualTo("Prepare report")
+        assertThat(t.body).isEqualTo("Draft & review")
+        assertThat(t.importance).isEqualTo(2)
+        assertThat(t.sensitivity).isEqualTo(2)
+        assertThat(t.complete).isTrue()
+        assertThat(t.dateCompleted).isEqualTo(utcMillis("2026-01-19T12:00:00.000Z", iso))
+        assertThat(t.dueDate).isEqualTo(utcMillis("2026-01-20T17:00:00.000Z", iso))   // UtcDueDate fallback
+        assertThat(t.reminderSet).isTrue()
+        assertThat(t.reminderTime).isEqualTo(utcMillis("2026-01-20T08:00:00.000Z", iso))
+        assertThat(t.categories).containsExactly("Work", "Urgent").inOrder()
     }
 
     @Test

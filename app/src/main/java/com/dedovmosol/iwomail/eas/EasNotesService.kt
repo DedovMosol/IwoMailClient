@@ -21,15 +21,9 @@ class EasNotesService internal constructor(
     private val syncKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     companion object {
-        // Разбор полей/тела мигрирован на EasXmlParser (потоковый XmlPullParser).
-        // Намеренно оставлены два паттерна:
-        //  - EWS_ITEM_PATTERN: один проход по <t:PostItem>|<t:Message> сохраняет ДОКУМЕНТНЫЙ порядок
-        //    элементов (два раздельных forEachElement дали бы все PostItem, затем все Message).
-        //  - NOTES_CATEGORIES_PATTERN: категории EAS matched по ПРЕФИКСНОМУ <notes:Categories>;
-        //    WBXML-декодер выдаёт ГОЛЫЙ <Categories> (см. EasCodePages), поэтому паттерн сейчас не
-        //    срабатывает — перевод на EasXmlParser (который матчит голый тег) ИЗМЕНИЛ бы поведение
-        //    (категории начали бы извлекаться). Сохраняем эквивалентность; латентный баг — отдельно.
-        private val NOTES_CATEGORIES_PATTERN = "<notes:Categories>(.*?)</notes:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        // Разбор полей/тела/категорий — на EasXmlParser (потоковый XmlPullParser).
+        // Намеренно оставлен EWS_ITEM_PATTERN: один проход по <t:PostItem>|<t:Message> сохраняет
+        // ДОКУМЕНТНЫЙ порядок элементов (два раздельных forEachElement дали бы все PostItem, затем все Message).
         private val EWS_ITEM_PATTERN = "<t:(?:PostItem|Message)[^>]*>(.*?)</t:(?:PostItem|Message)>".toRegex(RegexOption.DOT_MATCHES_ALL)
     }
     
@@ -1188,17 +1182,9 @@ $itemIdsXml
         }
     }
 
-    private fun extractNoteCategories(xml: String): List<String> {
-        val categories = mutableListOf<String>()
-        val categoriesMatch = NOTES_CATEGORIES_PATTERN.find(xml)
-        if (categoriesMatch != null) {
-            val categoriesXml = categoriesMatch.groupValues[1]
-            EasPatterns.NOTES_CATEGORY.findAll(categoriesXml).forEach { match ->
-                categories.add(match.groupValues[1].trim())
-            }
-        }
-        return categories
-    }
+    // Прежний regex искал ПРЕФИКСНЫЙ <notes:Categories>, а декодер выдаёт голый <Categories> —
+    // категории EAS-заметок (Exchange 2010/2013) терялись всегда. Хелпер матчит оба варианта.
+    private fun extractNoteCategories(xml: String): List<String> = EasXmlParser.categories(xml, "notes")
     
     private fun parseNoteDate(dateStr: String?): Long {
         if (dateStr.isNullOrBlank()) return System.currentTimeMillis()

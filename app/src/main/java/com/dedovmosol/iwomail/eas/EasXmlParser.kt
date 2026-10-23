@@ -245,6 +245,21 @@ object EasXmlParser {
     /** SOAP Envelope: namespace soap: */
     fun soap(xml: String, tag: String): String? = extractValue(xml, tag, listOf("soap"))
 
+    /**
+     * EAS-категории `<Categories><Category>…</Category>…</Categories>` (code pages Notes/Tasks/Calendar).
+     *
+     * WBXML-декодер ([WbxmlParser.parse]) выдаёт ГОЛЫЕ теги (проверено round-trip через реальный
+     * кодек), а XML-запросы клиента — префиксные (`notes:`/`tasks:`/`calendar:`): матчим оба.
+     * Берётся ПЕРВЫЙ блок Categories в [xml] — вызывать на ApplicationData нужного уровня.
+     * Пустые `<Category/>` отбрасываются, XML-сущности разворачиваются.
+     */
+    fun categories(xml: String, nsPrefix: String): List<String> {
+        val ns = listOf(nsPrefix)
+        val block = collectElements(xml, "Categories", ns).firstOrNull()
+        if (block.isNullOrBlank()) return emptyList()
+        return extractAll(block, "Category", ns)
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // Внутренние методы
     // ═══════════════════════════════════════════════════════════════

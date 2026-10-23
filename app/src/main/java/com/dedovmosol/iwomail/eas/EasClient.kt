@@ -331,7 +331,6 @@ class EasClient(
         private val EWS_ITEM_ID_REGEX get() = EasPatterns.EWS_ITEM_ID
         private val EWS_MESSAGE_TEXT_REGEX get() = EasPatterns.EWS_MESSAGE_TEXT
         private val EWS_RESPONSE_CODE_REGEX get() = EasPatterns.EWS_RESPONSE_CODE
-        private val NOTES_CATEGORY_REGEX get() = EasPatterns.NOTES_CATEGORY
         private val CALENDAR_CATEGORY_REGEX get() = EasPatterns.CALENDAR_CATEGORY
         private val MDN_DISPOSITION_REGEX get() = EasPatterns.MDN_DISPOSITION
         private val MDN_RETURN_RECEIPT_REGEX get() = EasPatterns.MDN_RETURN_RECEIPT

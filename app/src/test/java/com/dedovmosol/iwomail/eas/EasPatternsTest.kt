@@ -48,12 +48,6 @@ class EasPatternsTest {
     }
 
     @Test
-    fun `NOTES_CATEGORY extracts category`() {
-        assertThat(EasPatterns.NOTES_CATEGORY.firstGroup("<notes:Category>Work</notes:Category>"))
-            .isEqualTo("Work")
-    }
-
-    @Test
     fun `MDN_DISPOSITION extracts recipient and strips brackets`() {
         assertThat(EasPatterns.MDN_DISPOSITION.firstGroup("Disposition-Notification-To: <a@b.com>"))
             .isEqualTo("a@b.com")

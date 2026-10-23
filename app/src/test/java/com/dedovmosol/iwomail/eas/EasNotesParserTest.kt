@@ -94,9 +94,8 @@ class EasNotesParserTest {
         assertThat(n1.body).isEqualTo("Milk & eggs")        // '&amp;' развёрнут (unescape НЕ no-op)
         assertThat(n1.messageClass).isEqualTo("IPM.StickyNote")
         assertThat(n1.lastModified).isEqualTo(parseUtc("2024-03-15T09:30:00"))
-        // Пре-существующая особенность: ГОЛЫЙ <Categories> не матчится паттерном <notes:Categories>,
-        // поэтому категории EAS-заметок сейчас НЕ извлекаются (фиксируем текущее поведение).
-        assertThat(n1.categories).isEmpty()
+        // Голый <Categories> (как выдаёт декодер) теперь извлекается (раньше терялся — баг исправлен).
+        assertThat(n1.categories).containsExactly("Personal")
         assertThat(n1.isDeleted).isFalse()
 
         val n2 = notes[1]
@@ -104,6 +103,27 @@ class EasNotesParserTest {
         assertThat(n2.body).isEqualTo("Discuss Q3")
         assertThat(n2.messageClass).isEqualTo("IPM.StickyNote") // дефолт (тега не было)
         assertThat(n2.lastModified).isIn(before..after)         // даты не было → now
+    }
+
+    @Test
+    fun `real WBXML round-trip - notes fields and categories survive the actual decoder`() {
+        // Эмпирика вместо допущений: XML с namespace-префиксами → РЕАЛЬНЫЙ WbxmlParser.generate →
+        // РЕАЛЬНЫЙ WbxmlParser.parse (ровно то, что получает сервис в проде) → разбор.
+        val wbxml = WbxmlParser()
+        val sent = """<?xml version="1.0" encoding="utf-8"?>
+<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:notes="Notes"><Collections><Collection><SyncKey>5</SyncKey><CollectionId>10</CollectionId><Status>1</Status><Commands>
+<Add><ServerId>10:1</ServerId><ApplicationData><notes:Subject>Shopping</notes:Subject><airsyncbase:Body><airsyncbase:Type>1</airsyncbase:Type><airsyncbase:Data>Milk &amp; eggs</airsyncbase:Data></airsyncbase:Body><notes:MessageClass>IPM.StickyNote</notes:MessageClass><notes:LastModifiedDate>2024-03-15T09:30:00.000Z</notes:LastModifiedDate><notes:Categories><notes:Category>Personal</notes:Category><notes:Category>R&amp;D</notes:Category></notes:Categories></ApplicationData></Add>
+</Commands></Collection></Collections></Sync>"""
+        val decoded = wbxml.parse(wbxml.generate(sent))
+        assertThat(decoded).doesNotContain("notes:")            // декодер выдаёт голые теги
+
+        val note = service().parseNotesResponse(decoded).single()
+        assertThat(note.serverId).isEqualTo("10:1")
+        assertThat(note.subject).isEqualTo("Shopping")
+        assertThat(note.body).isEqualTo("Milk & eggs")
+        assertThat(note.messageClass).isEqualTo("IPM.StickyNote")
+        assertThat(note.lastModified).isEqualTo(parseUtc("2024-03-15T09:30:00"))
+        assertThat(note.categories).containsExactly("Personal", "R&D").inOrder()
     }
 
     @Test

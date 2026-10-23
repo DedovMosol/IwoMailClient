@@ -1750,17 +1750,9 @@ $itemIdsXml
         return removeDuplicateLines(raw)
     }
 
-    private fun extractTaskCategories(xml: String): List<String> {
-        val categories = mutableListOf<String>()
-        val categoriesMatch = Companion.REGEX_TASKS_CATEGORIES.find(xml)
-        if (categoriesMatch != null) {
-            val categoriesXml = categoriesMatch.groupValues[1]
-            Companion.REGEX_TASKS_CATEGORY.findAll(categoriesXml).forEach { match ->
-                categories.add(match.groupValues[1].trim())
-            }
-        }
-        return categories
-    }
+    // Прежний regex искал ПРЕФИКСНЫЙ <tasks:Categories>, а декодер выдаёт голый <Categories> —
+    // категории EAS-задач (Exchange 2010/2013) терялись всегда. Хелпер матчит оба варианта.
+    private fun extractTaskCategories(xml: String): List<String> = EasXmlParser.categories(xml, "tasks")
 
     private fun extractEwsCategories(xml: String): List<String> {
         val categories = mutableListOf<String>()
@@ -1828,15 +1820,9 @@ $itemIdsXml
             "<(?:t:)?Message\\b[^>]*>(.*?)</(?:t:)?Message>".toRegex(RegexOption.DOT_MATCHES_ALL)
         )
 
-        // EAS Sync разбор (Add/Change/ApplicationData/тело) мигрирован на EasXmlParser —
-        // соответствующие regex удалены. EWS-путь и EAS-категории ниже намеренно оставлены на regex
-        // (EWS: позиционный fallback для 2007 SP1 режет произвольные подстроки, XmlPullParser их не
-        //  разберёт; EAS-категории: паттерн <tasks:Categories> против голого <Categories> из декодера
-        //  не срабатывает — перевод на EasXmlParser ИЗМЕНИЛ бы поведение, поэтому сохраняем).
-
-        // extractTaskCategories
-        private val REGEX_TASKS_CATEGORIES = "<tasks:Categories>(.*?)</tasks:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val REGEX_TASKS_CATEGORY = "<tasks:Category>(.*?)</tasks:Category>".toRegex()
+        // EAS Sync разбор (Add/Change/ApplicationData/тело/категории) — на EasXmlParser.
+        // EWS-путь ниже намеренно оставлен на regex: позиционный fallback для Exchange 2007 SP1
+        // режет произвольные подстроки по смещениям ItemId — XmlPullParser их не разберёт.
 
         // extractEwsCategories
         private val REGEX_EWS_CATEGORIES_OUTER = "<(?:t:)?Categories>(.*?)</(?:t:)?Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)

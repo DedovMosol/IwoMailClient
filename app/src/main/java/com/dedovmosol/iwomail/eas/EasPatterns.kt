@@ -22,8 +22,8 @@ object EasPatterns {
     val EWS_MESSAGE_TEXT = """<m:MessageText>(.*?)</m:MessageText>""".toRegex(RegexOption.DOT_MATCHES_ALL)
     val EWS_RESPONSE_CODE = """<m:ResponseCode>(.*?)</m:ResponseCode>""".toRegex()
     
-    // === Notes/Calendar category patterns ===
-    val NOTES_CATEGORY = "<notes:Category>(.*?)</notes:Category>".toRegex()
+    // === Calendar category pattern ===
+    // (Notes-категории разбираются EasXmlParser.categories — NOTES_CATEGORY удалён.)
     val CALENDAR_CATEGORY = "<calendar:Category>(.*?)</calendar:Category>".toRegex()
     
     // === MDN (Message Disposition Notification) patterns ===
