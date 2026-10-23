@@ -67,8 +67,7 @@ class EasCalendarService internal constructor(
     // === Service instances ===
 
     val xmlParser = CalendarXmlParser(
-        parseEasDate = deps.parseEasDate,
-        extractValue = deps.extractValue
+        parseEasDate = deps.parseEasDate
     )
 
     val attachmentService = CalendarAttachmentService(

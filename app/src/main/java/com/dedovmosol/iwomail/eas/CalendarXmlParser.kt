@@ -1,5 +1,8 @@
 package com.dedovmosol.iwomail.eas
 
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserException
+
 /**
  * XML parsing for EAS/EWS Calendar responses.
  *
@@ -15,111 +18,277 @@ package com.dedovmosol.iwomail.eas
  *  - XML value extraction helpers
  *
  * Thread-safety: All methods are stateless (no shared mutable state).
- * Regex patterns are compiled once (companion object).
+ * EAS parsing: one XmlPullParser per call (local); EWS: regex patterns compiled once (companion object).
  *
  * Compatibility: Exchange 2007 SP1 / EAS 12.1 / EWS
  */
 class CalendarXmlParser(
-    private val parseEasDate: (String?) -> Long?,
-    private val extractValue: (String, String) -> String?
+    private val parseEasDate: (String?) -> Long?
 ) {
 
     companion object {
         val DELETE_SERVER_ID_PATTERN = "<(?:Delete|SoftDelete)>.*?<ServerId>(.*?)</ServerId>.*?</(?:Delete|SoftDelete)>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val RESPONSES_PATTERN = "<Responses>(.*?)</Responses>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val ADD_PATTERN = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val CHANGE_PATTERN = "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val ADD_OR_CHANGE_PATTERN = "<Add>(.*?)</Add>|<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val APP_DATA_PATTERN = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val EWS_RESPONSE_CODE = "<(?:m:)?ResponseCode>(.*?)</(?:m:)?ResponseCode>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val EWS_ITEM_ID = "<(?:t:)?ItemId[^>]*\\bId=\"([^\"]+)\"[^>]*\\bChangeKey=\"([^\"]+)\"".toRegex()
         val CHANGE_STATUS_PATTERN = Regex("<Change>.*?<Status>(\\d+)</Status>", RegexOption.DOT_MATCHES_ALL)
         val DELETE_STATUS_PATTERN = "<Responses>.*?<Delete>.*?<Status>(\\d+)</Status>.*?</Delete>.*?</Responses>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val EAS_CATEGORIES_PATTERN = "<calendar:Categories>(.*?)</calendar:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val EAS_CATEGORY_PATTERN = "<calendar:Category>(.*?)</calendar:Category>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val EWS_CATEGORIES_PATTERN = "<(?:t:)?Categories>(.*?)</(?:t:)?Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
         val EWS_STRING_PATTERN = "<(?:t:)?String>(.*?)</(?:t:)?String>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val ATTENDEE_PATTERN = "<calendar:Attendee>(.*?)</calendar:Attendee>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val ATTACHMENT_PATTERN = "<(?:airsyncbase:)?Attachment>(.*?)</(?:airsyncbase:)?Attachment>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val EAS_RECURRENCE_PATTERN = "<(?:calendar:)?Recurrence>(.*?)</(?:calendar:)?Recurrence>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        val EAS_EXCEPTION_PATTERN = "<(?:calendar:)?Exception>(.*?)</(?:calendar:)?Exception>".toRegex(RegexOption.DOT_MATCHES_ALL)
     }
 
     // ========================= EAS Event Parsing =========================
 
+    /**
+     * Разбор EAS Sync календаря (MS-ASCAL) — ОДИН проход потокового XmlPullParser по всему ответу.
+     *
+     * Вход — вывод [WbxmlParser.parse]: ГОЛЫЕ теги (без namespace-префиксов; проверено round-trip через
+     * реальный кодек). Поэтому принадлежность поля определяется ТОЛЬКО позицией в дереве:
+     *  - поля серии — ПРЯМЫЕ дети `ApplicationData` (то, что внутри `Exceptions`, `Recurrence`,
+     *    `Attendees`, `Attachments`, не «протекает» в серию — прежний regex брал первое совпадение где угодно);
+     *  - `Body`/`Type`/`Attachment`/`DisplayName` совпадают по имени в Calendar и AirSyncBase — скоуп решает.
+     * Берутся только `Commands/Add|Change` (в `Responses/Add` у ответов на клиентские команды нет ApplicationData).
+     *
+     * Целостность: если документ оборван или битый, бросаем исключение. KXmlParser на обрыве выдаёт
+     * END_DOCUMENT с открытыми тегами (проверено эмпирически) — молча вернуть «часть событий» нельзя:
+     * календарь синкается с SyncKey=0 (полный снимок), и частичный список как «авторитетный» привёл бы к
+     * удалению реальных локальных событий. Исключение → EasResult.Error → ветка ошибок синка
+     * (неавторитетный результат, без удалений).
+     *
+     * JSON-форматы recurrenceRule/exceptions/attachments — прежние байт-в-байт (их потребляют
+     * CalendarRepository/RecurrenceHelper/UI).
+     */
     fun parseCalendarEvents(xml: String): List<EasCalendarEvent> {
+        val p = EasXmlParser.createParser(xml) // единая усиленная фабрика (DOCTYPE/XXE отключены)
         val events = mutableListOf<EasCalendarEvent>()
+        var commandsDepth = -1
+        var type = p.eventType
+        while (type != XmlPullParser.END_DOCUMENT) {
+            when (type) {
+                XmlPullParser.START_TAG -> when {
+                    commandsDepth < 0 && p.name == "Commands" -> commandsDepth = p.depth
+                    commandsDepth > 0 && p.depth == commandsDepth + 1 && (p.name == "Add" || p.name == "Change") ->
+                        readSyncItem(p)?.let { events.add(it) }
+                }
+                XmlPullParser.END_TAG -> if (p.depth == commandsDepth) commandsDepth = -1
+            }
+            type = p.next()
+        }
+        if (p.depth > 0) throw XmlPullParserException("Truncated EAS Sync response: unclosed elements at depth ${p.depth}")
+        return events
+    }
 
-        for (match in ADD_OR_CHANGE_PATTERN.findAll(xml)) {
-            val eventXml = match.groupValues[1].ifEmpty { match.groupValues[2] }
-            if (eventXml.isEmpty()) continue
+    // ---------- скоупированное чтение (парсер стоит на START_TAG, выходит на его END_TAG) ----------
 
-            val serverId = extractValue(eventXml, "ServerId") ?: continue
-            val dataMatch = APP_DATA_PATTERN.find(eventXml) ?: continue
-            val dataXml = dataMatch.groupValues[1]
+    /** Полный текст элемента (вся вложенность), сущности развёрнуты; trim; пустой → null. */
+    private fun leafText(p: XmlPullParser): String? {
+        val sb = StringBuilder()
+        var depth = 1
+        while (depth > 0) {
+            when (p.next()) {
+                XmlPullParser.START_TAG -> depth++
+                XmlPullParser.END_TAG -> depth--
+                XmlPullParser.TEXT, XmlPullParser.CDSECT, XmlPullParser.ENTITY_REF -> sb.append(p.text)
+                XmlPullParser.END_DOCUMENT -> throw XmlPullParserException("Unexpected end of document")
+            }
+        }
+        return sb.toString().trim().ifEmpty { null }
+    }
 
-            val subject = extractCalendarValue(dataXml, "Subject") ?: ""
-            val location = extractCalendarValue(dataXml, "Location") ?: ""
-            val body = extractCalendarBody(dataXml)
+    /** Обходит ПРЯМЫХ детей текущего элемента; [onChild] обязан дочитать ребёнка (или вызвать skip). */
+    private inline fun children(p: XmlPullParser, onChild: (String) -> Unit) {
+        val parentDepth = p.depth
+        while (true) {
+            when (p.next()) {
+                XmlPullParser.START_TAG -> onChild(p.name)
+                XmlPullParser.END_TAG -> if (p.depth == parentDepth) return
+                XmlPullParser.END_DOCUMENT -> throw XmlPullParserException("Unexpected end of document")
+            }
+        }
+    }
 
-            val startTime = parseEasDate(extractCalendarValue(dataXml, "StartTime")) ?: 0L
-            val endTime = parseEasDate(extractCalendarValue(dataXml, "EndTime")) ?: 0L
+    /** Карта «имя прямого ребёнка → текст» (первое вхождение); вложенные контейнеры пропускаются. */
+    private fun leafMap(p: XmlPullParser): Map<String, String> {
+        val map = HashMap<String, String>()
+        children(p) { name ->
+            val value = leafText(p)
+            if (value != null && name !in map) map[name] = value
+        }
+        return map
+    }
 
-            val allDayEvent = extractCalendarValue(dataXml, "AllDayEvent") == "1"
-            val reminder = extractCalendarValue(dataXml, "Reminder")?.toIntOrNull() ?: 0
-            val busyStatus = extractCalendarValue(dataXml, "BusyStatus")?.toIntOrNull() ?: 2
-            val sensitivity = extractCalendarValue(dataXml, "Sensitivity")?.toIntOrNull() ?: 0
+    /**
+     * `<Body>`: текст `Data` (AirSyncBase: `<Body><Type/><Data>…</Data></Body>`), иначе — собственный
+     * текст элемента (EAS 2.5: тело прямо в `<Body>`). Прочие дети (`Type`, `EstimatedDataSize`…)
+     * пропускаются. Значение тримится — как прежде (`trim()` перед unescape в старом regex-коде).
+     * (Альтернативы `Organizer_Email`/`Organizer_Name` старого кода не перенесены: таких тегов нет
+     * ни в одной WBXML code page — декодер их выдать не может.)
+     */
+    private fun readBody(p: XmlPullParser): String? {
+        if (p.isEmptyElementTag) { p.next(); return null }
+        val parentDepth = p.depth
+        val ownText = StringBuilder()
+        var data: String? = null
+        while (true) {
+            when (p.next()) {
+                XmlPullParser.START_TAG ->
+                    if (p.name == "Data" && data == null) data = leafText(p) else EasXmlParser.skip(p)
+                XmlPullParser.TEXT, XmlPullParser.CDSECT, XmlPullParser.ENTITY_REF -> ownText.append(p.text)
+                XmlPullParser.END_TAG -> if (p.depth == parentDepth) break
+                XmlPullParser.END_DOCUMENT -> throw XmlPullParserException("Unexpected end of document")
+            }
+        }
+        return data ?: ownText.toString().trim().ifEmpty { null }
+    }
 
-            val organizerEmail = extractCalendarValue(dataXml, "OrganizerEmail")
-                ?: extractCalendarValue(dataXml, "Organizer_Email") ?: ""
-            val organizerName = extractCalendarValue(dataXml, "OrganizerName")
-                ?: extractCalendarValue(dataXml, "Organizer_Name") ?: ""
+    private fun readSyncItem(p: XmlPullParser): EasCalendarEvent? {
+        var serverId: String? = null
+        var event: EasCalendarEvent? = null
+        children(p) { name ->
+            when (name) {
+                "ServerId" -> if (serverId == null) serverId = leafText(p) else EasXmlParser.skip(p)
+                "ApplicationData" -> event = readApplicationData(p, serverId)
+                else -> EasXmlParser.skip(p)
+            }
+        }
+        val id = serverId ?: return null
+        return event?.copy(serverId = id)
+    }
 
-            val categories = extractCalendarCategories(dataXml)
-            val isRecurring = dataXml.contains("<calendar:Recurrence>") || dataXml.contains("<Recurrence>")
-            val lastModified = parseEasDate(extractCalendarValue(dataXml, "DtStamp")) ?: System.currentTimeMillis()
+    private fun readApplicationData(p: XmlPullParser, serverIdHint: String?): EasCalendarEvent? {
+        if (p.isEmptyElementTag) {
+            p.next() // KXml выдаёт END_TAG и для <ApplicationData/>
+            return null
+        }
+        val leaves = HashMap<String, String>()
+        var body = ""
+        var attendees: List<EasAttendee> = emptyList()
+        var categories: List<String> = emptyList()
+        var recurrence: Map<String, String>? = null
+        var exceptions: List<String> = emptyList()
+        var attachments: List<String> = emptyList()
 
-            val uid = extractCalendarValue(dataXml, "UID") ?: ""
-            val timezone = extractCalendarValue(dataXml, "Timezone") ?: ""
-            val meetingStatusVal = extractCalendarValue(dataXml, "MeetingStatus")?.toIntOrNull() ?: 0
-            val isMeeting = meetingStatusVal == 1 || meetingStatusVal == 3 || meetingStatusVal == 5 || meetingStatusVal == 7
-            val responseRequested = extractCalendarValue(dataXml, "ResponseRequested") == "1"
-            val responseType = extractCalendarValue(dataXml, "ResponseType")?.toIntOrNull() ?: 0
-            val appointmentReplyTime = parseEasDate(extractCalendarValue(dataXml, "AppointmentReplyTime")) ?: 0L
-            val disallowNewTimeProposal = extractCalendarValue(dataXml, "DisallowNewTimeProposal") == "1"
-            val onlineMeetingLink = extractCalendarValue(dataXml, "OnlineMeetingExternalLink")
-                ?: extractCalendarValue(dataXml, "OnlineMeetingConfLink") ?: ""
-
-            val attachmentsJson = if (dataXml.contains("<Attachment>") || dataXml.contains("<airsyncbase:Attachment>"))
-                parseEasAttachments(dataXml) else ""
-            val hasAttachments = attachmentsJson.isNotBlank()
-
-            val recurrenceRuleJson = if (isRecurring) parseEasRecurrence(dataXml) else ""
-            val exceptionsJson = if (isRecurring) parseEasExceptions(dataXml) else ""
-
-            events.add(
-                EasCalendarEvent(
-                    serverId = serverId, subject = subject,
-                    startTime = startTime, endTime = endTime,
-                    location = location, body = body,
-                    allDayEvent = allDayEvent, reminder = reminder,
-                    busyStatus = busyStatus, sensitivity = sensitivity,
-                    organizer = organizerEmail, organizerName = organizerName,
-                    attendees = parseAttendees(dataXml), categories = categories,
-                    isRecurring = isRecurring, recurrenceRule = recurrenceRuleJson,
-                    lastModified = lastModified, uid = uid,
-                    timezone = timezone, exceptions = exceptionsJson,
-                    isMeeting = isMeeting, meetingStatus = meetingStatusVal,
-                    responseStatus = responseType, responseRequested = responseRequested,
-                    appointmentReplyTime = appointmentReplyTime,
-                    disallowNewTimeProposal = disallowNewTimeProposal,
-                    onlineMeetingLink = onlineMeetingLink,
-                    hasAttachments = hasAttachments, attachments = attachmentsJson
-                )
-            )
+        children(p) { name ->
+            when (name) {
+                "Body" -> {
+                    val text = readBody(p)
+                    if (body.isEmpty() && !text.isNullOrBlank()) body = CalendarDateUtils.removeDuplicateLines(text)
+                }
+                "Attendees" -> attendees = readAttendees(p)
+                "Categories" -> categories = readCategories(p)
+                // Пустой <Recurrence/> прежде давал «не повторяется» (regex требовал парный тег) — сохраняем.
+                "Recurrence" -> if (p.isEmptyElementTag) p.next() else recurrence = leafMap(p)
+                "Exceptions" -> exceptions = readExceptions(p)
+                "Attachments" -> attachments = readAttachments(p)
+                else -> {
+                    val value = leafText(p)
+                    if (value != null && name !in leaves) leaves[name] = value
+                }
+            }
         }
 
-        return events
+        fun v(tag: String) = leaves[tag]
+        val meetingStatus = v("MeetingStatus")?.toIntOrNull() ?: 0
+        val isRecurring = recurrence != null
+        val attachmentsJson = if (attachments.isEmpty()) "" else "[${attachments.joinToString(",")}]"
+        return EasCalendarEvent(
+            serverId = serverIdHint ?: "",
+            subject = v("Subject") ?: "",
+            location = v("Location") ?: "",
+            body = body,
+            startTime = parseEasDate(v("StartTime")) ?: 0L,
+            endTime = parseEasDate(v("EndTime")) ?: 0L,
+            allDayEvent = v("AllDayEvent") == "1",
+            reminder = v("Reminder")?.toIntOrNull() ?: 0,
+            busyStatus = v("BusyStatus")?.toIntOrNull() ?: 2,
+            sensitivity = v("Sensitivity")?.toIntOrNull() ?: 0,
+            organizer = v("OrganizerEmail") ?: "",
+            organizerName = v("OrganizerName") ?: "",
+            attendees = attendees,
+            isRecurring = isRecurring,
+            recurrenceRule = recurrence?.let(::recurrenceJson) ?: "",
+            uid = v("UID") ?: "",
+            timezone = v("Timezone") ?: "",
+            exceptions = if (isRecurring && exceptions.isNotEmpty()) "[${exceptions.joinToString(",")}]" else "",
+            categories = categories,
+            lastModified = parseEasDate(v("DtStamp")) ?: System.currentTimeMillis(),
+            responseStatus = v("ResponseType")?.toIntOrNull() ?: 0,
+            isMeeting = meetingStatus == 1 || meetingStatus == 3 || meetingStatus == 5 || meetingStatus == 7,
+            meetingStatus = meetingStatus,
+            responseRequested = v("ResponseRequested") == "1",
+            appointmentReplyTime = parseEasDate(v("AppointmentReplyTime")) ?: 0L,
+            disallowNewTimeProposal = v("DisallowNewTimeProposal") == "1",
+            onlineMeetingLink = v("OnlineMeetingExternalLink") ?: v("OnlineMeetingConfLink") ?: "",
+            hasAttachments = attachmentsJson.isNotEmpty(),
+            attachments = attachmentsJson
+        )
+    }
+
+    private fun readAttendees(p: XmlPullParser): List<EasAttendee> {
+        val result = mutableListOf<EasAttendee>()
+        children(p) { name ->
+            if (name != "Attendee") { EasXmlParser.skip(p); return@children }
+            val f = leafMap(p)
+            val email = f["Email"] ?: return@children
+            result.add(EasAttendee(email, f["Name"] ?: "", f["AttendeeStatus"]?.toIntOrNull() ?: 0))
+        }
+        return result
+    }
+
+    private fun readCategories(p: XmlPullParser): List<String> {
+        val result = mutableListOf<String>()
+        children(p) { name -> if (name == "Category") leafText(p)?.let { result.add(it) } else EasXmlParser.skip(p) }
+        return result
+    }
+
+    private fun readExceptions(p: XmlPullParser): List<String> {
+        val result = mutableListOf<String>()
+        children(p) { name ->
+            if (name != "Exception") { EasXmlParser.skip(p); return@children }
+            val leaves = HashMap<String, String>()
+            var body = ""
+            children(p) { field ->
+                if (field == "Body") {
+                    val text = readBody(p)
+                    if (body.isEmpty() && !text.isNullOrBlank()) body = CalendarDateUtils.removeDuplicateLines(text)
+                } else {
+                    val value = leafText(p)
+                    if (value != null && field !in leaves) leaves[field] = value
+                }
+            }
+            val esc = CalendarDateUtils::escapeJsonString
+            result.add(
+                """{"exceptionStartTime":${parseEasDate(leaves["ExceptionStartTime"]) ?: 0L},"deleted":${leaves["Deleted"] == "1"},""" +
+                    """"subject":"${esc(leaves["Subject"] ?: "")}","location":"${esc(leaves["Location"] ?: "")}",""" +
+                    """"startTime":${parseEasDate(leaves["StartTime"]) ?: 0L},"endTime":${parseEasDate(leaves["EndTime"]) ?: 0L},""" +
+                    """"body":"${esc(body)}"}"""
+            )
+        }
+        return result
+    }
+
+    private fun readAttachments(p: XmlPullParser): List<String> {
+        val result = mutableListOf<String>()
+        children(p) { name ->
+            if (name != "Attachment") { EasXmlParser.skip(p); return@children }
+            val f = leafMap(p)
+            val esc = CalendarDateUtils::escapeJsonString
+            result.add(
+                """{"name":"${esc(f["DisplayName"] ?: "attachment")}","fileReference":"${esc(f["FileReference"] ?: "")}",""" +
+                    """"size":${f["EstimatedDataSize"]?.toLongOrNull() ?: 0L},"isInline":${f["IsInline"] == "1"},""" +
+                    """"contentId":"${esc(f["ContentId"] ?: "")}","method":${f["Method"]?.toIntOrNull() ?: 1}}"""
+            )
+        }
+        return result
+    }
+
+    /** Прежний формат parseEasRecurrence байт-в-байт. */
+    private fun recurrenceJson(r: Map<String, String>): String {
+        fun i(tag: String, def: Int) = r[tag]?.toIntOrNull() ?: def
+        return """{"type":${i("Type", 0)},"interval":${i("Interval", 1)},"dayOfWeek":${i("DayOfWeek", 0)},""" +
+            """"dayOfMonth":${i("DayOfMonth", 0)},"weekOfMonth":${i("WeekOfMonth", 0)},"monthOfYear":${i("MonthOfYear", 0)},""" +
+            """"until":${parseEasDate(r["Until"]) ?: 0L},"occurrences":${i("Occurrences", 0)},"firstDayOfWeek":${i("FirstDayOfWeek", 0)}}"""
     }
 
     // ========================= EWS Event Parsing =========================
@@ -215,90 +384,7 @@ class CalendarXmlParser(
         return events
     }
 
-    // ========================= XML Value Extraction =========================
-
-    fun extractCalendarValue(xml: String, tag: String): String? {
-        val patterns = listOf(
-            "<calendar:$tag>(.*?)</calendar:$tag>",
-            "<$tag>(.*?)</$tag>"
-        )
-        for (pattern in patterns) {
-            val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(xml)
-            if (match != null) return XmlUtils.unescape(match.groupValues[1].trim())
-        }
-        return null
-    }
-
-    fun extractCalendarBody(xml: String): String {
-        val bodyPatterns = listOf(
-            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
-            "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
-            "<calendar:Body>.*?<Data>(.*?)</Data>.*?</calendar:Body>",
-            "<calendar:Body>(.*?)</calendar:Body>"
-        )
-        for (pattern in bodyPatterns) {
-            val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(xml)
-            if (match != null) {
-                val rawBody = XmlUtils.unescape(match.groupValues[1].trim())
-                if (rawBody.isNotBlank()) return CalendarDateUtils.removeDuplicateLines(rawBody)
-            }
-        }
-        return ""
-    }
-
-    fun extractCalendarCategories(xml: String): List<String> {
-        val categories = mutableListOf<String>()
-        val categoriesMatch = EAS_CATEGORIES_PATTERN.find(xml)
-        if (categoriesMatch != null) {
-            EAS_CATEGORY_PATTERN.findAll(categoriesMatch.groupValues[1]).forEach { match ->
-                categories.add(match.groupValues[1].trim())
-            }
-        }
-        return categories
-    }
-
-    fun extractAirsyncValue(xml: String, tag: String): String? {
-        val patterns = listOf(
-            "<airsyncbase:$tag>(.*?)</airsyncbase:$tag>",
-            "<$tag>(.*?)</$tag>"
-        )
-        for (pattern in patterns) {
-            val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(xml)
-            if (match != null) return match.groupValues[1].trim()
-        }
-        return null
-    }
-
-    fun extractExceptionBody(exXml: String): String {
-        val patterns = listOf(
-            "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>",
-            "<Body>.*?<Data>(.*?)</Data>.*?</Body>",
-            "<calendar:Body>.*?<Data>(.*?)</Data>.*?</calendar:Body>",
-            "<calendar:Body>(.*?)</calendar:Body>"
-        )
-        for (pattern in patterns) {
-            val match = pattern.toRegex(RegexOption.DOT_MATCHES_ALL).find(exXml)
-            if (match != null && match.groupValues[1].isNotBlank())
-                return CalendarDateUtils.removeDuplicateLines(XmlUtils.unescape(match.groupValues[1].trim()))
-        }
-        return ""
-    }
-
-    // ========================= Attendees Parsing =========================
-
-    fun parseAttendees(xml: String): List<EasAttendee> {
-        val attendees = mutableListOf<EasAttendee>()
-        for (match in ATTENDEE_PATTERN.findAll(xml)) {
-            val attendeeXml = match.groupValues[1]
-            val email = extractCalendarValue(attendeeXml.replace("calendar:", ""), "Email")
-                ?: """<calendar:Email>(.*?)</calendar:Email>""".toRegex().find(attendeeXml)?.groupValues?.get(1)
-                ?: continue
-            val name = """<calendar:Name>(.*?)</calendar:Name>""".toRegex().find(attendeeXml)?.groupValues?.get(1) ?: ""
-            val status = """<calendar:AttendeeStatus>(.*?)</calendar:AttendeeStatus>""".toRegex().find(attendeeXml)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            attendees.add(EasAttendee(email, name, status))
-        }
-        return attendees
-    }
+    // ========================= EWS Attendees Parsing =========================
 
     fun parseEwsAttendees(xml: String): List<EasAttendee> {
         val attendees = mutableListOf<EasAttendee>()
@@ -319,25 +405,7 @@ class CalendarXmlParser(
         return attendees
     }
 
-    // ========================= Attachments Parsing =========================
-
-    fun parseEasAttachments(xml: String): String {
-        val attachments = mutableListOf<String>()
-        for (match in ATTACHMENT_PATTERN.findAll(xml)) {
-            val attXml = match.groupValues[1]
-            val displayName = extractAirsyncValue(attXml, "DisplayName") ?: "attachment"
-            val fileReference = extractAirsyncValue(attXml, "FileReference") ?: ""
-            val estimatedSize = extractAirsyncValue(attXml, "EstimatedDataSize")?.toLongOrNull() ?: 0L
-            val isInline = extractAirsyncValue(attXml, "IsInline") == "1"
-            val contentId = extractAirsyncValue(attXml, "ContentId") ?: ""
-            val method = extractAirsyncValue(attXml, "Method")?.toIntOrNull() ?: 1
-            val escapedName = CalendarDateUtils.escapeJsonString(displayName)
-            val escapedRef = CalendarDateUtils.escapeJsonString(fileReference)
-            val escapedCid = CalendarDateUtils.escapeJsonString(contentId)
-            attachments.add("""{"name":"$escapedName","fileReference":"$escapedRef","size":$estimatedSize,"isInline":$isInline,"contentId":"$escapedCid","method":$method}""")
-        }
-        return if (attachments.isEmpty()) "" else "[${attachments.joinToString(",")}]"
-    }
+    // ========================= EWS Attachments Parsing =========================
 
     fun parseEwsAttachments(xml: String): String {
         val attachments = mutableListOf<String>()
@@ -358,28 +426,7 @@ class CalendarXmlParser(
         return if (attachments.isEmpty()) "" else "[${attachments.joinToString(",")}]"
     }
 
-    // ========================= Recurrence Parsing =========================
-
-    /**
-     * Parses EAS recurrence rule (MS-ASCAL <calendar:Recurrence>).
-     * Returns JSON: {"type","interval","dayOfWeek","dayOfMonth","weekOfMonth","monthOfYear","until","occurrences","firstDayOfWeek"}
-     */
-    fun parseEasRecurrence(xml: String): String {
-        val recMatch = EAS_RECURRENCE_PATTERN.find(xml) ?: return ""
-        val recXml = recMatch.groupValues[1]
-
-        val type = extractCalendarValue(recXml, "Type")?.toIntOrNull() ?: 0
-        val interval = extractCalendarValue(recXml, "Interval")?.toIntOrNull() ?: 1
-        val dayOfWeek = extractCalendarValue(recXml, "DayOfWeek")?.toIntOrNull() ?: 0
-        val dayOfMonth = extractCalendarValue(recXml, "DayOfMonth")?.toIntOrNull() ?: 0
-        val weekOfMonth = extractCalendarValue(recXml, "WeekOfMonth")?.toIntOrNull() ?: 0
-        val monthOfYear = extractCalendarValue(recXml, "MonthOfYear")?.toIntOrNull() ?: 0
-        val until = parseEasDate(extractCalendarValue(recXml, "Until")) ?: 0L
-        val occurrences = extractCalendarValue(recXml, "Occurrences")?.toIntOrNull() ?: 0
-        val firstDayOfWeek = extractCalendarValue(recXml, "FirstDayOfWeek")?.toIntOrNull() ?: 0
-
-        return """{"type":$type,"interval":$interval,"dayOfWeek":$dayOfWeek,"dayOfMonth":$dayOfMonth,"weekOfMonth":$weekOfMonth,"monthOfYear":$monthOfYear,"until":$until,"occurrences":$occurrences,"firstDayOfWeek":$firstDayOfWeek}"""
-    }
+    // ========================= EWS Recurrence Parsing =========================
 
     /**
      * Parses EWS recurrence rule (<t:Recurrence>).
@@ -449,26 +496,6 @@ class CalendarXmlParser(
         }
 
         return """{"type":$type,"interval":$interval,"dayOfWeek":$dayOfWeek,"dayOfMonth":$dayOfMonth,"weekOfMonth":$weekOfMonth,"monthOfYear":$monthOfYear,"until":$until,"occurrences":$occurrences,"firstDayOfWeek":$firstDayOfWeek}"""
-    }
-
-    /**
-     * Parses EAS exceptions from recurring events (MS-ASCAL Exceptions).
-     * Returns JSON array: [{exceptionStartTime, deleted, subject, location, startTime, endTime, body}]
-     */
-    fun parseEasExceptions(xml: String): String {
-        val exceptions = mutableListOf<String>()
-        for (match in EAS_EXCEPTION_PATTERN.findAll(xml)) {
-            val exXml = match.groupValues[1]
-            val exStartTime = parseEasDate(extractCalendarValue(exXml, "ExceptionStartTime")) ?: 0L
-            val deleted = extractCalendarValue(exXml, "Deleted") == "1"
-            val subject = CalendarDateUtils.escapeJsonString(extractCalendarValue(exXml, "Subject") ?: "")
-            val location = CalendarDateUtils.escapeJsonString(extractCalendarValue(exXml, "Location") ?: "")
-            val startTime = parseEasDate(extractCalendarValue(exXml, "StartTime")) ?: 0L
-            val endTime = parseEasDate(extractCalendarValue(exXml, "EndTime")) ?: 0L
-            val body = CalendarDateUtils.escapeJsonString(extractExceptionBody(exXml))
-            exceptions.add("""{"exceptionStartTime":$exStartTime,"deleted":$deleted,"subject":"$subject","location":"$location","startTime":$startTime,"endTime":$endTime,"body":"$body"}""")
-        }
-        return if (exceptions.isEmpty()) "" else "[${exceptions.joinToString(",")}]"
     }
 
     // ========================= Private Helpers =========================

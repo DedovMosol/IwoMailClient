@@ -264,7 +264,8 @@ object EasXmlParser {
     // Внутренние методы
     // ═══════════════════════════════════════════════════════════════
 
-    private fun createParser(xml: String): XmlPullParser {
+    /** Единая усиленная фабрика парсера (DOCTYPE/XXE отключены) — переиспользуется потоковыми парсерами пакета. */
+    internal fun createParser(xml: String): XmlPullParser {
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
         try { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) } catch (_: Exception) {}
