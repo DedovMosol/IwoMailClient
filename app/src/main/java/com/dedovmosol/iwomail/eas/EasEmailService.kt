@@ -1460,15 +1460,15 @@ $deleteCommands
         mimeData
     }
 
-    private fun parseMoveItemsResponse(xml: String): Map<String, String> {
+    internal fun parseMoveItemsResponse(xml: String): Map<String, String> {
         val result = mutableMapOf<String, String>()
-        val responsePattern = "<Response>(.*?)</Response>".toRegex(RegexOption.DOT_MATCHES_ALL)
 
-        responsePattern.findAll(xml).forEach { match ->
-            val responseXml = match.groupValues[1]
-            val srcMsgId = deps.extractValue(responseXml, "SrcMsgId")
-            val dstMsgId = deps.extractValue(responseXml, "DstMsgId")
-            val status = deps.extractValue(responseXml, "Status")
+        // MoveItems-ответ малый (только Src/Dst/Status, без тел писем) → EasXmlParser уместен и дёшев
+        // (в отличие от горячего Sync-разбора, который остаётся на XmlUtils). Status=3 = успех (MS-ASCMD).
+        EasXmlParser.forEachElement(xml, "Response") { responseXml ->
+            val srcMsgId = EasXmlParser.extractValue(responseXml, "SrcMsgId")
+            val dstMsgId = EasXmlParser.extractValue(responseXml, "DstMsgId")
+            val status = EasXmlParser.extractValue(responseXml, "Status")
 
             if (srcMsgId != null && status == "3" && dstMsgId != null) {
                 result[srcMsgId] = dstMsgId
