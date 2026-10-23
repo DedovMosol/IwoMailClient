@@ -21,18 +21,16 @@ class EasNotesService internal constructor(
     private val syncKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     companion object {
-        private val ADD_PATTERN = "<Add>(.*?)</Add>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val CHANGE_PATTERN = "<Change>(.*?)</Change>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val APPLICATION_DATA_PATTERN = "<ApplicationData>(.*?)</ApplicationData>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        // Разбор полей/тела мигрирован на EasXmlParser (потоковый XmlPullParser).
+        // Намеренно оставлены два паттерна:
+        //  - EWS_ITEM_PATTERN: один проход по <t:PostItem>|<t:Message> сохраняет ДОКУМЕНТНЫЙ порядок
+        //    элементов (два раздельных forEachElement дали бы все PostItem, затем все Message).
+        //  - NOTES_CATEGORIES_PATTERN: категории EAS matched по ПРЕФИКСНОМУ <notes:Categories>;
+        //    WBXML-декодер выдаёт ГОЛЫЙ <Categories> (см. EasCodePages), поэтому паттерн сейчас не
+        //    срабатывает — перевод на EasXmlParser (который матчит голый тег) ИЗМЕНИЛ бы поведение
+        //    (категории начали бы извлекаться). Сохраняем эквивалентность; латентный баг — отдельно.
         private val NOTES_CATEGORIES_PATTERN = "<notes:Categories>(.*?)</notes:Categories>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val EWS_ITEM_PATTERN = "<t:(?:PostItem|Message)[^>]*>(.*?)</t:(?:PostItem|Message)>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val BODY_T_PATTERN = "<t:Body[^>]*>(.*?)</t:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val BODY_PATTERN = "<Body[^>]*>(.*?)</Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val BODY_M_PATTERN = "<m:Body[^>]*>(.*?)</m:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val BODY_AIRSYNC_DATA = "<airsyncbase:Body>.*?<airsyncbase:Data>(.*?)</airsyncbase:Data>.*?</airsyncbase:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val BODY_DATA = "<Body>.*?<Data>(.*?)</Data>.*?</Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val BODY_NOTES_DATA = "<notes:Body>.*?<Data>(.*?)</Data>.*?</notes:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
-        private val BODY_NOTES = "<notes:Body>(.*?)</notes:Body>".toRegex(RegexOption.DOT_MATCHES_ALL)
     }
     
     interface EasCommandExecutor {
@@ -990,36 +988,30 @@ $itemIdsXml
     
     // ==================== Parsing ====================
     
-    private fun parseNotesResponse(xml: String): List<EasNote> {
+    internal fun parseNotesResponse(xml: String): List<EasNote> {
         val notes = mutableListOf<EasNote>()
-        
-        val patterns = listOf(ADD_PATTERN, CHANGE_PATTERN)
-        
-        for (pattern in patterns) {
-            pattern.findAll(xml).forEach { match ->
-                val itemXml = match.groupValues[1]
-                val note = parseNoteFromXml(itemXml)
-                if (note != null) notes.add(note)
-            }
+
+        // Порядок как в прежнем regex-коде: сначала все <Add>, затем все <Change>.
+        EasXmlParser.forEachElement(xml, "Add") { itemXml ->
+            parseNoteFromXml(itemXml)?.let { notes.add(it) }
         }
-        
+        EasXmlParser.forEachElement(xml, "Change") { itemXml ->
+            parseNoteFromXml(itemXml)?.let { notes.add(it) }
+        }
+
         return notes
     }
     
     private fun parseNoteFromXml(itemXml: String): EasNote? {
-        val serverId = deps.extractValue(itemXml, "ServerId") ?: return null
-        
-        val dataXml = APPLICATION_DATA_PATTERN.find(itemXml)?.groupValues?.get(1) ?: return null
-        
-        val subject = XmlValueExtractor.extractNote(dataXml, "Subject") ?: ""
-        val body = extractNoteBody(dataXml).ifEmpty {
-            XmlUtils.unescape(deps.extractValue(dataXml, "notes:Body")
-                ?: deps.extractValue(dataXml, "Data")
-                ?: deps.extractValue(dataXml, "Body")
-                ?: "")
-        }
-        val messageClass = XmlValueExtractor.extractNote(dataXml, "MessageClass") ?: "IPM.StickyNote"
-        val lastModified = parseNoteDate(XmlValueExtractor.extractNote(dataXml, "LastModifiedDate"))
+        val serverId = EasXmlParser.extractValue(itemXml, "ServerId") ?: return null
+
+        // Поля заметки — внутри ApplicationData (сохраняем прежнее скоупирование).
+        val dataXml = EasXmlParser.collectElements(itemXml, "ApplicationData").firstOrNull() ?: return null
+
+        val subject = EasXmlParser.note(dataXml, "Subject") ?: ""
+        val body = extractNoteBody(dataXml)
+        val messageClass = EasXmlParser.note(dataXml, "MessageClass") ?: "IPM.StickyNote"
+        val lastModified = parseNoteDate(EasXmlParser.note(dataXml, "LastModifiedDate"))
         val categories = extractNoteCategories(dataXml)
 
         if (subject.isEmpty() && body.isEmpty()) {
@@ -1037,24 +1029,24 @@ $itemIdsXml
         )
     }
     
-    private fun parseEwsNotesResponse(xml: String): List<EasNote> {
+    internal fun parseEwsNotesResponse(xml: String): List<EasNote> {
         val notes = mutableListOf<EasNote>()
         
         if (BuildConfig.DEBUG) android.util.Log.d("NOT", "parseEwsNotesResponse: Searching for <t:PostItem> or <t:Message>")
         EWS_ITEM_PATTERN.findAll(xml).forEach { match ->
             val itemXml = match.groupValues[1]
             
-            val itemId = XmlValueExtractor.extractAttribute(itemXml, "ItemId", "Id") ?: run {
+            val itemId = EasXmlParser.extractAttribute(itemXml, "ItemId", "Id", listOf("t")) ?: run {
                 if (BuildConfig.DEBUG) android.util.Log.d("NOT", "parseEwsNotesResponse: No ItemId found, skipping")
                 return@forEach
             }
             
-            // Извлекаем значения с разными namespace
-            val subject = XmlValueExtractor.extractEws(itemXml, "Subject") ?: ""
+            // Извлекаем значения с разными namespace (t:/m:)
+            val subject = EasXmlParser.ews(itemXml, "Subject") ?: ""
             val bodyRaw = extractEwsBody(itemXml)
-                ?: XmlValueExtractor.extractEws(itemXml, "Body")
+                ?: EasXmlParser.ews(itemXml, "Body")
                 ?: ""
-            val itemClass = XmlValueExtractor.extractEws(itemXml, "ItemClass") ?: ""
+            val itemClass = EasXmlParser.ews(itemXml, "ItemClass") ?: ""
             
             if (BuildConfig.DEBUG) android.util.Log.d("NOT", "parseEwsNotesResponse: Found item: itemId=${itemId.take(20)}..., bodyLen=${bodyRaw.length}, itemClass='$itemClass'")
             
@@ -1121,9 +1113,9 @@ $itemIdsXml
         val result = mutableMapOf<String, String>()
         EWS_ITEM_PATTERN.findAll(responseXml).forEach { match ->
             val itemXml = match.groupValues[1]
-            val itemId = XmlValueExtractor.extractAttribute(itemXml, "ItemId", "Id") ?: return@forEach
+            val itemId = EasXmlParser.extractAttribute(itemXml, "ItemId", "Id", listOf("t")) ?: return@forEach
             val body = extractEwsBody(itemXml)
-                ?: XmlValueExtractor.extractEws(itemXml, "Body")
+                ?: EasXmlParser.ews(itemXml, "Body")
                 ?: ""
             if (body.isNotBlank()) {
                 result[itemId] = body
@@ -1133,25 +1125,20 @@ $itemIdsXml
     }
 
     private fun extractEwsBody(xml: String): String? {
-        val bodyPatterns = listOf(BODY_T_PATTERN, BODY_PATTERN, BODY_M_PATTERN)
-        for (regex in bodyPatterns) {
-            val match = regex.find(xml)
-            if (match != null && match.groupValues[1].isNotBlank()) {
-                return stripHtmlIfNeeded(XmlUtils.unescape(match.groupValues[1].trim()))
-            }
-        }
-        return null
+        // EWS тело: <t:Body> | <Body> | <m:Body>. EasXmlParser.ews снимает экранирование и тримит;
+        // readText возвращает null для пустого/пробельного содержимого (как прежняя isNotBlank-проверка).
+        val raw = EasXmlParser.ews(xml, "Body") ?: return null
+        return stripHtmlIfNeeded(raw)
     }
     
     private fun extractNoteBody(xml: String): String {
-        val bodyPatterns = listOf(BODY_AIRSYNC_DATA, BODY_DATA, BODY_NOTES_DATA, BODY_NOTES)
-        for (regex in bodyPatterns) {
-            val match = regex.find(xml)
-            if (match != null && match.groupValues[1].isNotBlank()) {
-                return stripHtmlIfNeeded(XmlUtils.unescape(match.groupValues[1].trim()))
-            }
-        }
-        return ""
+        // EAS 14.0+: тело приходит как AirSyncBase <Body><Type/><Data>…</Data></Body> (голые теги
+        // после WBXML-декодирования, см. EasCodePages). Берём текст Data; если Body без Data —
+        // текст самого Body. EasXmlParser.extractValue уже снимает экранирование и тримит.
+        val raw = EasXmlParser.extractValue(xml, "Data")
+            ?: EasXmlParser.extractValue(xml, "Body")
+            ?: return ""
+        return stripHtmlIfNeeded(raw)
     }
 
     private fun stripHtmlIfNeeded(text: String): String =
