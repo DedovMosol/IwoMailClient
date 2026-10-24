@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+: nothing leaves the device, neither to cloud backup nor in a device-to-device
+    transfer. android:allowBackup="false" does not stop D2D transfers on Android 12+; only these
+    rules do. Private storage holds the mail database, the credential store (unreadable without the
+    old device's KeyStore key), downloaded attachments, the outbox queue and client certificates.
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="sharedpref" path="." />
-        <exclude domain="database" path="." />
+        <exclude domain="root" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="external" path="." />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="sharedpref" path="." />
-        <exclude domain="database" path="." />
+        <exclude domain="root" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="external" path="." />
     </device-transfer>
 </data-extraction-rules>
