@@ -69,7 +69,11 @@ class EasCalendarCrudService(
             actualEndTime = endTime
         }
 
-        val result = if (attachments.isNotEmpty() || majorVersion < 14) {
+        // Через EWS создаём: встречу с участниками (EWS CreateItem сам шлёт приглашения — на EAS 14.x
+        // сервер их НЕ рассылает при Sync, MS-ASCMD это задача клиента), событие с вложениями и всё на
+        // Exchange 2007 (majorVersion<14). Обычный appointment без вложений на 14+ — через EAS.
+        val isMeetingInvite = attendees.isNotEmpty()
+        val result = if (attachments.isNotEmpty() || majorVersion < 14 || isMeetingInvite) {
             val ewsResult = createCalendarEventEws(
                 subject,
                 actualStartTime,
@@ -87,6 +91,8 @@ class EasCalendarCrudService(
                 createdViaEws = true
             }
 
+            // Фоллбэк на EAS — только для Exchange 2007. На 14+ встреча обязана уйти через EWS
+            // (иначе приглашения не отправятся), поэтому ошибку возвращаем, а не маскируем EAS-путём.
             if (ewsResult is EasResult.Error && majorVersion < 14) {
                 createdViaEws = false
                 android.util.Log.w(
@@ -185,6 +191,7 @@ class EasCalendarCrudService(
         sensitivity: Int = 0,
         meeting: MeetingEdit,
         oldSubject: String? = null,
+        oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
         oldSensitivity: Int? = null
@@ -207,7 +214,13 @@ class EasCalendarCrudService(
 
         val isEwsItemId = serverId.length > 50 && !serverId.contains(":")
 
-        val result = if (majorVersion >= 14 && !isEwsItemId) {
+        // Встречу с рассылкой на EAS 14+ ведём через EWS: по MS-ASCMD в протоколах 2.5–14.1 сервер
+        // НЕ рассылает приглашения/обновления при EAS Sync (это делает клиент), а EWS UpdateItem с
+        // SendMeetingInvitationsOrCancellations рассылает сам. meeting.sendUpdates уже означает
+        // «организатор изменил встречу или добавил участников» (CalendarRepository.buildMeetingEdit).
+        val meetingNeedsEws = majorVersion >= 14 && meeting.sendUpdates
+
+        val result = if (majorVersion >= 14 && !isEwsItemId && !meetingNeedsEws) {
             updateCalendarEventEas(serverId, subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, recurrenceType)
         } else {
             val ewsResult = updateCalendarEventEws(
@@ -223,14 +236,15 @@ class EasCalendarCrudService(
                 sensitivity,
                 meeting,
                 oldSubject,
+                oldStartTime,
                 recurrenceType,
                 oldSensitivity
             )
 
-            // КРИТИЧНО: если sync идёт через EAS legacy (короткий ServerId),
-            // а EWS недоступен, пробуем EAS update как fallback.
+            // Фоллбэк на EAS — для короткого EAS ServerId, когда EWS недоступен. Но НЕ для рассылочной
+            // встречи: EAS-путь не отправит приглашения, и мы снова получим «молчаливую» встречу.
             val isEasServerId = serverId.contains(":") && serverId.length < 20
-            if (ewsResult is EasResult.Error && isEasServerId) {
+            if (ewsResult is EasResult.Error && isEasServerId && !meetingNeedsEws) {
                 android.util.Log.w(
                     "EasCalendarCrudService",
                     "updateCalendarEvent: EWS failed (${ewsResult.message}), fallback to EAS"
@@ -1357,6 +1371,7 @@ class EasCalendarCrudService(
         sensitivity: Int,
         meeting: MeetingEdit,
         oldSubject: String? = null,
+        oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
         oldSensitivity: Int? = null
     ): EasResult<Boolean> {
@@ -1374,10 +1389,19 @@ class EasCalendarCrudService(
                     (serverId.length > 50 && !serverId.contains("|"))
 
                 if (needsFindItem) {
-                    // КРИТИЧНО: Используем СТАРЫЙ subject для поиска (если subject изменился)
+                    // Ищем по СТАРЫМ subject и СТАРОМУ времени начала: на сервере элемент ещё с ними,
+                    // а startTime — уже новое. По новому времени FindItem промахнулся бы при переносе.
                     val searchSubject = oldSubject ?: subject
+                    val searchStart = if (oldStartTime > 0L) oldStartTime else startTime
 
-                    val findResult = findCalendarItemIdBySubject(searchSubject, startTime)
+                    // Повторяющуюся серию адресуем master-элементом (FindItem без CalendarView):
+                    // CalendarView вернул бы ItemId вхождения, и UpdateItem изменил бы одно вхождение,
+                    // а не всю серию.
+                    val findResult = if (recurrenceType >= 0) {
+                        findRecurringMasterItemId(searchSubject)
+                    } else {
+                        findCalendarItemIdBySubject(searchSubject, searchStart)
+                    }
 
                     if (findResult is EasResult.Success) {
                         actualServerId = findResult.data

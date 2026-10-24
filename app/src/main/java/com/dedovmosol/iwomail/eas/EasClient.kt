@@ -1561,11 +1561,12 @@ $foldersXml
         // без Attendees) — вызывающий обязан решить явно (CalendarRepository.buildMeetingEdit).
         meeting: MeetingEdit,
         oldSubject: String? = null,
+        oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
         oldSensitivity: Int? = null
     ): EasResult<String> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, oldSubject, recurrenceType, attachments, oldSensitivity
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, oldSubject, oldStartTime, recurrenceType, attachments, oldSensitivity
     )
 
     /**

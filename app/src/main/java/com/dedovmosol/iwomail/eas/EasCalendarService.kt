@@ -153,12 +153,13 @@ class EasCalendarService internal constructor(
         sensitivity: Int = 0,
         meeting: MeetingEdit,
         oldSubject: String? = null,
+        oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
         oldSensitivity: Int? = null
     ): EasResult<String> = crudService.updateCalendarEvent(
         serverId, subject, startTime, endTime, location, body, allDayEvent,
-        reminder, busyStatus, sensitivity, meeting, oldSubject,
+        reminder, busyStatus, sensitivity, meeting, oldSubject, oldStartTime,
         recurrenceType, attachments, oldSensitivity
     )
 

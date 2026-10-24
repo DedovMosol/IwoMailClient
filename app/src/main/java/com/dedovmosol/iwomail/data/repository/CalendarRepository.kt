@@ -516,6 +516,7 @@ class CalendarRepository(private val context: Context) {
                         sensitivity = sensitivity,
                         meeting = meeting,
                         oldSubject = event.subject,
+                        oldStartTime = event.startTime,
                         recurrenceType = recurrenceType,
                         attachments = attachments
                     )
