@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
+import com.dedovmosol.iwomail.data.repository.CalendarRepository
 import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.ui.Strings
@@ -116,7 +117,12 @@ internal fun CreateEventDialog(
     var allDayEvent by rememberSaveable { mutableStateOf(event?.allDayEvent ?: false) }
     var reminder by rememberSaveable { mutableStateOf(event?.reminder ?: 15) }
     var busyStatus by rememberSaveable { mutableStateOf(event?.busyStatus ?: 2) }
-    var attendees by rememberSaveable { mutableStateOf("") }
+    // Префилл участниками существующего события: при правке встречи поле не должно быть пустым,
+    // иначе на EAS 14+ уходит MeetingStatus=0 (демотирует встречу) и введённые заново участники
+    // заменяют всю серверную коллекцию. При создании (event == null) поле пустое.
+    var attendees by rememberSaveable {
+        mutableStateOf(event?.attendees?.let { CalendarRepository.attendeeEmailsCsv(it) } ?: "")
+    }
     // Тип повторения: -1=Нет, 0=Daily, 1=Weekly, 2=Monthly, 5=Yearly
     var recurrenceType by rememberSaveable {
         mutableStateOf(

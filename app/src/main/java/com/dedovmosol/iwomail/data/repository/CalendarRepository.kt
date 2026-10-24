@@ -29,6 +29,25 @@ class CalendarRepository(private val context: Context) {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
         private fun getSyncMutex(accountId: Long) = syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
 
+        /**
+         * Emails участников из attendees-JSON, через ", " — для префилла поля в диалоге
+         * редактирования события. Диалог ДОЛЖЕН показывать существующих участников, а не пустое
+         * поле: иначе на EAS 14+ правка встречи уходит с MeetingStatus=0 без блока Attendees и
+         * демотирует встречу (MS-ASCAL: MeetingStatus не ghosted), а введённые заново участники
+         * заменяют всю серверную коллекцию, теряя прежних. Берём только email (имя/статус не нужны).
+         */
+        fun attendeeEmailsCsv(attendeesJson: String): String {
+            if (attendeesJson.isBlank()) return ""
+            return try {
+                val arr = JSONArray(attendeesJson)
+                (0 until arr.length())
+                    .mapNotNull { arr.optJSONObject(it)?.optString("email", "")?.trim()?.ifEmpty { null } }
+                    .joinToString(", ")
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
         // Защита от "воскрешения" удалённых событий (без TTL — до подтверждения сервером).
         private val deletedTracker = com.dedovmosol.iwomail.util.DeletedIdsTracker(
             prefsName = "calendar_deleted_ids",
