@@ -33,6 +33,11 @@ Build and test:
 - Jetpack Compose + Material 3 for UI.
 - Offline-first: UI reads from Room via Flow; background services update the DB.
 
+## License
+
+The project is licensed under the [GNU General Public License v3.0](LICENSE).
+By submitting a contribution you agree that it is licensed under the same terms.
+
 ## Reporting bugs
 
 Use the issue templates. For security-sensitive reports, follow

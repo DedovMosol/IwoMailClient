@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml/badge.svg)](https://github.com/DedovMosol/IwoMailClient/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/DedovMosol/IwoMailClient)](https://github.com/DedovMosol/IwoMailClient/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Android-brightgreen)
 ![Min API](https://img.shields.io/badge/API-26%2B-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)
@@ -190,7 +190,7 @@ Version 1.6.1 changed the package from `com.iwo.iwomail` to `com.dedovmosol.iwom
 
 ## License
 
-MIT License
+Licensed under the [GNU General Public License v3.0](LICENSE). Releases made before the switch to GPLv3 were published under MIT and remain under it.
 
 ---
 
