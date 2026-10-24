@@ -25,7 +25,10 @@ class EasContactsServiceTest {
     // extractValue инжектируем РЕАЛЬНЫЙ (XmlUtils) — так parseGalSearchResponse характеризуется
     // как в проде (его проверка Status идёт через инжектированный extractValue на старом коде).
     private fun service() = EasContactsService(
-        executeCommand = { _, _, _ -> EasResult.Success(emptyList()) },
+        executeCommand = object : EasContactsService.EasCommandExecutor {
+            override suspend fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T> =
+                EasResult.Error("unused in parse tests")
+        },
         folderSync = { EasResult.Error("unused in parse tests") },
         extractValue = { xml, tag -> XmlUtils.extractTagValue(xml, tag) },
         getEasVersion = { "12.1" }

@@ -148,7 +148,8 @@ class CalendarXmlParser(
             categories = categories,
             lastModified = parseEasDate(v("DtStamp")) ?: System.currentTimeMillis(),
             responseStatus = v("ResponseType")?.toIntOrNull() ?: 0,
-            isMeeting = meetingStatus == 1 || meetingStatus == 3 || meetingStatus == 5 || meetingStatus == 7,
+            // MS-ASCAL: MeetingStatus разбирается по битам (M=1, R=2, C=4); 9/11/13/15 — те же 1/3/5/7.
+            isMeeting = (meetingStatus and 1) != 0,
             meetingStatus = meetingStatus,
             responseRequested = v("ResponseRequested") == "1",
             appointmentReplyTime = parseEasDate(v("AppointmentReplyTime")) ?: 0L,

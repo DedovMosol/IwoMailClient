@@ -151,16 +151,15 @@ class EasCalendarService internal constructor(
         reminder: Int = 15,
         busyStatus: Int = 2,
         sensitivity: Int = 0,
-        attendees: List<String> = emptyList(),
+        meeting: MeetingEdit,
         oldSubject: String? = null,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        newAttendeesToAppend: List<String> = emptyList(),
         oldSensitivity: Int? = null
     ): EasResult<String> = crudService.updateCalendarEvent(
         serverId, subject, startTime, endTime, location, body, allDayEvent,
-        reminder, busyStatus, sensitivity, attendees, oldSubject,
-        recurrenceType, attachments, newAttendeesToAppend, oldSensitivity
+        reminder, busyStatus, sensitivity, meeting, oldSubject,
+        recurrenceType, attachments, oldSensitivity
     )
 
     suspend fun updateSingleOccurrence(

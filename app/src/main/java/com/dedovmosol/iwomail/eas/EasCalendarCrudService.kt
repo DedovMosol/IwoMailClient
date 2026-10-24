@@ -183,11 +183,10 @@ class EasCalendarCrudService(
         reminder: Int = 15,
         busyStatus: Int = 2,
         sensitivity: Int = 0,
-        attendees: List<String> = emptyList(),
+        meeting: MeetingEdit,
         oldSubject: String? = null,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        newAttendeesToAppend: List<String> = emptyList(),
         oldSensitivity: Int? = null
     ): EasResult<String> {
         if (!deps.isVersionDetected()) {
@@ -209,7 +208,7 @@ class EasCalendarCrudService(
         val isEwsItemId = serverId.length > 50 && !serverId.contains(":")
 
         val result = if (majorVersion >= 14 && !isEwsItemId) {
-            updateCalendarEventEas(serverId, subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
+            updateCalendarEventEas(serverId, subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, recurrenceType)
         } else {
             val ewsResult = updateCalendarEventEws(
                 serverId,
@@ -222,10 +221,9 @@ class EasCalendarCrudService(
                 reminder,
                 busyStatus,
                 sensitivity,
-                attendees,
+                meeting,
                 oldSubject,
                 recurrenceType,
-                newAttendeesToAppend,
                 oldSensitivity
             )
 
@@ -248,7 +246,7 @@ class EasCalendarCrudService(
                     reminder,
                     busyStatus,
                     sensitivity,
-                    attendees,
+                    meeting,
                     recurrenceType
                 )
             } else {
@@ -959,19 +957,7 @@ class EasCalendarCrudService(
             if (majorVersion >= 14) {
                 val meetingStatus = if (attendees.isNotEmpty()) 1 else 0
                 append("<calendar:MeetingStatus>$meetingStatus</calendar:MeetingStatus>")
-
-                if (attendees.isNotEmpty()) {
-                    append("<calendar:Attendees>")
-                    for (email in attendees) {
-                        val escapedEmail = deps.escapeXml(email.trim())
-                        append("<calendar:Attendee>")
-                        append("<calendar:Email>$escapedEmail</calendar:Email>")
-                        append("<calendar:AttendeeType>1</calendar:AttendeeType>")
-                        append("<calendar:AttendeeStatus>0</calendar:AttendeeStatus>")
-                        append("</calendar:Attendee>")
-                    }
-                    append("</calendar:Attendees>")
-                }
+                appendEasAttendees(attendees.map { EasAttendee(it) })
             }
 
             val recurrenceXml = CalendarRecurrenceBuilder.buildEasRecurrenceXml(recurrenceType, startTime)
@@ -1016,7 +1002,7 @@ class EasCalendarCrudService(
         reminder: Int,
         busyStatus: Int,
         sensitivity: Int,
-        attendees: List<String>,
+        meeting: MeetingEdit,
         recurrenceType: Int = -1
     ): EasResult<Boolean> {
         val calendarFolderId = syncService.getCalendarFolderId()
@@ -1078,21 +1064,15 @@ class EasCalendarCrudService(
 
             // MeetingStatus и Attendees только для EAS 14+ (Exchange 2010+)
             if (majorVersion >= 14) {
-                val meetingStatus = if (attendees.isNotEmpty()) 1 else 0
-                append("<calendar:MeetingStatus>$meetingStatus</calendar:MeetingStatus>")
-
-                if (attendees.isNotEmpty()) {
-                    append("<calendar:Attendees>")
-                    for (email in attendees) {
-                        val escapedEmail = deps.escapeXml(email.trim())
-                        append("<calendar:Attendee>")
-                        append("<calendar:Email>$escapedEmail</calendar:Email>")
-                        append("<calendar:AttendeeType>1</calendar:AttendeeType>")
-                        append("<calendar:AttendeeStatus>0</calendar:AttendeeStatus>")
-                        append("</calendar:Attendee>")
-                    }
-                    append("</calendar:Attendees>")
+                // У участника — MeetingStatus сервера: без бита R («получена от другого») Exchange
+                // счёл бы пользователя организатором его копии встречи. Организатор: 1 — встреча, 0 — нет.
+                val meetingStatus = when {
+                    !meeting.isOrganizer -> meeting.meetingStatus
+                    meeting.attendees.isNotEmpty() -> 1
+                    else -> 0
                 }
+                append("<calendar:MeetingStatus>$meetingStatus</calendar:MeetingStatus>")
+                appendEasAttendees(meeting.attendees)
 
                 val recurrenceXml = CalendarRecurrenceBuilder.buildEasRecurrenceXml(recurrenceType, startTime)
                 if (recurrenceXml.isNotBlank()) append(recurrenceXml)
@@ -1375,10 +1355,9 @@ class EasCalendarCrudService(
         reminder: Int,
         busyStatus: Int,
         sensitivity: Int,
-        attendees: List<String>,
+        meeting: MeetingEdit,
         oldSubject: String? = null,
         recurrenceType: Int = -1,
-        newAttendeesToAppend: List<String> = emptyList(),
         oldSensitivity: Int? = null
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
@@ -1438,7 +1417,9 @@ class EasCalendarCrudService(
                     append("""<t:RequestServerVersion Version="Exchange2007_SP1"/>""")
                     append("</soap:Header>")
                     append("<soap:Body>")
-                    val sendMode = if (attendees.isNotEmpty()) "SendToAllAndSaveCopy" else "SendToNone"
+                    // Рассылку решает репозиторий: только организатор и только при изменении встречи.
+                    // Правка участника или личного поля (напоминание) уходит без писем.
+                    val sendMode = if (meeting.sendUpdates) "SendToAllAndSaveCopy" else "SendToNone"
                     append("""<m:UpdateItem ConflictResolution="AlwaysOverwrite" SendMeetingInvitationsOrCancellations="$sendMode">""")
                     append("<m:ItemChanges>")
                     append("<t:ItemChange>")
@@ -1555,8 +1536,8 @@ class EasCalendarCrudService(
 
                     // Exchange 2007 SP1: SetItemField NOT supported for RequiredAttendees.
                     // Only APPEND truly new attendees (diff computed by CalendarRepository).
-                    if (newAttendeesToAppend.isNotEmpty()) {
-                        for (email in newAttendeesToAppend) {
+                    if (meeting.newAttendees.isNotEmpty()) {
+                        for (email in meeting.newAttendees) {
                             val escapedEmail = deps.escapeXml(email.trim())
                             append("<t:AppendToItemField>")
                             append("""<t:FieldURI FieldURI="calendar:RequiredAttendees"/>""")
@@ -2007,7 +1988,30 @@ $itemIdsXml
         }
     }
 
+    /**
+     * Блок `calendar:Attendees` (MS-ASCAL Attendee): Email, Name (если известно), тип «обязательный»,
+     * статус ответа. Статус — тот, что отдал сервер: при правке ответы участников не сбрасываются.
+     * Пустой список — блока нет.
+     */
+    private fun StringBuilder.appendEasAttendees(attendees: List<EasAttendee>) {
+        if (attendees.isEmpty()) return
+        append("<calendar:Attendees>")
+        for (attendee in attendees) {
+            append("<calendar:Attendee>")
+            append("<calendar:Email>${deps.escapeXml(attendee.email.trim())}</calendar:Email>")
+            if (attendee.name.isNotBlank()) append("<calendar:Name>${deps.escapeXml(attendee.name.trim())}</calendar:Name>")
+            append("<calendar:AttendeeType>1</calendar:AttendeeType>")
+            // MS-ASCAL AttendeeStatus: только 0, 2, 3, 4, 5 — прочее как «ответ неизвестен».
+            val status = attendee.status.takeIf { it in ATTENDEE_STATUSES } ?: 0
+            append("<calendar:AttendeeStatus>$status</calendar:AttendeeStatus>")
+            append("</calendar:Attendee>")
+        }
+        append("</calendar:Attendees>")
+    }
+
     companion object {
+        private val ATTENDEE_STATUSES = setOf(0, 2, 3, 4, 5)
+
         private val EWS_CALENDAR_ITEM = "<(?:t:)?CalendarItem\\b[^>]*>(.*?)</(?:t:)?CalendarItem>"
             .toRegex(RegexOption.DOT_MATCHES_ALL)
         // EWS-1: EWS_ITEM_ID_WITH_CHANGE_KEY удалён — заменён на order/prefix-устойчивый EwsIds.

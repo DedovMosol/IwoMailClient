@@ -35,7 +35,6 @@ class EasTasksService internal constructor(
         val isVersionDetected: () -> Boolean,
         val detectEasVersion: suspend () -> EasResult<String>,
         val getTasksFolderId: suspend () -> String?,
-        val getDeletedItemsFolderId: suspend () -> String?,
         val performNtlmHandshake: suspend () -> String?,
         val executeNtlmRequest: suspend (String, String) -> String?,
         val tryBasicAuthEws: suspend (String, String) -> String?,
@@ -195,22 +194,12 @@ class EasTasksService internal constructor(
         return EasResult.Error("Не удалось обновить задачу после retry")
     }
     
-    suspend fun deleteTask(serverId: String): EasResult<Boolean> =
-        deleteTaskImpl(serverId, deletesAsMoves = true, ewsDeleteType = "MoveToDeletedItems")
-
-    suspend fun deleteTaskPermanently(serverId: String): EasResult<Boolean> =
-        deleteTaskImpl(serverId, deletesAsMoves = false, ewsDeleteType = "HardDelete", ewsNotFoundIsSuccess = true)
-
-    private suspend fun deleteTaskImpl(
-        serverId: String,
-        deletesAsMoves: Boolean,
-        ewsDeleteType: String,
-        ewsNotFoundIsSuccess: Boolean = false
-    ): EasResult<Boolean> {
+    /** Перемещение задачи в корзину (Deleted Items). ServerId — из синка, поэтому протокол — его же. */
+    suspend fun deleteTask(serverId: String): EasResult<Boolean> {
         if (!deps.isVersionDetected()) deps.detectEasVersion()
 
-        if (deps.getEasVersion().startsWith("12.")) {
-            return deleteTaskEwsImpl(serverId, ewsDeleteType, ewsNotFoundIsSuccess)
+        if (tasksSyncedViaEws()) {
+            return deleteTaskEwsImpl(serverId, "MoveToDeletedItems", notFoundIsSuccess = false)
         }
 
         val tasksFolderId = cachedTasksFolderId ?: deps.getTasksFolderId()
@@ -218,7 +207,7 @@ class EasTasksService internal constructor(
 
         for (attempt in 0..1) {
             val syncKey = getSyncKey(tasksFolderId) ?: return EasResult.Error("Не удалось получить SyncKey")
-            val deleteXml = EasXmlTemplates.syncDelete(syncKey, tasksFolderId, serverId, deletesAsMoves)
+            val deleteXml = EasXmlTemplates.syncDelete(syncKey, tasksFolderId, serverId, deletesAsMoves = true)
 
             val result = deps.executeEasCommand("Sync", deleteXml) { responseXml ->
                 val status = deps.extractValue(responseXml, "Status")
@@ -245,7 +234,7 @@ class EasTasksService internal constructor(
     suspend fun deleteTasksBatch(serverIds: List<String>): EasResult<Int> {
         if (serverIds.isEmpty()) return EasResult.Success(0)
         if (!deps.isVersionDetected()) deps.detectEasVersion()
-        return if (deps.getEasVersion().startsWith("12.")) {
+        return if (tasksSyncedViaEws()) {
             deleteTasksBatchEws(serverIds, "MoveToDeletedItems")
         } else {
             var deleted = 0
@@ -256,39 +245,66 @@ class EasTasksService internal constructor(
         }
     }
 
-    /**
-     * Batch окончательное удаление задач (HardDelete). Один EWS DeleteItem на весь пакет.
+    /*
+     * Корзина задач. Откуда взялся ServerId корзинной задачи, зависит от протокола синка:
+     *  - Exchange 2007 (EWS-синк): синк читает deleteditems, и ServerId — EWS ItemId копии в корзине.
+     *  - Exchange 2010/2013 (EAS-синк): корзину EAS-синк не читает, а Sync Delete с DeletesAsMoves
+     *    не сообщает новый ServerId в Deleted Items. Локальная запись хранит прежний ServerId из
+     *    папки Tasks: по нему копию в корзине не адресовать, а Sync Delete по нему ударил бы по папке
+     *    Tasks — после полного пересинка (SyncKey=0) ServerId может достаться другой задаче.
+     *    Поэтому копию в корзине ищем через EWS: единственная IPM.Task с той же темой в deleteditems.
      */
-    suspend fun deleteTasksPermanentlyBatch(serverIds: List<String>): EasResult<Int> {
-        if (serverIds.isEmpty()) return EasResult.Success(0)
+
+    /** Синк задач идёт по EWS (Exchange 2007): ServerId корзины — EWS ItemId копии в deleteditems. */
+    private fun tasksSyncedViaEws(): Boolean =
+        (deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12) < 14
+
+    /**
+     * Окончательное удаление задачи из корзины.
+     * EAS-синк ([tasksSyncedViaEws] = false): копия ищется в deleteditems по [subject]; не нашли
+     * однозначно или EWS недоступен — удалять на сервере нечего адресно, копия остаётся в Deleted
+     * Items (как до появления локальной корзины), запись убирается из приложения.
+     */
+    suspend fun deleteTaskPermanently(serverId: String, subject: String? = null): EasResult<Boolean> {
         if (!deps.isVersionDetected()) deps.detectEasVersion()
-        return if (deps.getEasVersion().startsWith("12.")) {
-            deleteTasksBatchEws(serverIds, "HardDelete")
+        if (tasksSyncedViaEws()) return deleteTaskEwsImpl(serverId, "HardDelete", notFoundIsSuccess = true)
+
+        val itemId = findDeletedTaskItemIdEws(subject)
+        if (itemId == null) {
+            android.util.Log.w("EasTasksService",
+                "deleteTaskPermanently: trashed copy not addressable, it stays in Deleted Items on the server")
+            return EasResult.Success(true)
+        }
+        return deleteEwsTaskItem(itemId, "HardDelete")
+    }
+
+    /**
+     * Окончательное удаление задач корзины: [tasks] — пары (ServerId, тема).
+     * Exchange 2007 — один EWS DeleteItem на пакет, EAS-синк — по задаче (см. [deleteTaskPermanently]).
+     */
+    suspend fun deleteTasksPermanentlyBatch(tasks: List<Pair<String, String>>): EasResult<Int> {
+        if (tasks.isEmpty()) return EasResult.Success(0)
+        if (!deps.isVersionDetected()) deps.detectEasVersion()
+        return if (tasksSyncedViaEws()) {
+            deleteTasksBatchEws(tasks.map { it.first }, "HardDelete")
         } else {
-            var deleted = 0
-            for (sid in serverIds) {
-                if (deleteTaskPermanently(sid) is EasResult.Success) deleted++
-            }
-            EasResult.Success(deleted)
+            // Частичный успех — ошибка, а не «удалено N»: на успехе пакета репозиторий удаляет
+            // локально ВСЮ корзину. На ошибке он проходит по задачам и убирает только удалённые
+            // (уже удалённая копия не находится, и повтор для неё — только локальное удаление).
+            val deleted = tasks.count { (serverId, subject) -> deleteTaskPermanently(serverId, subject) is EasResult.Success }
+            if (deleted == tasks.size) EasResult.Success(deleted)
+            else EasResult.Error("Окончательно удалено $deleted из ${tasks.size}")
         }
     }
 
     /**
-     * Восстановление задачи из корзины
-     * Перемещает задачу из Deleted Items обратно в Tasks
+     * Восстановление задачи из корзины: EWS MoveItem из deleteditems в tasks. Копию адресует EWS
+     * ItemId из синка корзины (Exchange 2007) или поиск по [subject] в deleteditems (EAS-синк).
+     * Возвращает ItemId восстановленной задачи; следующий синк заменит его своим ServerId.
      */
     suspend fun restoreTask(serverId: String, subject: String? = null): EasResult<String> {
-        if (!deps.isVersionDetected()) {
-            deps.detectEasVersion()
-        }
-        
-        val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        
-        return if (majorVersion >= 14) {
-            restoreTaskEas(serverId)
-        } else {
-            restoreTaskEws(serverId, subject)
-        }
+        if (!deps.isVersionDetected()) deps.detectEasVersion()
+        return restoreTaskEws(serverId, subject)
     }
     
     // ==================== Private EAS methods ====================
@@ -951,25 +967,33 @@ class EasTasksService internal constructor(
         serverId: String,
         deleteType: String,
         notFoundIsSuccess: Boolean
-    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
-        try {
-            val ewsItemId = resolveEwsTaskItemId(serverId)
-            if (ewsItemId == null) {
-                return@withContext if (notFoundIsSuccess) EasResult.Success(true)
-                    else EasResult.Error("Не удалось найти задачу на сервере")
-            }
-            val escapedItemId = deps.escapeXml(ewsItemId)
-            val soapRequest = buildEwsDeleteRequest(escapedItemId, deleteType)
-
-            val responseXml = executeEwsWithAuth(soapRequest, "DeleteItem")
-                ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
-
-            EasResult.Success(EwsClient.isEwsSuccessOrNotFound(responseXml))
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка EWS: ${e.message}")
-        }
+    ): EasResult<Boolean> {
+        val ewsItemId = resolveEwsTaskItemId(serverId)
+            ?: return if (notFoundIsSuccess) EasResult.Success(true)
+                else EasResult.Error("Не удалось найти задачу на сервере")
+        return deleteEwsTaskItem(ewsItemId, deleteType)
     }
+
+    /** EWS DeleteItem по известному ItemId (без повторного разрешения id). */
+    private suspend fun deleteEwsTaskItem(ewsItemId: String, deleteType: String): EasResult<Boolean> =
+        withContext(Dispatchers.IO) {
+            try {
+                // buildEwsDeleteRequest экранирует id сам: прежде он экранировался дважды.
+                val responseXml = executeEwsWithAuth(buildEwsDeleteRequest(ewsItemId, deleteType), "DeleteItem")
+                    ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
+                // Отказ сервера — ошибка. Прежде он возвращался как Success(false), а репозиторий
+                // проверяет только тип результата: задача пропадала локально, оставаясь на сервере.
+                if (EwsClient.isEwsSuccessOrNotFound(responseXml)) {
+                    EasResult.Success(true)
+                } else {
+                    val code = REGEX_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)?.trim()
+                    EasResult.Error("Не удалось удалить задачу на сервере: ${code ?: "EWS DeleteItem"}")
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                EasResult.Error("Ошибка EWS: ${e.message}")
+            }
+        }
     
     /**
      * Batch EWS DeleteItem для задач — один запрос с несколькими ItemId.
@@ -1027,42 +1051,18 @@ $itemIdsXml
     }
     
     /**
-     * Восстановление задачи через EAS MoveItems (для Exchange 2010+)
+     * EWS MoveItem задачи из корзины в tasks. Прежде EAS-ветка (Exchange 2010+) слала MoveItems с
+     * ServerId из папки Tasks — копии в Deleted Items он не адресует, восстановление не работало;
+     * а короткий ServerId здесь искался по теме в tasks, где копии нет.
      */
-    private suspend fun restoreTaskEas(serverId: String): EasResult<String> {
-        val tasksFolderId = cachedTasksFolderId ?: deps.getTasksFolderId()
-            ?: return EasResult.Error("Папка задач не найдена")
-        
-        val deletedItemsFolderId = deps.getDeletedItemsFolderId()
-            ?: return EasResult.Error("Папка Deleted Items не найдена")
-        
-        // MoveItems для перемещения из Deleted Items в Tasks
-        val moveXml = EasXmlTemplates.moveItems(
-            listOf(serverId to deletedItemsFolderId),
-            tasksFolderId
-        )
-        
-        return deps.executeEasCommand("MoveItems", moveXml) { responseXml ->
-            val status = deps.extractValue(responseXml, "Status")
-            if (status == "3") { // 3 = Success для MoveItems
-                deps.extractValue(responseXml, "DstMsgId") ?: serverId
-            } else {
-                throw Exception("Ошибка восстановления: Status=$status")
-            }
-        }
-    }
-    
-    /**
-     * Восстановление задачи через EWS MoveItem (для Exchange 2007)
-     */
-    private suspend fun restoreTaskEws(serverId: String, subject: String? = null): EasResult<String> = withContext(Dispatchers.IO) {
+    private suspend fun restoreTaskEws(serverId: String, subject: String?): EasResult<String> = withContext(Dispatchers.IO) {
         try {
             val ewsItemId = if (serverId.length >= 50 && !serverId.contains(":")) {
                 serverId
             } else {
-                resolveEwsTaskItemId(serverId, subject) ?: run {
-                    return@withContext EasResult.Error("Задача не найдена")
-                }
+                // null — копии нет, их несколько или EWS недоступен: «не удалось найти», а не «нет».
+                findDeletedTaskItemIdEws(subject)
+                    ?: return@withContext EasResult.Error("Не удалось найти задачу в «Удалённых» на сервере")
             }
             
             val soapRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -1270,6 +1270,44 @@ $itemIdsXml
         // EWS-4: при неоднозначности (несколько задач с одинаковой темой) НЕ выбираем первую —
         // раньше это приводило к операции над ЧУЖОЙ задачей. null → resolveEwsTaskItemId
         // откатывается к сохранённому EWS ItemId конкретной задачи (однозначно и корректно).
+        return singleTaskItemIdOrNull(responseXml)
+    }
+
+    /**
+     * EWS ItemId единственной задачи (IPM.Task) с темой [subject] в deleteditems, иначе null: темы
+     * нет, совпадений нет или их несколько (EWS-4: чужую задачу не трогаем), EWS недоступен.
+     * Класс в фильтре обязателен — в корзине лежат и письма с той же темой.
+     */
+    private suspend fun findDeletedTaskItemIdEws(subject: String?): String? {
+        if (subject.isNullOrBlank()) return null
+        val soapBody = """
+    <m:FindItem Traversal="Shallow">
+        <m:ItemShape>
+            <t:BaseShape>IdOnly</t:BaseShape>
+        </m:ItemShape>
+        <m:Restriction>
+            <t:And>
+                <t:IsEqualTo>
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:FieldURIOrConstant>
+                        <t:Constant Value="${deps.escapeXml(subject)}"/>
+                    </t:FieldURIOrConstant>
+                </t:IsEqualTo>
+                <t:IsEqualTo>
+                    <t:FieldURI FieldURI="item:ItemClass"/>
+                    <t:FieldURIOrConstant>
+                        <t:Constant Value="IPM.Task"/>
+                    </t:FieldURIOrConstant>
+                </t:IsEqualTo>
+            </t:And>
+        </m:Restriction>
+        <m:ParentFolderIds>
+            <t:DistinguishedFolderId Id="deleteditems"/>
+        </m:ParentFolderIds>
+    </m:FindItem>"""
+        val responseXml = executeEwsWithAuth(EasXmlTemplates.ewsSoapRequest(soapBody), "FindItem") ?: return null
+        // Обрубленный ответ мог потерять второе совпадение — тогда «единственное» ложно.
+        if (!EwsClient.isCompleteEnvelope(responseXml)) return null
         return singleTaskItemIdOrNull(responseXml)
     }
 

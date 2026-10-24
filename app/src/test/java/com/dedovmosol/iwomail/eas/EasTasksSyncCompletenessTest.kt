@@ -22,27 +22,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class EasTasksSyncCompletenessTest {
 
-    private fun service(exchange: FakeExchange, easVersion: String): EasTasksService {
-        val transport = exchange.transport(easVersion)
-        return EasTasksService(EasTasksService.TasksServiceDependencies(
-            executeEasCommand = object : EasTasksService.EasCommandExecutor {
-                override suspend fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T> =
-                    transport.executeEasCommand(command, xml, parser = parser)
-            },
-            folderSync = { EasResult.Success(FolderSyncResponse("1", listOf(EasFolder(TASKS, "Tasks", "0", FolderType.TASKS)))) },
-            extractValue = { xml, tag -> XmlUtils.extractTagValue(xml, tag) },
-            escapeXml = { XmlUtils.escape(it) },
-            getEasVersion = { transport.easVersion },
-            isVersionDetected = { true },
-            detectEasVersion = { EasResult.Success(transport.easVersion) },
-            getTasksFolderId = { TASKS },
-            getDeletedItemsFolderId = { "deleted" },
-            performNtlmHandshake = { transport.performNtlmHandshake() },
-            executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
-            tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
-            sendMail = { _, _, _, _, _, _ -> EasResult.Error("unused") }
-        ))
-    }
+    private fun service(exchange: FakeExchange, easVersion: String): EasTasksService =
+        exchange.tasksService(easVersion, TASKS)
 
     private fun eas(route: (FakeExchange.Call) -> Reply): Pair<FakeExchange, EasTasksService> {
         val exchange = FakeExchange(route)

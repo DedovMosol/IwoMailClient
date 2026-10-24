@@ -9,15 +9,22 @@ package com.dedovmosol.iwomail.eas
  * - Поиск в глобальной адресной книге (GAL)
  */
 class EasContactsService internal constructor(
-    private val executeCommand: suspend (String, String, (String) -> List<GalContact>) -> EasResult<List<GalContact>>,
+    private val executeCommand: EasCommandExecutor,
     private val folderSync: suspend (String) -> EasResult<FolderSyncResponse>,
     private val extractValue: (String, String) -> String?,
     private val getEasVersion: () -> String
 ) {
 
+    /** EAS-команда с типизированным разбором ответа — как у остальных EAS-сервисов. */
+    interface EasCommandExecutor {
+        suspend operator fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T>
+    }
+
     private val syncKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     companion object {
+        private const val TAG = "EasContactsService"
+        private const val MAX_SYNC_PAGES = 10 // WindowSize=500 → до 5000 контактов
         // Sync контактов — один потоковый проход EasSyncStream; GAL Search — EasXmlParser.
         // Остаются ТОЛЬКО regex разбора email-СТРОКИ (не XML): RFC 2822 `"Name" <addr>` и простой адрес.
         private val ADD_ONLY = setOf("Add")
@@ -51,7 +58,7 @@ class EasContactsService internal constructor(
         val foldersResult = folderSync("0")
         val contactsFolderId = when (foldersResult) {
             is EasResult.Success -> {
-                foldersResult.data.folders.find { it.type == 9 }?.serverId
+                foldersResult.data.folders.find { it.type == FolderType.CONTACTS }?.serverId
             }
             is EasResult.Error -> return EasResult.Error(foldersResult.message)
         }
@@ -74,31 +81,24 @@ class EasContactsService internal constructor(
     </Collections>
 </Sync>""".trimIndent()
 
-            var probeStatus: String? = null
-            var probeNewKey: String? = null
-            var probeHasChanges = false
-
             val probeResult = executeCommand("Sync", probeXml) { responseXml ->
-                probeStatus = extractValue(responseXml, "Status")
-                probeNewKey = extractValue(responseXml, "SyncKey")
-                probeHasChanges = responseXml.contains("<Add>") ||
+                val hasChanges = responseXml.contains("<Add>") ||
                         responseXml.contains("<Change>") ||
                         responseXml.contains("<Delete>") ||
                         responseXml.contains("<SoftDelete>") ||
                         responseXml.contains("<MoreAvailable")
-                emptyList()
+                Triple(extractValue(responseXml, "Status"), extractValue(responseXml, "SyncKey"), hasChanges)
             }
 
             if (probeResult is EasResult.Success) {
+                val (status, newKey, hasChanges) = probeResult.data
                 when {
-                    (probeStatus == "1" || probeStatus == null) && !probeHasChanges -> {
-                        if (probeNewKey != null) syncKeyCache[contactsFolderId] = probeNewKey!!
+                    (status == "1" || status == null) && !hasChanges -> {
+                        if (newKey != null) syncKeyCache[contactsFolderId] = newKey
                         // Изменений нет: снимок не авторитетен (ничего не удаляем), данные актуальны.
                         return EasResult.Success(ContactsSyncResult(emptyList(), isAuthoritative = false, isUnchanged = true))
                     }
-                    probeStatus == "3" || probeStatus == "12" -> {
-                        syncKeyCache.remove(contactsFolderId)
-                    }
+                    status == "3" || status == "12" -> syncKeyCache.remove(contactsFolderId)
                 }
             }
         }
@@ -113,75 +113,92 @@ class EasContactsService internal constructor(
     </Collections>
 </Sync>""".trimIndent()
         
-        var syncKey = "0"
-        val initialResult = executeCommand("Sync", initialXml) { responseXml ->
-            val key = extractValue(responseXml, "SyncKey") ?: "0"
-            syncKey = key
-            emptyList()
+        var syncKey = when (val initial = executeCommand("Sync", initialXml) { extractValue(it, "SyncKey") ?: "0" }) {
+            is EasResult.Success -> initial.data
+            is EasResult.Error -> return initial
         }
-        
-        when (initialResult) {
-            is EasResult.Success -> { /* syncKey уже установлен */ }
-            is EasResult.Error -> return EasResult.Error(initialResult.message)
-        }
-        
-        if (syncKey == "0") {
-            // Сервер не выдал SyncKey — снимок неполный, удаления запрещаем.
-            return EasResult.Success(ContactsSyncResult(emptyList(), isAuthoritative = false))
-        }
+        // Без ключа выдачи нет: это сбой, а не пустая папка (как у задач и заметок).
+        if (syncKey == "0") return EasResult.Error("Sync контактов: сервер не выдал SyncKey")
         
         val easVersion = getEasVersion()
         val allContacts = mutableListOf<GalContact>()
-        var isAuthoritative = true
-        var moreAvailable = true
+        // Снимок полон, только если сервер сам сообщил конец выдачи: Status=1 на каждой странице
+        // и MoreAvailable исчерпан. Любой досрочный выход записывает причину сюда. Раньше Status≠1
+        // (кроме 3/12) и пустая страница с MoreAvailable сходили за конец выдачи, и репозиторий
+        // удалял контакты, которых сервер просто не успел отдать.
+        var incompleteReason: String? = null
+        var keyInvalidated = false
         var iterations = 0
-        val maxIterations = 10
         
-        while (moreAvailable && iterations < maxIterations) {
+        while (true) {
+            if (iterations >= MAX_SYNC_PAGES) {
+                incompleteReason = "лимит $MAX_SYNC_PAGES страниц"
+                break
+            }
             iterations++
             val syncXml = buildContactsSyncXml(syncKey, contactsFolderId, easVersion)
             
-            val batchResult = executeCommand("Sync", syncXml) { responseXml ->
-                val status = extractValue(responseXml, "Status")
-                if (status == "3" || status == "12") {
-                    syncKeyCache.remove(contactsFolderId)
-                    throw Exception("InvalidSyncKey: Status=$status")
-                }
-
-                val newKey = extractValue(responseXml, "SyncKey")
-                if (newKey != null && newKey != syncKey) syncKey = newKey
-                moreAvailable = responseXml.contains("<MoreAvailable", ignoreCase = true)
-                parseContactsSyncResponse(responseXml)
-            }
-            
-            when (batchResult) {
-                is EasResult.Success -> {
-                    allContacts.addAll(batchResult.data)
-                    if (batchResult.data.isEmpty()) moreAvailable = false
-                }
+            val page = when (val result = executeCommand("Sync", syncXml) { parseContactsSyncPage(it) }) {
+                is EasResult.Success -> result.data
                 is EasResult.Error -> {
-                    if (batchResult.message.contains("InvalidSyncKey")) {
-                        syncKeyCache.remove(contactsFolderId)
-                    }
-                    if (allContacts.isNotEmpty()) {
-                        isAuthoritative = false
-                        break
-                    }
-                    return EasResult.Error(batchResult.message)
+                    incompleteReason = result.message
+                    break
                 }
+            }
+            if (page.status != "1") {
+                // 3 — Invalid SyncKey, 12 — иерархия папок изменилась: ключ недействителен.
+                if (page.status == "3" || page.status == "12") {
+                    syncKeyCache.remove(contactsFolderId)
+                    keyInvalidated = true
+                }
+                incompleteReason = "Status=${page.status}"
+                break
+            }
+
+            page.syncKey?.let { syncKey = it }
+            allContacts.addAll(page.contacts)
+            if (!page.moreAvailable) break
+            // MoreAvailable без данных: сервер обещает продолжение, но не отдаёт его.
+            if (page.contacts.isEmpty()) {
+                incompleteReason = "MoreAvailable без данных"
+                break
             }
         }
 
-        // MoreAvailable ещё выставлен (упёрлись в лимит страниц) → выдача неполная.
-        if (moreAvailable) {
-            isAuthoritative = false
-        }
+        // Недействительный ключ не возвращаем в кэш: проба по нему — лишний запрос со Status=3.
+        if (!keyInvalidated) syncKeyCache[contactsFolderId] = syncKey
 
-        if (syncKey != "0") {
-            syncKeyCache[contactsFolderId] = syncKey
+        if (incompleteReason != null) {
+            android.util.Log.w(TAG, "syncContacts: incomplete ($incompleteReason), ${allContacts.size} contacts, deletions disabled")
+            // Сбой до первого контакта — ошибка синка, а не «пустая папка».
+            if (allContacts.isEmpty()) return EasResult.Error("Синхронизация контактов прервана: $incompleteReason")
         }
-        
-        return EasResult.Success(ContactsSyncResult(allContacts, isAuthoritative = isAuthoritative))
+        return EasResult.Success(ContactsSyncResult(allContacts, isAuthoritative = incompleteReason == null))
+    }
+
+    /** Страница EAS Sync контактов. */
+    private class ContactsSyncPage(
+        val status: String,
+        val syncKey: String?,
+        val contacts: List<GalContact>,
+        val moreAvailable: Boolean
+    )
+
+    /**
+     * Страница собирается только из целиком разобранного ответа: ключ страницы, которую не удалось
+     * разобрать, «подтвердил» бы серверу недоставленные контакты, и проба по нему сказала бы
+     * «изменений нет».
+     */
+    private fun parseContactsSyncPage(responseXml: String): ContactsSyncPage {
+        // MS-ASCMD: Status коллекции обязателен; пустое тело ответа транспорт подменяет на Status=1.
+        val status = extractValue(responseXml, "Status") ?: "1"
+        if (status != "1") return ContactsSyncPage(status, syncKey = null, contacts = emptyList(), moreAvailable = false)
+        return ContactsSyncPage(
+            status = status,
+            syncKey = extractValue(responseXml, "SyncKey"),
+            contacts = parseContactsSyncResponse(responseXml),
+            moreAvailable = responseXml.contains("<MoreAvailable")
+        )
     }
     
     /**

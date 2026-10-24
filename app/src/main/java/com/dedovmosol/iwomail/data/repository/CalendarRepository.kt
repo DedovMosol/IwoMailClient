@@ -4,8 +4,10 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
+import com.dedovmosol.iwomail.eas.EasAttendee
 import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.eas.MeetingEdit
 import com.dedovmosol.iwomail.sync.CalendarReminderReceiver
 import com.dedovmosol.iwomail.sync.RescheduleRemindersWorker
 import kotlinx.coroutines.Dispatchers
@@ -29,23 +31,87 @@ class CalendarRepository(private val context: Context) {
         private val syncLocks = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
         private fun getSyncMutex(accountId: Long) = syncLocks.computeIfAbsent(accountId) { kotlinx.coroutines.sync.Mutex() }
 
+        /** MS-ASCAL MeetingStatus, бит R: встреча получена от другого организатора. */
+        private const val MEETING_STATUS_RECEIVED = 2
+
+        /**
+         * Участники из attendees-JSON по порядку, email обрезан. Записи без email пропускаются,
+         * битый JSON — пустой список: одна плохая запись не обнуляет остальных.
+         */
+        fun parseAttendees(json: String): List<Attendee> {
+            if (json.isBlank()) return emptyList()
+            return try {
+                val arr = JSONArray(json)
+                (0 until arr.length()).mapNotNull { i ->
+                    val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                    val email = obj.optString("email", "").trim()
+                    if (email.isEmpty()) null else Attendee(email, obj.optString("name", ""), obj.optInt("status", 0))
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
         /**
          * Emails участников из attendees-JSON, через ", " — для префилла поля в диалоге
          * редактирования события. Диалог ДОЛЖЕН показывать существующих участников, а не пустое
-         * поле: иначе на EAS 14+ правка встречи уходит с MeetingStatus=0 без блока Attendees и
-         * демотирует встречу (MS-ASCAL: MeetingStatus не ghosted), а введённые заново участники
-         * заменяют всю серверную коллекцию, теряя прежних. Берём только email (имя/статус не нужны).
+         * поле: на EAS 14+ Change заменяет коллекцию Attendees целиком (без airsync:Supported
+         * ничего не ghosted), и введённые заново участники вытеснили бы прежних.
          */
-        fun attendeeEmailsCsv(attendeesJson: String): String {
-            if (attendeesJson.isBlank()) return ""
-            return try {
-                val arr = JSONArray(attendeesJson)
-                (0 until arr.length())
-                    .mapNotNull { arr.optJSONObject(it)?.optString("email", "")?.trim()?.ifEmpty { null } }
-                    .joinToString(", ")
-            } catch (_: Exception) {
-                ""
+        fun attendeeEmailsCsv(attendeesJson: String): String =
+            parseAttendees(attendeesJson).joinToString(", ") { it.email }
+
+        /**
+         * Пользователь — организатор события; для не-встречи — true. Только организатор меняет
+         * состав участников и рассылает обновления, правка участника — личная (напоминание,
+         * занятость). Признак — бит R MeetingStatus (MS-ASCAL), его выдаёт сервер в EAS-синке
+         * календаря, которым идут Exchange 2007–2013.
+         */
+        fun isUserOrganizer(event: CalendarEventEntity): Boolean =
+            !event.isMeeting || (event.meetingStatus and MEETING_STATUS_RECEIVED) == 0
+
+        /**
+         * Участники для отправки на сервер при правке: адреса [requested] по порядку, без дублей
+         * (регистр не важен), с именем и статусом ответа из прежнего списка [existingJson].
+         * Статус ведёт сервер: в EAS Change он уходит обратно, а не сбрасывается в «неизвестен».
+         */
+        fun mergeAttendees(existingJson: String, requested: List<String>): List<EasAttendee> {
+            val known = parseAttendees(existingJson).associateBy { it.email.lowercase() }
+            val seen = HashSet<String>()
+            return requested.mapNotNull { raw ->
+                val email = raw.trim()
+                if (email.isEmpty() || !seen.add(email.lowercase())) return@mapNotNull null
+                val old = known[email.lowercase()]
+                EasAttendee(email = old?.email ?: email, name = old?.name.orEmpty(), status = old?.status ?: 0)
             }
+        }
+
+        /** Адреса из [requested], которых нет в [existingJson] (регистр не важен, без дублей): им уходит приглашение. */
+        fun addedAttendees(existingJson: String, requested: List<String>): List<String> {
+            val known = parseAttendees(existingJson).mapTo(HashSet()) { it.email.lowercase() }
+            return requested.map { it.trim() }.filter { it.isNotEmpty() && known.add(it.lowercase()) }
+        }
+
+        /**
+         * Встречная часть правки [event]. Организатор отправляет адреса из диалога [requested] (с именем
+         * и статусом прежних участников) и рассылает обновление, только если изменилась сама встреча
+         * ([meetingChanged]) или добавлены участники: правка напоминания писем не шлёт. Участник состав
+         * не меняет: на сервер уходит прежний список, без рассылки.
+         */
+        fun buildMeetingEdit(event: CalendarEventEntity, requested: List<String>, meetingChanged: Boolean): MeetingEdit {
+            if (!isUserOrganizer(event)) {
+                val existing = parseAttendees(event.attendees).map { EasAttendee(it.email, it.name, it.status) }
+                return MeetingEdit(attendees = existing, isOrganizer = false, meetingStatus = event.meetingStatus)
+            }
+            val attendees = mergeAttendees(event.attendees, requested)
+            val added = addedAttendees(event.attendees, requested)
+            return MeetingEdit(
+                attendees = attendees,
+                isOrganizer = true,
+                meetingStatus = event.meetingStatus,
+                sendUpdates = attendees.isNotEmpty() && (added.isNotEmpty() || meetingChanged),
+                newAttendees = added
+            )
         }
 
         // Защита от "воскрешения" удалённых событий (без TTL — до подтверждения сервером).
@@ -429,10 +495,11 @@ class CalendarRepository(private val context: Context) {
                     }
                 }
 
-                val oldAttendeeEmails = parseAttendeesFromJson(event.attendees)
-                    .map { it.email.trim().lowercase() }.toSet()
-                val newAttendeesToAppend = attendees
-                    .filter { it.trim().lowercase() !in oldAttendeeEmails }
+                val existingRuleType = RecurrenceHelper.parseRule(event.recurrenceRule)?.type ?: -1
+                val meetingChanged = subject != event.subject || effectiveStartTime != event.startTime ||
+                    effectiveEndTime != event.endTime || location != event.location ||
+                    body != event.body || allDayEvent != event.allDayEvent || recurrenceType != existingRuleType
+                val meeting = buildMeetingEdit(event, attendees, meetingChanged)
 
                 val result = withRetry {
                     easClient.updateCalendarEvent(
@@ -447,11 +514,10 @@ class CalendarRepository(private val context: Context) {
                         reminder = reminder,
                         busyStatus = busyStatus,
                         sensitivity = sensitivity,
-                        attendees = attendees,
+                        meeting = meeting,
                         oldSubject = event.subject,
                         recurrenceType = recurrenceType,
-                        attachments = attachments,
-                        newAttendeesToAppend = newAttendeesToAppend
+                        attachments = attachments
                     )
                 }
 
@@ -485,7 +551,6 @@ class CalendarRepository(private val context: Context) {
 
                         val newLastModified = System.currentTimeMillis()
                         val isRecurringNew = recurrenceType >= 0
-                        val existingRuleType = RecurrenceHelper.parseRule(event.recurrenceRule)?.type ?: -1
                         val recurrenceRuleNew = if (isRecurringNew) {
                             if (recurrenceType == existingRuleType && event.recurrenceRule.isNotBlank()) {
                                 event.recurrenceRule
@@ -493,16 +558,10 @@ class CalendarRepository(private val context: Context) {
                                 RecurrenceHelper.buildRuleJson(recurrenceType, effectiveStartTime)
                             }
                         } else ""
-                        val attendeesJson = if (attendees.isNotEmpty()) {
-                            val jsonArray = JSONArray()
-                            attendees.forEach { email ->
-                                val jsonObject = JSONObject()
-                                jsonObject.put("email", email.trim())
-                                jsonObject.put("name", "")
-                                jsonObject.put("status", 0)
-                                jsonArray.put(jsonObject)
-                            }
-                            jsonArray.toString()
+                        // Имя и статус ответа прежних участников сохраняются: раньше JSON пересобирался
+                        // с name="" и status=0, и до следующего синка ответы участников пропадали из UI.
+                        val attendeesJson = if (meeting.attendees.isNotEmpty()) {
+                            attendeesToJson(meeting.attendees)
                         } else event.attendees
 
                         val updatedEvent = event.copy(
@@ -1612,26 +1671,7 @@ class CalendarRepository(private val context: Context) {
         return jsonArray.toString()
     }
 
-    fun parseAttendeesFromJson(json: String): List<Attendee> {
-        if (json.isBlank()) return emptyList()
-        return try {
-            val jsonArray = JSONArray(json)
-            val attendees = mutableListOf<Attendee>()
-            for (i in 0 until jsonArray.length()) {
-                val jsonObject = jsonArray.getJSONObject(i)
-                attendees.add(
-                    Attendee(
-                        email = jsonObject.getString("email"),
-                        name = jsonObject.optString("name", ""),
-                        status = jsonObject.optInt("status", 0)
-                    )
-                )
-            }
-            attendees
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
+    fun parseAttendeesFromJson(json: String): List<Attendee> = parseAttendees(json)
 
     /**
      * Обновление статуса участника в событии календаря

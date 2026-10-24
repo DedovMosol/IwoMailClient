@@ -123,6 +123,10 @@ internal fun CreateEventDialog(
     var attendees by rememberSaveable {
         mutableStateOf(event?.attendees?.let { CalendarRepository.attendeeEmailsCsv(it) } ?: "")
     }
+    // Правка одного вхождения серии (id с "_occ_") участников не отправляет (MS-ASCAL Exception),
+    // поэтому и поле для него только для чтения.
+    val canEditAttendees = event == null ||
+        (!event.id.contains("_occ_") && CalendarRepository.isUserOrganizer(event))
     // Тип повторения: -1=Нет, 0=Daily, 1=Weekly, 2=Monthly, 5=Yearly
     var recurrenceType by rememberSaveable {
         mutableStateOf(
@@ -525,20 +529,24 @@ internal fun CreateEventDialog(
                 }
 
                 item {
-                    // Пригласить участников
+                    // Пригласить участников. Состав чужой встречи меняет только организатор:
+                    // у участника поле только для чтения (репозиторий его правку всё равно не отправит).
                     OutlinedTextField(
                         value = attendees,
                         onValueChange = { attendees = it },
-                        label = { Text(Strings.inviteAttendees) },
+                        label = { Text(if (canEditAttendees) Strings.inviteAttendees else Strings.attendees) },
                         placeholder = { Text(Strings.attendeesHint) },
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = canEditAttendees,
                         singleLine = false,
                         maxLines = 2,
-                        trailingIcon = {
-                            IconButton(onClick = { showContactPicker = true }) {
-                                Icon(AppIcons.PersonAdd, contentDescription = null)
+                        trailingIcon = if (canEditAttendees) {
+                            {
+                                IconButton(onClick = { showContactPicker = true }) {
+                                    Icon(AppIcons.PersonAdd, contentDescription = null)
+                                }
                             }
-                        }
+                        } else null
                     )
                 }
 

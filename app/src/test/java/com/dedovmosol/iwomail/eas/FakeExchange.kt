@@ -132,10 +132,32 @@ internal class FakeExchange(private val route: (Call) -> Reply) {
     }
 }
 
+/** [EasTasksService], собранный как в EasClient, поверх транспорта фейка; папка задач — [tasksFolderId]. */
+internal fun FakeExchange.tasksService(easVersion: String, tasksFolderId: String): EasTasksService {
+    val transport = transport(easVersion)
+    return EasTasksService(EasTasksService.TasksServiceDependencies(
+        executeEasCommand = object : EasTasksService.EasCommandExecutor {
+            override suspend fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T> =
+                transport.executeEasCommand(command, xml, parser = parser)
+        },
+        folderSync = { EasResult.Success(FolderSyncResponse("1", listOf(EasFolder(tasksFolderId, "Tasks", "0", FolderType.TASKS)))) },
+        extractValue = { xml, tag -> XmlUtils.extractTagValue(xml, tag) },
+        escapeXml = { XmlUtils.escape(it) },
+        getEasVersion = { transport.easVersion },
+        isVersionDetected = { true },
+        detectEasVersion = { EasResult.Success(transport.easVersion) },
+        getTasksFolderId = { tasksFolderId },
+        performNtlmHandshake = { transport.performNtlmHandshake() },
+        executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
+        tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+        sendMail = { _, _, _, _, _, _ -> EasResult.Error("unused") }
+    ))
+}
+
 /** Ответы EAS Sync в «серверном» виде: префиксы code page, их кодирует реальный генератор WBXML. */
 internal object EasSyncXml {
     private const val ROOT =
-        """<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks" xmlns:notes="Notes" xmlns:email="Email">"""
+        """<Sync xmlns="AirSync" xmlns:airsyncbase="AirSyncBase" xmlns:tasks="Tasks" xmlns:notes="Notes" xmlns:email="Email" xmlns:contacts="Contacts">"""
 
     /** Ответ на первичный Sync (SyncKey=0): только новый ключ. */
     fun initial(syncKey: String, collectionId: String): String =
@@ -163,6 +185,10 @@ internal object EasSyncXml {
         "<Add><ServerId>$serverId</ServerId><ApplicationData><notes:Subject>$subject</notes:Subject>" +
             "<airsyncbase:Body><airsyncbase:Type>1</airsyncbase:Type><airsyncbase:Data>$body</airsyncbase:Data></airsyncbase:Body>" +
             "<notes:MessageClass>$messageClass</notes:MessageClass></ApplicationData></Add>"
+
+    fun contact(serverId: String, fileAs: String, email: String): String =
+        "<Add><ServerId>$serverId</ServerId><ApplicationData><contacts:FileAs>$fileAs</contacts:FileAs>" +
+            "<contacts:Email1Address>$email</contacts:Email1Address></ApplicationData></Add>"
 
     fun mail(serverId: String, subject: String): String =
         "<Add><ServerId>$serverId</ServerId><ApplicationData><email:Subject>$subject</email:Subject>" +
@@ -197,6 +223,13 @@ internal object EwsXml {
             """<m:MessageText>$code</m:MessageText><m:ResponseCode>$code</m:ResponseCode>""" +
             "<m:DescriptiveLinkKey>0</m:DescriptiveLinkKey></m:${operation}ResponseMessage></m:ResponseMessages>" +
             "</m:${operation}Response>"
+    )
+
+    /** Успех операции (ResponseClass="Success", NoError), например UpdateItem. */
+    fun success(operation: String, itemsXml: String = ""): String = envelope(
+        """<m:${operation}Response $NS><m:ResponseMessages><m:${operation}ResponseMessage ResponseClass="Success">""" +
+            "<m:ResponseCode>NoError</m:ResponseCode><m:Items>$itemsXml</m:Items></m:${operation}ResponseMessage>" +
+            "</m:ResponseMessages></m:${operation}Response>"
     )
 
     /** GetItem: по сообщению на каждый элемент; null в списке — ошибка ErrorItemNotFound для элемента. */

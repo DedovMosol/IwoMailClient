@@ -399,8 +399,9 @@ class TaskRepository internal constructor(
     suspend fun deleteTaskPermanently(task: TaskEntity): EasResult<Boolean> {
         return accountRepo.withEasClient(task.accountId, RepositoryErrors.TASKS_EXCHANGE_ONLY) { easClient ->
             try {
-                // Окончательно удаляем на сервере (HardDelete)
-                val result = withEasRetry { easClient.deleteTaskPermanently(task.serverId) }
+                // Окончательно удаляем на сервере (HardDelete). Тема нужна EAS-синку: копию в
+                // Deleted Items адресует только поиск по теме (см. EasTasksService).
+                val result = withEasRetry { easClient.deleteTaskPermanently(task.serverId, task.subject) }
                 
                 when (result) {
                     is EasResult.Success -> {
@@ -437,7 +438,7 @@ class TaskRepository internal constructor(
                     return@withEasClient EasResult.Success(0)
                 }
 
-                val batchResult = easClient.deleteTasksPermanentlyBatch(deletedTasks.map { it.serverId })
+                val batchResult = easClient.deleteTasksPermanentlyBatch(deletedTasks.map { it.serverId to it.subject })
                 val batchOk = batchResult is EasResult.Success && batchResult.data > 0
 
                 if (batchOk) {
@@ -451,7 +452,7 @@ class TaskRepository internal constructor(
                         "emptyTasksTrash: batch failed ($errMsg), falling back to sequential")
                     var deletedCount = 0
                     for (task in deletedTasks) {
-                        val result = easClient.deleteTaskPermanently(task.serverId)
+                        val result = easClient.deleteTaskPermanently(task.serverId, task.subject)
                         when (result) {
                             is EasResult.Success -> {
                                 taskDao.delete(task.id)

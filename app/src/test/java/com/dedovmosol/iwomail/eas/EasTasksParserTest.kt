@@ -40,7 +40,6 @@ class EasTasksParserTest {
             isVersionDetected = { true },
             detectEasVersion = { EasResult.Error("unused") },
             getTasksFolderId = { null },
-            getDeletedItemsFolderId = { null },
             performNtlmHandshake = { null },
             executeNtlmRequest = { _, _ -> null },
             tryBasicAuthEws = { _, _ -> null },

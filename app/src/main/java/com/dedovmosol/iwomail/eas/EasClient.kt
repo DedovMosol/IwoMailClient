@@ -136,8 +136,12 @@ class EasClient(
 
     val contactsService: EasContactsService by lazy {
         EasContactsService(
-            executeCommand = { cmd, xml, parser ->
-                transport.executeEasCommand(cmd, xml, parser = parser)
+            executeCommand = object : EasContactsService.EasCommandExecutor {
+                override suspend fun <T> invoke(
+                    command: String,
+                    xml: String,
+                    parser: (String) -> T
+                ): EasResult<T> = transport.executeEasCommand(command, xml, parser = parser)
             },
             folderSync = { syncKey -> folderSync(syncKey) },
             extractValue = { xml, tag -> extractValue(xml, tag) },
@@ -161,7 +165,6 @@ class EasClient(
             isVersionDetected = { versionDetected },
             detectEasVersion = { detectEasVersion() },
             getTasksFolderId = { getTasksFolderId() },
-            getDeletedItemsFolderId = { getDeletedItemsFolderId() },
             performNtlmHandshake = { transport.performNtlmHandshake() },
             executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
             tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
@@ -1554,14 +1557,15 @@ $foldersXml
         reminder: Int = 15,
         busyStatus: Int = 2,
         sensitivity: Int = 0,
-        attendees: List<String> = emptyList(),
+        // Без значения по умолчанию: «пустая» правка на EAS 14 демотирует встречу (MeetingStatus=0,
+        // без Attendees) — вызывающий обязан решить явно (CalendarRepository.buildMeetingEdit).
+        meeting: MeetingEdit,
         oldSubject: String? = null,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        newAttendeesToAppend: List<String> = emptyList(),
         oldSensitivity: Int? = null
     ): EasResult<String> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, oldSubject, recurrenceType, attachments, newAttendeesToAppend, oldSensitivity
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, oldSubject, recurrenceType, attachments, oldSensitivity
     )
 
     /**
@@ -2278,8 +2282,8 @@ $foldersXml
      * Окончательное удаление задачи (без перемещения в корзину)
      * @see EasTasksService.deleteTaskPermanently
      */
-    suspend fun deleteTaskPermanently(serverId: String): EasResult<Boolean> {
-        return tasksService.deleteTaskPermanently(serverId)
+    suspend fun deleteTaskPermanently(serverId: String, subject: String? = null): EasResult<Boolean> {
+        return tasksService.deleteTaskPermanently(serverId, subject)
     }
 
     /**
@@ -2291,8 +2295,8 @@ $foldersXml
     /**
      * Batch окончательное удаление задач (HardDelete).
      */
-    suspend fun deleteTasksPermanentlyBatch(serverIds: List<String>): EasResult<Int> =
-        tasksService.deleteTasksPermanentlyBatch(serverIds)
+    suspend fun deleteTasksPermanentlyBatch(tasks: List<Pair<String, String>>): EasResult<Int> =
+        tasksService.deleteTasksPermanentlyBatch(tasks)
 
     /**
      * Восстановление задачи из корзины
@@ -2713,6 +2717,25 @@ data class EasAttendee(
     val email: String,
     val name: String = "",
     val status: Int = 0 // 0=Unknown, 2=Tentative, 3=Accept, 4=Decline, 5=NotResponded
+)
+
+/**
+ * Встречная часть правки события (решения принимает CalendarRepository, протокол — CRUD-сервис).
+ *
+ * @property attendees участники с именем и статусом ответа, как их отдал сервер: EAS 14 Change
+ *   заменяет коллекцию целиком (MS-ASCAL, без airsync:Supported ничего не ghosted).
+ * @property isOrganizer только организатор меняет состав участников и рассылает обновления.
+ * @property meetingStatus MeetingStatus сервера. Участнику уходит как есть: без бита R
+ *   («получена от другого») Exchange счёл бы пользователя организатором его копии встречи.
+ * @property sendUpdates разослать участникам обновление (EWS SendMeetingInvitationsOrCancellations).
+ * @property newAttendees адреса, которых раньше не было (EWS AppendToItemField, Exchange 2007 SP1).
+ */
+data class MeetingEdit(
+    val attendees: List<EasAttendee> = emptyList(),
+    val isOrganizer: Boolean = true,
+    val meetingStatus: Int = 0,
+    val sendUpdates: Boolean = false,
+    val newAttendees: List<String> = emptyList()
 )
 
 /**

@@ -234,4 +234,18 @@ class CalendarXmlParserTest {
         val e = parser.parseCalendarEvents(decoded(sync(add))).single()
         assertThat(e.attachments).contains(""""name":"R&D plan.docx"""")
     }
+
+    @Test
+    fun `MeetingStatus is read by bit flags, 9 to 15 are meetings too`() {
+        // MS-ASCAL MeetingStatus: значения разбираются по битам (M=1, R=2, C=4); 9/11/13/15 — «то же, что 1/3/5/7».
+        // Прежний список 1/3/5/7 считал 11 обычным событием, и встреча теряла признак «получена от другого».
+        fun status(value: Int) = parser.parseCalendarEvents(decoded(sync(
+            "<Add><ServerId>3:$value</ServerId><ApplicationData><calendar:Subject>S</calendar:Subject>" +
+                "<calendar:MeetingStatus>$value</calendar:MeetingStatus></ApplicationData></Add>"
+        ))).single()
+
+        assertThat(status(0).isMeeting).isFalse()
+        listOf(1, 3, 5, 7, 9, 11, 13, 15).forEach { assertThat(status(it).isMeeting).isTrue() }
+        assertThat(status(11).meetingStatus).isEqualTo(11)
+    }
 }

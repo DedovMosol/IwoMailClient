@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
+import com.dedovmosol.iwomail.data.repository.CalendarRepository
 import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
@@ -879,7 +880,15 @@ fun CalendarScreen(
                                 // createEvent() и updateEvent() уже синхронизируют внутри себя.
                                 // Повторный sync опасен: Exchange может не успеть проиндексировать
                                 // новое событие → sync не увидит его → удалит локально.
-                                val messageBase = if (attendeeList.isNotEmpty()) {
+                                // «Приглашение отправлено» — только тем, кому оно правда ушло. Поле участников
+                                // при правке предзаполнено, поэтому непустой список ещё не значит рассылку:
+                                // приглашение получают лишь добавленные организатором адреса.
+                                val invited = when {
+                                    eventToEdit == null -> attendeeList
+                                    occStartTime != null || !CalendarRepository.isUserOrganizer(eventToEdit) -> emptyList()
+                                    else -> CalendarRepository.addedAttendees(eventToEdit.attendees, attendeeList)
+                                }
+                                val messageBase = if (invited.isNotEmpty()) {
                                     "${if (isEditing) eventUpdatedText else eventCreatedText}. $invitationSentText"
                                 } else {
                                     if (isEditing) eventUpdatedText else eventCreatedText
