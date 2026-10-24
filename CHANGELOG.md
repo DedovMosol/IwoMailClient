@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sync completeness and protocol audit (2026-10-24)** — every sync path that deletes local data now acts only on a complete server snapshot (Exchange 2007 SP1 … 2013, EAS 12.1/14.x and EWS):
+  - **Contacts (EAS)**: a collection `Status` other than 1 (besides 3/12) and an empty page with `MoreAvailable` were taken for the end of the collection, so `ContactRepository` deleted contacts the server had not sent yet — on a first-page error, all Exchange contacts. Pages are parsed atomically; any early exit makes the snapshot non-authoritative; a failure before the first contact is an error. Completeness is carried by value (`ContactsSyncResult`), not by a volatile flag.
+  - **Tasks and notes (EAS + EWS)**: an incomplete snapshot (HTTP error, dropped connection, truncated WBXML/SOAP, page limit) no longer deletes local items; the EAS task sync no longer wipes the local task trash it never reads.
+  - **Task trash on Exchange 2010/2013**: restore and permanent delete addressed the trashed copy by its old Tasks-folder ServerId — restore never worked, and a permanent delete sent `Sync Delete` for a ServerId that can belong to another task after a full resync. The copy is now located via EWS (the single `IPM.Task` with that subject in `deleteditems`). A refused EWS `DeleteItem` is an error instead of `Success(false)`, which the repository took for success.
+  - **Meeting edits**: the attendee field is prefilled; attendees' names and responses are sent back (an EAS 14 `Change` replaces the whole `Attendees` collection); an attendee's edit keeps the server `MeetingStatus` (received bit) and mails nobody; the organizer's EWS update goes out only when the meeting itself changed or attendees were added; the «Invitation sent» toast appears on an edit only when the organizer added attendees; `MeetingStatus` is read by bit flags (values 9–15).
+  - **EWS note categories** are parsed; the task `OwnerId` field (MS-ASTASK has no Owner) was removed.
+  - Tests: a fake Exchange at the HTTP level (`FakeExchange`, real WBXML codec, Basic → NTLM) for EAS 12.1/14.1 and EWS 2007.
 - **Settings cache race eliminated (theme / color theme / day themes)**
   - Setter writes now guard their cache keys: the background DataStore collector no longer overwrites a value the setter just wrote (async echo of own writes). Single-writer invariant per official DataStore constraint — no new locks, no perf impact.
   - `getThemeModeSync()` cold-cache fallback: deterministic one-shot DataStore read instead of returning the default, so first launch after restart shows the saved mode immediately.
@@ -84,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **No device-to-device transfer of app data (2026-10-24)**: on Android 12+ `allowBackup="false"` does not stop D2D transfers; `data_extraction_rules.xml` now excludes all private storage. Before, only shared preferences and databases were excluded, so files such as imported client certificates, downloaded attachments and the outbox queue could be transferred. `docs/SECURITY.md` describes the threat model.
 - **L-7: Enhanced password storage fallback mechanism**
   - Migrated from inline `ObfuscatedSharedPreferences` to dedicated `PasswordStorage` class
   - Upgraded obfuscation from simple SHA-256 to PBKDF2-HMAC-SHA256 (10,000 iterations) for defense-in-depth
@@ -97,6 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **License: MIT → GNU GPL v3.0 (2026-10-24).** Releases published before the switch remain available under MIT.
 - **N-4: Optimized `parseEwsDateTime` timezone handling**
   - Replaced `SimpleDateFormat` with `java.time.Instant.parse()` for ISO 8601 parsing
   - Simplified logic: removed regex fractional seconds stripping and conditional branching
