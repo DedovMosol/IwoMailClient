@@ -1515,9 +1515,10 @@ $foldersXml
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
         recurrenceType: Int = -1,
-        attachments: List<DraftAttachmentData> = emptyList()
+        attachments: List<DraftAttachmentData> = emptyList(),
+        categories: List<String> = emptyList()
     ): EasResult<String> = calendarService.createCalendarEvent(
-        subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType, attachments
+        subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType, attachments, categories
     )
 
     /**
@@ -1574,9 +1575,11 @@ $foldersXml
         oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        oldSensitivity: Int? = null
+        oldSensitivity: Int? = null,
+        // Полный набор категорий события; null — не менять (см. EasCalendarCrudService.updateCalendarEvent).
+        categories: List<String>? = null
     ): EasResult<String> = calendarService.updateCalendarEvent(
-        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, oldSubject, oldStartTime, recurrenceType, attachments, oldSensitivity
+        serverId, subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, oldSubject, oldStartTime, recurrenceType, attachments, oldSensitivity, categories
     )
 
     /**
@@ -1611,6 +1614,17 @@ $foldersXml
     suspend fun deleteCalendarAttachments(
         attachmentIds: List<String>
     ): EasResult<Boolean> = calendarService.deleteCalendarAttachments(attachmentIds)
+
+    /**
+     * Удаление вложений события: EAS FileReference (синк Exchange 2010+) сопоставляются с EWS
+     * AttachmentId через вложения элемента. Тема/начало — текущие серверные (до правки события).
+     */
+    suspend fun deleteEventAttachments(
+        subject: String,
+        startTime: Long,
+        isRecurring: Boolean,
+        attachments: List<CalendarAttachmentRef>
+    ): EasResult<Boolean> = calendarService.deleteEventAttachments(subject, startTime, isRecurring, attachments)
 
     /**
      * Ответ на приглашение на встречу.

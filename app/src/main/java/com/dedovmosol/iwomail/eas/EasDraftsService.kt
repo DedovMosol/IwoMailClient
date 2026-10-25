@@ -1094,14 +1094,9 @@ private suspend fun updateDraftEws(
     ): String {
         val escapedItemId = deps.escapeXml(itemId)
         val changeKeyAttr = changeKey?.takeIf { it.isNotBlank() }?.let { " ChangeKey=\"${deps.escapeXml(it)}\"" } ?: ""
-        // Exchange 2007 (Exchange2007_SP1) НЕ поддерживает <t:IsInline>.
-        // Только Exchange 2010+ поддерживает IsInline.
-        // ContentId поддерживается во всех версиях (по документации Microsoft).
-        val supportsIsInline = !exchangeVersion.contains("2007")
-        
+
         // Строим XML без trimIndent — чистый XML без артефактов пробелов.
-        // Порядок элементов СТРОГО по XSD схеме Microsoft:
-        // Name → ContentType → ContentId → IsInline → Content
+        // FileAttachment (порядок по XSD, IsInline только с Exchange 2010) — EwsAttachmentXml.
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
         sb.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"")
@@ -1116,30 +1111,7 @@ private suspend fun updateDraftEws(
         sb.append("<m:Attachments>")
         
         for (att in attachments) {
-            val name = deps.escapeXml(att.name)
-            val contentType = deps.escapeXml(att.mimeType)
-            val content = Base64.encodeToString(att.data, Base64.NO_WRAP)
-            
-            sb.append("<t:FileAttachment>")
-            sb.append("<t:Name>$name</t:Name>")
-            sb.append("<t:ContentType>$contentType</t:ContentType>")
-            
-            // ContentId — для inline-картинок (cid: ссылки в HTML). Работает на Exchange 2007+.
-            if (att.isInline || !att.contentId.isNullOrBlank()) {
-                att.contentId?.trim()?.takeIf { it.isNotBlank() }?.let { raw ->
-                    val cleaned = raw.removePrefix("<").removeSuffix(">")
-                    val withoutCid = if (cleaned.startsWith("cid:", ignoreCase = true)) cleaned.substring(4) else cleaned
-                    sb.append("<t:ContentId>${deps.escapeXml(withoutCid)}</t:ContentId>")
-                }
-            }
-            
-            // IsInline — только для Exchange 2010+ (после ContentId по XSD схеме)
-            if (supportsIsInline && att.isInline) {
-                sb.append("<t:IsInline>true</t:IsInline>")
-            }
-            
-            sb.append("<t:Content>$content</t:Content>")
-            sb.append("</t:FileAttachment>")
+            EwsAttachmentXml.appendFileAttachment(sb, att, exchangeVersion, deps.escapeXml)
         }
         
         sb.append("</m:Attachments>")

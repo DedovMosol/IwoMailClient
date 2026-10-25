@@ -655,6 +655,13 @@ object Strings {
     val categorySourcePreset: String @Composable get() = if (isRussian()) "Стандартная категория Outlook" else "Default Outlook category"
     val categorySourceAuto: String @Composable get() = if (isRussian()) "Подобран автоматически" else "Picked automatically"
     val chooseCategoryColor: String @Composable get() = if (isRussian()) "Цвет категории" else "Category color"
+    val addCategory: String @Composable get() = if (isRussian()) "Добавить категорию" else "Add category"
+    val removeCategory: String @Composable get() = if (isRussian()) "Убрать категорию" else "Remove category"
+    val newCategoryName: String @Composable get() = if (isRussian()) "Новая категория" else "New category"
+    val categoryNameRules: String @Composable get() = if (isRussian()) "Без запятых, до 255 символов" else "No commas, up to 255 characters"
+    val categoryNameExists: String @Composable get() = if (isRussian()) "Такая категория уже есть" else "This category already exists"
+    val categoriesForSeriesOnly: String @Composable get() = if (isRussian()) "Категории меняются для всей серии" else "Categories apply to the whole series"
+    val add: String @Composable get() = if (isRussian()) "Добавить" else "Add"
     val resetToServerColor: String @Composable get() = if (isRussian()) "Сбросить" else "Reset"
     /** Подписи палитры [MS-OXOCFG]: индекс в списке = индекс цвета + 1 (первый — «без цвета»). */
     val categoryColorNames: List<String> @Composable get() = if (isRussian())

@@ -142,10 +142,11 @@ class EasCalendarService internal constructor(
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
         recurrenceType: Int = -1,
-        attachments: List<DraftAttachmentData> = emptyList()
+        attachments: List<DraftAttachmentData> = emptyList(),
+        categories: List<String> = emptyList()
     ): EasResult<String> = crudService.createCalendarEvent(
         subject, startTime, endTime, location, body, allDayEvent,
-        reminder, busyStatus, sensitivity, attendees, recurrenceType, attachments
+        reminder, busyStatus, sensitivity, attendees, recurrenceType, attachments, categories
     )
 
     suspend fun updateCalendarEvent(
@@ -164,11 +165,12 @@ class EasCalendarService internal constructor(
         oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        oldSensitivity: Int? = null
+        oldSensitivity: Int? = null,
+        categories: List<String>? = null
     ): EasResult<String> = crudService.updateCalendarEvent(
         serverId, subject, startTime, endTime, location, body, allDayEvent,
         reminder, busyStatus, sensitivity, meeting, oldSubject, oldStartTime,
-        recurrenceType, attachments, oldSensitivity
+        recurrenceType, attachments, oldSensitivity, categories
     )
 
     suspend fun updateSingleOccurrence(
@@ -230,6 +232,14 @@ class EasCalendarService internal constructor(
 
     suspend fun deleteCalendarAttachments(attachmentIds: List<String>): EasResult<Boolean> =
         attachmentService.deleteCalendarAttachments(attachmentIds)
+
+    /** Удаление вложений события с сопоставлением EAS FileReference → EWS AttachmentId. */
+    suspend fun deleteEventAttachments(
+        subject: String,
+        startTime: Long,
+        isRecurring: Boolean,
+        attachments: List<CalendarAttachmentRef>
+    ): EasResult<Boolean> = crudService.deleteEventAttachments(subject, startTime, isRecurring, attachments)
 
     internal suspend fun attachFilesEws(
         itemId: String,

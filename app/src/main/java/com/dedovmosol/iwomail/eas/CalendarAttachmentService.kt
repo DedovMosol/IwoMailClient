@@ -1,6 +1,5 @@
 package com.dedovmosol.iwomail.eas
 
-import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -124,9 +123,14 @@ class CalendarAttachmentService(
                 currentChangeKey = newChangeKey
             }
 
-            val escapedName = att.name.replace("\"", "\\\"")
-            val escapedRef = attachmentId.replace("\"", "\\\"")
-            attachmentInfos.add("""{"name":"$escapedName","fileReference":"$escapedRef","size":${att.data.size},"isInline":false}""")
+            // Формат как у CalendarXmlParser: inline-картинка сразу видна в теле и скрыта из списка вложений.
+            val escapedName = CalendarDateUtils.escapeJsonString(att.name)
+            val escapedRef = CalendarDateUtils.escapeJsonString(attachmentId)
+            val escapedCid = CalendarDateUtils.escapeJsonString(EwsAttachmentXml.normalizedContentId(att).orEmpty())
+            attachmentInfos.add(
+                """{"name":"$escapedName","fileReference":"$escapedRef","size":${att.data.size},""" +
+                    """"isInline":${att.isInline},"contentId":"$escapedCid","method":1}"""
+            )
 
             Log.d(TAG, "CreateAttachment OK [${index + 1}/${attachments.size}] ${att.name}, attId=${attachmentId.take(20)}...")
         }
@@ -474,9 +478,6 @@ class CalendarAttachmentService(
     ): String {
         val escapedItemId = escapeXml(itemId)
         val changeKeyAttr = changeKey?.takeIf { it.isNotBlank() }?.let { " ChangeKey=\"${escapeXml(it)}\"" } ?: ""
-        val name = escapeXml(att.name)
-        val contentType = escapeXml(att.mimeType)
-        val content = Base64.encodeToString(att.data, Base64.NO_WRAP)
 
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
@@ -490,11 +491,8 @@ class CalendarAttachmentService(
         sb.append("<m:CreateAttachment>")
         sb.append("<m:ParentItemId Id=\"$escapedItemId\"$changeKeyAttr/>")
         sb.append("<m:Attachments>")
-        sb.append("<t:FileAttachment>")
-        sb.append("<t:Name>$name</t:Name>")
-        sb.append("<t:ContentType>$contentType</t:ContentType>")
-        sb.append("<t:Content>$content</t:Content>")
-        sb.append("</t:FileAttachment>")
+        // ContentId/IsInline — inline-картинки HTML-тела (IsInline только с Exchange 2010).
+        EwsAttachmentXml.appendFileAttachment(sb, att, exchangeVersion, escapeXml)
         sb.append("</m:Attachments>")
         sb.append("</m:CreateAttachment>")
         sb.append("</soap:Body>")
@@ -505,5 +503,51 @@ class CalendarAttachmentService(
     companion object {
         private const val TAG = "CalendarAttachmentSvc"
         private const val MAX_ATTACHMENT_SUPPLEMENT_WINDOWS = 36
+
+        /** EAS FileReference (Sync) содержит ':'; EWS AttachmentId — base64 без ':' (как в downloadCalendarAttachment). */
+        internal fun isEasFileReference(reference: String): Boolean = reference.contains(":")
+
+        /** Вложения из attachments-JSON события (формат CalendarXmlParser / attachFilesEws). */
+        internal fun parseAttachmentRefs(json: String): List<CalendarAttachmentRef> {
+            if (json.isBlank()) return emptyList()
+            return try {
+                val arr = org.json.JSONArray(json)
+                (0 until arr.length()).mapNotNull { i ->
+                    val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                    val ref = obj.optString("fileReference", "")
+                    if (ref.isBlank()) null
+                    else CalendarAttachmentRef(ref, obj.optString("name", ""), obj.optLong("size", 0L), obj.optString("contentId", ""))
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
+        /**
+         * EWS AttachmentId для удаления [wanted]. EWS-ссылки — как есть. EAS FileReference EWS DeleteAttachment
+         * не принимает: такие сопоставляются с вложениями элемента на сервере [onServer] — по Content-ID, без
+         * него по имени и размеру. Неоднозначное или пропавшее совпадение пропускается: лучше оставить
+         * вложение, чем удалить чужое.
+         */
+        internal fun resolveEwsAttachmentIds(
+            wanted: List<CalendarAttachmentRef>,
+            onServer: List<CalendarAttachmentRef>
+        ): List<String> {
+            val taken = HashSet<String>()
+            return wanted.mapNotNull { ref ->
+                if (!isEasFileReference(ref.fileReference)) return@mapNotNull ref.fileReference
+                val cid = com.dedovmosol.iwomail.util.normalizeContentId(ref.contentId)
+                val match = onServer.filter { candidate ->
+                    candidate.fileReference !in taken && !isEasFileReference(candidate.fileReference) &&
+                        if (cid.isNotEmpty()) com.dedovmosol.iwomail.util.normalizeContentId(candidate.contentId) == cid
+                        else candidate.name == ref.name && (ref.size <= 0 || candidate.size <= 0 || candidate.size == ref.size)
+                }.singleOrNull() ?: return@mapNotNull null
+                taken += match.fileReference
+                match.fileReference
+            }
+        }
     }
 }
+
+/** Вложение события: ссылка (EAS FileReference или EWS AttachmentId) и признаки для сопоставления. */
+data class CalendarAttachmentRef(val fileReference: String, val name: String, val size: Long, val contentId: String)

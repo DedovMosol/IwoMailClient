@@ -117,6 +117,29 @@ internal fun replaceCidWithDataUrl(html: String, inlineImages: Map<String, Strin
     com.dedovmosol.iwomail.util.replaceInlineCids(html, inlineImages)
 
 /**
+ * Обратная к [replaceCidWithDataUrl] (DRY: письма, черновики, календарь): data: URL-картинки тела →
+ * `cid:` + inline-вложения с ContentId. Outlook рендерит HTML через Word, который data: URL не
+ * показывает, — работает только cid: + ContentId. [knownCids] (data URL → Content-ID) — картинки уже
+ * существующих вложений: они возвращаются к своему cid и повторно не загружаются.
+ */
+internal fun extractInlineImageAttachments(
+    html: String,
+    knownCids: Map<String, String> = emptyMap()
+): Pair<String, List<com.dedovmosol.iwomail.eas.DraftAttachmentData>> {
+    val stamp = System.currentTimeMillis()
+    val (body, images) = com.dedovmosol.iwomail.util.extractDataUrlImages(html, knownCids) { index -> "img${index}_$stamp" }
+    return body to images.mapIndexed { i, image ->
+        com.dedovmosol.iwomail.eas.DraftAttachmentData(
+            name = "image_${i + 1}${com.dedovmosol.iwomail.util.imageFileExtension(image.mimeType)}",
+            mimeType = image.mimeType,
+            data = image.bytes,
+            isInline = true,
+            contentId = image.contentId
+        )
+    }
+}
+
+/**
  * Нормализует строку получателей: разбивает по запятым/точкам с запятой, извлекает валидные
  * email-адреса (в т.ч. из формата "Name <email>"), убирает дубликаты. Токены групп [GroupName]
  * сохраняются как есть (раскрываются в адреса при отправке через expandGroupTokens).

@@ -45,7 +45,8 @@ class EasCalendarCrudService(
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
         recurrenceType: Int = -1,
-        attachments: List<DraftAttachmentData> = emptyList()
+        attachments: List<DraftAttachmentData> = emptyList(),
+        categories: List<String> = emptyList()
     ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -85,7 +86,8 @@ class EasCalendarCrudService(
                 busyStatus,
                 sensitivity,
                 attendees,
-                recurrenceType
+                recurrenceType,
+                categories
             )
             if (ewsResult is EasResult.Success) {
                 createdViaEws = true
@@ -110,13 +112,14 @@ class EasCalendarCrudService(
                     busyStatus,
                     sensitivity,
                     attendees,
-                    recurrenceType
+                    recurrenceType,
+                    categories
                 )
             } else {
                 ewsResult
             }
         } else {
-            createCalendarEventEas(subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType)
+            createCalendarEventEas(subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, attendees, recurrenceType, categories)
         }
 
         // Загружаем вложения после успешного создания
@@ -155,7 +158,7 @@ class EasCalendarCrudService(
                     val cleanItemId = if (resolvedRawId.contains("|")) resolvedRawId.substringBefore("|") else resolvedRawId
                     val changeKey = if (resolvedRawId.contains("|")) resolvedRawId.substringAfter("|") else null
                     android.util.Log.d("EasCalendarCrudService", "createCalendarEvent: calling attachFilesEws, itemId=${cleanItemId.take(40)}, hasChangeKey=${changeKey != null}, attachments=${attachments.size}")
-                    val attachResult = attachmentService.attachFilesEws(cleanItemId, changeKey, attachments, "Exchange2007_SP1")
+                    val attachResult = attachmentService.attachFilesEws(cleanItemId, changeKey, attachments, EwsAttachmentXml.requestVersion(majorVersion))
                     if (attachResult is EasResult.Error) {
                         // Нефатально: само событие уже создано на сервере, не блокируем отправку.
                         android.util.Log.e("EasCalendarCrudService", "Событие создано, но вложения не загружены: ${attachResult.message}")
@@ -194,7 +197,9 @@ class EasCalendarCrudService(
         oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        oldSensitivity: Int? = null
+        oldSensitivity: Int? = null,
+        // Полный актуальный набор категорий; null — не трогать (EAS: без элемента, EWS: без поля).
+        categories: List<String>? = null
     ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -221,7 +226,7 @@ class EasCalendarCrudService(
         val meetingNeedsEws = majorVersion >= 14 && meeting.sendUpdates
 
         val result = if (majorVersion >= 14 && !isEwsItemId && !meetingNeedsEws) {
-            updateCalendarEventEas(serverId, subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, recurrenceType)
+            updateCalendarEventEas(serverId, subject, actualStartTime, actualEndTime, location, body, allDayEvent, reminder, busyStatus, sensitivity, meeting, recurrenceType, categories)
         } else {
             val ewsResult = updateCalendarEventEws(
                 serverId,
@@ -238,7 +243,8 @@ class EasCalendarCrudService(
                 oldSubject,
                 oldStartTime,
                 recurrenceType,
-                oldSensitivity
+                oldSensitivity,
+                categories
             )
 
             // Фоллбэк на EAS — для короткого EAS ServerId, когда EWS недоступен. Но НЕ для рассылочной
@@ -261,7 +267,8 @@ class EasCalendarCrudService(
                     busyStatus,
                     sensitivity,
                     meeting,
-                    recurrenceType
+                    recurrenceType,
+                    categories
                 )
             } else {
                 ewsResult
@@ -296,7 +303,7 @@ class EasCalendarCrudService(
                 val cleanItemId = if (rawId.contains("|")) rawId.substringBefore("|") else rawId
                 val changeKey = if (rawId.contains("|")) rawId.substringAfter("|") else null
                 android.util.Log.d("EasCalendarCrudService", "updateCalendarEvent: calling attachFilesEws, itemId=${cleanItemId.take(40)}, hasChangeKey=${changeKey != null}")
-                val attachResult = attachmentService.attachFilesEws(cleanItemId, changeKey, attachments, "Exchange2007_SP1")
+                val attachResult = attachmentService.attachFilesEws(cleanItemId, changeKey, attachments, EwsAttachmentXml.requestVersion(majorVersion))
                 if (attachResult is EasResult.Error) {
                     // Нефатально: само событие уже обновлено на сервере.
                     android.util.Log.e("EasCalendarCrudService", "Событие обновлено, но вложения не загружены: ${attachResult.message}")
@@ -660,6 +667,40 @@ class EasCalendarCrudService(
     }
 
     /**
+     * Удаление вложений события (в т.ч. inline-картинок, убранных из тела).
+     *
+     * EWS DeleteAttachment принимает только EWS AttachmentId, а синк Exchange 2010+ хранит EAS
+     * FileReference. Для таких ссылок элемент ищется так же, как при загрузке вложений (серия — master
+     * без CalendarView, иначе CalendarView по теме и началу), и ссылки сопоставляются с его вложениями
+     * ([CalendarAttachmentService.resolveEwsAttachmentIds]). Вызывать ДО изменения темы/времени на сервере.
+     */
+    suspend fun deleteEventAttachments(
+        subject: String,
+        startTime: Long,
+        isRecurring: Boolean,
+        attachments: List<CalendarAttachmentRef>
+    ): EasResult<Boolean> {
+        if (attachments.isEmpty()) return EasResult.Success(true)
+        val onServer = if (attachments.any { CalendarAttachmentService.isEasFileReference(it.fileReference) }) {
+            val found = if (isRecurring) findRecurringMasterItemId(subject) else findCalendarItemIdBySubject(subject, startTime)
+            val itemId = (found as? EasResult.Success)?.data?.substringBefore("|")
+            if (itemId == null) {
+                android.util.Log.w("EasCalendarCrudService", "deleteEventAttachments: EWS item not found, EAS references kept")
+                emptyList()
+            } else {
+                CalendarAttachmentService.parseAttachmentRefs(
+                    attachmentService.fetchCalendarAttachmentsEws(listOf(itemId))[itemId].orEmpty()
+                )
+            }
+        } else emptyList()
+        val ids = CalendarAttachmentService.resolveEwsAttachmentIds(attachments, onServer)
+        val deleted = attachmentService.deleteCalendarAttachments(ids)
+        return if (deleted is EasResult.Success && ids.size < attachments.size) {
+            EasResult.Error("Не все вложения найдены на сервере (${ids.size}/${attachments.size})")
+        } else deleted
+    }
+
+    /**
      * Удаление события календаря.
      * КРИТИЧНО: Для meetings (встреч с участниками) простой DeleteItem с SendToNone
      * вызывает "воскрешение" — Calendar Repair Assistant (CRA) Exchange
@@ -906,7 +947,8 @@ class EasCalendarCrudService(
         busyStatus: Int,
         sensitivity: Int,
         attendees: List<String>,
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        categories: List<String> = emptyList()
     ): EasResult<String> {
         val calendarFolderId = syncService.getCalendarFolderId()
             ?: return EasResult.Error("Папка календаря не найдена")
@@ -967,6 +1009,10 @@ class EasCalendarCrudService(
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
             append("<calendar:Sensitivity>$sensitivity</calendar:Sensitivity>")
+            // Exchange 2007 (12.x) календарь пишет через EWS — категории EAS только с 14.
+            if (majorVersion >= 14 && categories.isNotEmpty()) {
+                append(CalendarCategoriesXml.eas(categories, deps.escapeXml))
+            }
 
             if (majorVersion >= 14) {
                 val meetingStatus = if (attendees.isNotEmpty()) 1 else 0
@@ -1017,7 +1063,8 @@ class EasCalendarCrudService(
         busyStatus: Int,
         sensitivity: Int,
         meeting: MeetingEdit,
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        categories: List<String>? = null
     ): EasResult<Boolean> {
         val calendarFolderId = syncService.getCalendarFolderId()
             ?: return EasResult.Error("Папка календаря не найдена")
@@ -1075,6 +1122,12 @@ class EasCalendarCrudService(
             append("<calendar:Reminder>$reminder</calendar:Reminder>")
             append("<calendar:BusyStatus>$busyStatus</calendar:BusyStatus>")
             append("<calendar:Sensitivity>$sensitivity</calendar:Sensitivity>")
+
+            // [MS-ASCMD] Supported: без Supported в начальном Sync элементы НЕ ghosted, и опущенный в
+            // Change элемент СТИРАЕТСЯ — поэтому категории шлём всегда полным набором (пустой = очистка).
+            if (majorVersion >= 14 && categories != null) {
+                append(CalendarCategoriesXml.eas(categories, deps.escapeXml))
+            }
 
             // MeetingStatus и Attendees только для EAS 14+ (Exchange 2010+)
             if (majorVersion >= 14) {
@@ -1235,7 +1288,8 @@ class EasCalendarCrudService(
         busyStatus: Int,
         sensitivity: Int,
         attendees: List<String>,
-        recurrenceType: Int = -1
+        recurrenceType: Int = -1,
+        categories: List<String> = emptyList()
     ): EasResult<String> {
         return withContext(Dispatchers.IO) {
             try {
@@ -1295,6 +1349,8 @@ class EasCalendarCrudService(
                     if (escapedBody.isNotBlank()) {
                         append("""<Body BodyType="${CalendarBodyFormat.ewsType(body)}">$escapedBody</Body>""")
                     }
+                    // Порядок схемы ItemType: Body → … → Categories → … → ReminderIsSet.
+                    append(CalendarCategoriesXml.ewsCreate(categories, deps.escapeXml))
                     if (reminder > 0) {
                         append("<ReminderIsSet>true</ReminderIsSet>")
                         append("<ReminderMinutesBeforeStart>$reminder</ReminderMinutesBeforeStart>")
@@ -1373,7 +1429,8 @@ class EasCalendarCrudService(
         oldSubject: String? = null,
         oldStartTime: Long = 0L,
         recurrenceType: Int = -1,
-        oldSensitivity: Int? = null
+        oldSensitivity: Int? = null,
+        categories: List<String>? = null
     ): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
             try {
@@ -1513,6 +1570,9 @@ class EasCalendarCrudService(
                         append("""<t:FieldURI FieldURI="item:Body"/>""")
                         append("</t:DeleteItemField>")
                     }
+
+                    // Categories — полный набор (личное поле: у участника встречи тоже меняется)
+                    if (categories != null) append(CalendarCategoriesXml.ewsUpdate(categories, deps.escapeXml))
 
                     // IsAllDayEvent
                     append("<t:SetItemField>")

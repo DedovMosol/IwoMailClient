@@ -34,6 +34,58 @@ fun replaceInlineCids(html: String, inlineImages: Map<String, String>): String {
     }
 }
 
+/** Картинка тела (data URL), ставшая inline-вложением с [contentId]. */
+class InlineDataImage(val contentId: String, val mimeType: String, val bytes: ByteArray)
+
+/** `src="data:<mime>;base64,<data>"` — так картинки сериализует contenteditable-редактор. */
+private val DATA_URL_SRC_REGEX = Regex("""src\s*=\s*"data:([^;"]+);base64,([^"]+)"""")
+
+/**
+ * Обратная к [replaceInlineCids]: `src="data:…"` → `src="cid:…"` перед отправкой HTML-тела.
+ *
+ * data URL из [knownCids] (data URL → Content-ID уже существующего вложения) возвращаются к своему
+ * cid без повторной загрузки. Остальные декодируются в [InlineDataImage] с Content-ID от
+ * [newContentId] (номер с 1); одинаковая картинка, вставленная дважды, — одно вложение.
+ * Битый base64 остаётся в теле как есть.
+ */
+fun extractDataUrlImages(
+    html: String,
+    knownCids: Map<String, String> = emptyMap(),
+    newContentId: (index: Int) -> String
+): Pair<String, List<InlineDataImage>> {
+    if (!html.contains("data:")) return html to emptyList()
+    val images = mutableListOf<InlineDataImage>()
+    val newCidByDataUrl = HashMap<String, String>()
+    val body = DATA_URL_SRC_REGEX.replace(html) { match ->
+        val mimeType = match.groupValues[1].trim()
+        val base64 = match.groupValues[2]
+        val dataUrl = "data:$mimeType;base64,$base64"
+        val cid = knownCids[dataUrl] ?: newCidByDataUrl[dataUrl] ?: run {
+            val bytes = try {
+                java.util.Base64.getMimeDecoder().decode(base64)
+            } catch (_: IllegalArgumentException) {
+                return@replace match.value
+            }
+            if (bytes.isEmpty()) return@replace match.value
+            val created = newContentId(images.size + 1)
+            images += InlineDataImage(created, mimeType, bytes)
+            newCidByDataUrl[dataUrl] = created
+            created
+        }
+        "src=\"cid:${normalizeContentId(cid)}\""
+    }
+    return body to images
+}
+
+/** Расширение файла inline-картинки по MIME (имя вложения видно в Outlook). */
+fun imageFileExtension(mimeType: String): String = when (mimeType.lowercase()) {
+    "image/jpeg", "image/jpg" -> ".jpg"
+    "image/gif" -> ".gif"
+    "image/bmp" -> ".bmp"
+    "image/webp" -> ".webp"
+    else -> ".png"
+}
+
 /** RFC 2392: в URL `cid:` спецсимволы Content-ID могут быть %-кодированы. */
 private fun decodeCidToken(token: String): String =
     if (!token.contains('%')) token

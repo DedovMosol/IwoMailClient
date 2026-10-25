@@ -875,7 +875,7 @@ class ComposeViewModel(
                 // Извлекаем inline-картинки из body: data: URL → cid: ссылки.
                 // На сервер отправляем cleanBody (с cid:) + вложения через CreateAttachment.
                 // Локально храним body (с data: URL) — для отображения в приложении.
-                val (cleanBody, inlineDraftAttachments) = extractInlineAttachments(state.body)
+                val (cleanBody, inlineDraftAttachments) = extractInlineImageAttachments(state.body)
 
                 val allServerAttachments = fileDraftAttachments + inlineDraftAttachments
                 val normalizedTo = normalizeRecipients(state.to)
@@ -1691,47 +1691,6 @@ class ComposeViewModel(
                 null
             }
         }
-    }
-
-    /**
-     * Извлекает inline data:URL-картинки из тела: base64 → байты, замена на cid: ссылки.
-     * @return (cleanBody с cid:, список inline-вложений с ContentId)
-     */
-    private fun extractInlineAttachments(body: String): Pair<String, List<DraftAttachmentData>> {
-        val inlineAttachments = mutableListOf<DraftAttachmentData>()
-        var cleanBody = body
-        var inlineCounter = 0
-        for (match in DATA_URL_REGEX.findAll(body)) {
-            inlineCounter++
-            val mimeType = match.groupValues[1]
-            val base64Data = match.groupValues[2]
-            val contentId = "img${inlineCounter}_${System.currentTimeMillis()}"
-            val ext = when {
-                mimeType.contains("png") -> ".png"
-                mimeType.contains("jpeg") || mimeType.contains("jpg") -> ".jpg"
-                mimeType.contains("gif") -> ".gif"
-                else -> ".png"
-            }
-            try {
-                val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                inlineAttachments.add(
-                    DraftAttachmentData(
-                        name = "image_$inlineCounter$ext",
-                        mimeType = mimeType,
-                        data = bytes,
-                        isInline = true,
-                        contentId = contentId
-                    )
-                )
-                cleanBody = cleanBody.replace(
-                    "data:$mimeType;base64,$base64Data",
-                    "cid:$contentId"
-                )
-            } catch (e: Exception) {
-                android.util.Log.w(TAG, "Failed to decode inline image #$inlineCounter: ${e.message}")
-            }
-        }
-        return cleanBody to inlineAttachments
     }
 
     /** Очистка тела перед отправкой (портировано из ComposeScreen.sendEmail). */

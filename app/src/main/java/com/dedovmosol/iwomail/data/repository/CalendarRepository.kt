@@ -3,6 +3,8 @@ package com.dedovmosol.iwomail.data.repository
 import android.content.Context
 import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
+import com.dedovmosol.iwomail.eas.CalendarAttachmentRef
+import com.dedovmosol.iwomail.eas.CalendarAttachmentService
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.eas.EasAttendee
 import com.dedovmosol.iwomail.eas.EasClient
@@ -10,6 +12,7 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.MeetingEdit
 import com.dedovmosol.iwomail.sync.CalendarReminderReceiver
 import com.dedovmosol.iwomail.sync.RescheduleRemindersWorker
+import com.dedovmosol.iwomail.util.CalendarCategories
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.withLock
@@ -225,8 +228,10 @@ class CalendarRepository(private val context: Context) {
         sensitivity: Int = 0,
         attendees: List<String> = emptyList(),
         recurrenceType: Int = -1,
-        attachments: List<DraftAttachmentData> = emptyList()
+        attachments: List<DraftAttachmentData> = emptyList(),
+        categories: List<String> = emptyList()
     ): EasResult<CalendarEventEntity> {
+        val categoriesCsv = CalendarCategories.toCsv(categories)
         return withContext(Dispatchers.IO) {
             // Race protection: tryLock + fallback. Если mutex свободен (типичный случай) —
             // берём его и используем syncCalendarInternal (без re-acquire). Если занят — не блокируем
@@ -264,7 +269,8 @@ class CalendarRepository(private val context: Context) {
                     sensitivity = sensitivity,
                     attendees = attendees,
                     recurrenceType = recurrenceType,
-                    attachments = attachments
+                    attachments = attachments,
+                    categories = CalendarCategories.parse(categoriesCsv)
                 )
 
                 val isRecurring = recurrenceType >= 0
@@ -321,7 +327,7 @@ class CalendarRepository(private val context: Context) {
                                 attendees = attendeesJson,
                                 isRecurring = isRecurring,
                                 recurrenceRule = recurrenceRule,
-                                categories = "",
+                                categories = categoriesCsv,
                                 lastModified = System.currentTimeMillis(),
                                 hasAttachments = attachmentsJson.isNotBlank(),
                                 attachments = attachmentsJson
@@ -395,7 +401,7 @@ class CalendarRepository(private val context: Context) {
                             attendees = attendeesJson,
                             isRecurring = isRecurring,
                             recurrenceRule = recurrenceRule,
-                            categories = "",
+                            categories = categoriesCsv,
                             lastModified = System.currentTimeMillis(),
                             hasAttachments = attachmentsJson.isNotBlank(),
                             attachments = attachmentsJson
@@ -465,8 +471,12 @@ class CalendarRepository(private val context: Context) {
         attendees: List<String> = emptyList(),
         recurrenceType: Int = -1,
         attachments: List<DraftAttachmentData> = emptyList(),
-        removedAttachmentIds: List<String> = emptyList()
+        removedAttachmentIds: List<String> = emptyList(),
+        // Полный набор категорий. По умолчанию — текущие: на EAS 14 опущенные в Change категории
+        // стираются сервером ([MS-ASCMD] Supported), поэтому они уходят всегда.
+        categories: List<String> = CalendarCategories.parse(event.categories)
     ): EasResult<CalendarEventEntity> {
+        val categoriesCsv = CalendarCategories.toCsv(categories)
         return withContext(Dispatchers.IO) {
             // Race protection (аналогично createEvent): tryLock + fallback.
             val mutex = getSyncMutex(event.accountId)
@@ -488,7 +498,15 @@ class CalendarRepository(private val context: Context) {
                 }
 
                 if (removedAttachmentIds.isNotEmpty()) {
-                    val deleteResult = easClient.deleteCalendarAttachments(removedAttachmentIds)
+                    // До правки события: элемент на сервере ищется по текущим теме и началу.
+                    val known = CalendarAttachmentService.parseAttachmentRefs(event.attachments).associateBy { it.fileReference }
+                    val removedRefs = removedAttachmentIds.map { id -> known[id] ?: CalendarAttachmentRef(id, "", 0L, "") }
+                    val deleteResult = easClient.deleteEventAttachments(
+                        subject = event.subject,
+                        startTime = event.startTime,
+                        isRecurring = event.isRecurring,
+                        attachments = removedRefs
+                    )
                     if (deleteResult is EasResult.Error) {
                         android.util.Log.w("CalendarRepository",
                             "updateEvent: Failed to delete some attachments: ${deleteResult.message}")
@@ -518,7 +536,8 @@ class CalendarRepository(private val context: Context) {
                         oldSubject = event.subject,
                         oldStartTime = event.startTime,
                         recurrenceType = recurrenceType,
-                        attachments = attachments
+                        attachments = attachments,
+                        categories = CalendarCategories.parse(categoriesCsv)
                     )
                 }
 
@@ -580,7 +599,8 @@ class CalendarRepository(private val context: Context) {
                             lastModified = newLastModified,
                             hasAttachments = finalAttachments.isNotBlank(),
                             attachments = finalAttachments,
-                            attendees = attendeesJson
+                            attendees = attendeesJson,
+                            categories = categoriesCsv
                         )
 
                         calendarEventDao.update(updatedEvent)

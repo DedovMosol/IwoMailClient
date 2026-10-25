@@ -64,6 +64,11 @@ import com.dedovmosol.iwomail.util.OutlookCategoryPalette
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
+private fun stringListSaver() = androidx.compose.runtime.saveable.listSaver<List<String>, String>(
+    save = { it },
+    restore = { it }
+)
+
 /** Цвет палитры [MS-OXOCFG] для UI; null — «без цвета». */
 internal fun categoryUiColor(color: Int): Color? = OutlookCategoryPalette.argb(color)?.let { Color(it) }
 
@@ -370,5 +375,173 @@ private fun CategoryColorPickerDialog(
         dismissButton = if (canReset) {
             { com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(onClick = onReset, text = Strings.resetToServerColor) }
         } else null
+    )
+}
+
+/** Плашка категории в редакторе события: цвет категории и крестик «убрать». */
+@Composable
+private fun RemovableCategoryChip(name: String, color: Color?, onRemove: () -> Unit) {
+    val removeLabel = Strings.removeCategory
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = color ?: Color.Transparent,
+        border = if (color == null) BorderStroke(1.dp, MaterialTheme.colorScheme.outline) else null
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 10.dp)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.labelMedium,
+                color = color?.let { contentOn(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    AppIcons.Close,
+                    contentDescription = "$removeLabel $name",
+                    tint = color?.let { contentOn(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Категории в редакторе события: выбранные — цветными плашками с «убрать», плюс кнопка выбора.
+ * [known] — категории аккаунта (список Outlook, ручные, из событий) для пикера.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun EditableCategoryChips(
+    selected: List<String>,
+    known: List<String>,
+    colors: CategoryColors,
+    onChange: (List<String>) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showPicker by rememberSaveable { mutableStateOf(false) }
+    FlowRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        selected.forEach { name ->
+            RemovableCategoryChip(name, categoryUiColor(colors.resolve(name).color)) {
+                onChange(selected.filterNot { CalendarCategories.key(it) == CalendarCategories.key(name) })
+            }
+        }
+        androidx.compose.material3.AssistChip(
+            onClick = { showPicker = true },
+            label = { Text(Strings.addCategory) },
+            leadingIcon = { Icon(AppIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp)) }
+        )
+    }
+    if (showPicker) {
+        CategoryPickerDialog(
+            known = colors.knownCategories(known + selected),
+            initiallySelected = selected,
+            colors = colors,
+            onDone = { picked ->
+                showPicker = false
+                onChange(picked)
+            },
+            onDismiss = { showPicker = false }
+        )
+    }
+}
+
+/**
+ * Выбор категорий события: отметки по известным категориям и новая категория по имени.
+ * Имя — по правилам [MS-OXOCFG]: не пустое, без запятой, не длиннее 255 символов, уникальное без
+ * учёта регистра (совпадение с существующей просто отмечает её).
+ */
+@Composable
+private fun CategoryPickerDialog(
+    known: List<String>,
+    initiallySelected: List<String>,
+    colors: CategoryColors,
+    onDone: (List<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    // Выбор и добавленные имена переживают поворот экрана.
+    var options by rememberSaveable(stateSaver = stringListSaver()) { mutableStateOf(known) }
+    var pickedKeys by rememberSaveable(stateSaver = stringListSaver()) {
+        mutableStateOf(initiallySelected.map { CalendarCategories.key(it) }.distinct())
+    }
+    val picked = pickedKeys.toSet()
+    var newName by rememberSaveable { mutableStateOf("") }
+    val trimmed = newName.trim()
+    val nameValid = trimmed.isNotEmpty() && !trimmed.contains(',') && trimmed.length <= CalendarCategories.MAX_NAME_LENGTH
+    val existing = options.firstOrNull { CalendarCategories.key(it) == CalendarCategories.key(trimmed) }
+
+    fun addNewName() {
+        if (!nameValid) return
+        val name = existing ?: trimmed
+        if (existing == null) options = options + name
+        if (CalendarCategories.key(name) !in picked) pickedKeys = pickedKeys + CalendarCategories.key(name)
+        newName = ""
+    }
+
+    com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+        onDismissRequest = onDismiss,
+        scrollable = false,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.fillMaxWidth(0.92f),
+        title = { Text(Strings.categories) },
+        text = {
+            Column {
+                androidx.compose.material3.OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it.take(CalendarCategories.MAX_NAME_LENGTH + 1) },
+                    label = { Text(Strings.newCategoryName) },
+                    singleLine = true,
+                    isError = trimmed.isNotEmpty() && !nameValid,
+                    supportingText = {
+                        Text(if (existing != null && trimmed.isNotEmpty()) Strings.categoryNameExists else Strings.categoryNameRules)
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = ::addNewName, enabled = nameValid) {
+                            Icon(AppIcons.Add, contentDescription = Strings.add)
+                        }
+                    },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                    ),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { addNewName() }),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    items(options, key = { CalendarCategories.key(it) }) { name ->
+                        val key = CalendarCategories.key(name)
+                        val isPicked = key in picked
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(role = Role.Checkbox) { pickedKeys = if (isPicked) pickedKeys - key else pickedKeys + key }
+                                .padding(horizontal = 4.dp, vertical = 6.dp)
+                        ) {
+                            androidx.compose.material3.Checkbox(checked = isPicked, onCheckedChange = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            ColorSwatch(colors.resolve(name).color, 20.dp)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                onClick = { onDone(options.filter { CalendarCategories.key(it) in picked }) },
+                text = Strings.done
+            )
+        },
+        dismissButton = {
+            com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(onClick = onDismiss, text = Strings.cancel)
+        }
     )
 }

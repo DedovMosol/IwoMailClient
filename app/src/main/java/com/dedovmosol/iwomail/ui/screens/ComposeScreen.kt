@@ -44,9 +44,9 @@ import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.components.ContactPickerDialog
 import com.dedovmosol.iwomail.ui.components.NetworkBanner
-import com.dedovmosol.iwomail.ui.components.RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS
 import com.dedovmosol.iwomail.ui.components.RichTextEditor
 import com.dedovmosol.iwomail.ui.components.RichTextToolbar
+import com.dedovmosol.iwomail.ui.components.awaitCurrentHtml
 import com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.ui.screens.compose.AttachmentInfo
@@ -71,6 +71,7 @@ import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_P_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.WHITESPACE_COLLAPSE_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
 import com.dedovmosol.iwomail.ui.screens.compose.extractEmailFromString
+import com.dedovmosol.iwomail.ui.screens.compose.extractInlineImageAttachments
 import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlQuote
 import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlSignature
 import com.dedovmosol.iwomail.ui.screens.compose.looksLikeHtml
@@ -81,10 +82,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.coroutines.resume
 
 /**
  * Максимальный суммарный размер вложений (совпадает со строкой `attachmentLimitExceeded` «10 МБ»).
@@ -193,31 +191,9 @@ fun ComposeScreen(
     val richTextController = rememberRichTextEditorController()
 
     suspend fun flushEditorHtml() {
-        var flushId: Long? = null
-        val flushedHtml = withTimeoutOrNull(RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS) {
-            suspendCancellableCoroutine<String?> { continuation ->
-                flushId = richTextController.flushHtml { html ->
-                    if (continuation.isActive) continuation.resume(html)
-                }
-                if (flushId == null && continuation.isActive) {
-                    continuation.resume(null)
-                }
-                continuation.invokeOnCancellation {
-                    flushId?.let { richTextController.cancelPendingFlush(it) }
-                }
-            }
-        }
-        if (flushedHtml != null) {
-            body = flushedHtml
-        } else {
-            flushId?.let { richTextController.cancelPendingFlush(it) }
-            // CS-9: flush не успел (WebView занят/медленный) — вместо устаревшего body берём самый
-            // свежий кэш редактора latestHtml (обновляется немедленно на каждый ввод через cacheHtml).
-            // Пусто → не перезатираем body. Так последние введённые символы не теряются при
-            // отправке/сохранении. Хуже прежнего не будет: в худшем случае body остаётся как был.
-            val cached = richTextController.latestHtml
-            if (cached.isNotEmpty()) body = cached
-        }
+        // CS-9: flush не успел (WebView занят/медленный) — берётся свежий кэш ввода latestHtml;
+        // пусто → body не перезатирается (последние символы не теряются при отправке/сохранении).
+        richTextController.awaitCurrentHtml()?.let { body = it }
     }
 
     // Сохраняем вложения как строки для переживания поворота экрана
@@ -1309,38 +1285,7 @@ fun ComposeScreen(
                 // Локально храним body (с data: URL) — для отображения в приложении.
                 // Outlook десктопный рендерит HTML через Word, который НЕ поддерживает data: URL,
                 // поэтому cid: + ContentId — единственный рабочий способ.
-                val inlineDraftAttachments = mutableListOf<com.dedovmosol.iwomail.eas.DraftAttachmentData>()
-                var cleanBody = body
-                var inlineCounter = 0
-                for (match in DATA_URL_REGEX.findAll(body)) {
-                    inlineCounter++
-                    val mimeType = match.groupValues[1]
-                    val base64Data = match.groupValues[2]
-                    val contentId = "img${inlineCounter}_${System.currentTimeMillis()}"
-                    val ext = when {
-                        mimeType.contains("png") -> ".png"
-                        mimeType.contains("jpeg") || mimeType.contains("jpg") -> ".jpg"
-                        mimeType.contains("gif") -> ".gif"
-                        else -> ".png"
-                    }
-                    try {
-                        val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                        inlineDraftAttachments.add(com.dedovmosol.iwomail.eas.DraftAttachmentData(
-                            name = "image_$inlineCounter$ext",
-                            mimeType = mimeType,
-                            data = bytes,
-                            isInline = true,
-                            contentId = contentId
-                        ))
-                        cleanBody = cleanBody.replace(
-                            "data:$mimeType;base64,$base64Data",
-                            "cid:$contentId"
-                        )
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        android.util.Log.w("ComposeScreen", "Failed to decode inline image #$inlineCounter: ${e.message}")
-                    }
-                }
+                val (cleanBody, inlineDraftAttachments) = extractInlineImageAttachments(body)
 
                 val allServerAttachments = fileDraftAttachments + inlineDraftAttachments
                 val normalizedTo = normalizeRecipients(to)

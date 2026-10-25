@@ -876,13 +876,16 @@ fun CalendarScreen(
             isCreating = isCreating,
             accountId = accountId,
             ownEmail = activeAccount?.email ?: "",
+            calendarRepo = calendarRepo,
+            categoryColors = categoryColors,
+            knownCategories = remember(events) { events.flatMap { CalendarCategories.parse(it.categories) } },
             onDismiss = {
                 showCreateDialog = false
                 editingEventId = null
                 editingOccurrenceStartTime = null
                 cachedOccurrenceEvent = null
             },
-            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, attachments, removedAttachmentIds ->
+            onSave = { subject, startTime, endTime, location, body, allDayEvent, reminder, busyStatus, attendees, recurrenceType, attachments, removedAttachmentIds, categories ->
                 // Защита от double-tap: если уже создаём — игнорируем
                 if (isCreating) return@CreateEventDialog
                 isCreating = true
@@ -928,7 +931,8 @@ fun CalendarScreen(
                                     attendees = attendeeList,
                                     recurrenceType = recurrenceType,
                                     attachments = attachments,
-                                    removedAttachmentIds = removedAttachmentIds
+                                    removedAttachmentIds = removedAttachmentIds,
+                                    categories = categories
                                 )
                             }
                         } else if (editingEventId != null) {
@@ -947,7 +951,8 @@ fun CalendarScreen(
                                     busyStatus = busyStatus,
                                     attendees = attendeeList,
                                     recurrenceType = recurrenceType,
-                                    attachments = attachments
+                                    attachments = attachments,
+                                    categories = categories
                                 )
                             }
                         }

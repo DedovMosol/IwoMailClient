@@ -32,6 +32,23 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
+import com.dedovmosol.iwomail.ui.components.RichTextEditor
+import com.dedovmosol.iwomail.ui.components.RichTextToolbar
+import com.dedovmosol.iwomail.ui.components.awaitCurrentHtml
+import com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController
+import com.dedovmosol.iwomail.ui.screens.compose.ImageQuality
+import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
+import com.dedovmosol.iwomail.ui.screens.compressImageForInline
+import com.dedovmosol.iwomail.data.repository.CategoryColors
+import com.dedovmosol.iwomail.util.CalendarCategories
+import com.dedovmosol.iwomail.util.referencedContentIds
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.graphics.luminance
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -79,6 +96,14 @@ private val StringSetSaver = listSaver<Set<String>, String>(
     restore = { it.toSet() }
 )
 
+private val StringListSaver = listSaver<List<String>, String>(
+    save = { it },
+    restore = { it }
+)
+
+/** Общий лимит вложений события: файлы и inline-картинки описания (сервер принимает до 10 МБ). */
+private const val MAX_EVENT_ATTACHMENTS_BYTES = 10L * 1024 * 1024
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CreateEventDialog(
@@ -87,7 +112,10 @@ internal fun CreateEventDialog(
     isCreating: Boolean,
     accountId: Long,
     ownEmail: String,
+    calendarRepo: CalendarRepository,
     onDismiss: () -> Unit,
+    categoryColors: CategoryColors = CategoryColors.EMPTY,
+    knownCategories: List<String> = emptyList(),
     onSave: (
         subject: String,
         startTime: Long,
@@ -100,7 +128,8 @@ internal fun CreateEventDialog(
         attendees: String,
         recurrenceType: Int,
         attachments: List<DraftAttachmentData>,
-        removedAttachmentIds: List<String>
+        removedAttachmentIds: List<String>,
+        categories: List<String>
     ) -> Unit
 ) {
     val context = LocalContext.current
@@ -113,7 +142,62 @@ internal fun CreateEventDialog(
     // Состояния полей
     var subject by rememberSaveable { mutableStateOf(event?.subject ?: "") }
     var location by rememberSaveable { mutableStateOf(event?.location ?: "") }
-    var body by rememberSaveable { mutableStateOf(event?.body ?: "") }
+    // Описание — rich-редактор писем (DRY): HTML, форматирование, inline-картинки из вложений события.
+    val isOccurrenceEdit = event?.id?.contains("_occ_") == true
+    val originalBody = event?.body.orEmpty()
+    val bodyEditorController = rememberRichTextEditorController()
+    // Картинки cid: подставляются из вложений (лениво, с кэшем на диске). До этого редактор не
+    // показывается: иначе подстановка затёрла бы уже начатый ввод.
+    val editorBody by produceState<EventBodyEditing.EditorBody?>(
+        initialValue = if (event == null || referencedContentIds(originalBody).isEmpty()) {
+            EventBodyEditing.forEditor(originalBody, emptyMap())
+        } else null,
+        event?.id, originalBody
+    ) {
+        if (value != null || event == null) return@produceState
+        val images = try {
+            calendarRepo.loadInlineImages(event)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            emptyMap()
+        }
+        value = EventBodyEditing.forEditor(originalBody, images)
+    }
+    // Текущее содержимое редактора: переживает поворот (крупное — через файл, как в письмах) и служит
+    // initialHtml редактора, поэтому восстановление после поворота не затирает правки.
+    val editorHtmlSaver = remember { createLargeStringSaver(context.cacheDir, "event_body") }
+    var editorHtml by rememberSaveable(stateSaver = editorHtmlSaver) { mutableStateOf("") }
+    var editorHtmlInitialized by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(editorBody) {
+        val loaded = editorBody ?: return@LaunchedEffect
+        if (!editorHtmlInitialized) {
+            editorHtml = loaded.html
+            editorHtmlInitialized = true
+        }
+    }
+    // Категории события; для одного вхождения серии не меняются (категории ведёт серия).
+    var selectedCategories by rememberSaveable(stateSaver = StringListSaver) {
+        mutableStateOf(CalendarCategories.parse(event?.categories.orEmpty()))
+    }
+    val saveScope = rememberCoroutineScope()
+    var isPreparingSave by remember { mutableStateOf(false) }
+
+    /**
+     * Серверная форма описания. Без правок — исходное тело как есть (cid:-ссылки и формат сервера не
+     * трогаются). С правками — HTML редактора: data URL → cid, новые картинки — inline-вложения.
+     */
+    suspend fun prepareEventBody(): EventBodyEditing.Encoded {
+        val loaded = editorBody
+        val baseline = loaded?.html
+        val edited = loaded != null && editorHtmlInitialized &&
+            ((bodyEditorController.latestHtml.isNotEmpty() && bodyEditorController.latestHtml != baseline) ||
+                editorHtml != baseline)
+        if (loaded == null || !edited) return EventBodyEditing.Encoded(originalBody, emptyList(), emptyList())
+        val html = bodyEditorController.awaitCurrentHtml() ?: editorHtml
+        return withContext(Dispatchers.Default) {
+            EventBodyEditing.encode(html, loaded, originalBody, event?.attachments.orEmpty())
+        }
+    }
     var allDayEvent by rememberSaveable { mutableStateOf(event?.allDayEvent ?: false) }
     var reminder by rememberSaveable { mutableIntStateOf(event?.reminder ?: 15) }
     var busyStatus by rememberSaveable { mutableIntStateOf(event?.busyStatus ?: 2) }
@@ -194,7 +278,7 @@ internal fun CreateEventDialog(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         val maxSingleFile = 7L * 1024 * 1024 // 7 MB — лимит сервера
-        val maxTotal = 10L * 1024 * 1024 // 10 MB суммарно
+        val maxTotal = MAX_EVENT_ATTACHMENTS_BYTES // 10 MB суммарно (с inline-картинками — при сохранении)
         var currentTotal = pendingAttachments.sumOf { it.sizeBytes }
         uris.forEach { uri ->
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -266,6 +350,35 @@ internal fun CreateEventDialog(
         }
     }
 
+    // Картинка в описание: сжатие как в письмах (ImageQuality.MEDIUM) → data URL в редактор; при
+    // сохранении она станет inline-вложением с ContentId.
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        saveScope.launch {
+            val compressed = try {
+                withContext(Dispatchers.IO) {
+                    compressImageForInline(
+                        context, uri,
+                        maxWidth = ImageQuality.MEDIUM.maxSize,
+                        maxHeight = ImageQuality.MEDIUM.maxSize,
+                        quality = ImageQuality.MEDIUM.jpegQuality
+                    )
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            }
+            if (compressed == null) {
+                SafeToast.long(context, if (isRussianCallback) "Не удалось вставить изображение" else "Failed to insert image")
+                return@launch
+            }
+            val (bytes, mimeType) = compressed
+            bodyEditorController.insertImage(android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP), mimeType)
+        }
+    }
+
     // Текстовые поля для дат и времени
     var startDateText by rememberSaveable { mutableStateOf("") }
     var startTimeText by rememberSaveable { mutableStateOf("") }
@@ -322,7 +435,7 @@ internal fun CreateEventDialog(
     val lazyListState = rememberLazyListState()
 
     com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-        onDismissRequest = { if (!isCreating) dismissDialog() },
+        onDismissRequest = { if (!isCreating && !isPreparingSave) dismissDialog() },
         scrollable = false, // Отключаем автоскролл диалога
         properties = DialogProperties(usePlatformDefaultWidth = false),
         modifier = Modifier
@@ -687,23 +800,91 @@ internal fun CreateEventDialog(
                 }
 
                 item {
-                    // Описание
-                    OutlinedTextField(
-                        value = body,
-                        onValueChange = { body = it },
-                        label = { Text(Strings.eventDescription) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(100.dp),
-                        maxLines = 5
-                    )
+                    // Категории (цвета — гибрид: Outlook / стандартные имена / свои)
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = Strings.categories,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        if (isOccurrenceEdit) {
+                            if (selectedCategories.isNotEmpty()) {
+                                CategoryChips(selectedCategories, categoryColors, Modifier.padding(bottom = 4.dp))
+                            }
+                            Text(
+                                text = Strings.categoriesForSeriesOnly,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            EditableCategoryChips(
+                                selected = selectedCategories,
+                                known = knownCategories,
+                                colors = categoryColors,
+                                onChange = { selectedCategories = it }
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    // Описание — rich-редактор (как в письмах); вставка картинок — кроме одного вхождения
+                    // серии: на Exchange 2010+ вложения вхождения через EAS не передаются.
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = Strings.eventDescription,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (editorBody == null || !editorHtmlInitialized) {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().height(160.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                                }
+                            } else {
+                                Column {
+                                    Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                                        RichTextToolbar(
+                                            controller = bodyEditorController,
+                                            onInsertImage = { imagePickerLauncher.launch("image/*") },
+                                            showInsertImage = !isOccurrenceEdit
+                                        )
+                                    }
+                                    HorizontalDivider()
+                                    RichTextEditor(
+                                        initialHtml = editorHtml,
+                                        onHtmlChanged = { editorHtml = it },
+                                        controller = bodyEditorController,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 160.dp),
+                                        placeholder = Strings.eventDescription,
+                                        minHeight = 140,
+                                        isDarkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         // Существующие вложения с сервера (при редактировании)
                         if (isEditing && event != null && event.hasAttachments && event.attachments.isNotBlank()) {
-                            val existingAttachments = remember(event.attachments) {
+                            val existingAttachments = remember(event.attachments, originalBody) {
+                                // Картинки описания правятся в редакторе: вложения, на Content-ID которых
+                                // ссылается тело, здесь не показываются (Exchange 2007 не передаёт IsInline).
+                                val bodyContentIds = referencedContentIds(originalBody)
                                 try {
                                     val jsonArray = org.json.JSONArray(event.attachments)
                                     (0 until jsonArray.length()).map { i ->
@@ -712,7 +893,8 @@ internal fun CreateEventDialog(
                                             name = obj.optString("name", "attachment"),
                                             fileReference = obj.optString("fileReference", ""),
                                             size = obj.optLong("size", 0),
-                                            isInline = obj.optBoolean("isInline", false)
+                                            isInline = obj.optBoolean("isInline", false) ||
+                                                com.dedovmosol.iwomail.util.normalizeContentId(obj.optString("contentId", "")) in bodyContentIds
                                         )
                                     }.filter { !it.isInline }
                                 } catch (_: Exception) { emptyList() }
@@ -875,27 +1057,42 @@ internal fun CreateEventDialog(
                             return@ThemeOutlinedButton
                         }
 
-                        val draftAttachments = buildDraftAttachments() ?: return@ThemeOutlinedButton
-                        clearPendingAttachments()
-                        onSave(
-                            subject,
-                            startTime,
-                            endTime,
-                            location,
-                            body,
-                            allDayEvent,
-                            reminder,
-                            busyStatus,
-                            attendees,
-                            recurrenceType,
-                            draftAttachments,
-                            removedExistingAttachmentRefs.toList()
-                        )
+                        if (isPreparingSave) return@ThemeOutlinedButton
+                        isPreparingSave = true
+                        saveScope.launch {
+                            try {
+                                val encodedBody = prepareEventBody()
+                                val draftAttachments = buildDraftAttachments() ?: return@launch
+                                val allAttachments = draftAttachments + encodedBody.newInlineImages
+                                if (allAttachments.sumOf { it.data.size.toLong() } > MAX_EVENT_ATTACHMENTS_BYTES) {
+                                    SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
+                                    return@launch
+                                }
+                                clearPendingAttachments()
+                                onSave(
+                                    subject,
+                                    startTime,
+                                    endTime,
+                                    location,
+                                    encodedBody.body,
+                                    allDayEvent,
+                                    reminder,
+                                    busyStatus,
+                                    attendees,
+                                    recurrenceType,
+                                    allAttachments,
+                                    (removedExistingAttachmentRefs + encodedBody.removedInlineRefs).toList(),
+                                    if (isOccurrenceEdit) CalendarCategories.parse(event?.categories.orEmpty()) else selectedCategories
+                                )
+                            } finally {
+                                isPreparingSave = false
+                            }
+                        }
                     }
                 },
                 text = Strings.save,
-                enabled = isValid,
-                isLoading = isCreating
+                enabled = isValid && !isPreparingSave,
+                isLoading = isCreating || isPreparingSave
             )
         },
         dismissButton = {

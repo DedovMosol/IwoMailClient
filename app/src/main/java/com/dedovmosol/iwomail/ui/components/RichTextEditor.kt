@@ -29,6 +29,7 @@ import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.sanitizeEmailHtml
+import kotlin.coroutines.resume
 
 internal const val RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS = 2_000L
 
@@ -258,6 +259,29 @@ fun rememberRichTextEditorController(): RichTextEditorController {
     return rememberSaveable(saver = RichTextEditorController.Saver) {
         RichTextEditorController()
     }
+}
+
+/**
+ * Актуальный HTML редактора перед сохранением/отправкой (DRY: письма, календарь): принудительный
+ * flush из WebView с таймаутом, иначе — кэш последнего ввода [RichTextEditorController.latestHtml]
+ * (обновляется на каждый ввод, поэтому последние символы не теряются). null — ни flush, ни ввода.
+ */
+suspend fun RichTextEditorController.awaitCurrentHtml(
+    timeoutMs: Long = RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS
+): String? {
+    var flushId: Long? = null
+    val flushed = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+        kotlinx.coroutines.suspendCancellableCoroutine<String?> { continuation ->
+            flushId = flushHtml { html ->
+                if (continuation.isActive) continuation.resume(html)
+            }
+            if (flushId == null && continuation.isActive) continuation.resume(null)
+            continuation.invokeOnCancellation { flushId?.let { cancelPendingFlush(it) } }
+        }
+    }
+    if (flushed != null) return flushed
+    flushId?.let { cancelPendingFlush(it) }
+    return latestHtml.takeIf { it.isNotEmpty() }
 }
 
 /**
