@@ -107,7 +107,7 @@ class CalendarXmlParser(
             when (name) {
                 "Body" -> {
                     val text = readBody(p)
-                    if (body.isEmpty() && !text.isNullOrBlank()) body = CalendarDateUtils.removeDuplicateLines(text)
+                    if (body.isEmpty() && !text.isNullOrBlank()) body = CalendarBodyFormat.normalizeIncoming(text)
                 }
                 "Attendees" -> attendees = readAttendees(p)
                 "Categories" -> categories = readCategories(p)
@@ -180,7 +180,7 @@ class CalendarXmlParser(
             children(p) { field ->
                 if (field == "Body") {
                     val text = readBody(p)
-                    if (body.isEmpty() && !text.isNullOrBlank()) body = CalendarDateUtils.removeDuplicateLines(text)
+                    if (body.isEmpty() && !text.isNullOrBlank()) body = CalendarBodyFormat.normalizeIncoming(text)
                 } else {
                     val value = leafText(p)
                     if (value != null && field !in leaves) leaves[field] = value
@@ -235,7 +235,7 @@ class CalendarXmlParser(
             val subject = ewsTag(itemXml, "Subject") ?: ""
             val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>"
                 .toRegex(RegexOption.DOT_MATCHES_ALL).find(itemXml)?.groupValues?.getOrNull(1)?.trim() ?: ""
-            val body = CalendarDateUtils.removeDuplicateLines(XmlUtils.unescape(rawBody))
+            val body = CalendarBodyFormat.normalizeIncoming(XmlUtils.unescape(rawBody))
 
             val startStr = ewsTag(itemXml, "Start")
             val endStr = ewsTag(itemXml, "End")

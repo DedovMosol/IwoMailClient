@@ -60,6 +60,10 @@ class AttachmentManager(
             for (name in ATTACHMENT_TEMP_DIRS) {
                 cleanupDirByAgeAndSize(File(context.filesDir, name))
             }
+            // Кэш inline-картинок событий календаря (cacheDir) — тот же возрастной/размерный порог.
+            cleanupDirByAgeAndSize(
+                File(context.cacheDir, com.dedovmosol.iwomail.data.repository.CalendarInlineImages.CACHE_DIR_NAME)
+            )
         }
 
         /**

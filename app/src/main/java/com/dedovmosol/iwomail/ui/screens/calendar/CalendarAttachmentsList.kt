@@ -24,6 +24,7 @@ import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.genericErrorText
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.util.SafeToast
+import com.dedovmosol.iwomail.util.normalizeContentId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,23 +33,32 @@ import java.util.Locale
 
 internal data class CalendarAttachmentInfo(val name: String, val fileReference: String, val size: Long, val isInline: Boolean)
 
+/**
+ * @param shownInlineContentIds Content-ID вложений, уже показанных картинками в теле. Они скрываются
+ *   из списка: Exchange 2007 (EWS) не передаёт IsInline, и без этого картинка была бы видна дважды.
+ *   Не показанные (лимит размера, ошибка загрузки) остаются в списке — доступ к файлу не теряется.
+ */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun CalendarAttachmentsList(
     attachmentsJson: String,
     accountId: Long,
-    calendarRepo: CalendarRepository
+    calendarRepo: CalendarRepository,
+    shownInlineContentIds: Set<String> = emptySet()
 ) {
     val context = LocalContext.current
     val accountRepo = remember { com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context) }
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val isRussian = LocalLanguage.current == AppLanguage.RUSSIAN
 
-    val attachments = remember(attachmentsJson) {
+    val attachments = remember(attachmentsJson, shownInlineContentIds) {
+        val shown = shownInlineContentIds.mapTo(HashSet()) { normalizeContentId(it) }
         try {
             val jsonArray = org.json.JSONArray(attachmentsJson)
-            (0 until jsonArray.length()).map { i ->
+            (0 until jsonArray.length()).mapNotNull { i ->
                 val obj = jsonArray.getJSONObject(i)
+                val contentId = normalizeContentId(obj.optString("contentId", ""))
+                if (contentId.isNotEmpty() && contentId in shown) return@mapNotNull null
                 CalendarAttachmentInfo(
                     name = obj.optString("name", "attachment"),
                     fileReference = obj.optString("fileReference", ""),

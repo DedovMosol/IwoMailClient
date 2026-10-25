@@ -282,3 +282,31 @@ internal object EwsXml {
         """<t:Folder><t:FolderId Id="$id" ChangeKey="AQ=="/><t:FolderClass>$folderClass</t:FolderClass>""" +
             "<t:DisplayName>$name</t:DisplayName><t:TotalCount>1</t:TotalCount></t:Folder>"
 }
+
+/** [EasCalendarService], собранный как в EasClient, поверх транспорта фейка; папка календаря — [calendarFolderId]. */
+internal fun FakeExchange.calendarService(
+    easVersion: String,
+    calendarFolderId: String,
+    parseEasDate: (String?) -> Long? = { null }
+): EasCalendarService {
+    val transport = transport(easVersion)
+    return EasCalendarService(EasCalendarService.CalendarServiceDependencies(
+        executeEasCommand = object : EasCalendarService.EasCommandExecutor {
+            override suspend fun <T> invoke(command: String, xml: String, parser: (String) -> T): EasResult<T> =
+                transport.executeEasCommand(command, xml, parser = parser)
+        },
+        folderSync = {
+            EasResult.Success(FolderSyncResponse("1", listOf(EasFolder(calendarFolderId, "Calendar", "0", FolderType.CALENDAR))))
+        },
+        refreshSyncKey = { _, key -> EasResult.Success(key) },
+        extractValue = { xml, tag -> XmlUtils.extractTagValue(xml, tag) },
+        escapeXml = { XmlUtils.escape(it) },
+        getEasVersion = { transport.easVersion },
+        isVersionDetected = { true },
+        detectEasVersion = { EasResult.Success(transport.easVersion) },
+        performNtlmHandshake = { transport.performNtlmHandshake() },
+        executeNtlmRequest = { request, action -> transport.executeNtlmRequest(request, action) },
+        tryBasicAuthEws = { request, action -> transport.executeEwsWithAuth(request, action) },
+        parseEasDate = parseEasDate
+    ))
+}

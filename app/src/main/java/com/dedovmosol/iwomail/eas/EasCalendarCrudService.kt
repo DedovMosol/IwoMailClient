@@ -542,7 +542,7 @@ class EasCalendarCrudService(
                     if (escapedBody.isNotBlank()) {
                         append("<t:SetItemField>")
                         append("""<t:FieldURI FieldURI="item:Body"/>""")
-                        append("""<t:CalendarItem><t:Body BodyType="Text">$escapedBody</t:Body></t:CalendarItem>""")
+                        append("""<t:CalendarItem><t:Body BodyType="${CalendarBodyFormat.ewsType(body)}">$escapedBody</t:Body></t:CalendarItem>""")
                         append("</t:SetItemField>")
                     } else {
                         append("""<t:DeleteItemField><t:FieldURI FieldURI="item:Body"/></t:DeleteItemField>""")
@@ -956,7 +956,7 @@ class EasCalendarCrudService(
 
             if (majorVersion >= 14) {
                 append("<airsyncbase:Body>")
-                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Type>${CalendarBodyFormat.easType(body)}</airsyncbase:Type>")
                 append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
                 append("</airsyncbase:Body>")
             }
@@ -1062,7 +1062,7 @@ class EasCalendarCrudService(
             // Body только для EAS 14+ (Exchange 2010+)
             if (majorVersion >= 14) {
                 append("<airsyncbase:Body>")
-                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Type>${CalendarBodyFormat.easType(body)}</airsyncbase:Type>")
                 append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
                 append("</airsyncbase:Body>")
             }
@@ -1293,7 +1293,7 @@ class EasCalendarCrudService(
                     append("<Subject>$escapedSubject</Subject>")
                     append("<Sensitivity>$ewsSensitivity</Sensitivity>")
                     if (escapedBody.isNotBlank()) {
-                        append("""<Body BodyType="Text">$escapedBody</Body>""")
+                        append("""<Body BodyType="${CalendarBodyFormat.ewsType(body)}">$escapedBody</Body>""")
                     }
                     if (reminder > 0) {
                         append("<ReminderIsSet>true</ReminderIsSet>")
@@ -1505,7 +1505,7 @@ class EasCalendarCrudService(
                         append("<t:SetItemField>")
                         append("""<t:FieldURI FieldURI="item:Body"/>""")
                         append("<t:CalendarItem>")
-                        append("""<t:Body BodyType="Text">$escapedBody</t:Body>""")
+                        append("""<t:Body BodyType="${CalendarBodyFormat.ewsType(body)}">$escapedBody</t:Body>""")
                         append("</t:CalendarItem>")
                         append("</t:SetItemField>")
                     } else {

@@ -26,6 +26,11 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.util.htmlVisibleText
+import com.dedovmosol.iwomail.util.looksLikeHtmlEmailContent
+import com.dedovmosol.iwomail.util.replaceInlineCids
+import com.dedovmosol.iwomail.util.sanitizeEmailHtml
+import com.dedovmosol.iwomail.util.stripNonContentHtml
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -53,6 +58,10 @@ internal fun EventDetailDialog(
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     var expanded by rememberSaveable { mutableStateOf(false) }
+
+    // HTML-тело (синк просит HTML) рендерится полностью — разметка, цвета, inline-картинки (cid:).
+    // Текстовое (старые записи, plain text сервера) — прежним RichTextWithImages.
+    val isHtmlBody = remember(event.body) { looksLikeHtmlEmailContent(event.body) }
 
     // cleanBody — plain text для collapsed preview (все HTML-теги убраны)
     // richBody  — HTML с <img>/<a> для expanded RichTextWithImages
@@ -82,9 +91,13 @@ internal fun EventDetailDialog(
             .replace("\u00A0", " ")
             .replace("\t", " ")
 
-        val clean = dedup(decodeEntities(event.body.replace(HTML_TAG_REGEX, "\n")))
+        // <head>/<style>/комментарии Outlook — не содержимое: без их удаления CSS попадает в превью.
+        val content = stripNonContentHtml(event.body)
+        // HTML: видимый текст (строчные теги не рвут строку). Текст: прежняя обработка.
+        val clean = if (isHtmlBody) dedup(htmlVisibleText(event.body))
+            else dedup(decodeEntities(content.replace(HTML_TAG_REGEX, "\n")))
         val rich  = dedup(decodeEntities(
-            event.body.replace(HTML_TAG_KEEP_IMG_A_REGEX, "\n")
+            content.replace(HTML_TAG_KEEP_IMG_A_REGEX, "\n")
         ))
         clean to rich
     }
@@ -237,6 +250,21 @@ internal fun EventDetailDialog(
 
                 // Расширенный вид
                 if (expanded) {
+                    // Inline-картинки HTML-тела: грузятся только при раскрытии (лениво, с кэшем на диске);
+                    // до загрузки — плейсхолдеры битых картинок, затем WebView перерисуется.
+                    val inlineImages by produceState(
+                        initialValue = emptyMap<String, String>(),
+                        event.id, event.body, event.attachments, isHtmlBody
+                    ) {
+                        if (!isHtmlBody) return@produceState
+                        value = try {
+                            calendarRepo.loadInlineImages(event)
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            emptyMap()
+                        }
+                    }
+
                     // Кнопка "Свернуть" вверху для удобства
                     TextButton(
                         onClick = { expanded = false },
@@ -320,7 +348,8 @@ internal fun EventDetailDialog(
                             CalendarAttachmentsList(
                                 attachmentsJson = event.attachments,
                                 accountId = event.accountId,
-                                calendarRepo = calendarRepo
+                                calendarRepo = calendarRepo,
+                                shownInlineContentIds = inlineImages.keys
                             )
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -393,11 +422,22 @@ internal fun EventDetailDialog(
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        SelectionContainer {
-                            com.dedovmosol.iwomail.ui.components.RichTextWithImages(
-                                htmlContent = richBody,
-                                modifier = Modifier.fillMaxWidth()
+                        if (isHtmlBody) {
+                            val html = remember(event.body, inlineImages) {
+                                sanitizeEmailHtml(replaceInlineCids(event.body, inlineImages))
+                            }
+                            com.dedovmosol.iwomail.ui.components.HtmlBodyView(
+                                html = html,
+                                contentKey = event.id,
+                                onMailto = onComposeClick
                             )
+                        } else {
+                            SelectionContainer {
+                                com.dedovmosol.iwomail.ui.components.RichTextWithImages(
+                                    htmlContent = richBody,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
                 }
@@ -607,7 +647,7 @@ internal fun DeletedEventDetailDialog(
                     HorizontalDivider()
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = event.body.replace(HTML_TAG_REGEX, "").trim(),
+                        text = htmlVisibleText(event.body).trim(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 10,

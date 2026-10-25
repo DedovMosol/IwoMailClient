@@ -490,7 +490,7 @@ $SOAP_ENVELOPE_END"""
         isAllDay: Boolean = false
     ): String {
         val locationXml = if (location.isNotBlank()) "<t:Location>${XmlUtils.escape(location)}</t:Location>" else ""
-        val bodyXml = if (body.isNotBlank()) """<t:Body BodyType="Text">${XmlUtils.escape(body)}</t:Body>""" else ""
+        val bodyXml = if (body.isNotBlank()) """<t:Body BodyType="${CalendarBodyFormat.ewsType(body)}">${XmlUtils.escape(body)}</t:Body>""" else ""
         
         return """
             ${SOAP_ENVELOPE_START}

@@ -93,7 +93,7 @@ class CalendarExceptionService(
             append("<calendar:Location>$escapedLocation</calendar:Location>")
             if (majorVersion >= 14) {
                 append("<airsyncbase:Body>")
-                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Type>${CalendarBodyFormat.easType(body)}</airsyncbase:Type>")
                 append("<airsyncbase:Data>$escapedBody</airsyncbase:Data>")
                 append("</airsyncbase:Body>")
             }
@@ -127,7 +127,7 @@ class CalendarExceptionService(
             if (ex.location.isNotBlank()) append("<calendar:Location>${escapeXml(ex.location)}</calendar:Location>")
             if (ex.body.isNotBlank() && majorVersion >= 14) {
                 append("<airsyncbase:Body>")
-                append("<airsyncbase:Type>1</airsyncbase:Type>")
+                append("<airsyncbase:Type>${CalendarBodyFormat.easType(ex.body)}</airsyncbase:Type>")
                 append("<airsyncbase:Data>${escapeXml(ex.body)}</airsyncbase:Data>")
                 append("</airsyncbase:Body>")
             }
@@ -256,7 +256,7 @@ class CalendarExceptionService(
             val rawBody = "<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>"
                 .toRegex(RegexOption.DOT_MATCHES_ALL)
                 .find(xml)?.groupValues?.getOrNull(1)?.trim() ?: ""
-            val body = CalendarDateUtils.removeDuplicateLines(XmlUtils.unescape(rawBody))
+            val body = CalendarBodyFormat.normalizeIncoming(XmlUtils.unescape(rawBody))
             val startMs = CalendarDateUtils.parseEwsDateTime(XmlValueExtractor.extractEws(xml, "Start")) ?: 0L
             val endMs = CalendarDateUtils.parseEwsDateTime(XmlValueExtractor.extractEws(xml, "End")) ?: 0L
             val location = XmlValueExtractor.extractEws(xml, "Location") ?: ""

@@ -1,6 +1,7 @@
 ﻿package com.dedovmosol.iwomail.ui.screens
 
 import com.dedovmosol.iwomail.util.SafeToast
+import com.dedovmosol.iwomail.util.htmlVisibleText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -94,6 +95,16 @@ internal fun expandRecurringForRange(
 
     return result.sortedBy { it.startTime }
 }
+
+/**
+ * Совпадение поиска: тема, место и ВИДИМЫЙ текст тела. Тело события — HTML (синк просит Type=2),
+ * поэтому сырой текст дал бы совпадения по разметке и CSS («div», «font», «MsoNormal»).
+ * [bodyText] — извлечение текста с кэшем: вхождения серии разделяют одну строку тела.
+ */
+private fun CalendarEventEntity.matchesSearch(query: String, bodyText: (String) -> String): Boolean =
+    subject.contains(query, ignoreCase = true) ||
+        location.contains(query, ignoreCase = true) ||
+        bodyText(body).contains(query, ignoreCase = true)
 
 private fun buildRecurringOccurrenceSelectionId(
     event: CalendarEventEntity,
@@ -278,6 +289,11 @@ fun CalendarScreen(
         selectedEventIds = emptySet()
     }
 
+    // Видимый текст тел для поиска: извлекается лениво (только при непустом запросе) один раз на тело
+    // и переиспользуется между нажатиями клавиш; сбрасывается вместе со списком событий.
+    val bodySearchText = remember(events, deletedEvents) { HashMap<String, String>() }
+    val bodyText: (String) -> String = { body -> bodySearchText.getOrPut(body) { htmlVisibleText(body) } }
+
     // Фильтрация по поиску и по дате (с разворачиванием повторяющихся событий)
     val filteredEvents = remember(events, deletedEvents, debouncedSearchQuery, dateFilter) {
         // Сначала фильтруем по дате
@@ -338,11 +354,7 @@ fun CalendarScreen(
         if (debouncedSearchQuery.isBlank()) {
             dateFiltered
         } else {
-            dateFiltered.filter { event ->
-                event.subject.contains(debouncedSearchQuery, ignoreCase = true) ||
-                event.location.contains(debouncedSearchQuery, ignoreCase = true) ||
-                event.body.contains(debouncedSearchQuery, ignoreCase = true)
-            }
+            dateFiltered.filter { event -> event.matchesSearch(debouncedSearchQuery, bodyText) }
         }
     }
 
@@ -374,11 +386,7 @@ fun CalendarScreen(
             else -> events
         }
         if (debouncedSearchQuery.isBlank()) base
-        else base.filter { event ->
-            event.subject.contains(debouncedSearchQuery, ignoreCase = true) ||
-            event.location.contains(debouncedSearchQuery, ignoreCase = true) ||
-            event.body.contains(debouncedSearchQuery, ignoreCase = true)
-        }
+        else base.filter { event -> event.matchesSearch(debouncedSearchQuery, bodyText) }
     }
 
     // Виртуальные occurrence (_occ_) ищутся в filteredEvents (содержит развёрнутые повторения),

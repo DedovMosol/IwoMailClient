@@ -182,4 +182,36 @@ class HtmlUtilsTest {
         val decoded = HtmlRegex.HTML_ENTITY.replace(input) { HtmlRegex.decodeNumericEntity(it) }
         assertThat(decoded).isEqualTo(input)
     }
+
+    @Test
+    fun `decodeNumericEntity keeps supplementary code points whole`() {
+        // U+1F600 вне BMP: прежний toChar() обрезал до U+F600.
+        val decoded = HtmlRegex.HTML_ENTITY.replace("&#x1F600;") { HtmlRegex.decodeNumericEntity(it) }
+        assertThat(decoded).isEqualTo("\uD83D\uDE00")
+        val outOfRange = "&#x110000;"
+        assertThat(HtmlRegex.HTML_ENTITY.replace(outOfRange) { HtmlRegex.decodeNumericEntity(it) }).isEqualTo(outOfRange)
+    }
+
+    // ===================== decodeHtmlEntities / htmlVisibleText =====================
+
+    @Test
+    fun `decodeHtmlEntities decodes amp last so encoded entities stay text`() {
+        assertThat(decodeHtmlEntities("a &lt;b&gt; &amp;lt; &#1058;&#x435;&#x441;&#x442; &quot;q&quot;&nbsp;x"))
+            .isEqualTo("a <b> &lt; Тест \"q\" x")
+        assertThat(decodeHtmlEntities("&amp;#65;")).isEqualTo("&#65;")
+        assertThat(decodeHtmlEntities("no entities")).isEqualTo("no entities")
+    }
+
+    @Test
+    fun `htmlVisibleText drops markup, styles and comments but keeps block breaks`() {
+        val outlook = "<html><head><style>p.MsoNormal {margin:0}</style></head><body>" +
+            "<!--[if gte mso 9]>junk<![endif]--><div>Hello <b>big</b> world</div><div>Line&nbsp;2</div></body></html>"
+        assertThat(htmlVisibleText(outlook)).isEqualTo("Hello big world\nLine 2")
+    }
+
+    @Test
+    fun `htmlVisibleText does not turn encoded text into tags and leaves plain text alone`() {
+        assertThat(htmlVisibleText("<p>if a &lt;div&gt; b</p>")).isEqualTo("if a <div> b")
+        assertThat(htmlVisibleText("plain  text\n\nkept")).isEqualTo("plain  text\n\nkept")
+    }
 }

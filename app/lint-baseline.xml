@@ -8,7 +8,7 @@
         errorLine2="                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CalendarAttachmentsList.kt"
-            line="224"
+            line="234"
             column="45"/>
     </issue>
 
@@ -151,7 +151,7 @@
         errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CalendarAttachmentsList.kt"
-            line="291"
+            line="301"
             column="53"/>
     </issue>
 
@@ -587,12 +587,12 @@
     <issue
         id="SetJavaScriptEnabled"
         message="Using `setJavaScriptEnabled` can introduce XSS vulnerabilities into your application, review carefully"
-        errorLine1="                                                javaScriptEnabled = true // Нужен для измерения высоты"
-        errorLine2="                                                ~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine1="                            javaScriptEnabled = true // Нужен для измерения высоты"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/EmailDetailScreen.kt"
-            line="1516"
-            column="49"/>
+            file="src/main/java/com/dedovmosol/iwomail/ui/components/HtmlBodyView.kt"
+            line="81"
+            column="29"/>
     </issue>
 
     <issue
@@ -1057,12 +1057,12 @@
     <issue
         id="ClickableViewAccessibility"
         message="`onTouch` lambda should call `View#performClick` when a click is detected"
-        errorLine1="                                            setOnTouchListener { v, event ->"
-        errorLine2="                                                               ^">
+        errorLine1="                        setOnTouchListener { v, event ->"
+        errorLine2="                                           ^">
         <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/EmailDetailScreen.kt"
-            line="1543"
-            column="64"/>
+            file="src/main/java/com/dedovmosol/iwomail/ui/components/HtmlBodyView.kt"
+            line="108"
+            column="44"/>
     </issue>
 
     <issue

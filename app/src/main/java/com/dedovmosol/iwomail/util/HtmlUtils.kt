@@ -42,12 +42,21 @@ object HtmlRegex {
             } else {
                 raw.toInt()
             }
-            code.toChar().toString()
+            // Code point, а не Char: эмодзи и прочие символы вне BMP (> U+FFFF) — суррогатная пара.
+            if (Character.isValidCodePoint(code)) String(Character.toChars(code)) else match.value
         } catch (_: Exception) {
             match.value
         }
     }
 }
+
+/** Блочные теги и `<br>`: при извлечении текста дают перевод строки (иначе «a</div><div>b» → «ab»). */
+private val BLOCK_TAG_REGEX = Regex(
+    "(?i)</?(?:br|p|div|tr|td|th|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|pre|hr)\\b[^>]*>"
+)
+
+/** Серия переводов строк с пробелами вокруг: соседние блочные теги («</div><div>») — один перенос. */
+private val NEWLINE_RUN_REGEX = Regex("[ \\t]*(?:\\r?\\n[ \\t]*)+")
 
 private val HTML_EMAIL_FRAGMENT = Regex(
     "(?i)<\\s*(html|body|div|p|br|table|tr|td|th|tbody|thead|span|a|img|strong|b|i|em|u|blockquote|ul|ol|li|font|style|head)\\b"
@@ -118,6 +127,49 @@ fun looksLikeEncodedHtmlEmailContent(text: String): Boolean =
     ENCODED_HTML_EMAIL_FRAGMENT.containsMatchIn(text)
 
 /**
+ * Убирает из HTML блоки, текст которых не является содержимым: `<head>`, `<style>`, `<script>`,
+ * комментарии (в т.ч. условные комментарии Word/Outlook). Без этого при снятии тегов CSS Outlook
+ * («p.MsoNormal {…}») попадает в текстовое превью.
+ */
+fun stripNonContentHtml(html: String): String = html
+    .replace(HtmlRegex.STYLE, "")
+    .replace(HtmlRegex.SCRIPT, "")
+    .replace(HtmlRegex.COMMENT, "")
+    .replace(HtmlRegex.HEAD, "")
+
+/**
+ * Раскрывает HTML-сущности: базовые именованные и числовые (`&#1058;`, `&#x41;` — так Word/Outlook
+ * кодирует не-ASCII при `charset=us-ascii`). `&amp;` — последним, чтобы `&amp;lt;` остался текстом `&lt;`.
+ */
+fun decodeHtmlEntities(text: String): String {
+    if (text.indexOf('&') < 0) return text
+    return text
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace(HtmlRegex.HTML_ENTITY) { HtmlRegex.decodeNumericEntity(it) }
+        .replace("&amp;", "&")
+}
+
+/**
+ * Видимый текст HTML (поиск, текстовые превью): без служебных блоков и тегов, блочные теги — переводы
+ * строк (серия подряд — один), сущности раскрыты. Текст без HTML-разметки возвращается как есть.
+ */
+fun htmlVisibleText(text: String): String {
+    if (!looksLikeHtmlEmailContent(text)) return text
+    return decodeHtmlEntities(
+        stripNonContentHtml(text)
+            .replace(BLOCK_TAG_REGEX, "\n")
+            .replace(HtmlRegex.TAG, "")
+    )
+        .replace('\u00A0', ' ')
+        .replace(NEWLINE_RUN_REGEX, "\n")
+        .trim()
+}
+
+/**
  * Очистка HTML-тегов из текста, если он содержит HTML-разметку.
  * Exchange 2007 SP1 возвращает тело задач/заметок в HTML из Outlook.
  */
@@ -126,11 +178,7 @@ fun stripHtmlIfNeeded(text: String): String {
     if (!lower.contains("<html") && !lower.contains("<body") && !lower.contains("<font")) {
         return text
     }
-    return text
-        .replace(HtmlRegex.STYLE, "")
-        .replace(HtmlRegex.SCRIPT, "")
-        .replace(HtmlRegex.COMMENT, "")
-        .replace(HtmlRegex.HEAD, "")
+    return stripNonContentHtml(text)
         .replace(HtmlRegex.BR, "\n")
         .replace(HtmlRegex.P_OPEN, "\n")
         .replace(HtmlRegex.P_CLOSE, "")

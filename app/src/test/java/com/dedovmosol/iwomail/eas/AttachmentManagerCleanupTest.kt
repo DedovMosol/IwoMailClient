@@ -24,39 +24,47 @@ class AttachmentManagerCleanupTest {
 
     private val eightDaysMs = 8L * 24 * 60 * 60 * 1000
 
-    private fun fileIn(dirName: String, fileName: String, ageMs: Long): File {
-        val dir = File(tempFolder.root, dirName).apply { mkdirs() }
+    private val filesRoot get() = File(tempFolder.root, "files")
+    private val cacheRoot get() = File(tempFolder.root, "cache")
+
+    private fun fileIn(root: File, dirName: String, fileName: String, ageMs: Long): File {
+        val dir = File(root, dirName).apply { mkdirs() }
         val f = File(dir, fileName)
         f.writeBytes(ByteArray(10))
         f.setLastModified(System.currentTimeMillis() - ageMs)
         return f
     }
 
+    private fun context(): Context = mockk<Context>().also {
+        every { it.filesDir } returns filesRoot
+        every { it.cacheDir } returns cacheRoot
+    }
+
     @Test
     fun `removes files older than 7 days across all temp dirs and keeps recent`() {
-        val context = mockk<Context>()
-        every { context.filesDir } returns tempFolder.root
+        val oldCache = fileIn(filesRoot, "attachments", "old.dat", eightDaysMs)
+        val oldReply = fileIn(filesRoot, "reply_attachments", "old.dat", eightDaysMs)
+        val oldForward = fileIn(filesRoot, "forward_attachments", "old.dat", eightDaysMs)
+        val oldDraft = fileIn(filesRoot, "draft_attachments", "old.dat", eightDaysMs)
+        val recent = fileIn(filesRoot, "draft_attachments", "recent.dat", 0L)
+        // Кэш inline-картинок календаря живёт в cacheDir — тот же порог.
+        val oldInline = fileIn(cacheRoot, "calendar_inline", "old.bin", eightDaysMs)
+        val recentInline = fileIn(cacheRoot, "calendar_inline", "recent.bin", 0L)
 
-        val oldCache = fileIn("attachments", "old.dat", eightDaysMs)
-        val oldReply = fileIn("reply_attachments", "old.dat", eightDaysMs)
-        val oldForward = fileIn("forward_attachments", "old.dat", eightDaysMs)
-        val oldDraft = fileIn("draft_attachments", "old.dat", eightDaysMs)
-        val recent = fileIn("draft_attachments", "recent.dat", 0L)
-
-        AttachmentManager.cleanupOldAttachments(context)
+        AttachmentManager.cleanupOldAttachments(context())
 
         assertThat(oldCache.exists()).isFalse()
         assertThat(oldReply.exists()).isFalse()
         assertThat(oldForward.exists()).isFalse()
         assertThat(oldDraft.exists()).isFalse()
         assertThat(recent.exists()).isTrue()
+        assertThat(oldInline.exists()).isFalse()
+        assertThat(recentInline.exists()).isTrue()
     }
 
     @Test
     fun `missing dirs are a safe no-op`() {
-        val context = mockk<Context>()
-        every { context.filesDir } returns tempFolder.root
         // Каталоги не создаём — вызов не должен бросать исключений.
-        AttachmentManager.cleanupOldAttachments(context)
+        AttachmentManager.cleanupOldAttachments(context())
     }
 }

@@ -152,8 +152,8 @@ class EasCalendarSyncService(
             <WindowSize>100</WindowSize>
             <Options>
                 <airsyncbase:BodyPreference>
-                    <airsyncbase:Type>1</airsyncbase:Type>
-                    <airsyncbase:TruncationSize>200000</airsyncbase:TruncationSize>
+                    <airsyncbase:Type>${CalendarBodyFormat.EAS_TYPE_HTML}</airsyncbase:Type>
+                    <airsyncbase:TruncationSize>${CalendarBodyFormat.SYNC_TRUNCATION_SIZE}</airsyncbase:TruncationSize>
                 </airsyncbase:BodyPreference>
             </Options>
         </Collection>

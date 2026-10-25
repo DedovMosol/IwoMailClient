@@ -1069,6 +1069,19 @@ class CalendarRepository(private val context: Context) {
 
     // === Скачивание вложений календаря ===
 
+    private val inlineImages by lazy {
+        CalendarInlineImages(context.cacheDir) { accountId, fileReference ->
+            downloadCalendarAttachment(accountId, fileReference)
+        }
+    }
+
+    /**
+     * Inline-картинки тела события: Content-ID → data URL (для показа и редактирования). В БД тело
+     * остаётся серверным (с `cid:`), подстановка — только в памяти UI.
+     */
+    suspend fun loadInlineImages(event: CalendarEventEntity): Map<String, String> =
+        inlineImages.load(event.accountId, event.body, event.attachments)
+
     /**
      * Скачивание вложения события календаря
      * @param accountId ID аккаунта

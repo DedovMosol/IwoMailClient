@@ -112,15 +112,9 @@ internal fun extractEmailFromString(raw: String, queryHint: String? = null): Str
     return emails.firstOrNull()
 }
 
-internal fun replaceCidWithDataUrl(html: String, inlineImages: Map<String, String>): String {
-    var result = html
-    inlineImages.forEach { (cid, dataUrl) ->
-        result = result
-            .replace("cid:$cid", dataUrl)
-            .replace("cid:${cid.removePrefix("<").removeSuffix(">")}", dataUrl)
-    }
-    return result
-}
+/** DRY: единая потокенная замена `cid:` (см. [com.dedovmosol.iwomail.util.replaceInlineCids]). */
+internal fun replaceCidWithDataUrl(html: String, inlineImages: Map<String, String>): String =
+    com.dedovmosol.iwomail.util.replaceInlineCids(html, inlineImages)
 
 /**
  * Нормализует строку получателей: разбивает по запятым/точкам с запятой, извлекает валидные
