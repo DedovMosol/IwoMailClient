@@ -11,6 +11,8 @@
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white">
 </p>
 
+<div align="justify">
+
 🇬🇧 **English:** [README_EN.md](README_EN.md)
 
 Почтовый клиент для Android с основным фокусом на **Microsoft Exchange Server 2007 SP1+** через **Exchange ActiveSync (EAS)** и **Exchange Web Services (EWS)**. IMAP/POP3 присутствуют как beta-направление с ограниченной функциональностью.
@@ -217,3 +219,5 @@ Background
 ---
 
 © 2025-2026 DedovMosol
+
+</div>

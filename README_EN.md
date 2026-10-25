@@ -11,6 +11,8 @@
   <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white">
 </p>
 
+<div align="justify">
+
 🇷🇺 **Русская версия:** [README.md](README.md)
 
 Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through **Exchange ActiveSync (EAS)** and **Exchange Web Services (EWS)**. IMAP/POP3 are present as a beta direction with limited functionality.
@@ -217,3 +219,5 @@ Licensed under the [GNU General Public License v3.0](LICENSE). Releases made bef
 ---
 
 © 2025-2026 DedovMosol
+
+</div>
