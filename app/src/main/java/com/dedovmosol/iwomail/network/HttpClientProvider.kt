@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.network
 
 import okhttp3.ConnectionSpec
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import java.io.File
 import java.security.SecureRandom
@@ -28,6 +29,19 @@ object HttpClientProvider {
         }
     }
     
+    // Общий Dispatcher для ВСЕХ клиентов (base/trust-all/cert/system наследуют его через
+    // newBuilder()). EAS Direct Push держит по одному долгому async Ping на каждый ящик
+    // (heartbeat до 30 мин, readTimeout = heartbeat+60с). Дефолт OkHttp ограничивает async-вызовы
+    // до maxRequestsPerHost=5, поэтому 6+ ящиков на ОДНОМ Exchange-хосте голодали бы: лишние Ping
+    // бесконечно висят в очереди (нет push у этих ящиков), а занятые Ping-слоты ещё и задерживают
+    // обычный Sync к тому же хосту. Поднимаем лимиты (ограниченно) — голодание устранено.
+    private val sharedDispatcher: Dispatcher by lazy {
+        Dispatcher().apply {
+            maxRequests = 128
+            maxRequestsPerHost = 32
+        }
+    }
+
     // Базовый клиент с дефолтными настройками
     private val baseClient: OkHttpClient by lazy {
         createBaseClient()
@@ -329,6 +343,7 @@ object HttpClientProvider {
     
     private fun createBaseClient(): OkHttpClient {
         val builder = OkHttpClient.Builder()
+            .dispatcher(sharedDispatcher)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
