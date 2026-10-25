@@ -25,7 +25,7 @@ fun ScheduleSendDialog(
 ) {
     val context = LocalContext.current
     var showCustomPicker by rememberSaveable { mutableStateOf(false) }
-    var customDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
+    var customDateMillis by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     val customDate = remember(customDateMillis) { Calendar.getInstance().apply { timeInMillis = customDateMillis } }
     
     // Кэшируем Calendar и варианты времени для оптимизации recomposition

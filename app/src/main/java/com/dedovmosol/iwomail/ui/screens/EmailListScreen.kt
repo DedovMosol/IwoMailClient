@@ -831,7 +831,7 @@ private fun EmailList(
     val showScrollButton = emails.size > 5
     val pullRefreshState = rememberPullRefreshState(isRefreshing, onRetry)
 
-    var previousEmailCount by remember { mutableStateOf(emails.size) }
+    var previousEmailCount by remember { mutableIntStateOf(emails.size) }
     LaunchedEffect(emails.size) {
         if (emails.size > previousEmailCount && previousEmailCount > 0 &&
             listState.firstVisibleItemIndex == 0) {

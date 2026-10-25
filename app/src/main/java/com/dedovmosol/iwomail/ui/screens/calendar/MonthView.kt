@@ -48,8 +48,8 @@ internal fun MonthView(
     val calendar = Calendar.getInstance()
     calendar.time = selectedDate
     
-    var currentMonth by remember(selectedDate) { mutableStateOf(calendar.get(Calendar.MONTH)) }
-    var currentYear by remember(selectedDate) { mutableStateOf(calendar.get(Calendar.YEAR)) }
+    var currentMonth by remember(selectedDate) { mutableIntStateOf(calendar.get(Calendar.MONTH)) }
+    var currentYear by remember(selectedDate) { mutableIntStateOf(calendar.get(Calendar.YEAR)) }
     var showYearView by rememberSaveable { mutableStateOf(false) }
     
     val expandedEvents = remember(events, currentMonth, currentYear) {

@@ -1276,6 +1276,9 @@ private fun FeaturePage(
  * Элемент функции с иконкой и описанием
  */
 @Composable
+// iconModifier назван так намеренно: это модификатор ИКОНКИ, а не корня (корень-Row свой).
+// Переименование в `modifier` исказило бы смысл, поэтому ModifierParameter подавляется осознанно.
+@Suppress("ModifierParameter")
 private fun FeatureItem(
     visible: Boolean,
     delay: Int,

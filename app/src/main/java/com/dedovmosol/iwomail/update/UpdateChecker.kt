@@ -771,17 +771,15 @@ class UpdateChecker(context: Context) {
         val channelId = "rollback_install"
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // Создаём notification channel (Android 8+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "Установка обновлений",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Уведомления для установки обновлений и откатов"
-            }
-            notificationManager.createNotificationChannel(channel)
+        // Notification channel (minSdk 26 = Android 8).
+        val channel = NotificationChannel(
+            channelId,
+            "Установка обновлений",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Уведомления для установки обновлений и откатов"
         }
+        notificationManager.createNotificationChannel(channel)
 
         // Intent для установки APK из Downloads
         val installIntent = Intent(Intent.ACTION_VIEW).apply {

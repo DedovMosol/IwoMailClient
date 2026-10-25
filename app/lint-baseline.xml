@@ -4,56 +4,12 @@
     <issue
         id="DefaultLocale"
         message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
-        errorLine1="        return &quot;androidc${String.format(&quot;%010d&quot;, hash % 10000000000L)}&quot;"
-        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/eas/AttachmentManager.kt"
-            line="47"
-            column="27"/>
-    </issue>
-
-    <issue
-        id="DefaultLocale"
-        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
         errorLine1="                                    else -> String.format(&quot;%.1f MB&quot;, att.size / (1024.0 * 1024.0))"
         errorLine2="                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CalendarAttachmentsList.kt"
-            line="223"
+            line="224"
             column="45"/>
-    </issue>
-
-    <issue
-        id="DefaultLocale"
-        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
-        errorLine1="        return String.format("
-        errorLine2="               ^">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/eas/CalendarDateUtils.kt"
-            line="125"
-            column="16"/>
-    </issue>
-
-    <issue
-        id="DefaultLocale"
-        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
-        errorLine1="        val startStr = String.format("
-        errorLine2="                       ^">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/eas/CalendarExceptionService.kt"
-            line="168"
-            column="24"/>
-    </issue>
-
-    <issue
-        id="DefaultLocale"
-        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
-        errorLine1="        val endStr = String.format("
-        errorLine2="                     ^">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/eas/CalendarExceptionService.kt"
-            line="180"
-            column="22"/>
     </issue>
 
     <issue
@@ -85,7 +41,7 @@
         errorLine2="                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CreateEventDialog.kt"
-            line="977"
+            line="991"
             column="45"/>
     </issue>
 
@@ -96,19 +52,8 @@
         errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CreateEventDialog.kt"
-            line="999"
+            line="1013"
             column="43"/>
-    </issue>
-
-    <issue
-        id="DefaultLocale"
-        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
-        errorLine1="        return &quot;androidc${String.format(&quot;%010d&quot;, hash % 10000000000L)}&quot;"
-        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/eas/EasClient.kt"
-            line="410"
-            column="27"/>
     </issue>
 
     <issue
@@ -118,7 +63,7 @@
         errorLine2="                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/ScheduleSendDialog.kt"
-            line="73"
+            line="72"
             column="59"/>
     </issue>
 
@@ -129,7 +74,7 @@
         errorLine2="                                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/ScheduleSendDialog.kt"
-            line="74"
+            line="73"
             column="61"/>
     </issue>
 
@@ -140,7 +85,7 @@
         errorLine2="                                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/ScheduleSendDialog.kt"
-            line="75"
+            line="74"
             column="61"/>
     </issue>
 
@@ -151,7 +96,7 @@
         errorLine2="                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="1868"
+            line="1914"
             column="45"/>
     </issue>
 
@@ -162,7 +107,7 @@
         errorLine2="                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="1888"
+            line="1934"
             column="43"/>
     </issue>
 
@@ -173,7 +118,7 @@
         errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="1908"
+            line="1954"
             column="48"/>
     </issue>
 
@@ -206,7 +151,7 @@
         errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CalendarAttachmentsList.kt"
-            line="290"
+            line="291"
             column="53"/>
     </issue>
 
@@ -217,7 +162,7 @@
         errorLine2="                                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/EmailDetailScreen.kt"
-            line="1321"
+            line="1320"
             column="49"/>
     </issue>
 
@@ -332,13 +277,24 @@
     </issue>
 
     <issue
+        id="TestManifestGradleConfiguration"
+        message="Please use debugImplementation."
+        errorLine1="    testImplementation(&quot;androidx.compose.ui:ui-test-manifest&quot;)"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="201"
+            column="5"/>
+    </issue>
+
+    <issue
         id="GradleDependency"
-        message="A newer version of androidx.core:core-ktx than 1.12.0 is available: 1.19.0"
+        message="A newer version of androidx.core:core-ktx than 1.12.0 is available: 1.19.1"
         errorLine1="    implementation(&quot;androidx.core:core-ktx:1.12.0&quot;)"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="106"
+            line="109"
             column="20"/>
     </issue>
 
@@ -349,7 +305,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="107"
+            line="110"
             column="20"/>
     </issue>
 
@@ -360,7 +316,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="109"
+            line="112"
             column="20"/>
     </issue>
 
@@ -371,7 +327,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="110"
+            line="113"
             column="20"/>
     </issue>
 
@@ -382,7 +338,18 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="111"
+            line="114"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-process than 2.7.0 is available: 2.11.0"
+        errorLine1="    implementation(&quot;androidx.lifecycle:lifecycle-process:2.7.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="117"
             column="20"/>
     </issue>
 
@@ -393,84 +360,84 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="112"
+            line="118"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.compose:compose-bom than 2024.06.00 is available: 2026.06.01"
+        message="A newer version of androidx.compose:compose-bom than 2024.06.00 is available: 2026.09.00"
         errorLine1="    implementation(platform(&quot;androidx.compose:compose-bom:2024.06.00&quot;))"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="115"
+            line="121"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.navigation:navigation-compose than 2.7.6 is available: 2.9.8"
+        message="A newer version of androidx.navigation:navigation-compose than 2.7.6 is available: 2.10.2"
         errorLine1="    implementation(&quot;androidx.navigation:navigation-compose:2.7.6&quot;)"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="128"
+            line="134"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.room:room-runtime than 2.6.1 is available: 2.8.4"
+        message="A newer version of androidx.room:room-runtime than 2.6.1 is available: 2.8.5"
         errorLine1="    implementation(&quot;androidx.room:room-runtime:2.6.1&quot;)"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="131"
+            line="137"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.room:room-ktx than 2.6.1 is available: 2.8.4"
+        message="A newer version of androidx.room:room-ktx than 2.6.1 is available: 2.8.5"
         errorLine1="    implementation(&quot;androidx.room:room-ktx:2.6.1&quot;)"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="132"
+            line="138"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.room:room-compiler than 2.6.1 is available: 2.8.4"
+        message="A newer version of androidx.room:room-compiler than 2.6.1 is available: 2.8.5"
         errorLine1="    ksp(&quot;androidx.room:room-compiler:2.6.1&quot;)"
         errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="133"
+            line="139"
             column="9"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.work:work-runtime-ktx than 2.9.0 is available: 2.11.2"
+        message="A newer version of androidx.work:work-runtime-ktx than 2.9.0 is available: 2.12.0"
         errorLine1="    implementation(&quot;androidx.work:work-runtime-ktx:2.9.0&quot;)"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="150"
+            line="156"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.datastore:datastore-preferences than 1.0.0 is available: 1.2.1"
-        errorLine1="    implementation(&quot;androidx.datastore:datastore-preferences:1.0.0&quot;)"
+        message="A newer version of androidx.datastore:datastore-preferences than 1.1.1 is available: 1.3.0"
+        errorLine1="    implementation(&quot;androidx.datastore:datastore-preferences:1.1.1&quot;)"
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="153"
+            line="162"
             column="20"/>
     </issue>
 
@@ -481,18 +448,62 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="156"
+            line="169"
             column="20"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of io.mockk:mockk than 1.13.8 is available: 1.13.9"
-        errorLine1="    testImplementation(&quot;io.mockk:mockk:1.13.8&quot;)"
-        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~">
+        message="A newer version of androidx.fragment:fragment-ktx than 1.8.6 is available: 1.9.1"
+        errorLine1="    implementation(&quot;androidx.fragment:fragment-ktx:1.8.6&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="168"
+            line="175"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-appwidget than 1.1.1 is available: 1.2.0"
+        errorLine1="    implementation(&quot;androidx.glance:glance-appwidget:1.1.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="178"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.glance:glance-material3 than 1.1.1 is available: 1.2.0"
+        errorLine1="    implementation(&quot;androidx.glance:glance-material3:1.1.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="179"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.test:core than 1.5.0 is available: 1.7.0"
+        errorLine1="    testImplementation(&quot;androidx.test:core:1.5.0&quot;)"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="194"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.compose:compose-bom than 2024.06.00 is available: 2026.09.00"
+        errorLine1="    testImplementation(platform(&quot;androidx.compose:compose-bom:2024.06.00&quot;))"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="199"
             column="24"/>
     </issue>
 
@@ -503,7 +514,7 @@
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="172"
+            line="204"
             column="31"/>
     </issue>
 
@@ -514,19 +525,30 @@
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="173"
+            line="205"
             column="31"/>
     </issue>
 
     <issue
         id="GradleDependency"
-        message="A newer version of androidx.compose:compose-bom than 2024.06.00 is available: 2026.06.01"
+        message="A newer version of androidx.compose:compose-bom than 2024.06.00 is available: 2026.09.00"
         errorLine1="    androidTestImplementation(platform(&quot;androidx.compose:compose-bom:2024.06.00&quot;))"
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="174"
+            line="206"
             column="31"/>
+    </issue>
+
+    <issue
+        id="VisibleForTests"
+        message="This method should only be accessed from tests or within private scope"
+        errorLine1="    private val deviceId = EasClient.generateStableDeviceId(username, deviceIdSuffix)"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/dedovmosol/iwomail/eas/AttachmentManager.kt"
+            line="44"
+            column="38"/>
     </issue>
 
     <issue
@@ -541,134 +563,13 @@
     </issue>
 
     <issue
-        id="ModifierParameter"
-        message="Modifier parameter should be the first optional parameter"
-        errorLine1="    modifier: Modifier = Modifier"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="870"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Modifier parameter should be the first optional parameter"
-        errorLine1="    modifier: Modifier = Modifier"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="1957"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Modifier parameter should be named modifier"
-        errorLine1="    iconModifier: Modifier,"
-        errorLine2="    ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/OnboardingScreen.kt"
-            line="1209"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Optional Modifier parameter should have a default value of `Modifier`"
-        errorLine1="    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/theme/Theme.kt"
-            line="96"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Optional Modifier parameter should have a default value of `Modifier`"
-        errorLine1="    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/theme/Theme.kt"
-            line="198"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Optional Modifier parameter should have a default value of `Modifier`"
-        errorLine1="    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/theme/Theme.kt"
-            line="404"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Optional Modifier parameter should have a default value of `Modifier`"
-        errorLine1="    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/theme/Theme.kt"
-            line="747"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Optional Modifier parameter should have a default value of `Modifier`"
-        errorLine1="    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/theme/Theme.kt"
-            line="807"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Optional Modifier parameter should have a default value of `Modifier`"
-        errorLine1="    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/theme/Theme.kt"
-            line="868"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Optional Modifier parameter should have a default value of `Modifier`"
-        errorLine1="    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,"
-        errorLine2="    ~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/theme/Theme.kt"
-            line="892"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="MissingTranslation"
-        message="&quot;widget_description&quot; is not translated in &quot;ru&quot; (Russian)"
-        errorLine1="    &lt;string name=&quot;widget_description&quot;>Mail, calendar and tasks overview&lt;/string>"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/strings.xml"
-            line="24"
-            column="13"/>
-    </issue>
-
-    <issue
         id="JavascriptInterface"
         message="None of the methods in the added interface (T) have been annotated with `@android.webkit.JavascriptInterface`; they will not be visible in API 17"
         errorLine1="                addJavascriptInterface(jsInterface, &quot;Android&quot;)"
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/components/RichTextEditor.kt"
-            line="1090"
+            line="1092"
             column="17"/>
     </issue>
 
@@ -678,8 +579,8 @@
         errorLine1="        val androidId = android.provider.Settings.Secure.getString("
         errorLine2="                        ^">
         <location
-            file="src/main/java/com/dedovmosol/iwomail/data/repository/AccountRepository.kt"
-            line="1047"
+            file="src/main/java/com/dedovmosol/iwomail/data/security/PasswordStorage.kt"
+            line="218"
             column="25"/>
     </issue>
 
@@ -690,7 +591,7 @@
         errorLine2="                                                ~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/EmailDetailScreen.kt"
-            line="1517"
+            line="1516"
             column="49"/>
     </issue>
 
@@ -701,30 +602,8 @@
         errorLine2="                         ~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt"
-            line="478"
+            line="577"
             column="26"/>
-    </issue>
-
-    <issue
-        id="TrustAllX509TrustManager"
-        message="`checkServerTrusted` is empty, which could cause insecure network traffic due to trusting arbitrary TLS/SSL certificates presented by peers"
-        errorLine1="            override fun checkServerTrusted(chain: Array&lt;X509Certificate>, authType: String) {}"
-        errorLine2="                         ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt"
-            line="479"
-            column="26"/>
-    </issue>
-
-    <issue
-        id="AcceptsUserCertificates"
-        message="The Network Security Configuration allows the use of user certificates in the release version of your app"
-        errorLine1="            &lt;certificates src=&quot;user&quot;/>"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/xml/network_security_config.xml"
-            line="8"
-            column="13"/>
     </issue>
 
     <issue
@@ -734,7 +613,7 @@
         errorLine2="            ~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt"
-            line="439"
+            line="501"
             column="13"/>
     </issue>
 
@@ -745,7 +624,7 @@
         errorLine2="               ~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt"
-            line="477"
+            line="576"
             column="16"/>
     </issue>
 
@@ -756,7 +635,7 @@
         errorLine2="               ~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt"
-            line="496"
+            line="598"
             column="16"/>
     </issue>
 
@@ -767,162 +646,30 @@
         errorLine2="               ~~~~~~">
         <location
             file="src/main/java/com/dedovmosol/iwomail/network/HttpClientProvider.kt"
-            line="561"
+            line="663"
             column="16"/>
     </issue>
 
     <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="StaticFieldLeak"
+        message="This field leaks a context object"
+        errorLine1="    private val context: Context, // applicationContext"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
-            file="src/main/java/com/dedovmosol/iwomail/sync/CalendarReminderReceiver.kt"
-            line="192"
-            column="24"/>
+            file="src/main/java/com/dedovmosol/iwomail/ui/screens/compose/ComposeViewModel.kt"
+            line="93"
+            column="5"/>
     </issue>
 
     <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `PasswordStorage` which has field `context` pointing to `Context`); this is a memory leak"
+        errorLine1="        @Volatile"
+        errorLine2="        ^">
         <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/components/EasterEggOverlay.kt"
-            line="121"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="593"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="638"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="658"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="671"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="720"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="            } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {"
-        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="750"
-            column="24"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/sync/PushService.kt"
-            line="104"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/sync/PushService.kt"
-            line="138"
-            column="21"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="                val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
-        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/sync/PushService.kt"
-            line="176"
-            column="41"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/sync/PushService.kt"
-            line="190"
-            column="28"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
-        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/sync/TaskReminderReceiver.kt"
-            line="170"
-            column="24"/>
-    </issue>
-
-    <issue
-        id="ObsoleteSdkInt"
-        message="Unnecessary; SDK_INT is always >= 26"
-        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/update/UpdateChecker.kt"
-            line="771"
-            column="13"/>
+            file="src/main/java/com/dedovmosol/iwomail/data/security/PasswordStorage.kt"
+            line="165"
+            column="9"/>
     </issue>
 
     <issue
@@ -944,17 +691,6 @@
         <location
             file="src/main/java/com/dedovmosol/iwomail/data/repository/RepositoryProvider.kt"
             line="14"
-            column="5"/>
-    </issue>
-
-    <issue
-        id="StaticFieldLeak"
-        message="Do not place Android context classes in static fields (static reference to `NoteRepository` which has field `context` pointing to `Context`); this is a memory leak"
-        errorLine1="    @Volatile"
-        errorLine2="    ^">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/data/repository/RepositoryProvider.kt"
-            line="20"
             column="5"/>
     </issue>
 
@@ -982,13 +718,35 @@
 
     <issue
         id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `SecurityTelemetry` which has field `context` pointing to `Context`); this is a memory leak"
+        errorLine1="        @Volatile"
+        errorLine2="        ^">
+        <location
+            file="src/main/java/com/dedovmosol/iwomail/data/security/SecurityTelemetry.kt"
+            line="145"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
         message="Do not place Android context classes in static fields (static reference to `SettingsRepository` which has field `context` pointing to `Context`); this is a memory leak"
         errorLine1="        @Volatile"
         errorLine2="        ^">
         <location
             file="src/main/java/com/dedovmosol/iwomail/data/repository/SettingsRepository.kt"
-            line="32"
+            line="42"
             column="9"/>
+    </issue>
+
+    <issue
+        id="VectorPath"
+        message="Very long vector path (2071 characters), which is bad for performance. Considering reducing precision, removing minor details or rasterizing vector."
+        errorLine1="        android:pathData=&quot;M17.81,4.47c-0.08,0 -0.16,-0.02 -0.23,-0.06C15.66,3.42 14,3 12.01,3c-1.98,0 -3.86,0.47 -5.57,1.41 -0.24,0.13 -0.54,0.04 -0.68,-0.2 -0.13,-0.24 -0.04,-0.55 0.2,-0.68C7.82,2.52 9.86,2 12.01,2c2.13,0 3.99,0.47 6.03,1.52 0.25,0.13 0.34,0.43 0.21,0.67 -0.09,0.18 -0.26,0.28 -0.44,0.28zM3.5,9.72c-0.1,0 -0.2,-0.03 -0.29,-0.09 -0.23,-0.16 -0.28,-0.47 -0.12,-0.7 0.99,-1.4 2.25,-2.5 3.75,-3.27C9.98,4.04 14,4.03 17.15,5.65c1.5,0.77 2.76,1.86 3.75,3.25 0.16,0.22 0.11,0.54 -0.12,0.7 -0.23,0.16 -0.54,0.11 -0.7,-0.12 -0.9,-1.26 -2.04,-2.25 -3.39,-2.94 -2.87,-1.47 -6.54,-1.47 -9.4,0.01 -1.36,0.7 -2.5,1.7 -3.4,2.96 -0.08,0.14 -0.23,0.21 -0.39,0.21zM9.75,21.79c-0.13,0 -0.26,-0.05 -0.35,-0.15 -0.87,-0.87 -1.34,-1.43 -2.01,-2.64 -0.69,-1.23 -1.05,-2.73 -1.05,-4.34 0,-2.97 2.54,-5.39 5.66,-5.39s5.66,2.42 5.66,5.39c0,0.28 -0.22,0.5 -0.5,0.5s-0.5,-0.22 -0.5,-0.5c0,-2.42 -2.09,-4.39 -4.66,-4.39s-4.66,1.97 -4.66,4.39c0,1.44 0.32,2.77 0.93,3.85 0.64,1.15 1.08,1.64 1.85,2.42 0.19,0.2 0.19,0.51 0,0.71 -0.11,0.1 -0.24,0.15 -0.37,0.15zM16.92,19.94c-1.19,0 -2.24,-0.3 -3.1,-0.89 -1.49,-1.01 -2.38,-2.65 -2.38,-4.39 0,-0.28 0.22,-0.5 0.5,-0.5s0.5,0.22 0.5,0.5c0,1.41 0.72,2.74 1.94,3.56 0.71,0.48 1.54,0.71 2.54,0.71 0.24,0 0.64,-0.03 1.04,-0.1 0.27,-0.05 0.53,0.13 0.58,0.41 0.05,0.27 -0.13,0.53 -0.41,0.58 -0.57,0.11 -1.07,0.12 -1.21,0.12zM14.91,22c-0.04,0 -0.09,-0.01 -0.13,-0.02 -1.59,-0.44 -2.63,-1.03 -3.72,-2.1 -1.4,-1.39 -2.17,-3.24 -2.17,-5.22 0,-1.62 1.38,-2.94 3.08,-2.94s3.08,1.32 3.08,2.94c0,1.07 0.93,1.94 2.08,1.94s2.08,-0.87 2.08,-1.94c0,-3.77 -3.25,-6.83 -7.25,-6.83 -2.84,0 -5.44,1.58 -6.61,4.03 -0.39,0.81 -0.59,1.76 -0.59,2.8 0,0.78 0.07,2.01 0.67,3.61 0.1,0.26 -0.03,0.55 -0.29,0.64 -0.26,0.1 -0.55,-0.04 -0.64,-0.29 -0.49,-1.31 -0.73,-2.61 -0.73,-3.96 0,-1.2 0.23,-2.29 0.68,-3.24 1.33,-2.79 4.28,-4.6 7.51,-4.6 4.55,0 8.25,3.51 8.25,7.83 0,1.62 -1.38,2.94 -3.08,2.94s-3.08,-1.32 -3.08,-2.94c0,-1.07 -0.93,-1.94 -2.08,-1.94s-2.08,0.87 -2.08,1.94c0,1.71 0.66,3.31 1.87,4.51 0.95,0.94 1.86,1.46 3.27,1.85 0.27,0.07 0.42,0.35 0.35,0.61 -0.05,0.23 -0.26,0.38 -0.47,0.38z&quot;/>"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/drawable/ic_fingerprint.xml"
+            line="8"
+            column="27"/>
     </issue>
 
     <issue
@@ -1025,409 +783,13 @@
     </issue>
 
     <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var protocolTapCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                               ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/AboutScreen.kt"
-            line="54"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var lastHandledComposeId by rememberSaveable { mutableStateOf(0L) }"
-        errorLine2="                                                   ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/navigation/AppNavigation.kt"
-            line="445"
-            column="52"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var lastHandledEmailIntentId by rememberSaveable { mutableStateOf(0L) }"
-        errorLine2="                                                       ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/navigation/AppNavigation.kt"
-            line="479"
-            column="56"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var lastHandledInboxUnreadIntentId by rememberSaveable { mutableStateOf(0L) }"
-        errorLine2="                                                             ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/navigation/AppNavigation.kt"
-            line="540"
-            column="62"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var syncedForAccountId by rememberSaveable { mutableStateOf(0L) }"
-        errorLine2="                                                 ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/CalendarScreen.kt"
-            line="133"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var selectedDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }"
-        errorLine2="                                                 ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/CalendarScreen.kt"
-            line="171"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                                 ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/CalendarScreen.kt"
-            line="211"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var dragStartIndex by remember { mutableStateOf(-1) }"
-        errorLine2="                                     ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/components/ComposableUtils.kt"
-            line="318"
-            column="38"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var dragCurrentIndex by remember { mutableStateOf(-1) }"
-        errorLine2="                                       ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/components/ComposableUtils.kt"
-            line="319"
-            column="40"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
-        errorLine1="    var lastPointerY by remember { mutableStateOf(Float.NaN) }"
-        errorLine2="                                   ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/components/ComposableUtils.kt"
-            line="321"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
-        errorLine1="    var autoScrollDelta by remember { mutableStateOf(0f) }"
-        errorLine2="                                      ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/components/ComposableUtils.kt"
-            line="322"
-            column="39"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var pendingGroupColor by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                                ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/ComposeScreen.kt"
-            line="379"
-            column="49"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var reminder by rememberSaveable { mutableStateOf(event?.reminder ?: 15) }"
-        errorLine2="                                       ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CreateEventDialog.kt"
-            line="117"
-            column="40"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var busyStatus by rememberSaveable { mutableStateOf(event?.busyStatus ?: 2) }"
-        errorLine2="                                         ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CreateEventDialog.kt"
-            line="118"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="        mutableStateOf("
-        errorLine2="        ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/CreateEventDialog.kt"
-            line="122"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="                        var webViewHeight by remember(emailId) { mutableStateOf(0) }"
-        errorLine2="                                                                 ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/EmailDetailScreen.kt"
-            line="1472"
-            column="66"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var previousEmailCount by remember { mutableStateOf(emails.size) }"
-        errorLine2="                                         ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/EmailListScreen.kt"
-            line="837"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    private var openInboxUnreadIntentId = mutableStateOf(0L)"
-        errorLine2="                                          ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="194"
-            column="43"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    private var openEmailIntentId = mutableStateOf(0L)"
-        errorLine2="                                    ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="196"
-            column="37"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    private var composeIntentId = mutableStateOf(0L)"
-        errorLine2="                                  ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/MainActivity.kt"
-            line="211"
-            column="35"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var flaggedCount by remember { mutableStateOf(0) }"
-        errorLine2="                                   ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="146"
-            column="36"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var notesCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                         ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="199"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var eventsCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                          ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="200"
-            column="43"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var tasksCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                         ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="201"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var todayEmailsCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                               ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="204"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var todayEventsCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                               ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="205"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var todayTasksCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                              ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/MainScreen.kt"
-            line="206"
-            column="47"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var currentMonth by remember(selectedDate) { mutableStateOf(calendar.get(Calendar.MONTH)) }"
-        errorLine2="                                                 ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/MonthView.kt"
-            line="51"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var currentYear by remember(selectedDate) { mutableStateOf(calendar.get(Calendar.YEAR)) }"
-        errorLine2="                                                ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/calendar/MonthView.kt"
-            line="52"
-            column="49"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var customDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }"
-        errorLine2="                                               ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/ScheduleSendDialog.kt"
-            line="28"
-            column="48"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var selectedColor by rememberSaveable { mutableStateOf(ACCOUNT_COLORS[0]) }"
-        errorLine2="                                            ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/SetupScreen.kt"
-            line="100"
-            column="45"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }"
-        errorLine2="                                                 ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="128"
-            column="50"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var startDate by rememberSaveable { mutableStateOf(task?.startDate ?: 0L) }"
-        errorLine2="                                        ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="1371"
-            column="41"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var dueDate by rememberSaveable { mutableStateOf(task?.dueDate ?: 0L) }"
-        errorLine2="                                      ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="1372"
-            column="39"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
-        errorLine1="    var importance by rememberSaveable { mutableStateOf(task?.importance ?: TaskImportance.NORMAL.value) }"
-        errorLine2="                                         ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="1373"
-            column="42"/>
-    </issue>
-
-    <issue
-        id="AutoboxingStateCreation"
-        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
-        errorLine1="    var reminderTime by rememberSaveable { mutableStateOf(task?.reminderTime ?: 0L) }"
-        errorLine2="                                           ~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/dedovmosol/iwomail/ui/screens/TasksScreen.kt"
-            line="1375"
-            column="44"/>
-    </issue>
-
-    <issue
         id="Overdraw"
         message="Possible overdraw: Root element paints background `#FF1565C0` with a theme that also paints a background (inferred theme is `@style/Theme.IwoMailClient`)"
-        errorLine1="    android:background=&quot;#FF1565C0&quot;>"
+        errorLine1="    android:background=&quot;#FF1565C0&quot;"
         errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="6"
+            line="11"
             column="5"/>
     </issue>
 
@@ -1451,6 +813,72 @@
             file="src/main/res/drawable/ic_telegram.xml"
             line="1"
             column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.security_warning_insecure_storage_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;security_warning_insecure_storage_title&quot;>⚠️ Security Warning&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="40"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.security_warning_insecure_storage_message` appears to be unused"
+        errorLine1="    &lt;string name=&quot;security_warning_insecure_storage_message&quot;>Password encryption is unavailable. Your passwords are stored with reduced protection.&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="41"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.security_warning_insecure_storage_reason` appears to be unused"
+        errorLine1="    &lt;string name=&quot;security_warning_insecure_storage_reason&quot;>Reason: %s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="42"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.security_warning_acknowledge` appears to be unused"
+        errorLine1="    &lt;string name=&quot;security_warning_acknowledge&quot;>I Understand&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="43"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.security_banner_insecure_storage` appears to be unused"
+        errorLine1="    &lt;string name=&quot;security_banner_insecure_storage&quot;>⚠️ Reduced password protection active&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="44"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.security_banner_tap_for_details` appears to be unused"
+        errorLine1="    &lt;string name=&quot;security_banner_tap_for_details&quot;>Tap for details&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="45"
+            column="13"/>
     </issue>
 
     <issue
@@ -1627,101 +1055,13 @@
     </issue>
 
     <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `10sp`"
-        errorLine1="                android:textSize=&quot;10sp&quot; />"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="55"
-            column="17"/>
-    </issue>
-
-    <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `10sp`"
-        errorLine1="            android:textSize=&quot;10sp&quot; />"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="65"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `10sp`"
-        errorLine1="            android:textSize=&quot;10sp&quot; />"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="74"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `10sp`"
-        errorLine1="            android:textSize=&quot;10sp&quot; />"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="83"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `10sp`"
-        errorLine1="            android:textSize=&quot;10sp&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="106"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `10sp`"
-        errorLine1="            android:textSize=&quot;10sp&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="118"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `10sp`"
-        errorLine1="            android:textSize=&quot;10sp&quot;"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="129"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="SmallSp"
-        message="Avoid using sizes smaller than `11sp`: `9sp`"
-        errorLine1="                android:textSize=&quot;9sp&quot; />"
-        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/layout/widget_preview.xml"
-            line="161"
-            column="17"/>
-    </issue>
-
-    <issue
         id="ClickableViewAccessibility"
         message="`onTouch` lambda should call `View#performClick` when a click is detected"
         errorLine1="                                            setOnTouchListener { v, event ->"
         errorLine2="                                                               ^">
         <location
             file="src/main/java/com/dedovmosol/iwomail/ui/screens/EmailDetailScreen.kt"
-            line="1544"
+            line="1543"
             column="64"/>
     </issue>
 
@@ -1776,7 +1116,7 @@
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="45"
+            line="51"
             column="17"/>
     </issue>
 
@@ -1787,7 +1127,7 @@
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="53"
+            line="59"
             column="17"/>
     </issue>
 
@@ -1798,7 +1138,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="63"
+            line="69"
             column="13"/>
     </issue>
 
@@ -1809,7 +1149,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="72"
+            line="78"
             column="13"/>
     </issue>
 
@@ -1820,7 +1160,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="81"
+            line="87"
             column="13"/>
     </issue>
 
@@ -1831,7 +1171,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="104"
+            line="110"
             column="13"/>
     </issue>
 
@@ -1842,7 +1182,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="116"
+            line="122"
             column="13"/>
     </issue>
 
@@ -1853,7 +1193,7 @@
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="127"
+            line="133"
             column="13"/>
     </issue>
 
@@ -1864,7 +1204,7 @@
         errorLine2="                ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="148"
+            line="154"
             column="17"/>
     </issue>
 
@@ -1875,7 +1215,7 @@
         errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="159"
+            line="165"
             column="17"/>
     </issue>
 
@@ -1886,7 +1226,7 @@
         errorLine2="                ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="169"
+            line="175"
             column="17"/>
     </issue>
 
@@ -1897,7 +1237,7 @@
         errorLine2="                ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/layout/widget_preview.xml"
-            line="184"
+            line="190"
             column="17"/>
     </issue>
 

@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Статичный превью-макет для пикера виджетов (android:previewLayout в mail_widget_info.xml).
+     Мелкий текст (9–10sp) намеренный: превью один-в-один повторяет компактный Glance-виджет на
+     домашнем экране. Это не интерактивный, не читаемый TalkBack элемент, поэтому SmallSp здесь
+     подавляется осознанно, чтобы не искажать верность превью. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#FF1565C0">
+    android:background="#FF1565C0"
+    tools:ignore="SmallSp">
 
     <!-- ══════════════════════════════════════ -->
     <!-- ВЕРХ — градиентная часть              -->

@@ -131,7 +131,7 @@ fun CalendarScreen(
     // ID аккаунта, для которого уже был запущен автосинк.
     // rememberSaveable: сохраняется при повороте → не запускает повторный синк для того же аккаунта.
     // При смене accountId значение не совпадёт → синк запустится для нового аккаунта.
-    var syncedForAccountId by rememberSaveable { mutableStateOf(0L) }
+    var syncedForAccountId by rememberSaveable { mutableLongStateOf(0L) }
 
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
@@ -212,7 +212,7 @@ fun CalendarScreen(
     }
     var selectedEventId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
     var viewMode by rememberSaveable { mutableStateOf(CalendarViewMode.AGENDA) }
-    var selectedDateMillis by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
+    var selectedDateMillis by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     val selectedDate = remember(selectedDateMillis) { Date(selectedDateMillis) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var editingEventId by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
@@ -252,7 +252,7 @@ fun CalendarScreen(
 
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
-    var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
+    var deleteConfirmCount by rememberSaveable { mutableIntStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmTargetIds by rememberSaveable(accountId,
         saver = listSaver(

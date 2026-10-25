@@ -315,11 +315,11 @@ fun rememberDragSelectModifier(
 ): Modifier {
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
-    var dragStartIndex by remember { mutableStateOf(-1) }
-    var dragCurrentIndex by remember { mutableStateOf(-1) }
+    var dragStartIndex by remember { mutableIntStateOf(-1) }
+    var dragCurrentIndex by remember { mutableIntStateOf(-1) }
     var initialSelection by remember { mutableStateOf(setOf<String>()) }
-    var lastPointerY by remember { mutableStateOf(Float.NaN) }
-    var autoScrollDelta by remember { mutableStateOf(0f) }
+    var lastPointerY by remember { mutableFloatStateOf(Float.NaN) }
+    var autoScrollDelta by remember { mutableFloatStateOf(0f) }
     var autoScrollJob by remember { mutableStateOf<Job?>(null) }
 
     // rememberUpdatedState — closure всегда видит актуальные значения

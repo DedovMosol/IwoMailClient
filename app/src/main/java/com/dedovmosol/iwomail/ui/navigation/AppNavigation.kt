@@ -441,7 +441,7 @@ fun AppNavigation(
     
     // Обработка mailto: и SEND intent'ов — открываем экран создания письма
     // composeIntentId меняется при каждом новом intent, гарантируя повторную обработку
-    var lastHandledComposeId by rememberSaveable { mutableStateOf(0L) }
+    var lastHandledComposeId by rememberSaveable { mutableLongStateOf(0L) }
     
     LaunchedEffect(composeIntentId, hasCheckedAccounts, startDestination) {
         if (composeIntentId > 0 && composeIntentId != lastHandledComposeId &&
@@ -475,7 +475,7 @@ fun AppNavigation(
     // Храним ID последнего обработанного письма вместо boolean,
     // чтобы повторное уведомление (с другим emailId) тоже обрабатывалось
     // openEmailIntentId меняется при каждом клике на уведомление, гарантируя повторную обработку
-    var lastHandledEmailIntentId by rememberSaveable { mutableStateOf(0L) }
+    var lastHandledEmailIntentId by rememberSaveable { mutableLongStateOf(0L) }
     
     LaunchedEffect(openEmailIntentId, hasCheckedAccounts, startDestination, accountSwitchCompleted) {
         // Обрабатываем только когда всё готово (включая переключение аккаунта)
@@ -536,7 +536,7 @@ fun AppNavigation(
     // Открытие Inbox (непрочитанные) из виджета/уведомления. Через инкрементный intent-id
     // (как openEmailIntentId), а НЕ одноразовый boolean — иначе повторные тапы по аватару
     // виджета/уведомлению перестают навигировать после первого раза за жизнь процесса.
-    var lastHandledInboxUnreadIntentId by rememberSaveable { mutableStateOf(0L) }
+    var lastHandledInboxUnreadIntentId by rememberSaveable { mutableLongStateOf(0L) }
     LaunchedEffect(openInboxUnreadIntentId, hasCheckedAccounts, accountSwitchCompleted) {
         if (openInboxUnreadIntentId > 0L && openInboxUnreadIntentId != lastHandledInboxUnreadIntentId &&
             hasCheckedAccounts && accountSwitchCompleted) {

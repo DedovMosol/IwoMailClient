@@ -207,9 +207,9 @@ class MainActivity : FragmentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
     
-    private var openInboxUnreadIntentId = mutableStateOf(0L)
+    private var openInboxUnreadIntentId = mutableLongStateOf(0L)
     private var openEmailId = mutableStateOf<String?>(null)
-    private var openEmailIntentId = mutableStateOf(0L)
+    private var openEmailIntentId = mutableLongStateOf(0L)
     private var switchToAccountId = mutableStateOf<Long?>(null)
     private var showBatteryDialog = mutableStateOf(false)
     private var showAlarmDialog = mutableStateOf(false)
@@ -224,7 +224,7 @@ class MainActivity : FragmentActivity() {
     private var composeSubject = mutableStateOf<String?>(null)
     private var composeBody = mutableStateOf<String?>(null)
     private var composeAttachments = mutableStateOf<List<android.net.Uri>>(emptyList())
-    private var composeIntentId = mutableStateOf(0L)
+    private var composeIntentId = mutableLongStateOf(0L)
     
     // Открытие экрана обновлений из уведомления
     private var openUpdates = mutableStateOf(false)
@@ -554,7 +554,7 @@ class MainActivity : FragmentActivity() {
             }
         if (emailId != null) {
             openEmailId.value = emailId
-            openEmailIntentId.value++
+            openEmailIntentId.longValue++
             intent.removeExtra(EXTRA_OPEN_EMAIL_ID)
             intent.data = null
             return
@@ -562,7 +562,7 @@ class MainActivity : FragmentActivity() {
         
         if (intent.getBooleanExtra(EXTRA_OPEN_INBOX_UNREAD, false)) {
             // Инкремент intent-id — повторные тапы (виджет/уведомление) навигируют каждый раз.
-            openInboxUnreadIntentId.value++
+            openInboxUnreadIntentId.longValue++
             intent.removeExtra(EXTRA_OPEN_INBOX_UNREAD)
             return
         }
@@ -634,7 +634,7 @@ class MainActivity : FragmentActivity() {
                     intent.data?.let { uri ->
                         if (uri.scheme == "mailto") {
                             parseMailtoUri(uri)
-                            composeIntentId.value++
+                            composeIntentId.longValue++
                             // Очищаем intent чтобы не обрабатывать повторно при повороте экрана
                             intent.data = null
                             intent.action = null
@@ -659,7 +659,7 @@ class MainActivity : FragmentActivity() {
                     composeSubject.value = subj
                     composeBody.value = bodyText
                     composeAttachments.value = if (streamUri != null) listOf(streamUri) else emptyList()
-                    composeIntentId.value++
+                    composeIntentId.longValue++
                     
                     // Очищаем intent
                     intent.action = null
@@ -679,7 +679,7 @@ class MainActivity : FragmentActivity() {
                     composeSubject.value = subj
                     composeBody.value = bodyText
                     composeAttachments.value = streamUris ?: emptyList()
-                    composeIntentId.value++
+                    composeIntentId.longValue++
                     
                     // Очищаем intent
                     intent.action = null
@@ -689,12 +689,11 @@ class MainActivity : FragmentActivity() {
     }
     
     private fun requestPinWidget() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this)
-            val widgetProvider = android.content.ComponentName(this, com.dedovmosol.iwomail.widget.MailWidgetReceiver::class.java)
-            if (appWidgetManager.isRequestPinAppWidgetSupported) {
-                appWidgetManager.requestPinAppWidget(widgetProvider, null, null)
-            }
+        // minSdk 26 (O): pin-widget API доступен всегда.
+        val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this)
+        val widgetProvider = android.content.ComponentName(this, com.dedovmosol.iwomail.widget.MailWidgetReceiver::class.java)
+        if (appWidgetManager.isRequestPinAppWidgetSupported) {
+            appWidgetManager.requestPinAppWidget(widgetProvider, null, null)
         }
     }
     
@@ -798,12 +797,11 @@ class MainActivity : FragmentActivity() {
         // ИСПРАВЛЕНО БАГ #2: Показываем диалог разрешения СРАЗУ после онбоардинга
         // (даже если аккаунта ещё нет) - по требованию пользователя
         lifecycleScope.launch {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val powerManager = getSystemService(android.os.PowerManager::class.java)
-                if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                    showBatteryDialog.value = true
-                    return@launch
-                }
+            // minSdk 26 (>= M): оптимизация батареи доступна всегда.
+            val powerManager = getSystemService(android.os.PowerManager::class.java)
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                showBatteryDialog.value = true
+                return@launch
             }
             
             checkNextPermission()
@@ -818,12 +816,11 @@ class MainActivity : FragmentActivity() {
         permissionsChecked = true
         permissionsDialogsShown = true // Отмечаем что начали показывать диалоги
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val powerManager = getSystemService(android.os.PowerManager::class.java)
-            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                showBatteryDialog.value = true
-                return
-            }
+        // minSdk 26 (>= M): оптимизация батареи доступна всегда.
+        val powerManager = getSystemService(android.os.PowerManager::class.java)
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            showBatteryDialog.value = true
+            return
         }
         
         checkNextPermission()
@@ -831,11 +828,10 @@ class MainActivity : FragmentActivity() {
     
     private fun checkNextPermission() {
         // Проверяем alarm только если батарея уже разрешена
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val powerManager = getSystemService(android.os.PowerManager::class.java)
-            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                return // Батарея ещё не разрешена
-            }
+        // minSdk 26 (>= M): оптимизация батареи доступна всегда.
+        val powerManager = getSystemService(android.os.PowerManager::class.java)
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            return // Батарея ещё не разрешена
         }
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -880,21 +876,20 @@ class MainActivity : FragmentActivity() {
     
     @android.annotation.SuppressLint("BatteryLife")
     private fun openBatterySettings() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        // minSdk 26 (>= M): запрос игнорирования оптимизации батареи доступен всегда.
+        try {
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                android.net.Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        } catch (_: Exception) {
             try {
-                val intent = android.content.Intent(
-                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    android.net.Uri.parse("package:$packageName")
+                val fallbackIntent = android.content.Intent(
+                    android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
                 )
-                startActivity(intent)
-            } catch (_: Exception) {
-                try {
-                    val fallbackIntent = android.content.Intent(
-                        android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
-                    )
-                    startActivity(fallbackIntent)
-                } catch (_: Exception) { }
-            }
+                startActivity(fallbackIntent)
+            } catch (_: Exception) { }
         }
     }
     
@@ -910,7 +905,8 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                 }
-            } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            } else {
+                // minSdk 26 (>= M): API дисплея до R доступно всегда.
                 @Suppress("DEPRECATION")
                 val display = windowManager.defaultDisplay
                 val modes = display.supportedModes

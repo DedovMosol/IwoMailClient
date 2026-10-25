@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -93,7 +94,7 @@ val LocalAnimationsEnabled = compositionLocalOf { true }
 @Composable
 fun AnimatedFab(
     onClick: () -> Unit,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    modifier: Modifier = Modifier,
     containerColor: Color = LocalColorTheme.current.gradientStart,
     contentColor: Color = Color.White,
     content: @Composable () -> Unit
@@ -195,7 +196,7 @@ fun ExchangeMailTheme(
 fun ScaledAlertDialog(
     onDismissRequest: () -> Unit,
     confirmButton: @Composable () -> Unit,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    modifier: Modifier = Modifier,
     dismissButton: @Composable (() -> Unit)? = null,
     icon: @Composable (() -> Unit)? = null,
     title: @Composable (() -> Unit)? = null,
@@ -401,7 +402,7 @@ fun ScaledAlertDialog(
 fun StyledAlertDialog(
     onDismissRequest: () -> Unit,
     confirmButton: @Composable () -> Unit,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    modifier: Modifier = Modifier,
     dismissButton: @Composable (() -> Unit)? = null,
     icon: @Composable (() -> Unit)? = null,
     title: @Composable (() -> Unit)? = null,
@@ -744,7 +745,7 @@ object AppColors {
 fun ThemeOutlinedButton(
     onClick: () -> Unit,
     text: String,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     isLoading: Boolean = false
 ) {
@@ -804,7 +805,7 @@ fun ThemeOutlinedButton(
 @Composable
 fun ThemeButton(
     onClick: () -> Unit,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     isLoading: Boolean = false,
     content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit
@@ -865,7 +866,7 @@ fun ThemeButton(
 fun DeleteButton(
     onClick: () -> Unit,
     text: String,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
     androidx.compose.material3.Button(
@@ -889,7 +890,7 @@ fun DeleteButton(
 @Composable
 fun DeleteButton(
     onClick: () -> Unit,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit
 ) {

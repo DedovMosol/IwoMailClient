@@ -97,7 +97,7 @@ fun SetupScreen(
     var password by remember { mutableStateOf("") }
     var domain by rememberSaveable { mutableStateOf("") }
     var acceptAllCerts by rememberSaveable { mutableStateOf(false) }
-    var selectedColor by rememberSaveable { mutableStateOf(ACCOUNT_COLORS[0]) }
+    var selectedColor by rememberSaveable { mutableIntStateOf(ACCOUNT_COLORS[0]) }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }

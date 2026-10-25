@@ -118,13 +118,10 @@ private fun vibrateDevice(context: Context) {
             context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
         if (vibrator == null || !vibrator.hasVibrator()) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(
-                VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE)
-            )
-        } else {
-            vibrator.vibrate(300)
-        }
+        // minSdk 26 (O): VibrationEffect доступен всегда.
+        vibrator.vibrate(
+            VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE)
+        )
     } catch (_: Exception) {}
 }
 

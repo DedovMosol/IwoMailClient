@@ -1468,7 +1468,7 @@ fun EmailDetailScreen(
                     if (isHtml) {
                         // HTML контент - используем WebView с белым фоном
                         // key нужен чтобы WebView не пересоздавался при рекомпозиции
-                        var webViewHeight by remember(emailId) { mutableStateOf(0) }
+                        var webViewHeight by remember(emailId) { mutableIntStateOf(0) }
                         var webViewRef by remember(emailId) { mutableStateOf<WebView?>(null) }
                         // PERF: Отслеживаем последний загруженный HTML чтобы не перезагружать WebView при каждой рекомпозиции
                         var lastLoadedHtml by remember(emailId) { mutableStateOf("") }

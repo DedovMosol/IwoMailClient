@@ -116,11 +116,8 @@ class PushService : Service() {
 
         fun start(context: Context) {
             val intent = Intent(context, PushService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            // minSdk 26 (O): foreground-сервис всегда через startForegroundService.
+            context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
@@ -150,15 +147,10 @@ class PushService : Service() {
             try {
                 // Неточный alarm — Android может сдвинуть на несколько минут для батч-обработки
                 // Для fallback-синхронизации точность не критична
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setAndAllowWhileIdle(
-                        android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent
-                    )
-                } else {
-                    alarmManager.set(
-                        android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent
-                    )
-                }
+                // minSdk 26 (>= M): неточный alarm с учётом Doze.
+                alarmManager.setAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent
+                )
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "Failed to schedule sync alarm", e)
             }
@@ -198,24 +190,17 @@ class PushService : Service() {
             try {
                 val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                 val intent = Intent(appContext, PushService::class.java)
-                val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    PendingIntent.getForegroundService(
-                        appContext, RESTART_REQUEST_CODE, intent,
-                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                    )
-                } else {
-                    PendingIntent.getService(
-                        appContext, RESTART_REQUEST_CODE, intent,
-                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                    )
-                }
+                // minSdk 26 (O): PendingIntent на foreground-сервис.
+                val pendingIntent = PendingIntent.getForegroundService(
+                    appContext, RESTART_REQUEST_CODE, intent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
                 val triggerTime = System.currentTimeMillis() + effectiveDelay * 1000L
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                     alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
                 } else {
-                    alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                    // minSdk 26 (>= M): точный alarm с учётом Doze.
+                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "Failed to schedule restart alarm", e)

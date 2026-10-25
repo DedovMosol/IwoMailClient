@@ -115,8 +115,8 @@ internal fun CreateEventDialog(
     var location by rememberSaveable { mutableStateOf(event?.location ?: "") }
     var body by rememberSaveable { mutableStateOf(event?.body ?: "") }
     var allDayEvent by rememberSaveable { mutableStateOf(event?.allDayEvent ?: false) }
-    var reminder by rememberSaveable { mutableStateOf(event?.reminder ?: 15) }
-    var busyStatus by rememberSaveable { mutableStateOf(event?.busyStatus ?: 2) }
+    var reminder by rememberSaveable { mutableIntStateOf(event?.reminder ?: 15) }
+    var busyStatus by rememberSaveable { mutableIntStateOf(event?.busyStatus ?: 2) }
     // Префилл участниками существующего события: при правке встречи поле не должно быть пустым,
     // иначе на EAS 14+ уходит MeetingStatus=0 (демотирует встречу) и введённые заново участники
     // заменяют всю серверную коллекцию. При создании (event == null) поле пустое.
@@ -129,7 +129,7 @@ internal fun CreateEventDialog(
         (!event.id.contains("_occ_") && CalendarRepository.isUserOrganizer(event))
     // Тип повторения: -1=Нет, 0=Daily, 1=Weekly, 2=Monthly, 5=Yearly
     var recurrenceType by rememberSaveable {
-        mutableStateOf(
+        mutableIntStateOf(
             if (event?.isRecurring == true && event.recurrenceRule.isNotBlank()) {
                 RecurrenceHelper.parseRule(event.recurrenceRule)?.type ?: -1
             } else -1

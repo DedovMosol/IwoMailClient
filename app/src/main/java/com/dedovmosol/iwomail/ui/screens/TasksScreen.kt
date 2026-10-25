@@ -128,7 +128,7 @@ fun TasksScreen(
 
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
-    var deleteConfirmCount by rememberSaveable { mutableStateOf(0) }
+    var deleteConfirmCount by rememberSaveable { mutableIntStateOf(0) }
     var deleteConfirmIsPermanent by rememberSaveable { mutableStateOf(false) }
     var deleteConfirmTargetIds by rememberSaveable(accountId,
         saver = listSaver(save = { it.value.toList() }, restore = { mutableStateOf(it.toSet()) })
@@ -1414,11 +1414,11 @@ private fun CreateTaskDialog(
 ) {
     var subject by rememberSaveable { mutableStateOf(task?.subject ?: "") }
     var body by rememberSaveable { mutableStateOf(task?.body?.let { com.dedovmosol.iwomail.util.stripHtmlIfNeeded(it) } ?: "") }
-    var startDate by rememberSaveable { mutableStateOf(task?.startDate ?: 0L) }
-    var dueDate by rememberSaveable { mutableStateOf(task?.dueDate ?: 0L) }
-    var importance by rememberSaveable { mutableStateOf(task?.importance ?: TaskImportance.NORMAL.value) }
+    var startDate by rememberSaveable { mutableLongStateOf(task?.startDate ?: 0L) }
+    var dueDate by rememberSaveable { mutableLongStateOf(task?.dueDate ?: 0L) }
+    var importance by rememberSaveable { mutableIntStateOf(task?.importance ?: TaskImportance.NORMAL.value) }
     var reminderSet by rememberSaveable { mutableStateOf(task?.reminderSet ?: false) }
-    var reminderTime by rememberSaveable { mutableStateOf(task?.reminderTime ?: 0L) }
+    var reminderTime by rememberSaveable { mutableLongStateOf(task?.reminderTime ?: 0L) }
     var assignTo by rememberSaveable { mutableStateOf(task?.assignTo ?: "") }
     var showContactPicker by rememberSaveable { mutableStateOf(false) }
 

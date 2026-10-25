@@ -51,7 +51,7 @@ fun AboutScreen(
     val easterFound = remember { isEasterEggFound(context) }
     val persistedHintRevealed = remember { isEasterEggHintRevealed(context) }
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
-    var protocolTapCount by rememberSaveable { mutableStateOf(0) }
+    var protocolTapCount by rememberSaveable { mutableIntStateOf(0) }
     var base64Revealed by rememberSaveable { mutableStateOf(persistedHintRevealed) }
 
 

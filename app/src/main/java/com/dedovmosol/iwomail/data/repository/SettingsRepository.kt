@@ -320,9 +320,14 @@ class SettingsRepository private constructor(
             }
         }
         
-        context.registerReceiver(
+        // DRY/best-practice: единый безопасный способ регистрации (как в MailApplication).
+        // RECEIVER_NOT_EXPORTED — бродкаст только системный, чужим приложениям слать его нам не нужно;
+        // ContextCompat корректно обрабатывает требование флага экспорта на Android 14+ (API 34).
+        androidx.core.content.ContextCompat.registerReceiver(
+            context,
             receiver,
-            IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
         )
         
         awaitClose {

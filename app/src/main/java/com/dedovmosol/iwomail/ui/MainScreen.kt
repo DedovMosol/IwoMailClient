@@ -142,7 +142,7 @@ fun MainScreen(
 
     // Состояния для отображения папок и счетчиков
     var folders by remember { mutableStateOf(FoldersCache.get(activeAccount?.id ?: 0L)) }
-    var flaggedCount by remember { mutableStateOf(0) }
+    var flaggedCount by remember { mutableIntStateOf(0) }
     var isLoading by remember { mutableStateOf(false) }
     var showAccountPicker by rememberSaveable { mutableStateOf(false) }
     var accountsLoaded by remember { mutableStateOf(false) }
@@ -194,14 +194,14 @@ fun MainScreen(
     }
 
     // Загружаем папки и счётчики после смены аккаунта
-    var notesCount by rememberSaveable { mutableStateOf(0) }
-    var eventsCount by rememberSaveable { mutableStateOf(0) }
-    var tasksCount by rememberSaveable { mutableStateOf(0) }
+    var notesCount by rememberSaveable { mutableIntStateOf(0) }
+    var eventsCount by rememberSaveable { mutableIntStateOf(0) }
+    var tasksCount by rememberSaveable { mutableIntStateOf(0) }
 
     // Статистика за сегодня
-    var todayEmailsCount by rememberSaveable { mutableStateOf(0) }
-    var todayEventsCount by rememberSaveable { mutableStateOf(0) }
-    var todayTasksCount by rememberSaveable { mutableStateOf(0) }
+    var todayEmailsCount by rememberSaveable { mutableIntStateOf(0) }
+    var todayEventsCount by rememberSaveable { mutableIntStateOf(0) }
+    var todayTasksCount by rememberSaveable { mutableIntStateOf(0) }
 
     // Загрузка папок — отдельный эффект без зависимости от initialSyncDone
     LaunchedEffect(activeAccount?.id) {
@@ -841,6 +841,10 @@ fun MainScreen(
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class, androidx.compose.material.ExperimentalMaterialApi::class)
 @Composable
+// Внутренний композабл: modifier стоит после optional-колбэков. Вызывается именованными
+// аргументами, поэтому порядок не критичен; реордер большого списка ради мягкой конвенции
+// ModifierParameter («первый optional») не оправдан (YAGNI/риск без выгоды).
+@Suppress("ModifierParameter")
 private fun HomeContent(
     activeAccount: AccountEntity?,
     folders: List<FolderEntity>,
@@ -1941,6 +1945,8 @@ private fun FolderRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+// Внутренний композабл, вызывается именованными аргументами; modifier после optional unreadCount.
+@Suppress("ModifierParameter")
 private fun FolderCardDisplay(
     name: String,
     count: Int,

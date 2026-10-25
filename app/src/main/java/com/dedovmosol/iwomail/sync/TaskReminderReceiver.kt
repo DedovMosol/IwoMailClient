@@ -167,14 +167,9 @@ class TaskReminderReceiver : BroadcastReceiver() {
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
                 alarmManager.set(AlarmManager.RTC_WAKEUP, task.reminderTime, pendingIntent)
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    task.reminderTime,
-                    pendingIntent
-                )
             } else {
-                alarmManager.setExact(
+                // minSdk 26 (>= M): точный alarm с учётом Doze.
+                alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     task.reminderTime,
                     pendingIntent

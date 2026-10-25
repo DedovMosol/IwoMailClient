@@ -363,7 +363,7 @@ fun ComposeScreen(
     // Для сохранения группы при дубликате из подсказки
     var pendingGroupName by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingGroupEmails by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
-    var pendingGroupColor by rememberSaveable { mutableStateOf(0) }
+    var pendingGroupColor by rememberSaveable { mutableIntStateOf(0) }
     var pendingGroupSelections by remember { mutableStateOf<List<Triple<String, List<String>, Int>>>(emptyList()) }
 
     // Диалог выбора контактов
