@@ -2,6 +2,8 @@ package com.dedovmosol.iwomail.eas
 
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * Юнит-тесты `CalendarDateUtils.parseEwsDateTime` (N-4) — учёт смещения таймзоны.
@@ -51,5 +53,30 @@ class CalendarDateUtilsTest {
     fun `null or empty returns null`() {
         assertThat(CalendarDateUtils.parseEwsDateTime(null)).isNull()
         assertThat(CalendarDateUtils.parseEwsDateTime("")).isNull()
+    }
+
+    /**
+     * Регрессия локали: `localDateFromIso` строит дату для EWS `<StartDate>` (CalendarRecurrenceBuilder)
+     * через `String.format`. Без `Locale.US` в локалях с не-ASCII цифрами дата уходила бы как
+     * «۲۰۲۶-۱۰-۲۴» → сервер отклоняет (xs:date требует ASCII `[0-9]`). TZ фиксируем на UTC, чтобы
+     * сравнение не зависело от часового пояса машины (localDateFromIso берёт дату в локальной TZ).
+     */
+    @Test
+    fun `localDateFromIso stays ASCII and locale-invariant`() {
+        val prevLocale = Locale.getDefault()
+        val prevTz = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+            Locale.setDefault(Locale.forLanguageTag("en-US"))
+            val en = CalendarDateUtils.localDateFromIso("2026-10-24T00:00:00Z")
+            Locale.setDefault(Locale.forLanguageTag("fa-IR"))
+            val fa = CalendarDateUtils.localDateFromIso("2026-10-24T00:00:00Z")
+            assertThat(fa).isEqualTo(en)
+            assertThat(fa.all { it.code < 128 }).isTrue()
+            assertThat(fa).matches("\\d{4}-\\d{2}-\\d{2}")
+        } finally {
+            Locale.setDefault(prevLocale)
+            TimeZone.setDefault(prevTz)
+        }
     }
 }

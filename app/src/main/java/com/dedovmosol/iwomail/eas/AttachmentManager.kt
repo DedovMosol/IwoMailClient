@@ -39,13 +39,10 @@ class AttachmentManager(
 ) {
     private val client: OkHttpClient = com.dedovmosol.iwomail.network.HttpClientProvider.getAttachmentClient(acceptAllCerts)
     private val wbxmlParser = WbxmlParser()
-    private val deviceId = generateStableDeviceId(username, deviceIdSuffix)
+    // DRY: единый генератор DeviceId из EasClient — синк и загрузка вложений обязаны
+    // использовать ОДНУ идентичность устройства (см. EasClient.generateStableDeviceId).
+    private val deviceId = EasClient.generateStableDeviceId(username, deviceIdSuffix)
     private val normalizedServerUrl: String = EasClient.normalizeUrl(serverUrl, port, useHttps)
-    
-    private fun generateStableDeviceId(username: String, suffix: String): String {
-        val hash = (username + suffix).hashCode().toLong() and 0xFFFFFFFFL
-        return "androidc${String.format("%010d", hash % 10000000000L)}"
-    }
     
     companion object {
         private const val MAX_CACHE_SIZE_BYTES = 500L * 1024 * 1024 // 500 MB

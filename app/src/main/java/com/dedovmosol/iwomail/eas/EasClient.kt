@@ -398,13 +398,23 @@ class EasClient(
             val scheme = if (useHttps) "https" else "http"
             return "$scheme://$hostOnly:$port"
         }
-    }
 
-    private fun generateStableDeviceId(username: String, suffix: String): String {
-        // Генерируем СТАБИЛЬНЫЙ DeviceId на основе username
-        // Это важно чтобы сервер не требовал Provision при каждом запросе
-        val hash = (username + suffix).hashCode().toLong() and 0xFFFFFFFFL
-        return "androidc${String.format("%010d", hash % 10000000000L)}"
+        /**
+         * СТАБИЛЬНЫЙ EAS DeviceId из username+suffix (чтобы сервер не требовал Provision на каждом
+         * запросе). Единая точка (DRY): тот же DeviceId обязан использовать и [AttachmentManager],
+         * иначе синхронизация и загрузка вложений ходят под разной идентичностью устройства.
+         *
+         * КРИТИЧНО — Locale.US: DeviceId уходит в query-строку URL EAS ([MS-ASHTTP] 2.2.1.1.1.4).
+         * String.format без Locale берёт локаль устройства, и в локалях с не-ASCII цифрами
+         * (fa, ar-EG, bn, ne, mr…) `%010d` подставил бы восточные цифры (۰۱۲ / ٠١٢) → битый URL и
+         * «новое устройство» при каждой смене языка телефона (пере-provisioning, лимиты устройств).
+         * String.hashCode() стабилен по спеке, поэтому ID детерминирован для username+suffix.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun generateStableDeviceId(username: String, suffix: String): String {
+            val hash = (username + suffix).hashCode().toLong() and 0xFFFFFFFFL
+            return "androidc${String.format(java.util.Locale.US, "%010d", hash % 10000000000L)}"
+        }
     }
 
     private fun getAuthHeader(): String = transport.getAuthHeader()

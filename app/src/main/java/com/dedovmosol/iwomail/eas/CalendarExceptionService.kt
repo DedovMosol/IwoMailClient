@@ -158,6 +158,7 @@ class CalendarExceptionService(
         cal.set(java.util.Calendar.MILLISECOND, 0)
         val windowStartMs = cal.timeInMillis
         val startStr = String.format(
+            java.util.Locale.US,
             "%04d-%02d-%02dT00:00:00Z",
             cal.get(java.util.Calendar.YEAR),
             cal.get(java.util.Calendar.MONTH) + 1,
@@ -170,6 +171,7 @@ class CalendarExceptionService(
         cal.set(java.util.Calendar.MILLISECOND, 999)
         val windowEndMs = cal.timeInMillis
         val endStr = String.format(
+            java.util.Locale.US,
             "%04d-%02d-%02dT23:59:59Z",
             cal.get(java.util.Calendar.YEAR),
             cal.get(java.util.Calendar.MONTH) + 1,

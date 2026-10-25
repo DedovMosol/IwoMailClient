@@ -134,6 +134,7 @@ object CalendarDateUtils {
     fun localDateFromIso(isoDate: String): String {
         val cal = localCalFromIso(isoDate) ?: return isoDate.substringBefore("T")
         return String.format(
+            Locale.US,
             "%04d-%02d-%02d",
             cal.get(Calendar.YEAR),
             cal.get(Calendar.MONTH) + 1,
