@@ -11,8 +11,12 @@ import com.dedovmosol.iwomail.eas.EasNote
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.NotesSyncResult
 import com.google.common.truth.Truth.assertThat
+import io.mockk.Runs
 import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -48,6 +52,7 @@ class NoteRepositorySyncTest {
         accountId = runBlocking { db.accountDao().insert(account) }
         coEvery { accountRepo.getAccount(accountId) } returns account.copy(id = accountId)
         coEvery { accountRepo.createEasClient(accountId) } returns easClient
+        every { accountRepo.clearEasClientCache(accountId) } just Runs
         repo = NoteRepository(db, accountRepo)
     }
 
@@ -197,6 +202,23 @@ class NoteRepositorySyncTest {
         assertThat(result).isInstanceOf(EasResult.Error::class.java)
         assertThat(activeIds()).containsExactly("n1")
         assertThat(trashIds()).containsExactly("d1")
+    }
+
+    @Test
+    fun `resetAndResync wipes local notes and rebuilds from the server snapshot`() = runBlocking<Unit> {
+        // Сброс НЕ полагается на authoritative-diff: стирает всё локальное (активные и корзину) и
+        // тянет заново. «Зависшие» n2/stale и корзина d1 исчезают даже при НЕполном снимке; остаётся
+        // ровно то, что вернул сервер. Кэш EAS-клиента сбрасывается (иначе проба по SyncKey оставила
+        // бы БД пустой — поэтому clearEasClientCache здесь обязателен).
+        seed(local("n1"), local("n2"), local("stale"), local("d1", isDeleted = true))
+        serverReturns(NotesSyncResult(listOf(server("n1"), server("n9")), isActiveAuthoritative = false, isDeletedAuthoritative = false))
+
+        val result = repo.resetAndResync(accountId)
+
+        assertThat(result).isInstanceOf(EasResult.Success::class.java)
+        assertThat(activeIds()).containsExactly("n1", "n9")
+        assertThat(trashIds()).isEmpty()
+        verify { accountRepo.clearEasClientCache(accountId) }
     }
 
     private companion object {

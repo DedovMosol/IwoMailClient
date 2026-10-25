@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -121,6 +122,9 @@ fun TasksScreen(
         editingTaskId?.let { id -> allTasks.find { it.id == id } }
     }
     var showEmptyTrashDialog by rememberSaveable { mutableStateOf(false) }
+    var showResyncMenu by rememberSaveable { mutableStateOf(false) }
+    var showResyncDialog by rememberSaveable { mutableStateOf(false) }
+    val resyncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
 
     // Диалог подтверждения удаления
     var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
@@ -313,6 +317,39 @@ fun TasksScreen(
         )
     }
 
+    // Диалог локального сброса задач + ресинк
+    if (showResyncDialog) {
+        val resyncingText = Strings.resyncing
+        val resyncDoneText = Strings.resyncDone
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { showResyncDialog = false },
+            icon = { Icon(AppIcons.Refresh, null) },
+            title = { Text(Strings.resyncConfirmTitle) },
+            text = { Text(Strings.resyncConfirmMessage) },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showResyncDialog = false
+                        SafeToast.short(context, resyncingText)
+                        resyncScope.launch {
+                            when (val result = viewModel.resetAndResync()) {
+                                is EasResult.Success -> SafeToast.short(context, resyncDoneText)
+                                is EasResult.Error -> SafeToast.long(context, result.message)
+                            }
+                        }
+                    },
+                    text = Strings.yes
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showResyncDialog = false },
+                    text = Strings.no
+                )
+            }
+        )
+    }
+
     // Диалог очистки корзины задач
     if (showEmptyTrashDialog) {
         val deletingMessage = Strings.deletingTasks(deletedTasks.size)
@@ -480,6 +517,21 @@ fun TasksScreen(
                                 )
                             } else {
                                 Icon(AppIcons.Sync, Strings.syncTasks, tint = Color.White)
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { showResyncMenu = true }) {
+                                Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
+                            }
+                            DropdownMenu(expanded = showResyncMenu, onDismissRequest = { showResyncMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(Strings.resyncLocalData) },
+                                    onClick = {
+                                        showResyncMenu = false
+                                        showResyncDialog = true
+                                    },
+                                    leadingIcon = { Icon(AppIcons.Refresh, null) }
+                                )
                             }
                         }
                     },

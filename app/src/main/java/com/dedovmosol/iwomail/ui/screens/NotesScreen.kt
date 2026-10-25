@@ -48,6 +48,7 @@ import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // Паттерн для URL (компилируется один раз)
 private val urlPattern = Regex("https?://[\\w\\-.]+\\.[a-z]{2,}[\\w\\-._~:/?#\\[\\]@!%&'()*+,;=]*", RegexOption.IGNORE_CASE)
@@ -105,6 +106,9 @@ fun NotesScreen(
         editingNoteId?.let { id -> notes.find { it.id == id } }
     }
     var showEmptyTrashConfirm by rememberSaveable { mutableStateOf(false) }
+    var showResyncMenu by rememberSaveable { mutableStateOf(false) }
+    var showResyncDialog by rememberSaveable { mutableStateOf(false) }
+    val resyncScope = com.dedovmosol.iwomail.ui.components.rememberSyncScope()
     var showDeleteSelectedDialog by rememberSaveable { mutableStateOf(false) }
     var showDeletePermanentlyDialog by rememberSaveable { mutableStateOf(false) }
 
@@ -225,6 +229,38 @@ fun NotesScreen(
     }
 
     // Диалог подтверждения очистки корзины заметок
+    if (showResyncDialog) {
+        val resyncingText = Strings.resyncing
+        val resyncDoneText = Strings.resyncDone
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { showResyncDialog = false },
+            icon = { Icon(AppIcons.Refresh, null) },
+            title = { Text(Strings.resyncConfirmTitle) },
+            text = { Text(Strings.resyncConfirmMessage) },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showResyncDialog = false
+                        SafeToast.short(context, resyncingText)
+                        resyncScope.launch {
+                            when (val result = viewModel.resetAndResync()) {
+                                is EasResult.Success -> SafeToast.short(context, resyncDoneText)
+                                is EasResult.Error -> SafeToast.long(context, result.message)
+                            }
+                        }
+                    },
+                    text = Strings.yes
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showResyncDialog = false },
+                    text = Strings.no
+                )
+            }
+        )
+    }
+
     if (showEmptyTrashConfirm) {
         val deletingMessage = Strings.deletingNotes(deletedNotes.size)
         val notesTrashEmptiedText = Strings.notesTrashEmptied
@@ -407,6 +443,21 @@ fun NotesScreen(
                                 )
                             } else {
                                 Icon(AppIcons.Sync, Strings.syncNotes, tint = Color.White)
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { showResyncMenu = true }) {
+                                Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
+                            }
+                            DropdownMenu(expanded = showResyncMenu, onDismissRequest = { showResyncMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(Strings.resyncLocalData) },
+                                    onClick = {
+                                        showResyncMenu = false
+                                        showResyncDialog = true
+                                    },
+                                    leadingIcon = { Icon(AppIcons.Refresh, null) }
+                                )
                             }
                         }
                     },

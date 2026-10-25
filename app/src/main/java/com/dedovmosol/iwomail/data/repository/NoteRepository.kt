@@ -666,6 +666,23 @@ class NoteRepository internal constructor(
     /**
      * Синхронизация заметок с Exchange сервера
      */
+    /**
+     * Локальный сброс заметок + полный ресинк (ср. CalendarRepository.resetAndResync). Стираем все
+     * локальные заметки аккаунта и перезагружаем с сервера. Сервер не трогаем. Кэш EAS-клиента
+     * сбрасываем ОБЯЗАТЕЛЬНО: у заметок есть проба по кэшированному SyncKey («нет изменений → полный
+     * синк пропускается»), иначе после стирания БД осталась бы пустой. [syncNotes] сам берёт
+     * sync-мьютекс (ожидает), поэтому wipe — в отдельной критической секции, затем ресинк.
+     */
+    suspend fun resetAndResync(accountId: Long): EasResult<Int> {
+        getSyncMutex(accountId).withLock {
+            withContext(Dispatchers.IO) {
+                noteDao.deleteByAccount(accountId)
+            }
+            accountRepo.clearEasClientCache(accountId)
+        }
+        return syncNotes(accountId, skipRecentDeleteCheck = true)
+    }
+
     suspend fun syncNotes(accountId: Long, skipRecentDeleteCheck: Boolean = false): EasResult<Int> {
         return withContext(Dispatchers.IO) {
             getSyncMutex(accountId).withLock {

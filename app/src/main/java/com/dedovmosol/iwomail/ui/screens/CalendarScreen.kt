@@ -148,6 +148,49 @@ fun CalendarScreen(
         }
     }
     var isSyncing by remember { mutableStateOf(false) }
+    var showResyncMenu by rememberSaveable { mutableStateOf(false) }
+    var showResyncDialog by rememberSaveable { mutableStateOf(false) }
+
+    // Диалог локального сброса календаря + ресинк
+    if (showResyncDialog) {
+        val resyncingText = Strings.resyncing
+        val resyncDoneText = Strings.resyncDone
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { showResyncDialog = false },
+            icon = { Icon(AppIcons.Refresh, null) },
+            title = { Text(Strings.resyncConfirmTitle) },
+            text = { Text(Strings.resyncConfirmMessage) },
+            confirmButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = {
+                        showResyncDialog = false
+                        SafeToast.short(context, resyncingText)
+                        syncScope.launch {
+                            isSyncing = true
+                            try {
+                                val result = withContext(Dispatchers.IO) { calendarRepo.resetAndResync(accountId) }
+                                when (result) {
+                                    is EasResult.Success -> SafeToast.short(context, resyncDoneText)
+                                    is EasResult.Error -> SafeToast.long(context, result.message)
+                                }
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                            } finally {
+                                isSyncing = false
+                            }
+                        }
+                    },
+                    text = Strings.yes
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    onClick = { showResyncDialog = false },
+                    text = Strings.no
+                )
+            }
+        )
+    }
 
     // Автоматическая синхронизация при первом открытии экрана или смене аккаунта.
     // syncedForAccountId != accountId → синк не запускался для этого аккаунта → запускаем.
@@ -1136,6 +1179,21 @@ fun CalendarScreen(
                                 )
                             } else {
                                 Icon(AppIcons.Sync, Strings.syncCalendar, tint = Color.White)
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { showResyncMenu = true }) {
+                                Icon(AppIcons.MoreVert, Strings.more, tint = Color.White)
+                            }
+                            DropdownMenu(expanded = showResyncMenu, onDismissRequest = { showResyncMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(Strings.resyncLocalData) },
+                                    onClick = {
+                                        showResyncMenu = false
+                                        showResyncDialog = true
+                                    },
+                                    leadingIcon = { Icon(AppIcons.Refresh, null) }
+                                )
                             }
                         }
                     },

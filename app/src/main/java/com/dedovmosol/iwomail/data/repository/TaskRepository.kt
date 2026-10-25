@@ -492,6 +492,24 @@ class TaskRepository internal constructor(
      * Синхронизация задач с Exchange сервера
      * @param skipRecentDeleteCheck если true, отключает защиту от race condition (для явных операций delete/update)
      */
+    /**
+     * Локальный сброс задач + полный ресинк (ср. CalendarRepository.resetAndResync). Стираем все
+     * локальные задачи аккаунта и перезагружаем с сервера. Сервер не трогаем. Кэш EAS-клиента
+     * сбрасываем, чтобы ресинк пошёл полным проходом. [syncTasks] сам берёт sync-мьютекс (ожидает),
+     * поэтому wipe — в отдельной критической секции, затем ресинк.
+     */
+    suspend fun resetAndResync(accountId: Long): EasResult<Int> {
+        getSyncMutex(accountId).withLock {
+            withContext(Dispatchers.IO) {
+                val tasks = taskDao.getTasksByAccountList(accountId)
+                for (task in tasks) TaskReminderReceiver.cancelReminder(context, task.id)
+                taskDao.deleteByAccount(accountId)
+            }
+            accountRepo.clearEasClientCache(accountId)
+        }
+        return syncTasks(accountId, skipRecentDeleteCheck = true)
+    }
+
     suspend fun syncTasks(accountId: Long, skipRecentDeleteCheck: Boolean = false): EasResult<Int> {
         return withContext(Dispatchers.IO) {
             getSyncMutex(accountId).withLock {

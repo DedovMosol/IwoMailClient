@@ -1219,6 +1219,27 @@ class CalendarRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Локальный сброс календаря + полный ресинк с сервера. Для «зависших» локальных событий,
+     * которые обычный синк не снял (неполные снимки, окно ±90/+730 дней, защитные эвристики):
+     * стираем ВСЕ локальные события аккаунта (активные и корзину) и тянем актуальное состояние
+     * сервера заново. Сервер не трогаем — это чистка локального кэша, а не удаление на Exchange.
+     *
+     * Кэш EAS-клиента сбрасываем, чтобы ресинк пошёл полным проходом, а не пробой по кэшированному
+     * SyncKey. Всё под sync-мьютексом; вызываем no-lock [syncCalendarInternal] (Mutex не реентрантный).
+     */
+    suspend fun resetAndResync(accountId: Long): EasResult<Int> {
+        return getSyncMutex(accountId).withLock {
+            withContext(Dispatchers.IO) {
+                val events = calendarEventDao.getEventsByAccountList(accountId)
+                for (event in events) CalendarReminderReceiver.cancelReminder(context, event.id)
+                calendarEventDao.deleteByAccount(accountId)
+            }
+            accountRepo.clearEasClientCache(accountId)
+            syncCalendarInternal(accountId)
+        }
+    }
+
     private suspend fun syncCalendarInternal(accountId: Long): EasResult<Int> {
         initDeletedTracker(context)
         return withContext(Dispatchers.IO) {

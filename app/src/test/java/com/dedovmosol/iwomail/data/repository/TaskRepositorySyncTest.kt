@@ -11,8 +11,12 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.EasTask
 import com.dedovmosol.iwomail.eas.TasksSyncResult
 import com.google.common.truth.Truth.assertThat
+import io.mockk.Runs
 import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -49,6 +53,7 @@ class TaskRepositorySyncTest {
         accountId = runBlocking { db.accountDao().insert(account) }
         coEvery { accountRepo.getAccount(accountId) } returns account.copy(id = accountId)
         coEvery { accountRepo.createEasClient(accountId) } returns easClient
+        every { accountRepo.clearEasClientCache(accountId) } just Runs
         repo = TaskRepository(context, db, accountRepo)
     }
 
@@ -193,6 +198,21 @@ class TaskRepositorySyncTest {
 
         assertThat(result).isInstanceOf(EasResult.Error::class.java)
         assertThat(localServerIds()).containsExactly("t1", "t2")
+    }
+
+    @Test
+    fun `resetAndResync wipes local tasks and rebuilds from the server snapshot`() = runBlocking<Unit> {
+        // Сброс НЕ полагается на authoritative-diff: стирает всё локальное и тянет заново. Поэтому
+        // «зависшие» t2/stale и локальная корзина d1 исчезают даже при НЕполном снимке, а остаётся
+        // ровно то, что вернул сервер. Кэш EAS-клиента при этом обязательно сбрасывается.
+        seed(local("t1"), local("t2"), local("stale"), local("d1", isDeleted = true))
+        serverReturns(TasksSyncResult(listOf(server("t1"), server("t9")), isAuthoritative = false))
+
+        val result = repo.resetAndResync(accountId)
+
+        assertThat(result).isInstanceOf(EasResult.Success::class.java)
+        assertThat(localServerIds()).containsExactly("t1", "t9")
+        verify { accountRepo.clearEasClientCache(accountId) }
     }
 
     private companion object {

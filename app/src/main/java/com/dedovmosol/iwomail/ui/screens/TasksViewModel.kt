@@ -421,6 +421,10 @@ class TasksViewModel(
     suspend fun emptyTrash(): EasResult<Int> =
         withContext(ioDispatcher) { taskRepo.emptyTasksTrash(_uiState.value.accountId) }
 
+    /** Локальный сброс задач + полный ресинк с сервера (чистит «зависшие» локальные записи). */
+    suspend fun resetAndResync(): EasResult<Int> =
+        withContext(ioDispatcher) { taskRepo.resetAndResync(_uiState.value.accountId) }
+
     private fun sendEvent(event: TasksEvent) {
         viewModelScope.launch { _events.send(event) }
     }

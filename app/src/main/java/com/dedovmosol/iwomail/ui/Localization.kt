@@ -495,6 +495,12 @@ object Strings {
     val deletePermanently: String @Composable get() = if (isRussian()) "Удалить окончательно" else "Delete permanently"
     val cancelSelection: String @Composable get() = if (isRussian()) "Отменить выбор" else "Cancel selection"
     val more: String @Composable get() = if (isRussian()) "Ещё" else "More"
+    // Локальный сброс + ресинк (Календарь / Задачи / Заметки): чистит «зависшие» локальные записи.
+    val resyncLocalData: String @Composable get() = if (isRussian()) "Сбросить и пересинхронизировать" else "Reset & resync"
+    val resyncConfirmTitle: String @Composable get() = if (isRussian()) "Сбросить локальные данные?" else "Reset local data?"
+    val resyncConfirmMessage: String @Composable get() = if (isRussian()) "Локальная копия будет стёрта и заново загружена с сервера. Данные на сервере не изменятся." else "The local copy is cleared and reloaded from the server. Nothing on the server is changed."
+    val resyncing: String @Composable get() = if (isRussian()) "Пересинхронизация…" else "Resyncing…"
+    val resyncDone: String @Composable get() = if (isRussian()) "Готово, перезагружено с сервера" else "Reloaded from the server"
     val noUserFolders: String @Composable get() = if (isRussian()) "Нет пользовательских папок для перемещения" else "No user folders to move to"
 
     // Диалоги удаления

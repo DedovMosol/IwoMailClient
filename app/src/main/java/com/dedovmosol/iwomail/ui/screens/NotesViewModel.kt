@@ -327,6 +327,10 @@ class NotesViewModel(
     ): EasResult<Int> =
         withContext(ioDispatcher) { noteRepo.emptyNotesTrashWithProgress(_uiState.value.accountId, serverIds, onProgress) }
 
+    /** Локальный сброс заметок + полный ресинк с сервера (чистит «зависшие» локальные записи). */
+    suspend fun resetAndResync(): EasResult<Int> =
+        withContext(ioDispatcher) { noteRepo.resetAndResync(_uiState.value.accountId) }
+
     private fun sendEvent(event: NotesEvent) {
         viewModelScope.launch { _events.send(event) }
     }
