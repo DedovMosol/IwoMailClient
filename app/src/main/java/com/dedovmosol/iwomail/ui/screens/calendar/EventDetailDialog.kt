@@ -26,6 +26,8 @@ import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
+import com.dedovmosol.iwomail.data.repository.CategoryColors
+import com.dedovmosol.iwomail.util.CalendarCategories
 import com.dedovmosol.iwomail.util.htmlVisibleText
 import com.dedovmosol.iwomail.util.looksLikeHtmlEmailContent
 import com.dedovmosol.iwomail.util.replaceInlineCids
@@ -51,9 +53,11 @@ internal fun EventDetailDialog(
     onDismiss: () -> Unit,
     onComposeClick: (String) -> Unit = {},
     onEditClick: () -> Unit = {},
-    onDeleteClick: () -> Unit = {}
+    onDeleteClick: () -> Unit = {},
+    categoryColors: CategoryColors = CategoryColors.EMPTY
 ) {
         val dateFormat = remember { SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) }
+    val eventCategories = remember(event.categories) { CalendarCategories.parse(event.categories) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val attendees = remember(event.attendees) { calendarRepo.parseAttendeesFromJson(event.attendees) }
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
@@ -219,6 +223,15 @@ internal fun EventDetailDialog(
                             } else Modifier
                         )
                     }
+                }
+
+                // Категории — цветными плашками (видны и в свёрнутом виде)
+                if (eventCategories.isNotEmpty()) {
+                    CategoryChips(
+                        categories = eventCategories,
+                        colors = categoryColors,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
                 }
 
                 // Краткое описание (свёрнутый вид)

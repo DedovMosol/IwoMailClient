@@ -1855,6 +1855,9 @@ $foldersXml
      */
     suspend fun syncCalendar(): EasResult<EasCalendarService.CalendarSyncResult> = calendarService.syncCalendar()
 
+    /** Цвета категорий Outlook (Master Category List) — Exchange 2010+; Success(null) на Exchange 2007. */
+    suspend fun fetchCategoryList(): EasResult<List<OutlookCategory>?> = calendarService.fetchCategoryList()
+
     /**
      * Дополняет exceptions для повторяющихся событий через EWS.
      * Exchange 2007 SP1 EAS Sync может не возвращать обновлённые exceptions

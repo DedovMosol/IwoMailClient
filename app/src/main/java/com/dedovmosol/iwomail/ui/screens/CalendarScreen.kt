@@ -23,7 +23,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
 import com.dedovmosol.iwomail.data.repository.CalendarRepository
+import com.dedovmosol.iwomail.data.repository.CategoryColors
 import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
+import com.dedovmosol.iwomail.util.CalendarCategories
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.Strings
@@ -138,6 +140,30 @@ fun CalendarScreen(
 
     val events by remember(accountId) { calendarRepo.getEvents(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     val deletedEvents by remember(accountId) { calendarRepo.getDeletedEvents(accountId) }.collectAsStateWithLifecycle(initialValue = emptyList())
+
+    // Цвета категорий (гибрид): MCL с сервера на Exchange 2010+, стандартные имена, ручные назначения.
+    val categoryRepo = remember { RepositoryProvider.getCategoryColorRepository(context) }
+    val categoryColors by remember(accountId) { categoryRepo.observe(accountId) }
+        .collectAsStateWithLifecycle(initialValue = CategoryColors.EMPTY)
+    var showCategoryColors by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(accountId) {
+        if (accountId <= 0) return@LaunchedEffect
+        try {
+            categoryRepo.refreshIfStale(accountId)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+        }
+    }
+    if (showCategoryColors && accountId > 0) {
+        val usedCategories = remember(events) { events.flatMap { CalendarCategories.parse(it.categories) } }
+        com.dedovmosol.iwomail.ui.screens.calendar.CategoryColorsDialog(
+            accountId = accountId,
+            usedCategories = usedCategories,
+            colors = categoryColors,
+            repository = categoryRepo,
+            onDismiss = { showCategoryColors = false }
+        )
+    }
 
     // ID аккаунта, для которого уже был запущен автосинк.
     // rememberSaveable: сохраняется при повороте → не запускает повторный синк для того же аккаунта.
@@ -548,7 +574,8 @@ fun CalendarScreen(
                             }
                         }
                     }
-                }
+                },
+                categoryColors = categoryColors
             )
         }
     }
@@ -1195,6 +1222,14 @@ fun CalendarScreen(
                             }
                             DropdownMenu(expanded = showResyncMenu, onDismissRequest = { showResyncMenu = false }) {
                                 DropdownMenuItem(
+                                    text = { Text(Strings.categoryColors) },
+                                    onClick = {
+                                        showResyncMenu = false
+                                        showCategoryColors = true
+                                    },
+                                    leadingIcon = { Icon(AppIcons.Palette, null) }
+                                )
+                                DropdownMenuItem(
                                     text = { Text(Strings.resyncLocalData) },
                                     onClick = {
                                         showResyncMenu = false
@@ -1270,7 +1305,8 @@ fun CalendarScreen(
                         dateFilter = dateFilter,
                         onDateFilterChange = { selectedEventIds = emptySet(); dateFilter = it },
                         deletedCount = deletedEvents.size,
-                        onEmptyTrash = { showEmptyTrashDialog = true }
+                        onEmptyTrash = { showEmptyTrashDialog = true },
+                        categoryColors = categoryColors
                     )
                 }
                 CalendarViewMode.MONTH -> {
@@ -1303,7 +1339,8 @@ fun CalendarScreen(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             selectedEventIds = selectedEventIds + eventId
                         },
-                        onDragSelect = { newIds -> selectedEventIds = newIds }
+                        onDragSelect = { newIds -> selectedEventIds = newIds },
+                        categoryColors = categoryColors
                     )
                 }
             }

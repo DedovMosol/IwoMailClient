@@ -26,6 +26,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
+import com.dedovmosol.iwomail.data.repository.CategoryColors
+import com.dedovmosol.iwomail.util.CalendarCategories
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.screens.expandRecurringForRange
@@ -42,7 +44,8 @@ internal fun MonthView(
     selectedEventIds: Set<String> = emptySet(),
     onEventSelectionChange: (String, Boolean) -> Unit = { _, _ -> },
     onEventLongClick: (String) -> Unit = {},
-    onDragSelect: (Set<String>) -> Unit = {}
+    onDragSelect: (Set<String>) -> Unit = {},
+    categoryColors: CategoryColors = CategoryColors.EMPTY
 ) {
     val isSelectionMode = selectedEventIds.isNotEmpty()
     val calendar = Calendar.getInstance()
@@ -115,7 +118,8 @@ internal fun MonthView(
                 year = currentYear,
                 selectedDate = selectedDate,
                 events = expandedEvents,
-                onDateSelected = onDateSelected
+                onDateSelected = onDateSelected,
+                categoryColors = categoryColors
             )
             
             // События выбранного дня
@@ -168,7 +172,8 @@ internal fun MonthView(
                                 if (!isSelectionMode) {
                                     onEventLongClick(event.id)
                                 }
-                            }
+                            },
+                            categoryColors = categoryColors
                         )
                 }
             }
@@ -239,7 +244,8 @@ private fun CalendarGrid(
     year: Int,
     selectedDate: Date,
     events: List<CalendarEventEntity>,
-    onDateSelected: (Date) -> Unit
+    onDateSelected: (Date) -> Unit,
+    categoryColors: CategoryColors
 ) {
     val calendar = Calendar.getInstance()
     calendar.set(year, month, 1)
@@ -272,23 +278,29 @@ private fun CalendarGrid(
         
         Spacer(modifier = Modifier.height(8.dp))
         
-        val eventDays = remember(events, year, month) {
+        // День → точки событий: цвет первой категории события (null — без цвета, точка темы),
+        // до MAX_DAY_DOTS разных цветов на день.
+        val dayDots = remember(events, year, month, categoryColors) {
             val reuseCal = Calendar.getInstance()
             reuseCal.set(year, month, 1, 0, 0, 0)
             reuseCal.set(Calendar.MILLISECOND, 0)
             val monthStart = reuseCal.timeInMillis
             reuseCal.add(Calendar.MONTH, 1)
             val monthEnd = reuseCal.timeInMillis
-            val days = mutableSetOf<Int>()
+            val dots = HashMap<Int, MutableList<Color?>>()
             for (event in events) {
                 if (event.endTime <= monthStart || event.startTime >= monthEnd) continue
+                val color = primaryCategoryColor(CalendarCategories.parse(event.categories), categoryColors)
                 reuseCal.timeInMillis = maxOf(event.startTime, monthStart)
                 val from = reuseCal.get(Calendar.DAY_OF_MONTH)
                 reuseCal.timeInMillis = minOf(maxOf(event.endTime - 1, event.startTime), monthEnd - 1)
                 val to = reuseCal.get(Calendar.DAY_OF_MONTH)
-                for (d in from..to) days.add(d)
+                for (d in from..to) {
+                    val list = dots.getOrPut(d) { mutableListOf() }
+                    if (list.size < MAX_DAY_DOTS && color !in list) list.add(color)
+                }
             }
-            days
+            dots
         }
         val selectedDay = remember(selectedDate) {
             val cal = Calendar.getInstance().apply { time = selectedDate }
@@ -317,7 +329,6 @@ private fun CalendarGrid(
                 calendar.set(year, month, day)
                 val date = calendar.time
                 
-                val hasEvents = day in eventDays
                 val isSelected = selectedDay.first == year && selectedDay.second == month && selectedDay.third == day
                 val isToday = todayTriple.first == year && todayTriple.second == month && todayTriple.third == day
                 
@@ -325,7 +336,7 @@ private fun CalendarGrid(
                     day = day,
                     isSelected = isSelected,
                     isToday = isToday,
-                    hasEvents = hasEvents,
+                    eventDots = dayDots[day].orEmpty(),
                     onClick = { onDateSelected(date) }
                 )
             }
@@ -334,12 +345,16 @@ private fun CalendarGrid(
 }
 
 
+/** Не больше трёх точек под числом: в ячейке 40 dp больше не различить. */
+private const val MAX_DAY_DOTS = 3
+
+/** @param eventDots цвета точек событий дня; null — событие без цвета категории (точка темы). */
 @Composable
 private fun DayCell(
     day: Int,
     isSelected: Boolean,
     isToday: Boolean,
-    hasEvents: Boolean,
+    eventDots: List<Color?>,
     onClick: () -> Unit
 ) {
     Box(
@@ -373,19 +388,24 @@ private fun DayCell(
                 fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
             )
             
-            if (hasEvents) {
-                Box(
-                    modifier = Modifier
-                        .size(4.dp)
-                        .background(
-                            color = if (isSelected) {
-                                MaterialTheme.colorScheme.onPrimary
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            },
-                            shape = CircleShape
+            if (eventDots.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    eventDots.forEach { dotColor ->
+                        Box(
+                            modifier = Modifier
+                                .size(4.dp)
+                                .background(
+                                    // На выделенном (залитом primary) дне — контрастный onPrimary.
+                                    color = when {
+                                        isSelected -> MaterialTheme.colorScheme.onPrimary
+                                        dotColor != null -> dotColor
+                                        else -> MaterialTheme.colorScheme.primary
+                                    },
+                                    shape = CircleShape
+                                )
                         )
-                )
+                    }
+                }
             }
         }
     }

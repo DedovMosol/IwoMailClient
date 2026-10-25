@@ -27,6 +27,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.state.ToggleableState
@@ -36,7 +37,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dedovmosol.iwomail.data.database.CalendarEventEntity
+import com.dedovmosol.iwomail.data.repository.CategoryColors
 import com.dedovmosol.iwomail.data.repository.RecurrenceHelper
+import com.dedovmosol.iwomail.util.CalendarCategories
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
@@ -130,7 +133,8 @@ internal fun AgendaView(
     dateFilter: CalendarDateFilter = CalendarDateFilter.ALL,
     onDateFilterChange: (CalendarDateFilter) -> Unit = {},
     deletedCount: Int = 0,
-    onEmptyTrash: () -> Unit = {}
+    onEmptyTrash: () -> Unit = {},
+    categoryColors: CategoryColors = CategoryColors.EMPTY
 ) {
     val isSelectionMode = selectedEventIds.isNotEmpty()
     val haptic = LocalHapticFeedback.current
@@ -353,7 +357,8 @@ internal fun AgendaView(
                                         else onEventClick(event)
                                     },
                                     onLongClick = { if (!isSelectionMode) onEventLongClick(event.id) },
-                                    showDate = true
+                                    showDate = true,
+                                    categoryColors = categoryColors
                                 )
                             }
                         }
@@ -374,7 +379,8 @@ internal fun AgendaView(
                                 if (isSelectionMode) onEventSelectionChange(event.id, event.id !in selectedEventIds)
                                 else onEventClick(event)
                             },
-                            onLongClick = { if (!isSelectionMode) onEventLongClick(event.id) }
+                            onLongClick = { if (!isSelectionMode) onEventLongClick(event.id) },
+                            categoryColors = categoryColors
                         )
                     }
                 }
@@ -514,15 +520,23 @@ internal fun EventCard(
     isSelectionMode: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
-    showDate: Boolean = false
+    showDate: Boolean = false,
+    categoryColors: CategoryColors = CategoryColors.EMPTY
 ) {
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val shortDateFormat = remember { SimpleDateFormat("d MMM", Locale.getDefault()) }
     val isPastEvent = remember(event.endTime) { event.endTime < System.currentTimeMillis() }
+    val categoryNames = remember(event.categories) { CalendarCategories.parse(event.categories) }
+    // Как в Outlook: карточка окрашена цветом первой категории (полоска занятости остаётся).
+    val categoryTint = remember(categoryNames, categoryColors) { primaryCategoryColor(categoryNames, categoryColors) }
+    val baseBackground = if (isPastEvent) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     val backgroundColor by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-        else if (isPastEvent) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        targetValue = when {
+            isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            categoryTint != null -> categoryTint.copy(alpha = if (isPastEvent) 0.12f else 0.22f).compositeOver(baseBackground)
+            else -> baseBackground
+        },
         label = "eventBg"
     )
     
@@ -628,6 +642,15 @@ internal fun EventCard(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                }
+
+                if (categoryNames.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    CategoryInlineSummary(
+                        categories = categoryNames,
+                        colors = categoryColors,
+                        textColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isPastEvent) 0.6f else 1f)
+                    )
                 }
             }
             

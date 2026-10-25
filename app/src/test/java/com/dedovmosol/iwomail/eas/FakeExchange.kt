@@ -281,6 +281,15 @@ internal object EwsXml {
     fun folder(id: String, folderClass: String, name: String): String =
         """<t:Folder><t:FolderId Id="$id" ChangeKey="AQ=="/><t:FolderClass>$folderClass</t:FolderClass>""" +
             "<t:DisplayName>$name</t:DisplayName><t:TotalCount>1</t:TotalCount></t:Folder>"
+
+    /** GetUserConfiguration (Exchange 2010+): объект конфигурации с XmlData (base64). */
+    fun userConfiguration(name: String, xmlDataBase64: String): String = envelope(
+        """<m:GetUserConfigurationResponse $NS><m:ResponseMessages>""" +
+            """<m:GetUserConfigurationResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode>""" +
+            """<m:UserConfiguration><t:UserConfigurationName Name="$name"><t:DistinguishedFolderId Id="calendar"/>""" +
+            "</t:UserConfigurationName><t:XmlData>$xmlDataBase64</t:XmlData></m:UserConfiguration>" +
+            "</m:GetUserConfigurationResponseMessage></m:ResponseMessages></m:GetUserConfigurationResponse>"
+    )
 }
 
 /** [EasCalendarService], собранный как в EasClient, поверх транспорта фейка; папка календаря — [calendarFolderId]. */

@@ -25,6 +25,9 @@ object RepositoryProvider {
     
     @Volatile
     private var taskRepo: TaskRepository? = null
+
+    @Volatile
+    private var categoryColorRepo: CategoryColorRepository? = null
     
     fun getAccountRepository(context: Context): AccountRepository {
         return accountRepo ?: synchronized(this) {
@@ -62,6 +65,12 @@ object RepositoryProvider {
         }
     }
     
+    fun getCategoryColorRepository(context: Context): CategoryColorRepository {
+        return categoryColorRepo ?: synchronized(this) {
+            categoryColorRepo ?: CategoryColorRepository.create(context).also { categoryColorRepo = it }
+        }
+    }
+
     fun getSettingsRepository(context: Context): SettingsRepository {
         return SettingsRepository.getInstance(context.applicationContext)
     }

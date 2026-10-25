@@ -8,8 +8,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
-    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class],
-    version = 42,
+    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
+    version = 43,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -25,6 +25,7 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun calendarEventDao(): CalendarEventDao
     abstract fun taskDao(): TaskDao
     abstract fun syncDao(): SyncDao
+    abstract fun categoryColorDao(): CategoryColorDao
 
     companion object {
         private const val TAG = "MailDatabase"
@@ -214,7 +215,18 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
 
-        private val ALL_MIGRATIONS = arrayOf<Migration>(
+        /** Цвета категорий Outlook (serverColor из MCL Exchange 2010+, userColor — ручной). SQL — из schemas/43.json. */
+        private val MIGRATION_42_43 = object : Migration(42, 43) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `category_colors` (`accountId` INTEGER NOT NULL, `nameKey` TEXT NOT NULL, " +
+                        "`name` TEXT NOT NULL, `serverColor` INTEGER, `userColor` INTEGER, PRIMARY KEY(`accountId`, `nameKey`), " +
+                        "FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+            }
+        }
+
+        internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
             MIGRATION_25_26,
@@ -233,7 +245,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_38_39,
             MIGRATION_39_40,
             MIGRATION_40_41,
-            MIGRATION_41_42
+            MIGRATION_41_42,
+            MIGRATION_42_43
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -249,7 +262,7 @@ abstract class MailDatabase : RoomDatabase() {
                 // иначе забытая миграция ТИХО стирает локальные данные (оффлайн-черновики
                 // `local_draft_`, настройки) и маскирует баги миграций. В release отсутствие
                 // миграции даст явный сбой при открытии БД — это ловится тестами/CI до релиза
-                // (схемы экспортируются в app/schemas, цепочка 23→42 полная).
+                // (схемы экспортируются в app/schemas, цепочка 23→43 полная).
                 .apply {
                     if (BuildConfig.DEBUG) {
                         fallbackToDestructiveMigration()

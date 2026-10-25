@@ -99,6 +99,14 @@ class EasCalendarService internal constructor(
         ewsRequest = ::ewsRequest
     )
 
+    private val categoryService = CalendarCategoryService(
+        ewsRequest = ::ewsRequest,
+        easMajorVersion = {
+            if (!deps.isVersionDetected()) deps.detectEasVersion()
+            deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
+        }
+    )
+
     // === EWS Auth (shared by all services via lambda) ===
 
     private suspend fun ewsRequest(
@@ -206,6 +214,11 @@ class EasCalendarService internal constructor(
     ): EasResult<Boolean> = crudService.deleteSingleOccurrenceEws(
         searchSubject, occurrenceStartTime, isMeeting, isOrganizer
     )
+
+    // === Categories ===
+
+    /** Master Category List (Exchange 2010+); Success(null) — сервер его не отдаёт (Exchange 2007). */
+    suspend fun fetchCategoryList(): EasResult<List<OutlookCategory>?> = categoryService.fetchCategoryList()
 
     // === Exception supplement ===
 

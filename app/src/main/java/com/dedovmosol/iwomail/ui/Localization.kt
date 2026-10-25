@@ -644,6 +644,29 @@ object Strings {
     val responseDeclined: String @Composable get() = if (isRussian()) "Вы отклонили приглашение" else "You declined"
     val notResponded: String @Composable get() = if (isRussian()) "Ожидает ответа" else "Not responded"
 
+    // Цвета категорий календаря (гибрид: MCL Exchange 2010+ / стандартные имена / ручные)
+    val categoryColors: String @Composable get() = if (isRussian()) "Цвета категорий" else "Category colors"
+    val categoryColorsEmpty: String @Composable get() = if (isRussian()) "Категорий пока нет. Они появятся, когда у событий будут категории." else "No categories yet. They appear once events have categories."
+    val categoryColorsNoServerList: String @Composable get() = if (isRussian()) "Сервер не передаёт цвета категорий (Exchange 2007). Стандартные категории окрашены как в Outlook, остальным выберите цвет сами." else "The server does not provide category colors (Exchange 2007). Default categories use Outlook colors; pick colors for the rest."
+    val categoryColorsRefreshFailed: String @Composable get() = if (isRussian()) "Не удалось получить цвета с сервера. Показаны сохранённые." else "Could not get colors from the server. Showing saved ones."
+    val categorySourceUser: String @Composable get() = if (isRussian()) "Ваш цвет" else "Your color"
+    val categorySourceServer: String @Composable get() = if (isRussian()) "Из Outlook" else "From Outlook"
+    val categorySourceNotInList: String @Composable get() = if (isRussian()) "Нет в списке категорий Outlook" else "Not in your Outlook category list"
+    val categorySourcePreset: String @Composable get() = if (isRussian()) "Стандартная категория Outlook" else "Default Outlook category"
+    val categorySourceAuto: String @Composable get() = if (isRussian()) "Подобран автоматически" else "Picked automatically"
+    val chooseCategoryColor: String @Composable get() = if (isRussian()) "Цвет категории" else "Category color"
+    val resetToServerColor: String @Composable get() = if (isRussian()) "Сбросить" else "Reset"
+    /** Подписи палитры [MS-OXOCFG]: индекс в списке = индекс цвета + 1 (первый — «без цвета»). */
+    val categoryColorNames: List<String> @Composable get() = if (isRussian())
+        listOf("Без цвета", "Красный", "Оранжевый", "Персиковый", "Жёлтый", "Зелёный", "Бирюзовый", "Оливковый",
+            "Синий", "Фиолетовый", "Бордовый", "Стальной", "Тёмно-стальной", "Серый", "Тёмно-серый", "Чёрный",
+            "Тёмно-красный", "Тёмно-оранжевый", "Тёмно-персиковый", "Тёмно-жёлтый", "Тёмно-зелёный",
+            "Тёмно-бирюзовый", "Тёмно-оливковый", "Тёмно-синий", "Тёмно-фиолетовый", "Тёмно-бордовый")
+    else
+        listOf("No color", "Red", "Orange", "Peach", "Yellow", "Green", "Teal", "Olive", "Blue", "Purple", "Maroon",
+            "Steel", "Dark steel", "Gray", "Dark gray", "Black", "Dark red", "Dark orange", "Dark peach",
+            "Dark yellow", "Dark green", "Dark teal", "Dark olive", "Dark blue", "Dark purple", "Dark maroon")
+
     // Задачи
     val noTasks: String @Composable get() = if (isRussian()) "Нет задач" else "No tasks"
     val syncTasks: String @Composable get() = if (isRussian()) "Синхронизировать задачи" else "Sync tasks"
