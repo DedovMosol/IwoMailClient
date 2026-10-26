@@ -414,9 +414,8 @@ fun VerificationScreen(
                                 }
                                 is AccessVerificationResult.Error -> {
                                     val localizedMsg = localizeVerificationError(result.message)
-                                    Text(
-                                        if (isRussianLang) "✗ Ошибка проверки: $localizedMsg" else "✗ Check error: $localizedMsg",
-                                        style = MaterialTheme.typography.bodyMedium,
+                                    com.dedovmosol.iwomail.ui.components.CopyableErrorText(
+                                        text = if (isRussianLang) "✗ Ошибка проверки: $localizedMsg" else "✗ Check error: $localizedMsg",
                                         color = MaterialTheme.colorScheme.error
                                     )
                                 }
@@ -741,6 +740,7 @@ private suspend fun verifyEmail(
     if (foldersResult is EasResult.Error && !alternateServerUrl.isNullOrBlank()
         && com.dedovmosol.iwomail.data.model.isConnectionLevelError(foldersResult.message)
     ) {
+        val primaryResult = foldersResult
         val primaryError = foldersResult.message
         onStatusChange(tryingBackupServerText)
         client = try {
@@ -760,9 +760,11 @@ private suspend fun verifyEmail(
         } catch (_: IllegalArgumentException) {
             return VerificationResult.Error(primaryError)
         }
-        foldersResult = client.folderSync()
+        // Резервный ответил ошибкой (например, неверный пароль) — показываем её: основной всё равно
+        // недоступен. Не ответил и он — причину основного.
+        foldersResult = com.dedovmosol.iwomail.data.model.preferredDualUrlResult(primaryResult, client.folderSync())
         if (foldersResult is EasResult.Error) {
-            return VerificationResult.Error(primaryError)
+            return VerificationResult.Error(foldersResult.message)
         }
     }
 

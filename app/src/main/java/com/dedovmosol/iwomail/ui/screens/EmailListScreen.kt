@@ -1419,8 +1419,12 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
         modifier = Modifier.fillMaxWidth().padding(16.dp)
     ) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(text = message, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
+        Row(modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Текст выделяется и копируется (технические подробности нужны администратору)
+            androidx.compose.foundation.text.selection.SelectionContainer(modifier = Modifier.weight(1f)) {
+                Text(text = message, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
+            }
+            com.dedovmosol.iwomail.ui.components.CopyErrorButton(copyText = message, tint = MaterialTheme.colorScheme.onErrorContainer)
             // Без явного size у IconButton: минимальный тач-таргет 48dp (Material/WCAG)
             IconButton(onClick = onDismiss) {
                 Icon(AppIcons.Close, Strings.close, modifier = Modifier.size(16.dp))

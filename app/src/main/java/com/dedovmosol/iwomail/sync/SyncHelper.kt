@@ -2,28 +2,39 @@ package com.dedovmosol.iwomail.sync
 
 import com.dedovmosol.iwomail.data.model.ErrorKind
 import com.dedovmosol.iwomail.data.model.classifyError
-import com.dedovmosol.iwomail.data.repository.AccountRepository
+import com.dedovmosol.iwomail.data.model.isConnectionLevelError
 import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.network.ConnectionFailure
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Общая логика синхронизации папки с retry-стратегией.
- * Используется в SyncWorker и PushService для устранения дублирования (DRY).
+ * Переключение между основным и резервным сервером аккаунта (Dual-URL) для синхронизации.
+ * Абстракция (DIP): стратегия повтора тестируется без Android и БД; реализация — AccountRepository.
+ */
+interface EndpointFailover {
+    suspend fun hasAlternateUrl(accountId: Long): Boolean
+
+    /** Аккаунт сейчас работает через резервный сервер. */
+    fun isUsingFallback(accountId: Long): Boolean
+
+    /**
+     * Переключиться на другой сервер (с основного на резервный или обратно), если он отвечает.
+     * [fromFallback] — на каком сервере случился сбой. Если аккаунт уже переключили параллельно,
+     * вернуть true без повторного переключения (иначе два потока перекидывали бы его туда-обратно).
+     */
+    suspend fun switchToOtherEndpoint(accountId: Long, fromFallback: Boolean): Boolean
+}
+
+/**
+ * Синхронизация папки с повтором — общая для SyncWorker, PushService и InitialSyncController (DRY).
+ * Стратегия — см. [syncWithRetry].
  *
- * Стратегия:
- * 1. Инкрементальный sync (60с таймаут) — быстрый delta-sync, выполняется ВСЕГДА
- * 2. При таймауте/ошибке/исключении → полный resync (300с таймаут), если [allowFullResync] = true
- * 3. Dual-URL fallback: если оба sync-а провалились И настроен alternate URL → пробуем alternate
- * 4. CancellationException ВСЕГДА пробрасывается (Kotlin docs: rethrow for cancellation propagation)
- *
- * @param allowFullResync если false — при ошибке инкрементального sync НЕ делаем тяжёлый full resync.
- *   Используется для пользовательских папок сверх лимита: они получают быстрый инкрементальный sync,
- *   но не блокируют Worker тяжёлым full resync (до 280с/папка).
- * @param accountRepo опционально: для Dual-URL fallback при ошибке соединения
- * @return true если синхронизация прошла без ошибок
+ * @param allowFullResync false — без тяжёлого полного resync (пользовательские папки сверх лимита).
+ * @param accountRepo Dual-URL: переключение на другой сервер при обрыве связи.
+ * @return true, если синхронизация прошла без ошибок
  */
 suspend fun syncFolderWithRetry(
     mailRepo: MailRepository,
@@ -33,119 +44,137 @@ suspend fun syncFolderWithRetry(
     fullResyncTimeoutMs: Long = 300_000L,
     allowFullResync: Boolean = true,
     tag: String = "SyncHelper",
-    accountRepo: AccountRepository? = null
-): Boolean {
-    val hasAlternate = accountRepo?.hasAlternateUrl(accountId) ?: false
-    try {
-        val result = withTimeoutOrNull(incrementalTimeoutMs) {
-            mailRepo.syncEmails(accountId, folderId, forceFullSync = false)
-        }
-        if (result == null || result is EasResult.Error) {
-            if (!allowFullResync) {
-                return tryDualUrlFallback(accountRepo, accountId, folderId, mailRepo, fullResyncTimeoutMs, tag, hasAlternate)
-            }
-            if (result == null) {
-                android.util.Log.w(tag, "Incremental sync timeout for folder $folderId, falling back to full resync")
-            }
-            val retryResult = withTimeoutOrNull(fullResyncTimeoutMs) {
-                mailRepo.syncEmails(accountId, folderId, forceFullSync = true)
-            }
-            if (retryResult == null || retryResult is EasResult.Error) {
-                return tryDualUrlFallback(
-                    accountRepo, accountId, folderId, mailRepo, fullResyncTimeoutMs, tag, hasAlternate,
-                    lastError = (retryResult as? EasResult.Error)?.message ?: (result as? EasResult.Error)?.message
-                )
-            }
-        }
-    } catch (e: Exception) {
-        if (e is CancellationException) throw e
-        if (!allowFullResync) {
-            return tryDualUrlFallback(accountRepo, accountId, folderId, mailRepo, fullResyncTimeoutMs, tag, hasAlternate, exception = e)
-        }
-        try {
-            val retryResult = withTimeoutOrNull(fullResyncTimeoutMs) {
-                mailRepo.syncEmails(accountId, folderId, forceFullSync = true)
-            }
-            if (retryResult == null || retryResult is EasResult.Error) {
-                return tryDualUrlFallback(
-                    accountRepo, accountId, folderId, mailRepo, fullResyncTimeoutMs, tag, hasAlternate,
-                    lastError = (retryResult as? EasResult.Error)?.message ?: e.message,
-                    exception = e
-                )
-            }
-        } catch (e2: Exception) {
-            if (e2 is CancellationException) throw e2
-            return tryDualUrlFallback(accountRepo, accountId, folderId, mailRepo, fullResyncTimeoutMs, tag, hasAlternate, exception = e2)
-        }
-    }
-    AccountServerHealthRepository.reportSyncOutcome(
-        accountId, success = true, hasAlternateUrl = hasAlternate
-    )
-    return true
+    accountRepo: EndpointFailover? = null
+): Boolean = syncWithRetry(accountId, incrementalTimeoutMs, fullResyncTimeoutMs, allowFullResync, tag, accountRepo) { forceFull ->
+    mailRepo.syncEmails(accountId, folderId, forceFullSync = forceFull)
 }
 
 /**
- * Dual-URL fallback: при провале sync через primary URL пробует alternate.
- * Не тратит батарею на probe при отсутствии интернета.
+ * 1. Инкрементальный sync ([incrementalTimeoutMs]).
+ * 2. Сервер ответил ошибкой (протокол, SyncKey) → полный resync с SyncKey=0, если [allowFullResync].
+ *    При обрыве связи полный resync НЕ делается: он бесполезен (сеть та же), а SyncKey сбрасывается
+ *    до запроса — следующая удачная синхронизация стала бы полной перезагрузкой папки.
+ * 3. Обрыв связи (таймаут, DNS, отказ, сброс, 5xx) и есть резервный адрес → переключение на другой
+ *    сервер (TCP-проба без учётных данных) и один повтор. Авторизация, политика и сертификат не
+ *    переключают: у резервного те же учётные данные, а сертификат основного нельзя обходить молча.
+ * 4. CancellationException всегда пробрасывается.
+ *
+ * Исход попадает в [AccountServerHealthRepository] с тем сервером, где он случился.
  */
-private suspend fun tryDualUrlFallback(
-    accountRepo: AccountRepository?,
+internal suspend fun syncWithRetry(
     accountId: Long,
-    folderId: String,
-    mailRepo: MailRepository,
-    timeoutMs: Long,
+    incrementalTimeoutMs: Long,
+    fullResyncTimeoutMs: Long,
+    allowFullResync: Boolean,
     tag: String,
-    hasAlternate: Boolean,
-    lastError: String? = null,
-    exception: Throwable? = null
+    failover: EndpointFailover?,
+    sync: suspend (forceFullSync: Boolean) -> EasResult<*>
 ): Boolean {
-    if (accountRepo == null) {
-        reportFailure(accountId, hasAlternate, lastError, exception, usedFallback = false)
+    val hasAlternate = failover?.hasAlternateUrl(accountId) ?: false
+    val startedOnFallback = failover?.isUsingFallback(accountId) ?: false
+
+    var failure = attempt(incrementalTimeoutMs) { sync(false) }
+        ?: return reportSuccess(accountId, hasAlternate, usedFallback = startedOnFallback)
+    // Отказ авторизации/политики/TLS полный resync не лечит, а лишний вход с неверным паролем
+    // приближает блокировку учётной записи в AD.
+    if (allowFullResync && !failure.connectionLevel && !failure.deterministic) {
+        android.util.Log.w(tag, "Incremental sync failed (${failure.summary}), trying full resync")
+        failure = attempt(fullResyncTimeoutMs) { sync(true) }
+            ?: return reportSuccess(accountId, hasAlternate, usedFallback = startedOnFallback)
+    }
+    if (failover == null || !hasAlternate || !failure.connectionLevel) {
+        reportFailure(accountId, hasAlternate, failure, usedFallback = startedOnFallback)
         return false
     }
-    accountRepo.tryFallbackToAlternate(accountId) ?: run {
-        reportFailure(accountId, hasAlternate, lastError, exception, usedFallback = false)
+    if (!failover.switchToOtherEndpoint(accountId, fromFallback = startedOnFallback)) {
+        // Текущий сервер не отвечает, а другой недоступен даже по TCP — недоступны оба.
+        reportFailure(accountId, hasAlternate, failure, usedFallback = startedOnFallback, bothFailed = true)
         return false
     }
-    android.util.Log.i(tag, "Dual-URL: retrying folder $folderId via alternate server")
-    return try {
-        val result = withTimeoutOrNull(timeoutMs) {
-            mailRepo.syncEmails(accountId, folderId, forceFullSync = false)
-        }
-        if (result is EasResult.Success) {
-            AccountServerHealthRepository.reportSyncOutcome(
-                accountId, success = true, usedFallback = true, hasAlternateUrl = true
-            )
-            true
-        } else {
-            accountRepo.clearEasClientCache(accountId)
-            reportFailure(accountId, hasAlternate = true,
-                errorMessage = (result as? EasResult.Error)?.message ?: lastError,
-                exception = null, usedFallback = true)
-            false
-        }
+    android.util.Log.i(tag, "Dual-URL: retrying via ${if (startedOnFallback) "primary" else "alternate"} server")
+    val retryFailure = attempt(fullResyncTimeoutMs) { sync(false) }
+        ?: return reportSuccess(accountId, hasAlternate, usedFallback = !startedOnFallback)
+    reportFailure(
+        accountId, hasAlternate, retryFailure,
+        usedFallback = !startedOnFallback,
+        bothFailed = retryFailure.connectionLevel
+    )
+    return false
+}
+
+/**
+ * Один запрос с Dual-URL (например, FolderSync первичной синхронизации): при обрыве связи —
+ * переключение на другой сервер и один повтор. Health здесь не обновляется — это делает вызывающий.
+ */
+suspend fun <T> withEndpointFailover(
+    accountId: Long,
+    failover: EndpointFailover?,
+    request: suspend () -> EasResult<T>
+): EasResult<T> {
+    val startedOnFallback = failover?.isUsingFallback(accountId) ?: false
+    val result = request()
+    if (result !is EasResult.Error || failover == null || !isConnectionLevelError(result.message)) return result
+    if (!failover.hasAlternateUrl(accountId) || !failover.switchToOtherEndpoint(accountId, startedOnFallback)) return result
+    return request()
+}
+
+/** Неудачная попытка: текст ошибки, исключение или таймаут всей попытки (оба null). */
+private class SyncFailure(val message: String?, val exception: Throwable?) {
+    val isTimeout: Boolean get() = message == null && exception == null
+
+    /** Обрыв связи: другой сервер может помочь, а полный resync — нет. */
+    val connectionLevel: Boolean = when {
+        exception != null -> ConnectionFailure.classify(exception)?.connectionLevel ?: false
+        message == null -> true
+        else -> isConnectionLevelError(message)
+    }
+
+    /** Авторизация, политика, TLS/сертификат: повтор даст тот же отказ. */
+    val deterministic: Boolean
+        get() = classifyError(message, exception).let { it == ErrorKind.Auth || it == ErrorKind.Cert }
+
+    val summary: String
+        get() = message ?: exception?.let { ConnectionFailure.describe(it) } ?: SYNC_TIMEOUT_MESSAGE
+}
+
+private val SYNC_TIMEOUT_MESSAGE = "${ConnectionFailure.TIMEOUT.tag} Sync attempt timed out"
+
+/** null — успех; иначе причина сбоя. */
+private suspend fun attempt(timeoutMs: Long, block: suspend () -> EasResult<*>): SyncFailure? {
+    val result = try {
+        withTimeoutOrNull(timeoutMs) { block() }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
-        accountRepo.clearEasClientCache(accountId)
-        reportFailure(accountId, hasAlternate = true, errorMessage = lastError, exception = e, usedFallback = true)
-        false
+        return SyncFailure(e.message, e)
     }
+    return when (result) {
+        null -> SyncFailure(null, null)
+        is EasResult.Success -> null
+        is EasResult.Error -> SyncFailure(result.message, null)
+    }
+}
+
+private fun reportSuccess(accountId: Long, hasAlternate: Boolean, usedFallback: Boolean): Boolean {
+    AccountServerHealthRepository.reportSyncOutcome(
+        accountId, success = true, usedFallback = usedFallback, hasAlternateUrl = hasAlternate
+    )
+    return true
 }
 
 private fun reportFailure(
     accountId: Long,
     hasAlternate: Boolean,
-    errorMessage: String?,
-    exception: Throwable?,
-    usedFallback: Boolean
+    failure: SyncFailure,
+    usedFallback: Boolean,
+    bothFailed: Boolean = false
 ) {
-    val kind = classifyError(errorMessage, exception)
     AccountServerHealthRepository.reportSyncOutcome(
         accountId = accountId,
         success = false,
-        errorKind = kind,
-        errorMessage = errorMessage ?: exception?.message,
+        errorKind = if (failure.isTimeout) ErrorKind.Timeout else classifyError(failure.message, failure.exception),
+        errorMessage = failure.summary,
         usedFallback = usedFallback,
-        hasAlternateUrl = hasAlternate
+        hasAlternateUrl = hasAlternate,
+        bothFailed = bothFailed
     )
 }

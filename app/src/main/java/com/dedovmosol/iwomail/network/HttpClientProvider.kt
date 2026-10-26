@@ -26,8 +26,29 @@ object HttpClientProvider {
             org.conscrypt.Conscrypt.newProvider()
         } catch (_: Exception) {
             null
+        } catch (_: LinkageError) {
+            // Нативная библиотека не загрузилась (UnsatisfiedLinkError — Error, не Exception):
+            // без перехвата падал бы КАЖДЫЙ сетевой клиент. Откат на системный провайдер.
+            null
         }
     }
+
+    /**
+     * TLS 1.0–1.3 одним рукопожатием для Exchange (2007 SP1/SP2 часто только TLS 1.0).
+     *
+     * Раньше было [MODERN_TLS, COMPATIBLE_TLS]: OkHttp сначала шёл без TLS 1.0/1.1, получал отказ
+     * (BoringSSL `UNSUPPORTED_PROTOCOL`) и повторял рукопожатие с COMPATIBLE_TLS
+     * (ConnectionSpecSelector.connectionFailed). Цена — второе TCP+TLS соединение на КАЖДОЕ новое
+     * подключение к серверу TLS 1.0, а при сбое повторной попытки пользователь видел ошибку ПЕРВОЙ
+     * (RetryAndFollowUpInterceptor бросает firstConnectException, исход повтора — в suppressed):
+     * «UNSUPPORTED_PROTOCOL» вместо настоящей причины (сертификат, имя хоста).
+     *
+     * Понижения версии нет: версию выбирает сервер из предложенных, а подмену ClientHello/
+     * ServerHello выявляют Finished (TLS 1.0–1.2) и маркер понижения TLS 1.3 (RFC 8446 §4.1.3).
+     * TLS 1.0 на Android 15+ (targetSdk 35+) системный Conscrypt запрещает — работает через
+     * bundled Conscrypt ([createSslContext]).
+     */
+    private val exchangeConnectionSpecs = listOf(ConnectionSpec.COMPATIBLE_TLS)
     
     // Общий Dispatcher для ВСЕХ клиентов (base/trust-all/cert/system наследуют его через
     // newBuilder()). EAS Direct Push держит по одному долгому async Ping на каждый ящик
@@ -155,7 +176,9 @@ object HttpClientProvider {
      * hostname-verifier; переопределяет только TrustManager на system-only.
      */
     private val systemOnlyClient: OkHttpClient by lazy {
+        // Не-Exchange HTTPS (GitHub) — только TLS 1.2+: устаревшие версии там не нужны.
         val builder = baseClient.newBuilder()
+            .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
         try {
             val trustManager = createSystemOnlyTrustManager()
             val sslContext = createSslContext()
@@ -349,10 +372,7 @@ object HttpClientProvider {
             .writeTimeout(60, TimeUnit.SECONDS)
             .callTimeout(0, TimeUnit.SECONDS)  // 0=disabled (OkHttp default); readTimeout=60s защищает от зависших соединений
             .retryOnConnectionFailure(true)
-            .connectionSpecs(listOf(
-                ConnectionSpec.MODERN_TLS,
-                ConnectionSpec.COMPATIBLE_TLS
-            ))
+            .connectionSpecs(exchangeConnectionSpecs)
         
         // Настраиваем TLS с поддержкой старых версий (TLS 1.0 для Exchange 2007 SP1)
         try {
@@ -617,7 +637,7 @@ object HttpClientProvider {
                             hostname = serverUrl
                         )
                         
-                        throw java.security.cert.CertificateException("Certificate pin mismatch: expected ${pinnedCertInfo.hash.take(16)}..., got ${spkiHash.take(16)}...")
+                        throw CertificatePinMismatchException("Certificate pin mismatch: expected ${pinnedCertInfo.hash.take(16)}..., got ${spkiHash.take(16)}...")
                     }
                 }
             }

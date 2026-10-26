@@ -32,6 +32,9 @@ private val NON_RETRYABLE_MARKERS = arrayOf(
 fun <T> EasResult<T>.isRetryable(): Boolean {
     if (this !is EasResult.Error) return false
     if (NON_RETRYABLE_MARKERS.any { message.contains(it, ignoreCase = true) }) return false
+    // TLS и сертификат детерминированы: повтор через секунду даст ту же ошибку и лишнее рукопожатие.
+    val failure = com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(message)
+    if (failure != null && !failure.connectionLevel) return false
     return RETRYABLE_KEYWORDS.any { message.contains(it, ignoreCase = true) }
 }
 

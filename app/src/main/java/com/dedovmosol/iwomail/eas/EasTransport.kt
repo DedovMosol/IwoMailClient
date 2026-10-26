@@ -39,7 +39,6 @@ class EasTransport(
     val deviceType: String,
     private val ntlmAuth: NtlmAuthenticator,
     val ewsClient: EwsClient,
-    private val certificatePath: String? = null,
     initialPolicyKey: String? = null,
     /**
      * EAS-2: колбэк фактической локальной очистки данных аккаунта при RemoteWipe.
@@ -215,8 +214,10 @@ class EasTransport(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            val certInfo = if (certificatePath != null) " [cert: $certificatePath]" else ""
-            EasResult.Error("Ошибка: ${e.javaClass.simpleName}: ${e.message}$certInfo")
+            // Метка причины [NET:…] — для локализации в UI и решения о резервном сервере. Путь к файлу
+            // сертификата в текст больше не попадает: пользователю он ничего не говорит, а подстрока
+            // «cert» превращала в «ошибку сертификата» любую сетевую ошибку (classifyError).
+            EasResult.Error(com.dedovmosol.iwomail.network.ConnectionFailure.describe(e))
         }
     }
 

@@ -72,7 +72,7 @@ class EwsClient(
                 EwsResult.Error("Не удалось выполнить EWS запрос: аутентификация не удалась")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EwsResult.Error("EWS ошибка: ${e.message}")
+                EwsResult.Error("EWS: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }

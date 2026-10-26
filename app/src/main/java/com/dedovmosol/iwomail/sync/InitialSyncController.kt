@@ -148,8 +148,13 @@ object InitialSyncController {
         mailRepo: MailRepository,
         settingsRepo: SettingsRepository
     ) {
+        // Dual-URL и для первичной синхронизации: аккаунт мог быть добавлен через резервный сервер
+        // (основной недоступен) — без переключения первая синхронизация шла бы в недоступный основной.
+        val failover = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context)
         val syncResult = withTimeoutOrNull(900_000L) {
-                    val folderSyncResult = withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
+                    val folderSyncResult = withContext(Dispatchers.IO) {
+                        withEndpointFailover(accountId, failover) { mailRepo.syncFolders(accountId) }
+                    }
                     if (folderSyncResult is EasResult.Error) {
                         delay(3_000)
                         withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
@@ -181,7 +186,8 @@ object InitialSyncController {
                                             mailRepo, accountId, folder.id,
                                             incrementalTimeoutMs = 120_000L,
                                             fullResyncTimeoutMs = 480_000L,
-                                            tag = "InitialSync"
+                                            tag = "InitialSync",
+                                            accountRepo = failover
                                         )
                                         if (!ok) failedFolderIds.add(folder.id)
                                     } catch (e: Exception) {
@@ -207,7 +213,8 @@ object InitialSyncController {
                                                 mailRepo, accountId, folderId,
                                                 incrementalTimeoutMs = 120_000L,
                                                 fullResyncTimeoutMs = 480_000L,
-                                                tag = "InitialSync-Retry"
+                                                tag = "InitialSync-Retry",
+                                                accountRepo = failover
                                             )
                                         } catch (e: Exception) {
                                             if (e is CancellationException) throw e
@@ -252,7 +259,12 @@ object InitialSyncController {
     ) {
         try {
             withTimeoutOrNull(420_000L) {
-                withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
+                withContext(Dispatchers.IO) {
+                    withEndpointFailover(
+                        accountId,
+                        com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context)
+                    ) { mailRepo.syncFolders(accountId) }
+                }
 
                 val mainFolderTypes = listOf(
                     FolderType.INBOX,
@@ -391,12 +403,17 @@ object InitialSyncController {
         syncJobs[accountId] = syncScope.launch {
             try {
                 withTimeoutOrNull(600_000L) {
-                    val result = withContext(Dispatchers.IO) { mailRepo.syncFolders(accountId) }
+                    val failover = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context)
+                    val result = withContext(Dispatchers.IO) {
+                        withEndpointFailover(accountId, failover) { mailRepo.syncFolders(accountId) }
+                    }
 
                     if (result is EasResult.Error) {
                         val kind = classifyError(result.message, null)
                         AccountServerHealthRepository.reportSyncOutcome(
-                            accountId, success = false, errorKind = kind, errorMessage = result.message
+                            accountId, success = false, errorKind = kind, errorMessage = result.message,
+                            usedFallback = failover.isUsingFallback(accountId),
+                            hasAlternateUrl = failover.hasAlternateUrl(accountId)
                         )
                         return@withTimeoutOrNull
                     }

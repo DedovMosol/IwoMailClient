@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.ui
 
 import androidx.compose.runtime.*
 import com.dedovmosol.iwomail.data.model.ServerProblemType
+import com.dedovmosol.iwomail.network.ConnectionFailure
 
 /**
  * Поддерживаемые языки приложения
@@ -1228,7 +1229,7 @@ object Strings {
     val serverUnavailable: String @Composable get() = if (isRussian()) "Сервер недоступен" else "Server unavailable"
     val bothServersUnavailable: String @Composable get() = if (isRussian()) "Оба сервера недоступны" else "Both servers unavailable"
     val authErrorServer: String @Composable get() = if (isRussian()) "Ошибка авторизации на сервере" else "Server authentication error"
-    val certErrorServer: String @Composable get() = if (isRussian()) "Ошибка сертификата сервера" else "Server certificate error"
+    val certErrorServer: String @Composable get() = if (isRussian()) "Ошибка TLS/сертификата сервера" else "Server TLS/certificate error"
     val serverError5xx: String @Composable get() = if (isRussian()) "Сервер возвращает ошибку" else "Server error"
     val serverTimeout: String @Composable get() = if (isRussian()) "Сервер не отвечает" else "Server not responding"
     val dataMayBeOutdated: String @Composable get() = if (isRussian()) "Данные могут быть неактуальны" else "Data may be outdated"
@@ -1450,7 +1451,7 @@ object NotificationStrings {
         ServerProblemType.AuthError ->
             if (isRussian) "Ошибка авторизации на сервере" else "Server authorization error"
         ServerProblemType.CertError ->
-            if (isRussian) "Ошибка сертификата сервера" else "Server certificate error"
+            if (isRussian) "Ошибка TLS/сертификата сервера" else "Server TLS/certificate error"
         ServerProblemType.ServerError ->
             if (isRussian) "Сервер возвращает ошибку" else "Server is returning an error"
         ServerProblemType.Timeout ->
@@ -1490,10 +1491,135 @@ object NotificationStrings {
         return if (isRussian) "Папка 'Спам' не найдена" else "Spam folder not found"
     }
 
+    /**
+     * Короткое описание сетевой причины по метке `[NET:…]` (см. [ConnectionFailure]) на языке
+     * интерфейса; null — в тексте нет метки. Для строк статуса, где нет места подробностям.
+     */
+    fun connectionFailureTitle(message: String, isRussian: Boolean): String? =
+        ConnectionFailure.fromMessage(message)?.let { connectionFailureTexts(it, isRussian).first }
+
+    /** Заголовок и подсказка «что сделать» для каждой сетевой причины. */
+    private fun connectionFailureTexts(failure: ConnectionFailure, isRussian: Boolean): Pair<String, String> = when (failure) {
+        ConnectionFailure.CERT_EXPIRED -> if (isRussian)
+            "Срок действия сертификата сервера истёк" to
+                "Попросите администратора обновить сертификат сервера. Проверьте также дату и время на устройстве."
+        else "The server certificate has expired" to
+            "Ask the administrator to renew the server certificate. Also check the date and time on the device."
+        ConnectionFailure.CERT_NOT_YET_VALID -> if (isRussian)
+            "Сертификат сервера ещё не действует" to "Проверьте дату и время на устройстве."
+        else "The server certificate is not valid yet" to "Check the date and time on the device."
+        ConnectionFailure.CERT_HOSTNAME -> if (isRussian)
+            "Адрес сервера не совпадает с сертификатом" to
+                "Укажите адрес так, как он записан в сертификате (CN или SAN), например полное имя вместо IP-адреса."
+        else "The server address does not match its certificate" to
+            "Enter the address exactly as it appears in the certificate (CN or SAN), e.g. the full name instead of an IP address."
+        ConnectionFailure.CERT_PIN -> if (isRussian)
+            "Сертификат сервера изменился" to
+                "Он не совпадает с сохранённым при подключении. Если сертификат обновляли, подтвердите новый в настройках аккаунта."
+        else "The server certificate has changed" to
+            "It does not match the one saved when connecting. If the certificate was renewed, confirm the new one in account settings."
+        ConnectionFailure.CERT_UNTRUSTED -> if (isRussian)
+            "Сертификат сервера не является доверенным" to
+                "Выберите файл сертификата сервера (.cer, .crt, .pem) в разделе «Сертификат сервера» или установите корневой сертификат организации."
+        else "The server certificate is not trusted" to
+            "Pick the server certificate file (.cer, .crt, .pem) under \"Server certificate\" or install your organization's root certificate."
+        ConnectionFailure.CLIENT_CERT -> if (isRussian)
+            "Сервер не принял клиентский сертификат" to
+                "Выберите действующий сертификат .p12/.pfx, выданный для этого сервера, и проверьте его пароль."
+        else "The server rejected the client certificate" to
+            "Pick a valid .p12/.pfx certificate issued for this server and check its password."
+        ConnectionFailure.TLS_PLAINTEXT -> if (isRussian)
+            "Сервер на этом порту отвечает без шифрования" to
+                "Проверьте порт и протокол: для HTTPS обычно используется порт 443."
+        else "The server answers without encryption on this port" to
+            "Check the port and protocol: HTTPS normally uses port 443."
+        ConnectionFailure.TLS_HANDSHAKE -> if (isRussian)
+            "Не удалось установить защищённое соединение" to
+                "Сервер и устройство не согласовали шифрование. Возможно, сервер требует клиентский сертификат или поддерживает только устаревшие алгоритмы."
+        else "Could not establish a secure connection" to
+            "The server and the device could not agree on encryption. The server may require a client certificate or support only obsolete ciphers."
+        ConnectionFailure.TLS_VERSION -> if (isRussian)
+            "Сервер не поддерживает версию TLS приложения" to
+                "Приложение поддерживает TLS 1.0–1.3. Проверьте, какие протоколы включены на сервере."
+        else "The server does not support the app's TLS version" to
+            "The app supports TLS 1.0–1.3. Check which protocols are enabled on the server."
+        ConnectionFailure.CLEARTEXT_BLOCKED -> if (isRussian)
+            "Подключение без шифрования запрещено" to "Включите SSL/TLS (HTTPS) в настройках сервера."
+        else "Unencrypted connections are not allowed" to "Enable SSL/TLS (HTTPS) in the server settings."
+        ConnectionFailure.DNS -> if (isRussian)
+            "Сервер не найден" to
+                "Проверьте адрес сервера и подключение к сети. Внутренние адреса доступны только из сети организации или через VPN."
+        else "Server not found" to
+            "Check the server address and the network. Internal addresses work only inside the organization's network or over VPN."
+        ConnectionFailure.REFUSED -> if (isRussian)
+            "Сервер отклонил подключение" to "Проверьте адрес и порт сервера."
+        else "The server refused the connection" to "Check the server address and port."
+        ConnectionFailure.UNREACHABLE -> if (isRussian)
+            "Сервер недоступен из этой сети" to "Проверьте подключение к сети или VPN."
+        else "The server is unreachable from this network" to "Check the network connection or VPN."
+        ConnectionFailure.TIMEOUT -> if (isRussian)
+            "Сервер не ответил вовремя" to "Проверьте подключение к сети, адрес и порт сервера."
+        else "The server did not respond in time" to "Check the network connection, server address and port."
+        ConnectionFailure.RESET -> if (isRussian)
+            "Соединение с сервером прервано" to
+                "Повторите попытку. Если ошибка повторяется, соединение может обрывать прокси или межсетевой экран."
+        else "The connection to the server was interrupted" to
+            "Try again. If it keeps happening, a proxy or firewall may be dropping the connection."
+        ConnectionFailure.IO -> if (isRussian)
+            "Ошибка сети" to "Проверьте подключение к сети и повторите попытку."
+        else "Network error" to "Check the network connection and try again."
+    }
+
+    private fun technicalDetailsLabel(isRussian: Boolean) = if (isRussian) "Технические подробности:" else "Technical details:"
+
+    /** Описание + подсказка + исходный текст (копируется целиком для поддержки). Идемпотентно. */
+    private fun localizeConnectionFailure(failure: ConnectionFailure, errorCode: String, isRussian: Boolean): String {
+        val (title, hint) = connectionFailureTexts(failure, isRussian)
+        if (errorCode.startsWith(title)) return errorCode
+        return "$title\n\n$hint\n\n${technicalDetailsLabel(isRussian)}\n$errorCode"
+    }
+
+    private val PROVISION_STATUS_REGEX = Regex("""\(Status: (\d+)""")
+    private val POLICY_STATUS_REGEX = Regex("""\(Policy Status: (\d+)""")
+
+    /** Причина отказа Provision по кодам [MS-ASPROV] 3.1.5.1 (Provision Command Errors). */
+    private fun provisionReason(errorCode: String, isRussian: Boolean): String? {
+        PROVISION_STATUS_REGEX.find(errorCode)?.groupValues?.get(1)?.toIntOrNull()?.let { status ->
+            return when (status) {
+                2 -> if (isRussian) "Сервер не принял запрос политики (ошибка протокола)." else "The server rejected the policy request (protocol error)."
+                3 -> if (isRussian) "Временная ошибка на сервере. Повторите попытку позже." else "A temporary server error occurred. Try again later."
+                139 -> if (isRussian) "Устройство не может выполнить все требования политики безопасности. Нужна помощь администратора Exchange."
+                    else "The device cannot fully comply with the security policy. Exchange administrator help is required."
+                141 -> if (isRussian) "Сервер не допускает устройства без ключа политики безопасности." else "The server does not allow devices without a policy key."
+                145 -> if (isRussian) "Сервер не допускает устройства с внешним управлением." else "The server does not allow externally managed devices."
+                else -> null
+            }
+        }
+        POLICY_STATUS_REGEX.find(errorCode)?.groupValues?.get(1)?.toIntOrNull()?.let { status ->
+            return when (status) {
+                3 -> if (isRussian) "Сервер не распознал тип политики." else "The server did not recognize the policy type."
+                4 -> if (isRussian) "Данные политики на сервере повреждены. Нужна помощь администратора Exchange."
+                    else "The policy data on the server is corrupt. Exchange administrator help is required."
+                5 -> if (isRussian) "Ключ политики устарел. Повторите попытку." else "The policy key is out of date. Try again."
+                else -> null
+            }
+        }
+        return null
+    }
+
     // Локализация ошибок из репозитория и EasClient
     fun localizeError(errorCode: String, isRussian: Boolean): String {
+        // Сетевая причина (метка транспорта) важнее этапа, на котором она случилась: обрыв TLS при
+        // первом запросе (Provision) — проблема соединения, а не «политики безопасности».
+        ConnectionFailure.fromMessage(errorCode)?.let { return localizeConnectionFailure(it, errorCode, isRussian) }
         return when {
             errorCode == "ALREADY_IN_FOLDER" -> getAlreadyInFolder(isRussian)
+            errorCode == "UNAUTHORIZED" -> if (isRussian) "Неверный логин или пароль (401). Проверьте учётные данные и домен."
+                else "Wrong username or password (401). Check the credentials and domain."
+            errorCode == "ACCESS_DENIED" -> if (isRussian) "Доступ запрещён (403). Возможно, для ящика отключён Exchange ActiveSync."
+                else "Access denied (403). Exchange ActiveSync may be disabled for this mailbox."
+            errorCode == "PROVISION_REQUIRED" -> if (isRussian) "Сервер требует заново согласовать политику безопасности (449). Повторите попытку."
+                else "The server requires the security policy to be negotiated again (449). Try again."
             errorCode == "Email not found" -> getEmailNotFound(isRussian)
             errorCode == "Account not found" -> getAccountNotFound(isRussian)
             errorCode == "Trash folder not found" -> getTrashFolderNotFound(isRussian)
@@ -1574,7 +1700,8 @@ object NotificationStrings {
                 if (errorCode.contains(base)) {
                     errorCode // Уже локализовано
                 } else {
-                    "$base\n\n$errorCode"
+                    val reason = provisionReason(errorCode, isRussian)
+                    if (reason != null) "$base\n\n$reason\n\n${technicalDetailsLabel(isRussian)}\n$errorCode" else "$base\n\n$errorCode"
                 }
             }
             errorCode.contains("HTTP 401") || errorCode.contains("(401)") -> if (isRussian) "Ошибка авторизации (401). Проверьте логин и пароль." else "Authorization error (401). Check username and password."

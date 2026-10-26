@@ -1440,20 +1440,12 @@ fun EmailDetailScreen(
                         }
                     }
                 } else if (bodyLoadErrorText != null) {
-                    Card(
+                    com.dedovmosol.iwomail.ui.components.CopyableErrorCard(
+                        text = "${Strings.loadError}: $bodyLoadErrorText",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
-                    ) {
-                        Text(
-                            text = "${Strings.loadError}: $bodyLoadErrorText",
-                            modifier = Modifier.padding(16.dp),
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
+                            .padding(16.dp)
+                    )
                 } else {
                     // Тело письма — определяем HTML или plain text.
                     // PERF: конвейер (MIME-извлечение → unescape XML entities → чистка

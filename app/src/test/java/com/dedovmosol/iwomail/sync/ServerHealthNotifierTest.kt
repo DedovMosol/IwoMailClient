@@ -120,7 +120,7 @@ class ServerHealthNotifierTest {
         assertThat(textFor(101L, ServerProblemType.PrimaryDownNoFallback)).isEqualTo("Сервер недоступен")
         assertThat(textFor(102L, ServerProblemType.BothServersDown)).isEqualTo("Оба сервера недоступны")
         assertThat(textFor(103L, ServerProblemType.AuthError)).isEqualTo("Ошибка авторизации на сервере")
-        assertThat(textFor(104L, ServerProblemType.CertError)).isEqualTo("Ошибка сертификата сервера")
+        assertThat(textFor(104L, ServerProblemType.CertError)).isEqualTo("Ошибка TLS/сертификата сервера")
         assertThat(textFor(105L, ServerProblemType.ServerError)).isEqualTo("Сервер возвращает ошибку")
         assertThat(textFor(106L, ServerProblemType.Timeout)).isEqualTo("Сервер не отвечает")
     }
@@ -326,6 +326,9 @@ class ServerHealthNotifierTest {
                 id, success = false, errorKind = ErrorKind.Network, hasAlternateUrl = true
             )
         }
+        // «Работает резервный» — это УСПЕХ через резервный сервер, а не просто 3 сбоя основного
+        // (раньше статус ставился и тогда, когда резервный тоже лежал).
+        AccountServerHealthRepository.reportSyncOutcome(id, success = true, usedFallback = true, hasAlternateUrl = true)
         assertThat(AccountServerHealthRepository.healthSnapshot(id).problemType)
             .isEqualTo(ServerProblemType.PrimaryDownUsingFallback)
         syncFromRepo(id)

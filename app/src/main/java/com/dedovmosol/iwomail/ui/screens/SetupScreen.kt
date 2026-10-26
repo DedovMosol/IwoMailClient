@@ -1299,17 +1299,10 @@ fun SetupScreen(
 
             // Сообщения
             errorMessage?.let {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
-                ) {
-                    Text(
-                        text = NotificationStrings.localizeError(it, isRussianLang),
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
+                // Текст выделяется и копируется целиком — технические подробности нужны администратору.
+                com.dedovmosol.iwomail.ui.components.CopyableErrorCard(
+                    text = NotificationStrings.localizeError(it, isRussianLang)
+                )
             }
 
             successMessage?.let {

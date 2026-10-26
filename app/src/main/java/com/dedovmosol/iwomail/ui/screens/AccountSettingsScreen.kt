@@ -1581,13 +1581,16 @@ private fun ConnectionStatusBlock(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        if (health.lastErrorMessage != null) {
-            Text(
-                text = "${Strings.lastError}: ${health.lastErrorMessage}",
-                style = MaterialTheme.typography.bodySmall,
+        health.lastErrorMessage?.let { rawError ->
+            // Коротко и на языке интерфейса; кнопка копирует исходный текст целиком (для поддержки).
+            val shortError = com.dedovmosol.iwomail.ui.NotificationStrings.connectionFailureTitle(rawError, isRu)
+                ?: com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(rawError, isRu)
+            com.dedovmosol.iwomail.ui.components.CopyableErrorText(
+                text = "${Strings.lastError}: $shortError",
+                copyText = rawError,
                 color = MaterialTheme.colorScheme.error,
-                maxLines = 2,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2
             )
         }
     }

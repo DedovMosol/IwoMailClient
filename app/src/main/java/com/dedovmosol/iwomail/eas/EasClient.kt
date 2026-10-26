@@ -19,7 +19,6 @@ import com.dedovmosol.iwomail.util.MimeHtmlProcessor
  */
 class EasClient(
     serverUrl: String,
-    private val alternateServerUrl: String? = null,
     private val username: String,
     private val password: String,
     private val domain: String = "",
@@ -102,7 +101,6 @@ class EasClient(
             deviceType = deviceType,
             ntlmAuth = ntlmAuth,
             ewsClient = ewsClient,
-            certificatePath = certificatePath,
             initialPolicyKey = initialPolicyKey
         )
     }
@@ -348,23 +346,33 @@ class EasClient(
         private const val FALLBACK_PROBE_TIMEOUT_MS = 3000
 
         /**
-         * Dual-URL fallback: пробует alternate URL только когда primary недоступен.
-         * Вызывается ТОЛЬКО при ошибке соединения с primary, НЕ при каждой синхронизации.
-         * TCP-проба безопасна: не отправляет credentials (только SYN/ACK).
+         * Таймаут подключения, а не чтения: Android — «failed to connect to … after Nms», JVM —
+         * «Connect timed out»; таймаут чтения OkHttp — «timeout» / «Read timed out».
          */
-        suspend fun probeAlternateUrl(alternateUrl: String, port: Int): Boolean {
-            val host = extractHost(alternateUrl)
+        internal fun isConnectTimeout(e: java.net.SocketTimeoutException): Boolean {
+            val message = e.message.orEmpty()
+            return message.startsWith("failed to connect", ignoreCase = true) ||
+                message.contains("connect timed out", ignoreCase = true)
+        }
+
+        /**
+         * Dual-URL: TCP-проба сервера перед переключением на него (основной ↔ резервный).
+         * Вызывается ТОЛЬКО при обрыве связи, НЕ при каждой синхронизации.
+         * Проба безопасна: учётные данные не отправляются (только установка TCP-соединения).
+         */
+        suspend fun probeHost(serverUrl: String, port: Int): Boolean {
+            val host = extractHost(serverUrl)
             if (host.isBlank()) return false
             return withContext(Dispatchers.IO) {
                 try {
                     java.net.Socket().use { socket ->
                         socket.connect(java.net.InetSocketAddress(host, port), FALLBACK_PROBE_TIMEOUT_MS)
                     }
-                    android.util.Log.d("EasClient", "Dual-URL: alternate reachable ($host:$port)")
+                    android.util.Log.d("EasClient", "Dual-URL: $host:$port reachable")
                     true
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.d("EasClient", "Dual-URL: alternate also unreachable ($host:$port)")
+                    android.util.Log.d("EasClient", "Dual-URL: $host:$port unreachable")
                     false
                 }
             }
@@ -1245,10 +1253,17 @@ $foldersXml
                 }
 
             } catch (e: java.net.SocketTimeoutException) {
-                EasResult.Success(PingResult(1, emptyList()))
+                // Таймаут ЧТЕНИЯ долгого Ping — как истечение heartbeat (Status=1). Таймаут
+                // ПОДКЛЮЧЕНИЯ — сервер недоступен: раньше он тоже считался «Ping истёк», и
+                // упавший сервер выглядел здоровым (health «подключено», без резервного сервера).
+                if (isConnectTimeout(e)) {
+                    EasResult.Error("Ping: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
+                } else {
+                    EasResult.Success(PingResult(1, emptyList()))
+                }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка Ping: ${e.message}")
+                EasResult.Error("Ping: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }

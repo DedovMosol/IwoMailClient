@@ -21,10 +21,10 @@ import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
-import com.dedovmosol.iwomail.data.model.ErrorKind
 import com.dedovmosol.iwomail.data.repository.AccountServerHealthRepository
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
+import com.dedovmosol.iwomail.network.ConnectionFailure
 import com.dedovmosol.iwomail.ui.NotificationStrings
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -636,24 +636,47 @@ class PushService : Service() {
             // currentAccount vs cachedAccount для hasAlternateUrl). Прежний `continue` заменён
             // на if/else — семантика та же: после error-блока в теле while ничего нет, а при
             // успешном fallback мы и так не делаем backoff и уходим на новую итерацию.
-            suspend fun onPingFailure() {
+            suspend fun onPingFailure(message: String?, exception: Throwable?) {
                 consecutiveErrors++
                 consecutiveSuccesses = 0
-                if (heartbeat > MIN_HEARTBEAT) {
+                // Клиент устарел (Dual-URL переключил сервер, сменились настройки): сначала повтор с
+                // актуальным — цикл сам перечитает аккаунт; переключать «обратно» по устаревшему сбою нельзя.
+                if (accountRepo.getLastClientInvalidation(accountId) > lastAccountRefreshTime) return
+                val failure = exception?.let { ConnectionFailure.classify(it) } ?: ConnectionFailure.fromMessage(message)
+                val decision = PingFailurePolicy.decide(
+                    consecutiveErrors,
+                    com.dedovmosol.iwomail.data.model.classifyError(message, exception),
+                    failure,
+                    hasAlternate = cachedAccount?.alternateServerUrl?.isNotBlank() == true
+                )
+                if (decision.shrinkHeartbeat && heartbeat > MIN_HEARTBEAT) {
                     heartbeat = maxOf(heartbeat - HEARTBEAT_INCREASE_STEP, MIN_HEARTBEAT)
                     saveHeartbeat(accountId, heartbeat)
                 }
-                if (consecutiveErrors >= 3) {
-                    if (tryPushFallback(accountId)) {
-                        consecutiveErrors = 0
-                    } else {
-                        pingNotSupported = true
-                        savePingNotSupported(accountId)
-                        consecutiveErrors = 0
-                    }
-                } else {
-                    delay(if (consecutiveErrors == 1) 10_000L else 30_000L)
+                if (decision.trySwitchEndpoint &&
+                    accountRepo.switchToOtherEndpoint(accountId, fromFallback = accountRepo.isUsingFallback(accountId))
+                ) {
+                    // Следующий Ping — сразу и через клиент другого сервера. Счётчик не обнуляется:
+                    // не поможет — дальше пойдёт backoff, а не цикл переключений без пауз.
+                    easClientCache.remove(accountId)
+                    android.util.Log.i(TAG, "Ping: switched server for account $accountId")
+                    return
                 }
+                if (decision.markPingUnsupported) {
+                    pingNotSupported = true
+                    savePingNotSupported(accountId)
+                    consecutiveErrors = 0
+                    return
+                }
+                delay(decision.backoffMs)
+            }
+
+            fun reportPingSuccess(hasAlternate: Boolean) {
+                AccountServerHealthRepository.reportSyncOutcome(
+                    accountId, success = true,
+                    usedFallback = accountRepo.isUsingFallback(accountId),
+                    hasAlternateUrl = hasAlternate
+                )
             }
 
             while (isActive) {
@@ -728,9 +751,7 @@ class PushService : Service() {
                         STATUS_EXPIRED -> {
                             consecutiveErrors = 0
                             consecutiveSuccesses++
-                            AccountServerHealthRepository.reportSyncOutcome(
-                                accountId, success = true, hasAlternateUrl = hasAlt
-                            )
+                            reportPingSuccess(hasAlt)
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
                                 saveHeartbeat(accountId, heartbeat)
@@ -743,9 +764,7 @@ class PushService : Service() {
                             lastAccountRefreshTime = System.currentTimeMillis()
                             consecutiveErrors = 0
                             consecutiveSuccesses++
-                            AccountServerHealthRepository.reportSyncOutcome(
-                                accountId, success = true, hasAlternateUrl = hasAlt
-                            )
+                            reportPingSuccess(hasAlt)
                             if (consecutiveSuccesses >= SUCCESS_COUNT_TO_INCREASE && heartbeat < MAX_HEARTBEAT) {
                                 heartbeat = minOf(heartbeat + HEARTBEAT_INCREASE_STEP, MAX_HEARTBEAT)
                                 saveHeartbeat(accountId, heartbeat)
@@ -761,9 +780,7 @@ class PushService : Service() {
                             saveHeartbeat(accountId, heartbeat)
                             consecutiveErrors = 0
                             consecutiveSuccesses = 0
-                            AccountServerHealthRepository.reportSyncOutcome(
-                                accountId, success = true, hasAlternateUrl = hasAlt
-                            )
+                            reportPingSuccess(hasAlt)
                         }
                         STATUS_TOO_MANY_FOLDERS -> {
                             val currentMax = maxPingFoldersPerAccount[accountId] ?: 25
@@ -772,25 +789,29 @@ class PushService : Service() {
                             android.util.Log.w("PushService", "Ping Status=6: too many folders for account $accountId, reducing to $reducedMax")
                             consecutiveErrors = 0
                             consecutiveSuccesses = 0
-                            AccountServerHealthRepository.reportSyncOutcome(
-                                accountId, success = true, hasAlternateUrl = hasAlt
-                            )
+                            reportPingSuccess(hasAlt)
                         }
                         STATUS_FOLDER_REFRESH_NEEDED -> {
                             syncFolders(currentAccount)
                             consecutiveErrors = 0
                             consecutiveSuccesses = 0
-                            AccountServerHealthRepository.reportSyncOutcome(
-                                accountId, success = true, hasAlternateUrl = hasAlt
-                            )
+                            reportPingSuccess(hasAlt)
                         }
                         else -> {
+                            // 449 на Ping: политика безопасности обновилась — заново согласуем её
+                            // (Provision) и сразу повторим. Это не ошибка авторизации.
+                            if (ping.error?.contains("(449)") == true && consecutiveErrors == 0 && reprovision(accountId)) {
+                                continue
+                            }
+                            val message = ping.error ?: "Ping status=$result"
                             AccountServerHealthRepository.reportSyncOutcome(
-                                accountId, success = false, errorKind = ErrorKind.Network,
-                                errorMessage = "Ping status=$result",
+                                accountId, success = false,
+                                errorKind = com.dedovmosol.iwomail.data.model.classifyError(message, null),
+                                errorMessage = message,
+                                usedFallback = accountRepo.isUsingFallback(accountId),
                                 hasAlternateUrl = hasAlt
                             )
-                            onPingFailure()
+                            onPingFailure(message, null)
                         }
                     }
                 } catch (e: CancellationException) {
@@ -801,10 +822,11 @@ class PushService : Service() {
                     AccountServerHealthRepository.reportSyncOutcome(
                         accountId, success = false,
                         errorKind = com.dedovmosol.iwomail.data.model.classifyError(null, e),
-                        errorMessage = e.message,
+                        errorMessage = ConnectionFailure.describe(e),
+                        usedFallback = accountRepo.isUsingFallback(accountId),
                         hasAlternateUrl = hasAltForCatch
                     )
-                    onPingFailure()
+                    onPingFailure(e.message, e)
                 }
             }
         }
@@ -813,26 +835,21 @@ class PushService : Service() {
     }
 
     /**
-     * Перед отказом от Ping, пробуем подключить резервный сервер.
-     * Если alternate URL доступен → подменяем EasClient в кэше PushService и продолжаем Ping-loop.
-     * @return true если fallback удался и ping-loop можно продолжить
+     * Ping получил HTTP 449: сервер требует заново согласовать политику безопасности (MS-ASPROV).
+     * Сам Ping Provision не делает (в отличие от executeEasCommand) — согласуем здесь.
      */
-    private suspend fun tryPushFallback(accountId: Long): Boolean {
-        val fallbackClient = try {
-            accountRepo.tryFallbackToAlternate(accountId)
+    private suspend fun reprovision(accountId: Long): Boolean {
+        val client = easClientCache[accountId] ?: accountRepo.createEasClient(accountId) ?: return false
+        return try {
+            client.transport.provision() is EasResult.Success
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            null
-        } ?: return false
-        // ConcurrentHashMap: put атомарно перезаписывает — отдельный remove не нужен
-        // (устраняет окно отсутствия ключа между remove и put).
-        easClientCache[accountId] = fallbackClient
-        android.util.Log.i(TAG, "Ping: switched to alternate server for account $accountId")
-        return true
+            if (e is CancellationException) throw e
+            false
+        }
     }
 
-    /** Статус Ping + серверный HeartbeatInterval из ответа Status=5 (MS-ASCMD). */
-    private data class PingOutcome(val status: Int, val serverHeartbeat: Int? = null)
+    /** Статус Ping + серверный HeartbeatInterval из ответа Status=5 (MS-ASCMD) + текст ошибки запроса. */
+    private data class PingOutcome(val status: Int, val serverHeartbeat: Int? = null, val error: String? = null)
 
     private suspend fun doPing(account: AccountEntity, heartbeat: Int): PingOutcome {
         // MS-ASCMD Ping Status=6: сервер может ограничить количество папок.
@@ -899,13 +916,15 @@ class PushService : Service() {
         // при гонке двух Ping-циклов computeIfAbsent вернёт уже закэшированный клиент,
         // лишний экземпляр отбрасывается (first-writer-wins, как прежний getOrPut).
         val client = easClientCache[account.id] ?: run {
-            val created = accountRepo.createEasClient(account.id) ?: return PingOutcome(STATUS_SERVER_ERROR)
+            val created = accountRepo.createEasClient(account.id)
+                ?: return PingOutcome(STATUS_SERVER_ERROR, error = "Не удалось создать клиент")
             easClientCache.computeIfAbsent(account.id) { created }
         }
 
         return when (val result = client.ping(folderIds, heartbeat)) {
             is EasResult.Success -> PingOutcome(result.data.status, result.data.serverHeartbeatInterval)
-            is EasResult.Error -> PingOutcome(STATUS_SERVER_ERROR)
+            // Текст ошибки нужен для решения (обрыв связи / авторизация / Ping не поддерживается) и health.
+            is EasResult.Error -> PingOutcome(STATUS_SERVER_ERROR, error = result.message)
         }
     }
 

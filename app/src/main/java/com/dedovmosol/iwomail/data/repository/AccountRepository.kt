@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * L-7 fix: Migrated from inline ObfuscatedSharedPreferences to PasswordStorage.
  */
-class AccountRepository(private val context: Context) {
+class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.sync.EndpointFailover {
 
     private val database = MailDatabase.getInstance(context)
     private val accountDao = database.accountDao()
@@ -135,7 +135,7 @@ class AccountRepository(private val context: Context) {
                             incomingPort, useSSL, email, certificatePath,
                             clientCertificatePath, clientCertificatePassword
                         )
-                        if (altResult is EasResult.Success) altResult else primaryResult
+                        com.dedovmosol.iwomail.data.model.preferredDualUrlResult(primaryResult, altResult)
                     } else {
                         primaryResult
                     }
@@ -289,11 +289,13 @@ class AccountRepository(private val context: Context) {
             }
         }
         
-        // Очищаем кэшированный клиент чтобы при следующем запросе создался новый с актуальными настройками
-        clearEasClientCache(account.id)
-        AccountServerHealthRepository.resetHealth(account.id)
+        // Сначала запись, потом сброс кэша и health: иначе параллельный createEasClient успевал
+        // закэшировать клиент из СТАРОЙ строки (основной клиент не истекает — старый адрес жил до
+        // следующей инвалидации), а запросы к старому серверу снова наполняли health.
         accountDao.update(account)
         password?.let { savePassword(account.id, it) }
+        clearEasClientCache(account.id)
+        AccountServerHealthRepository.resetHealth(account.id)
         
         reconcileProfileFolderChanges(
             beforeAccounts = beforeAccounts,
@@ -470,87 +472,44 @@ class AccountRepository(private val context: Context) {
      * Кэширование предотвращает создание множества OkHttpClient и утечки памяти
      */
     suspend fun createEasClient(accountId: Long): EasClient? {
-        // Auto-switchback: если fallback-клиент просрочен, сбрасываем кэш → пробуем primary
-        val fbTime = fallbackTimestamps[accountId]
-        if (fbTime != null && System.currentTimeMillis() - fbTime > FALLBACK_PROBE_INTERVAL_MS) {
-            fallbackTimestamps.remove(accountId)
-            easClientCache.remove(accountId)
-        }
-        // Fast path — без блокировки
-        easClientCache[accountId]?.let { return it }
+        // Fast path — без блокировки (истёкший резервный клиент разбирается под локом)
+        if (!isFallbackExpired(accountId)) easClientCache[accountId]?.let { return it }
         
         // Per-account Mutex: не блокируем другие аккаунты
         val mutex = easClientLocks.computeIfAbsent(accountId) { Mutex() }
         return mutex.withLock {
+            val account = accountDao.getAccount(accountId) ?: return@withLock null
+            // Резервный сервер — на FALLBACK_PROBE_INTERVAL_MS, затем возврат на основной. Сначала
+            // TCP-проба основного (без учётных данных): пока он лежит, не тратим на него запрос
+            // (таймаут подключения до 30 с) и остаёмся на резервном ещё интервал.
+            if (isFallbackExpired(accountId)) {
+                if (EasClient.probeHost(account.serverUrl, account.incomingPort)) {
+                    fallbackTimestamps.remove(accountId)
+                    easClientCache.remove(accountId)
+                    clientInvalidationTimestamps[accountId] = System.currentTimeMillis()
+                } else {
+                    fallbackTimestamps[accountId] = System.currentTimeMillis()
+                }
+            }
             // Double-check под локом: другой поток мог создать клиент пока мы ждали
             easClientCache[accountId]?.let { return@withLock it }
             
-            val account = accountDao.getAccount(accountId) ?: return@withLock null
             val password = getPassword(accountId) ?: return@withLock null
-            val clientCertPassword = getClientCertPassword(accountId)
-            
-            // Получаем информацию о привязанном сертификате для Certificate Pinning
-            val pinnedCertInfo = if (account.pinnedCertificateHash != null && 
-                                      account.certificatePinningEnabled) {
-                com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo(
-                    hash = account.pinnedCertificateHash,
-                    cn = account.pinnedCertificateCN ?: "Unknown",
-                    organization = account.pinnedCertificateOrg ?: "Unknown",
-                    validFrom = account.pinnedCertificateValidFrom ?: 0L,
-                    validTo = account.pinnedCertificateValidTo ?: 0L
-                )
-            } else {
-                null
-            }
-            
-            val client = try {
-                EasClient(
-                    serverUrl = account.serverUrl,
-                    alternateServerUrl = account.alternateServerUrl,
-                    username = account.username,
-                    password = password,
-                    domain = account.domain,
-                    acceptAllCerts = account.acceptAllCerts,
-                    port = account.incomingPort,
-                    useHttps = account.useSSL,
-                    deviceIdSuffix = account.email,
-                    initialPolicyKey = account.policyKey,
-                    certificatePath = account.certificatePath,
-                    clientCertificatePath = account.clientCertificatePath,
-                    clientCertificatePassword = clientCertPassword,
-                    pinnedCertInfo = pinnedCertInfo,
-                    accountId = accountId
-                )
-            } catch (e: IllegalArgumentException) {
-                // Клиентский сертификат указан без пароля
-                android.util.Log.e("AccountRepository", "Failed to create EasClient: ${e.message}")
-                return@withLock null
-            }
-            
-            // Сохраняем в кэш
+            val client = buildEasClient(account, account.serverUrl, password) ?: return@withLock null
             easClientCache[accountId] = client
             client
         }
     }
-    
-    /**
-     * Dual-URL fallback: при ошибке соединения с primary пробует alternate URL.
-     * Вызывать ТОЛЬКО при connection-level ошибках (timeout, unreachable),
-     * НЕ при auth-ошибках и НЕ при отсутствии интернета.
-     */
-    suspend fun tryFallbackToAlternate(accountId: Long): EasClient? {
-        val account = accountDao.getAccount(accountId) ?: return null
-        val altUrl = account.alternateServerUrl
-        if (altUrl.isNullOrBlank()) return null
 
-        if (!isNetworkAvailable()) return null
+    private fun isFallbackExpired(accountId: Long): Boolean {
+        val since = fallbackTimestamps[accountId] ?: return false
+        return System.currentTimeMillis() - since > FALLBACK_PROBE_INTERVAL_MS
+    }
 
-        if (!EasClient.probeAlternateUrl(altUrl, account.incomingPort)) return null
-
-        val password = getPassword(accountId) ?: return null
-        val clientCertPassword = getClientCertPassword(accountId)
-        val pinnedCertInfo = if (account.pinnedCertificateHash != null &&
-            account.certificatePinningEnabled) {
+    /** EasClient аккаунта для конкретного сервера (основного или резервного) — DRY для кэша и Dual-URL. */
+    private suspend fun buildEasClient(account: AccountEntity, serverUrl: String, password: String): EasClient? {
+        // Информация о привязанном сертификате для Certificate Pinning
+        val pinnedCertInfo = if (account.pinnedCertificateHash != null && account.certificatePinningEnabled) {
             com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo(
                 hash = account.pinnedCertificateHash,
                 cn = account.pinnedCertificateCN ?: "Unknown",
@@ -559,38 +518,70 @@ class AccountRepository(private val context: Context) {
                 validTo = account.pinnedCertificateValidTo ?: 0L
             )
         } else null
+        return try {
+            EasClient(
+                serverUrl = serverUrl,
+                username = account.username,
+                password = password,
+                domain = account.domain,
+                acceptAllCerts = account.acceptAllCerts,
+                port = account.incomingPort,
+                useHttps = account.useSSL,
+                deviceIdSuffix = account.email,
+                initialPolicyKey = account.policyKey,
+                certificatePath = account.certificatePath,
+                clientCertificatePath = account.clientCertificatePath,
+                clientCertificatePassword = getClientCertPassword(account.id),
+                pinnedCertInfo = pinnedCertInfo,
+                accountId = account.id
+            )
+        } catch (e: IllegalArgumentException) {
+            // Клиентский сертификат указан без пароля или не загружается
+            android.util.Log.e("AccountRepository", "Failed to create EasClient: ${e.message}")
+            null
+        }
+    }
 
-        // N-7: все мутации кэша — под тем же per-account Mutex, что и в createEasClient (иначе
-        // конкурентная запись кэша primary vs fallback без взаимного исключения). Сеть (probe)
+    /** Dual-URL: аккаунт сейчас работает через резервный сервер. */
+    override fun isUsingFallback(accountId: Long): Boolean = fallbackTimestamps.containsKey(accountId)
+
+    /**
+     * Dual-URL: переключает аккаунт на ДРУГОЙ сервер — с основного на резервный или, если сбой
+     * случился уже на резервном, обратно на основной. Вызывать только при обрыве связи
+     * ([com.dedovmosol.iwomail.data.model.isConnectionLevelError]), не при ошибках авторизации.
+     *
+     * Перед переключением — TCP-проба целевого хоста (без учётных данных): недоступный сервер не
+     * тратит попытку синхронизации и не копит неудачные входы в AD. Резервный клиент живёт
+     * [FALLBACK_PROBE_INTERVAL_MS], затем [createEasClient] возвращает основной.
+     *
+     * @param fromFallback на каком сервере случился сбой. Если состояние уже другое — аккаунт
+     *   переключил параллельный вызов: возвращаем true без повторного переключения (без flip-flop).
+     */
+    override suspend fun switchToOtherEndpoint(accountId: Long, fromFallback: Boolean): Boolean {
+        if (isUsingFallback(accountId) != fromFallback) return true
+        val account = accountDao.getAccount(accountId) ?: return false
+        val alternateUrl = account.alternateServerUrl?.takeIf { it.isNotBlank() } ?: return false
+        val targetUrl = if (fromFallback) account.serverUrl else alternateUrl
+        if (!isNetworkAvailable()) return false
+        if (!EasClient.probeHost(targetUrl, account.incomingPort)) return false
+        val password = getPassword(accountId) ?: return false
+
+        // N-7: все мутации кэша — под тем же per-account Mutex, что и в createEasClient. Сеть (проба)
         // и чтение БД/паролей — выше, вне лока.
         val mutex = easClientLocks.computeIfAbsent(accountId) { Mutex() }
         return mutex.withLock {
-            clearEasClientCache(accountId)
-            val client = try {
-                EasClient(
-                    serverUrl = altUrl,
-                    alternateServerUrl = account.serverUrl,
-                    username = account.username,
-                    password = password,
-                    domain = account.domain,
-                    acceptAllCerts = account.acceptAllCerts,
-                    port = account.incomingPort,
-                    useHttps = account.useSSL,
-                    deviceIdSuffix = account.email,
-                    initialPolicyKey = account.policyKey,
-                    certificatePath = account.certificatePath,
-                    clientCertificatePath = account.clientCertificatePath,
-                    clientCertificatePassword = clientCertPassword,
-                    pinnedCertInfo = pinnedCertInfo,
-                    accountId = accountId
-                )
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                return@withLock null
-            }
+            if (isUsingFallback(accountId) != fromFallback) return@withLock true
+            val client = buildEasClient(account, targetUrl, password) ?: return@withLock false
+            val now = System.currentTimeMillis()
             easClientCache[accountId] = client
-            fallbackTimestamps[accountId] = System.currentTimeMillis()
-            client
+            if (fromFallback) fallbackTimestamps.remove(accountId) else fallbackTimestamps[accountId] = now
+            // PushService держит свой кэш клиентов: метка инвалидации заставит его взять новый.
+            clientInvalidationTimestamps[accountId] = now
+            android.util.Log.i(
+                "AccountRepository",
+                "Dual-URL: account $accountId switched to ${if (fromFallback) "primary" else "alternate"} server"
+            )
+            true
         }
     }
 
@@ -601,7 +592,7 @@ class AccountRepository(private val context: Context) {
     fun clearEasClientCache(accountId: Long) {
         easClientCache.remove(accountId)
         // N-7: НЕ удаляем per-account Mutex из easClientLocks. Иначе, если он сейчас удерживается
-        // внутри createEasClient/tryFallbackToAlternate, следующий computeIfAbsent создаст ДРУГОЙ
+        // внутри createEasClient/switchToOtherEndpoint, следующий computeIfAbsent создаст ДРУГОЙ
         // экземпляр Mutex → взаимное исключение нарушается (две корутины в критической секции).
         // Мьютексы per-account, их немного (по числу аккаунтов) — держать их безопасно и без утечки.
         fallbackTimestamps.remove(accountId)
@@ -986,7 +977,7 @@ class AccountRepository(private val context: Context) {
         AccountServerHealthRepository.resetHealth(accountId)
     }
 
-    suspend fun hasAlternateUrl(accountId: Long): Boolean {
+    override suspend fun hasAlternateUrl(accountId: Long): Boolean {
         return accountDao.getAccount(accountId)?.alternateServerUrl?.isNotBlank() == true
     }
 

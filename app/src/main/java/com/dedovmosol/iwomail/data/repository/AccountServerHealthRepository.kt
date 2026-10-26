@@ -41,6 +41,11 @@ object AccountServerHealthRepository {
         }
     }
 
+    /**
+     * @param usedFallback исход получен на резервном сервере.
+     * @param bothFailed сбой связи на текущем сервере, и другой тоже не ответил (недоступен или
+     *   сбой связи после переключения): засчитывается обоим счётчикам.
+     */
     fun reportSyncOutcome(
         accountId: Long,
         success: Boolean,
@@ -48,7 +53,8 @@ object AccountServerHealthRepository {
         errorMessage: String? = null,
         usedFallback: Boolean = false,
         hasAlternateUrl: Boolean = false,
-        serverDisplayName: String? = null
+        serverDisplayName: String? = null,
+        bothFailed: Boolean = false
     ) {
         val lock = locks.computeIfAbsent(accountId) { Any() }
         synchronized(lock) {
@@ -57,9 +63,11 @@ object AccountServerHealthRepository {
             val now = System.currentTimeMillis()
 
             if (success) {
+                // Почта идёт через резервный сервер: основной по-прежнему считается недоступным
+                // (состояние информационное — без баннера и уведомления, см. showBanner).
                 flow.value = current.copy(
-                    problemType = ServerProblemType.None,
-                    primaryConsecutiveFailures = 0,
+                    problemType = if (usedFallback) ServerProblemType.PrimaryDownUsingFallback else ServerProblemType.None,
+                    primaryConsecutiveFailures = if (usedFallback) current.primaryConsecutiveFailures else 0,
                     alternateConsecutiveFailures = 0,
                     lastSuccessAt = now,
                     lastErrorMessage = null,
@@ -72,18 +80,11 @@ object AccountServerHealthRepository {
 
             val kind = errorKind ?: ErrorKind.Unknown
 
-            val primaryFails: Int
-            val altFails: Int
-            if (usedFallback) {
-                primaryFails = current.primaryConsecutiveFailures
-                altFails = current.alternateConsecutiveFailures + 1
-            } else {
-                primaryFails = current.primaryConsecutiveFailures + 1
-                altFails = current.alternateConsecutiveFailures
-            }
+            val primaryFails = current.primaryConsecutiveFailures + if (!usedFallback || bothFailed) 1 else 0
+            val altFails = current.alternateConsecutiveFailures + if (usedFallback || bothFailed) 1 else 0
 
             val problemType = deriveProblemType(
-                primaryFails, altFails, hasAlternateUrl, kind
+                primaryFails, altFails, hasAlternateUrl, kind, onFallback = usedFallback && !bothFailed
             )
 
             flow.value = current.copy(
@@ -126,11 +127,17 @@ object AccountServerHealthRepository {
             MutableStateFlow(AccountServerHealth(accountId = accountId))
         }
 
+    /**
+     * @param onFallback сбой случился на резервном сервере, а основной к этому моменту уже не отвечал.
+     *   «Используется резервный» — только тогда: раньше этот статус ставился за любые 3 сбоя основного
+     *   при настроенном резервном, даже если резервный тоже недоступен (вместо «оба недоступны»).
+     */
     private fun deriveProblemType(
         primaryFails: Int,
         altFails: Int,
         hasAlternate: Boolean,
-        errorKind: ErrorKind
+        errorKind: ErrorKind,
+        onFallback: Boolean
     ): ServerProblemType {
         if (errorKind == ErrorKind.Auth) return ServerProblemType.AuthError
         if (errorKind == ErrorKind.Cert) return ServerProblemType.CertError
@@ -140,11 +147,8 @@ object AccountServerHealthRepository {
         }
 
         if (primaryFails >= FAILURE_THRESHOLD && hasAlternate) {
-            return if (altFails >= FAILURE_THRESHOLD) {
-                ServerProblemType.BothServersDown
-            } else {
-                ServerProblemType.PrimaryDownUsingFallback
-            }
+            if (altFails >= FAILURE_THRESHOLD) return ServerProblemType.BothServersDown
+            if (onFallback) return ServerProblemType.PrimaryDownUsingFallback
         }
 
         if (primaryFails >= FAILURE_THRESHOLD) {
