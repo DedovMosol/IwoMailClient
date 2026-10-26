@@ -11,6 +11,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -58,6 +61,15 @@ class SettingsRepositoryThemeModeTest {
     /** Свежий репозиторий поверх чистого изолированного хранилища. */
     private fun newRepo(): SettingsRepository = runBlocking {
         SettingsRepository.createForTesting(testContext, newIsolatedStore())
+    }
+
+    /**
+     * Значение синк-геттера после эмита коллектора кэша. Реальное время (Dispatchers.Default), а не
+     * виртуальное runTest: коллектор работает на Dispatchers.IO, виртуальные задержки его не ждут.
+     */
+    private suspend fun <T> awaitSyncValue(expected: T, read: () -> T): T = withContext(Dispatchers.Default) {
+        withTimeoutOrNull(5_000L) { while (read() != expected) delay(10L) }
+        read()
     }
 
     /** Остановка всех созданных хранилищ — без этого файл нельзя переиспользовать. */
@@ -117,7 +129,13 @@ class SettingsRepositoryThemeModeTest {
         }
         val repo2 = SettingsRepository.createForTesting(testContext, store2)
         assertEquals(SettingsRepository.ThemeMode.LIGHT, repo2.themeMode.first())
-        assertEquals(SettingsRepository.ThemeMode.LIGHT, repo2.getThemeModeSync())
+        // Синк-кэш согревает коллектор на Dispatchers.IO асинхронно: first() выше получил значение своим
+        // подписчиком, а коллектор кэша мог ещё не отработать — под нагрузкой CI ассерт ловил SYSTEM
+        // (падение прогона ec55d36). Ждём эмита коллектора в реальном времени.
+        assertEquals(
+            SettingsRepository.ThemeMode.LIGHT,
+            awaitSyncValue(SettingsRepository.ThemeMode.LIGHT) { repo2.getThemeModeSync() }
+        )
         repo2.cleanup()
         finish()
     }
