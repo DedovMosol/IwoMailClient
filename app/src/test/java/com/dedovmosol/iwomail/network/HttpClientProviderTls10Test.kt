@@ -7,12 +7,14 @@ import okhttp3.Request
 import okhttp3.TlsVersion
 import org.junit.After
 import org.junit.Assert.assertThrows
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.IOException
 import java.net.InetAddress
 import java.security.KeyStore
+import java.security.Security
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
@@ -35,8 +37,21 @@ class HttpClientProviderTls10Test {
 
     private val servers = mutableListOf<TlsServer>()
 
+    /**
+     * Как в приложении: MailApplication.initConscrypt ставит bundled Conscrypt первым провайдером
+     * (TrustManagerFactory/CertificateFactory тоже из него). Тест не зависит от того, успел ли это
+     * сделать Robolectric-тест в той же JVM.
+     */
+    @Before
+    fun installConscryptFirst() {
+        Security.insertProviderAt(conscryptProvider(), 1)
+    }
+
     @After
-    fun tearDown() = servers.forEach { it.close() }
+    fun tearDown() {
+        servers.forEach { it.close() }
+        Security.removeProvider("Conscrypt")
+    }
 
     @Test
     fun `TLS 1_0-only Exchange 2007 server connects in a single handshake`() {
