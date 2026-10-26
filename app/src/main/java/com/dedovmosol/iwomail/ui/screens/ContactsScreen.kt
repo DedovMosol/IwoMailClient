@@ -808,7 +808,7 @@ fun ContactsScreen(
 
         var selectedColor by rememberSaveable { mutableIntStateOf(defaultColor) }
 
-        val currentConfig = LocalContext.current.resources.configuration
+        val currentConfig = androidx.compose.ui.platform.LocalConfiguration.current
         val isLandscape = currentConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val screenHeightDp = currentConfig.screenHeightDp
         // Высота текстовой области: оставляем место для иконки, заголовка, кнопок
@@ -938,7 +938,7 @@ fun ContactsScreen(
 
         var selectedColor by rememberSaveable { mutableIntStateOf(group.color) }
 
-        val currentConfig = LocalContext.current.resources.configuration
+        val currentConfig = androidx.compose.ui.platform.LocalConfiguration.current
         val isLandscape = currentConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val screenHeightDp = currentConfig.screenHeightDp
         val maxTextHeight = if (isLandscape) {

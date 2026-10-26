@@ -249,6 +249,7 @@ class MainActivity : FragmentActivity() {
         
         // Sync shortcut — запускаем синхронизацию через broadcast и сразу выходим
         if (intent?.action == ACTION_SHORTCUT_SYNC) {
+            com.dedovmosol.iwomail.util.AppShortcuts.reportUsed(this, ACTION_SHORTCUT_SYNC)
             intent.action = null
             // Отправляем broadcast на SyncAlarmReceiver — он покажет toast о начале и завершении
             sendBroadcast(Intent(com.dedovmosol.iwomail.sync.SyncAlarmReceiver.ACTION_SYNC_NOW).apply {
@@ -599,6 +600,7 @@ class MainActivity : FragmentActivity() {
         }
         
         // App Shortcuts
+        com.dedovmosol.iwomail.util.AppShortcuts.reportUsed(this, intent.action)
         when (intent.action) {
             ACTION_SHORTCUT_COMPOSE -> {
                 shortcutCompose.value = true

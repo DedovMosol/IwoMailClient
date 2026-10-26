@@ -8,7 +8,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.ui.Strings
@@ -23,8 +22,8 @@ fun ScheduleSendDialog(
     onDismiss: () -> Unit,
     onSchedule: (Long) -> Unit
 ) {
-    val context = LocalContext.current
     var showCustomPicker by rememberSaveable { mutableStateOf(false) }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
     var customDateMillis by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     val customDate = remember(customDateMillis) { Calendar.getInstance().apply { timeInMillis = customDateMillis } }
     
@@ -87,22 +86,7 @@ fun ScheduleSendDialog(
                         readOnly = true,
                         modifier = Modifier.fillMaxWidth(),
                         trailingIcon = {
-                            IconButton(onClick = {
-                                // Показываем DatePicker через Android API
-                                android.app.DatePickerDialog(
-                                    context,
-                                    { _, year, month, day ->
-                                        customDateMillis = (customDate.clone() as Calendar).apply {
-                                            set(Calendar.YEAR, year)
-                                            set(Calendar.MONTH, month)
-                                            set(Calendar.DAY_OF_MONTH, day)
-                                        }.timeInMillis
-                                    },
-                                    customDate.get(Calendar.YEAR),
-                                    customDate.get(Calendar.MONTH),
-                                    customDate.get(Calendar.DAY_OF_MONTH)
-                                ).show()
-                            }) {
+                            IconButton(onClick = { showDatePicker = true }) {
                                 Icon(AppIcons.DateRange, Strings.selectDate)
                             }
                         }
@@ -200,6 +184,35 @@ fun ScheduleSendDialog(
                 )
             }
         )
+        // Compose DatePicker (как в календаре): перестраивается при повороте и переживает его.
+        // Платформенный DatePickerDialog при повороте без пересоздания активности сохранял
+        // портретную разметку. Его millis — полночь UTC выбранного дня.
+        if (showDatePicker) {
+            val utc = TimeZone.getTimeZone("UTC")
+            val datePickerState = rememberDatePickerState(
+                initialSelectedDateMillis = Calendar.getInstance(utc).apply {
+                    clear()
+                    set(customDate.get(Calendar.YEAR), customDate.get(Calendar.MONTH), customDate.get(Calendar.DAY_OF_MONTH))
+                }.timeInMillis
+            )
+            DatePickerDialog(
+                onDismissRequest = { showDatePicker = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val picked = Calendar.getInstance(utc).apply { timeInMillis = millis }
+                            customDateMillis = (customDate.clone() as Calendar).apply {
+                                set(picked.get(Calendar.YEAR), picked.get(Calendar.MONTH), picked.get(Calendar.DAY_OF_MONTH))
+                            }.timeInMillis
+                        }
+                        showDatePicker = false
+                    }) { Text(Strings.ok) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDatePicker = false }) { Text(Strings.cancel) }
+                }
+            ) { DatePicker(state = datePickerState) }
+        }
     } else {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = onDismiss,

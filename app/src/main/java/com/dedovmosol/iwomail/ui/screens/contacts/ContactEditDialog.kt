@@ -11,7 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.ContactEntity
 import com.dedovmosol.iwomail.ui.Strings
@@ -72,7 +72,7 @@ internal fun ContactEditDialog(
         }
     }
 
-    val currentConfig = LocalContext.current.resources.configuration
+    val currentConfig = LocalConfiguration.current
     val isLandscape = currentConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
     val screenHeightDp = currentConfig.screenHeightDp
     // Высота текстовой области: оставляем место для заголовка и кнопок

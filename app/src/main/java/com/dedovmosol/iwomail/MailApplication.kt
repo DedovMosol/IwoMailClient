@@ -12,6 +12,7 @@ import com.dedovmosol.iwomail.sync.ServerHealthNotifier
 import com.dedovmosol.iwomail.sync.SyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -71,6 +72,7 @@ class MailApplication : Application() {
         scheduleSync()
         startPushService()
         observeServerConnectionHealth()
+        observeAppShortcuts()
     }
     
     // Держим ссылку на процесс-lifetime ресивер watchdog'а PushService.
@@ -341,6 +343,25 @@ class MailApplication : Application() {
      * [flatMapLatest] переподписывает health-flow при изменении списка аккаунтов (добавление/удаление).
      * Процесс-lifetime подписка (не отменяется) — сбор при смерти процесса, как и остальные здесь.
      */
+    /**
+     * Ярлыки приложения — только при наличии аккаунта, подписи на языке приложения (см. [AppShortcuts]).
+     * distinctUntilChanged: ShortcutManager трогаем лишь при смене «есть аккаунт / язык», а не на
+     * каждое обновление строки аккаунта (policyKey и т.п.).
+     */
+    private fun observeAppShortcuts() {
+        applicationScope.launch(Dispatchers.IO) {
+            val accountDao = MailDatabase.getInstance(this@MailApplication).accountDao()
+            kotlinx.coroutines.flow.combine(
+                accountDao.getAllAccounts().map { it.isNotEmpty() },
+                settingsRepository.language
+            ) { hasAccounts, language -> hasAccounts to language }
+                .distinctUntilChanged()
+                .collect { (hasAccounts, language) ->
+                    com.dedovmosol.iwomail.util.AppShortcuts.update(this@MailApplication, hasAccounts, language)
+                }
+        }
+    }
+
     private fun observeServerConnectionHealth() {
         applicationScope.launch(Dispatchers.IO) {
             val accountDao = MailDatabase.getInstance(this@MailApplication).accountDao()

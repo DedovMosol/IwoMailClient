@@ -64,12 +64,27 @@ class SyncAlarmReceiver : BroadcastReceiver() {
                     return
                 }
 
-                showSyncStartedNotification(context)
-
-                // Единая точка запуска ручной синхронизации:
-                // внутри SyncWorker.syncNow уже используется enqueueUniqueWork(KEEP)
-                // с общим именем MANUAL_SYNC_WORK.
-                SyncWorker.syncNow(context)
+                // Ярлык «Синхронизация» (в т.ч. закреплённый на рабочем столе) до входа в аккаунт:
+                // синхронизировать нечего — сообщаем и не запускаем работу. Запрос к БД — не в main.
+                val pendingResult = goAsync()
+                com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.IO).launch {
+                    try {
+                        val hasAccounts = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
+                            .accountDao().getCount() > 0
+                        if (!hasAccounts) {
+                            val isRussian = SettingsRepository.getInstance(context).getLanguageSync() == "ru"
+                            SafeToast.short(context, if (isRussian) "Сначала добавьте аккаунт" else "Add an account first")
+                            return@launch
+                        }
+                        showSyncStartedNotification(context)
+                        // Единая точка запуска ручной синхронизации:
+                        // внутри SyncWorker.syncNow уже используется enqueueUniqueWork(KEEP)
+                        // с общим именем MANUAL_SYNC_WORK.
+                        SyncWorker.syncNow(context)
+                    } finally {
+                        pendingResult.finish()
+                    }
+                }
                 return
             }
 
