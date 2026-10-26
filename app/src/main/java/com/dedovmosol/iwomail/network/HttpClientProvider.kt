@@ -496,7 +496,8 @@ object HttpClientProvider {
         return builder.build()
     }
     
-    private fun createCertificateTrustManager(certPath: String): X509TrustManager? {
+    @androidx.annotation.VisibleForTesting
+    internal fun createCertificateTrustManager(certPath: String): X509TrustManager? {
         return try {
             val certFile = File(certPath)
             if (!certFile.exists()) return null
@@ -524,22 +525,20 @@ object HttpClientProvider {
                 }
                 
                 override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                    if (chain.isNotEmpty()) {
-                        val serverCert = chain[0]
-                        if (serverCert.publicKey == certificate.publicKey) {
-                            serverCert.checkValidity()
-                            return
-                        }
-                        try {
-                            if (serverCert.encoded.contentEquals(certificate.encoded)) return
-                        } catch (_: Exception) {}
-                        for (cert in chain) {
-                            if (cert.publicKey == certificate.publicKey || cert.encoded.contentEquals(certificate.encoded)) return
-                        }
+                    val leaf = chain.firstOrNull()
+                        ?: throw java.security.cert.CertificateException("Empty server certificate chain")
+                    // Сервер отдаёт сам импортированный сертификат (самоподписанный Exchange): ключ листа
+                    // совпал — значит, закрытый ключ у сервера (им подписано рукопожатие). Проверяем срок.
+                    // SPKI сравнивается в DER: equals() ключей разных провайдеров (Conscrypt/JCA) ненадёжен.
+                    if (leaf.publicKey.encoded.contentEquals(certificate.publicKey.encoded)) {
+                        leaf.checkValidity()
+                        return
                     }
-                    try { certTm?.checkServerTrusted(chain, authType); return } catch (_: Exception) {}
-                    try { systemTm?.checkServerTrusted(chain, authType); return } catch (_: Exception) {}
-                    throw java.security.cert.CertificateException("Certificate not trusted")
+                    // Импортирован сертификат УЦ — полная проверка цепочки (PKIX) с ним как якорем, затем
+                    // системное хранилище. Раньше цепочка принималась, если импортированный сертификат просто
+                    // ВСТРЕЧАЛСЯ в ней, без проверки подписей. Он публичный (сервер отдаёт его каждому) —
+                    // атакующий дописывал его после своего сертификата: MITM при выключенном Pinning.
+                    checkTrustedByAny(listOfNotNull(certTm, systemTm), chain, authType)
                 }
                 
                 override fun getAcceptedIssuers(): Array<X509Certificate> {
@@ -665,6 +664,25 @@ object HttpClientProvider {
         }
     }
     
+    /**
+     * Цепочка доверена хотя бы одним из [managers] (по порядку). Fail-closed: раньше `tm?.check(); return`
+     * при отсутствующем менеджере принимал ЛЮБУЮ цепочку. Бросается причина первого менеджера —
+     * самая точная (например, «сертификат истёк» по импортированному УЦ вместо «не доверен»).
+     */
+    private fun checkTrustedByAny(managers: List<X509TrustManager>, chain: Array<X509Certificate>, authType: String) {
+        var firstFailure: Exception? = null
+        for (manager in managers) {
+            try {
+                manager.checkServerTrusted(chain, authType)
+                return
+            } catch (e: Exception) {
+                if (firstFailure == null) firstFailure = e
+            }
+        }
+        throw firstFailure as? java.security.cert.CertificateException
+            ?: java.security.cert.CertificateException("Certificate not trusted", firstFailure)
+    }
+
     private fun createSystemTrustManager(): X509TrustManager {
         val systemTmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
         systemTmf.init(null as java.security.KeyStore?)
@@ -686,17 +704,7 @@ object HttpClientProvider {
             }
             
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                try {
-                    systemTm?.checkServerTrusted(chain, authType)
-                    return
-                } catch (_: Exception) {}
-                
-                try {
-                    userTm?.checkServerTrusted(chain, authType)
-                    return
-                } catch (_: Exception) {}
-                
-                throw java.security.cert.CertificateException("Trust anchor not found")
+                checkTrustedByAny(listOfNotNull(systemTm, userTm), chain, authType)
             }
             
             override fun getAcceptedIssuers(): Array<X509Certificate> {

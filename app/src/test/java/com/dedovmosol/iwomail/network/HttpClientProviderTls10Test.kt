@@ -43,14 +43,12 @@ class HttpClientProviderTls10Test {
      * сделать Robolectric-тест в той же JVM.
      */
     @Before
-    fun installConscryptFirst() {
-        Security.insertProviderAt(conscryptProvider(), 1)
-    }
+    fun installConscryptFirst() = TestConscrypt.installFirst()
 
     @After
     fun tearDown() {
         servers.forEach { it.close() }
-        Security.removeProvider("Conscrypt")
+        TestConscrypt.uninstall()
     }
 
     @Test
@@ -161,7 +159,7 @@ class HttpClientProviderTls10Test {
         resource("$cert.p12").use { keyStore.load(it, PASSWORD) }
         val keyManagers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
             .apply { init(keyStore, PASSWORD) }.keyManagers
-        val context = SSLContext.getInstance("TLS", conscryptProvider())
+        val context = SSLContext.getInstance("TLS", TestConscrypt.provider())
         context.init(keyManagers, null, null)
         val socket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         return TlsServer(socket) { raw ->
@@ -217,14 +215,8 @@ class HttpClientProviderTls10Test {
     }
 
     private companion object {
+        // Сервер — тоже на BoringSSL (Conscrypt): SunJSSE запрещает TLS 1.0 (jdk.tls.disabledAlgorithms).
         val PASSWORD = "changeit".toCharArray()
-
-        /**
-         * Сервер — тоже на BoringSSL (Conscrypt): SunJSSE запрещает TLS 1.0 (jdk.tls.disabledAlgorithms).
-         * conscrypt-openjdk-uber есть только в runtime-classpath тестов (через Robolectric), поэтому рефлексия.
-         */
-        fun conscryptProvider(): java.security.Provider =
-            Class.forName("org.conscrypt.Conscrypt").getMethod("newProvider").invoke(null) as java.security.Provider
 
         /** Наборы Schannel Windows Server 2008 для TLS 1.0 (без ECDHE): RSA + AES-CBC. */
         val EXCHANGE_2007_CIPHERS = arrayOf("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")

@@ -122,6 +122,9 @@ keystore.properties
 # Исключение: публичные тестовые сертификаты (без приватных ключей, сгенерированы
 # keytool для поведенческих тестов hostname-верификации — Rfc6125HostnameVerifier).
 !app/src/test/resources/certs/*.pem
+# Сокет-тесты TLS: сертификаты и ключи ТОЛЬКО для 127.0.0.1 (keytool, пароль changeit), не секреты.
+!app/src/test/resources/certs/tls/*.pem
+!app/src/test/resources/certs/tls/*.p12
 
 # Environment variables
 *.env
