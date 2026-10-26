@@ -36,6 +36,28 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
+      # Упавшие тесты — аннотациями к коммиту/PR: причина видна сразу, без скачивания артефакта.
+      - name: Annotate failed tests
+        if: failure()
+        run: |
+          python3 - <<'EOF'
+          import glob
+          import xml.etree.ElementTree as ET
+
+          def esc(s):
+              return s.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+
+          for path in sorted(glob.glob('app/build/test-results/testDebugUnitTest/*.xml')):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for tag in ('failure', 'error'):
+                      el = case.find(tag)
+                      if el is None:
+                          continue
+                      title = f"{case.get('classname')}.{case.get('name')}"
+                      body = (el.get('message') or '') + '\n' + '\n'.join((el.text or '').splitlines()[:12])
+                      print(f"::error title={esc(title)}::{esc(body[:1800])}")
+          EOF
+
       - name: Generate coverage report
         run: ./gradlew koverXmlReportDebug --stacktrace
 
