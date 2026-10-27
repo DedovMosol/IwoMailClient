@@ -365,6 +365,30 @@ class EmailOperationsService(
         return EasResult.Error("Загрузка тела не поддерживается для этого типа аккаунта")
     }
 
+    /**
+     * Тело серверного черновика перед редактированием — с сервера, по точному идентификатору: EWS
+     * ItemId → GetItem, EAS ServerId → ItemOperations Fetch. Без поиска по теме (fallback из
+     * [loadEmailBody] мог бы вернуть чужой черновик с той же темой). Синхронизация могла сохранить тело
+     * обрезанным или устаревшим, а сохранение такого тела перезаписало бы полное на сервере.
+     * Свежее тело записывается в БД; null — получить не удалось (остаётся сохранённое).
+     */
+    suspend fun refreshDraftBody(emailId: String): String? {
+        val email = emailDao.getEmail(emailId) ?: return null
+        val serverId = email.serverId
+        if (serverId.isBlank() || com.dedovmosol.iwomail.eas.DraftIds.isLocal(serverId)) return null
+        val client = accountRepo.createEasClient(email.accountId) ?: return null
+        val fresh = if (com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(serverId)) {
+            (client.getDraftBody(serverId) as? EasResult.Success)?.data
+        } else {
+            (client.fetchEmailBodyWithMdn(email.folderId.substringAfter("_"), serverId, fetchMimeHeaders = false)
+                as? EasResult.Success)?.data?.body
+        }
+        val body = fresh?.takeIf { it.isNotBlank() } ?: return null
+        // В БД — только помещающееся в строку (окно курсора 2 МБ), иначе черновик не прочитать вовсе.
+        if (body.length <= DraftUpload.MAX_LOCAL_BODY_CHARS) emailDao.updateBody(emailId, body)
+        return body
+    }
+
     private fun cachedBodyMatchesPreview(preview: String, body: String): Boolean {
         val normalizedPreview = normalizePreviewText(preview)
         if (normalizedPreview.isBlank()) return true

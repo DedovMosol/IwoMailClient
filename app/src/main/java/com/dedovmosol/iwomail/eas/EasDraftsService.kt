@@ -72,8 +72,6 @@ class EasDraftsService internal constructor(
         private val ITEM_ID_T_PATTERN = """<t:ItemId Id="([^"]+)"""".toRegex()
         private val ITEM_ID_NS_PATTERN = """<t:ItemId\s+Id="([^"]+)"""".toRegex()
         private val ITEM_ID_ALT_PATTERN = """ItemId\s+Id="([^"]+)"""".toRegex()
-        private val ITEM_ID_M_PATTERN = """<m:ItemId Id="([^"]+)"""".toRegex()
-        private val ITEM_ID_BARE_PATTERN = """<ItemId Id="([^"]+)"""".toRegex()
         private val EMAIL_ADDR_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     }
     
@@ -100,131 +98,68 @@ class EasDraftsService internal constructor(
     )
     
     
-suspend fun createDraft(
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    attachments: List<DraftAttachmentData> = emptyList()
-): EasResult<String> {
+    /**
+     * Создание черновика на сервере. С вложениями — MIME (тело и вложения одним CreateItem: только так
+     * inline-картинки с Content-ID надёжно сохраняются), без вложений или при ошибке MIME — EWS CreateItem.
+     * Сервер недоступен или отказал — local_draft_ (локальная запись, на сервер её загрузит syncDraftsFull).
+     * Exchange 2007 SP1+.
+     */
+    suspend fun createDraft(
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String,
+        attachments: List<DraftAttachmentData> = emptyList(),
+        importance: Int = 1
+    ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
-        val majorVersion = deps.getEasVersion().substringBefore(".").toIntOrNull() ?: 12
-        val minorVersion = deps.getEasVersion().substringAfter(".").substringBefore(".").toIntOrNull() ?: 0
-        
-        // Вспомогательная функция: проверка, не был ли черновик уже создан на сервере.
-        // КРИТИЧНО: MIME/EWS могут создать черновик на сервере, но вернуть Error
-        // (например, Exchange 2007 не включает ItemId в ответ для MIMEContent).
-        // Без этой проверки fallback создаёт ДУБЛИКАТ на сервере.
-        // FindItem по subject возвращает самый свежий черновик (DateTimeReceived DESC).
-        // Совместимо с Exchange 2007 SP1+ (EWS FindItem).
-        suspend fun tryRecoverItemId(): String? {
-            if (subject.isBlank()) return null
-            return try {
-                findDraftItemIdBySubject(subject)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                null
-            }
-        }
-        
-        // MIME-подход: тело + вложения в одном MIME-сообщении через CreateItem.
-        // Это единственный надёжный способ сохранить inline-картинки в черновиках.
-        // CreateItem + CreateAttachment (два запроса) имеет known issues с inline в drafts.
-        // MIME — одна атомарная операция. Работает на Exchange 2007 SP1+.
+
         if (attachments.isNotEmpty()) {
             val mimeResult = createDraftMime(to, cc, bcc, subject, body, attachments)
             if (mimeResult is EasResult.Success) {
+                applyDraftExtrasEws(mimeResult.data, bcc, importance)
                 return mimeResult
             }
-            // MIME мог создать черновик на сервере, но не вернуть ItemId.
-            // Проверяем через FindItem ПЕРЕД созданием дубликата fallback-ом.
-            tryRecoverItemId()?.let { return EasResult.Success(it) }
+            // Ошибку MIME не «чиним» поиском по теме: самый свежий черновик с той же темой — обычно
+            // ПРЕДЫДУЩАЯ версия пересохраняемого черновика; её id выдался бы за новый, а саму её
+            // вызывающий затем удалил бы. Успешный ответ без ItemId (Exchange 2007) разобран в createDraftMime.
         }
-        
-        if (majorVersion < 14) {
-            val ewsResult = createDraftEws(to, cc, bcc, subject, body, attachments)
-            if (ewsResult is EasResult.Success) {
-                return ewsResult
-            }
-            // EWS тоже мог создать черновик — проверяем перед local_draft_ fallback.
-            tryRecoverItemId()?.let { return EasResult.Success(it) }
-            // НЕ используем createDraftEas: он сбрасывает SyncKey на "0"
-            // (через refreshSyncKey(folderId, "0")), что вызывает полную ресинхронизацию
-            // и может привести к потере pending Adds (новый черновик от MIME/EWS).
-            // local_draft_ гарантирует локальную запись; серверный черновик
-            // (если MIME/EWS его создали) подтянется при следующем sync.
-            return EasResult.Success("local_draft_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}")
-        }
-        
-        if ((majorVersion == 14 && minorVersion >= 1) || majorVersion > 14) {
-            val ewsResult = createDraftEws2013(to, cc, bcc, subject, body, attachments)
-            if (ewsResult is EasResult.Success) {
-                return ewsResult
-            }
-            // Проверяем, не создался ли черновик на сервере
-            tryRecoverItemId()?.let { return EasResult.Success(it) }
-            return EasResult.Success("local_draft_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}")
-        }
-        
-        val ewsResult = createDraftEws(to, cc, bcc, subject, body, attachments)
+
+        val ewsResult = createDraftEws(to, cc, bcc, subject, body, attachments, importance)
         if (ewsResult is EasResult.Success) {
             return ewsResult
         }
-        
-        // Последний шанс: проверяем, не создался ли черновик ранее (MIME/EWS)
-        tryRecoverItemId()?.let { return EasResult.Success(it) }
-        
+        android.util.Log.w("EasDraftsService", "createDraft: not saved on the server (${(ewsResult as EasResult.Error).message})")
+        // НЕ createDraftEas: он сбрасывает SyncKey на "0" (полная ресинхронизация теряет pending Adds).
         return EasResult.Success("local_draft_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}")
     }
-    
+
     /**
-     * Сохранение черновика (обновляет существующий или создаёт новый)
+     * Обновление черновика на сервере (EWS UpdateItem). [bcc] = null — скрытые копии приложению не
+     * известны (EAS до 16.0 их не передаёт): на сервере они не меняются.
      */
-  suspend fun saveDraft(
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    existingDraftId: String? = null
-): EasResult<String> {
-        // Если есть существующий черновик - обновляем
-        if (existingDraftId != null && !existingDraftId.startsWith("local_draft_")) {
-            val updateResult = updateDraft(existingDraftId, to, cc, bcc, subject, body)
-            if (updateResult is EasResult.Success && updateResult.data) {
-                return EasResult.Success(existingDraftId)
-            }
-            // Если обновление не удалось - создаём новый
-        }
-        
-       return createDraft(to, cc, bcc, subject, body)
-    }
-    
-    /**
-     * Обновление черновика
-     */
-suspend fun updateDraft(
-    serverId: String,
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String
-): EasResult<Boolean> {
+    suspend fun updateDraft(
+        serverId: String,
+        to: String,
+        cc: String,
+        bcc: String?,
+        subject: String,
+        body: String,
+        importance: Int = 1
+    ): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
         }
-        
+
         // Локальные черновики нельзя обновить на сервере
         if (serverId.startsWith("local_draft_")) {
             return EasResult.Success(true)
         }
-        
-     return updateDraftEws(serverId, to, cc, bcc, subject, body)
+
+        return updateDraftEws(serverId, to, cc, bcc, subject, body, importance)
     }
     /**
  * Загрузка Body черновика через EWS GetItem
@@ -734,125 +669,99 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
     
     // === EWS методы ===
     
-private suspend fun createDraftEws(
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    attachments: List<DraftAttachmentData> = emptyList()
-): EasResult<String> {
-    return withContext(Dispatchers.IO) {
+    /**
+     * EWS CreateItem черновика (HTML-тело, получатели, важность), затем вложения по одному через
+     * CreateAttachment. Вложения не загрузились — недособранный черновик удаляется и возвращается
+     * ошибка: иначе вызывающий принял бы его за сохранённый и удалил прежнюю версию с её вложениями.
+     */
+    private suspend fun createDraftEws(
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String,
+        attachments: List<DraftAttachmentData>,
+        importance: Int
+    ): EasResult<String> = withContext(Dispatchers.IO) {
         try {
             val ewsVersion = resolveEwsVersion()
-            val soapRequest = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
-
-            val responseXml = executeEwsWithAuth(soapRequest, "CreateItem")
+            val request = EwsDraftXml.createItem(ewsVersion, subject, body, to, cc, bcc, importance, deps.escapeXml)
+            val response = executeEwsWithAuth(request, "CreateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-
-            val itemId = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "Id")
-                ?: EasPatterns.EWS_ITEM_ID.find(responseXml)?.groupValues?.get(1)
-                ?: run {
-                    // Дополнительные попытки извлечь ItemId
-                    val patterns = listOf(ITEM_ID_T_PATTERN, ITEM_ID_M_PATTERN, ITEM_ID_BARE_PATTERN)
-                    patterns.firstNotNullOfOrNull { it.find(responseXml)?.groupValues?.get(1) }
+            var itemId = EwsIds.parseItemId(response)
+            if (itemId == null && EwsClient.isEwsSuccess(response) && subject.isNotBlank()) {
+                // Успех без ItemId (встречается на Exchange 2007): только что созданный — самый свежий с этой темой.
+                itemId = findDraftItemIdBySubject(subject)
+            }
+            if (itemId == null) {
+                return@withContext EasResult.Error("Не удалось создать черновик: ${ewsErrorDetails(response)}")
+            }
+            if (attachments.isNotEmpty()) {
+                val attached = attachFilesEws(itemId, EwsIds.parseChangeKey(response), attachments, ewsVersion)
+                if (attached is EasResult.Error) {
+                    hardDeleteEws(itemId, ewsVersion)
+                    return@withContext attached
                 }
+            }
+            EasResult.Success(itemId)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            EasResult.Error("Ошибка создания черновика: ${e.message}")
+        }
+    }
 
-            if (itemId != null) {
-                if (attachments.isNotEmpty()) {
-                    try {
-                        val changeKey = XmlValueExtractor.extractAttribute(responseXml, "ItemId", "ChangeKey")
-                        attachFilesEws(itemId, changeKey, attachments, ewsVersion)
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                    }
-                }
-                EasResult.Success(itemId)
-            } else {
-                val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(responseXml)?.groupValues?.get(1)
-                val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)
-                val error = messageText ?: responseCode ?: "ItemId not found in response"
-                EasResult.Error("Не удалось создать черновик: $error")
+    /**
+     * Скрытые копии и важность черновика, созданного из MIME, — явным UpdateItem: что Exchange
+     * перенесёт их из заголовков MIME при CreateItem, документацией не гарантировано. Сбой не
+     * отменяет сохранение: локальная копия хранит оба поля, отправка из приложения их учтёт.
+     */
+    private suspend fun applyDraftExtrasEws(itemId: String, bcc: String, importance: Int) {
+        if (bcc.isBlank() && importance == 1) return
+        try {
+            val request = EwsDraftXml.updateItem(
+                resolveEwsVersion(), itemId, changeKey = null, subject = null, htmlBody = null,
+                to = null, cc = null, bcc = bcc.takeIf { it.isNotBlank() },
+                easImportance = importance.takeIf { it != 1 }, escape = deps.escapeXml
+            )
+            val response = executeEwsWithAuth(request, "UpdateItem")
+            if (response == null || !EwsClient.isEwsSuccess(response)) {
+                android.util.Log.w("EasDraftsService", "applyDraftExtrasEws: Bcc/Importance not applied")
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error(e.message ?: "Ошибка создания черновика")
+            android.util.Log.w("EasDraftsService", "applyDraftExtrasEws: ${e.message}")
         }
     }
-}
-    
-    private suspend fun createDraftEws2013(
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    attachments: List<DraftAttachmentData> = emptyList()
-): EasResult<String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val ewsVersion = resolveEwsVersion()
-                val request = buildCreateDraftRequest(to, cc, bcc, subject, body, ewsVersion)
-                
-                val response = executeEwsWithAuth(request, "CreateItem")
-                    ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-                
-                val itemId = XmlValueExtractor.extractAttribute(response, "ItemId", "Id")
-                    ?: EasPatterns.EWS_ITEM_ID.find(response)?.groupValues?.get(1)
 
-                if (itemId != null) {
-                    if (attachments.isNotEmpty()) {
-                        try {
-                            val changeKey = XmlValueExtractor.extractAttribute(response, "ItemId", "ChangeKey")
-                            attachFilesEws(itemId, changeKey, attachments, ewsVersion)
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                        }
-                    }
-                    EasResult.Success(itemId)
-                } else {
-                    val hasSuccess = response.contains("ResponseClass=\"Success\"")
-                    val hasNoError = response.contains("<ResponseCode>NoError</ResponseCode>") ||
-                                    response.contains("<m:ResponseCode>NoError</m:ResponseCode>")
-                    if (hasSuccess && hasNoError) {
-                        // P2 FIX: Сервер вернул Success, но ItemId не найден в ответе.
-                        // Черновик создан — ищем его по subject через FindItem.
-                        // Аналогично fallback в createDraftMime().
-                        val foundItemId = if (subject.isNotBlank()) {
-                            try { findDraftItemIdBySubject(subject) } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; null }
-                        } else null
-                        
-                        if (foundItemId != null) {
-                            EasResult.Success(foundItemId)
-                        } else {
-                            // Последний fallback: UUID. Черновик есть на сервере, но ID не удалось получить.
-                            // EWS→EAS миграция при следующем sync разрешит корректный ServerId.
-                            EasResult.Success("local_draft_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}")
-                        }
-                    } else {
-                        EasResult.Error("Не удалось создать черновик")
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка создания черновика: ${e.message}")
-            }
+    /** Уборка черновика, который не удалось собрать целиком (без «Удалённых»). */
+    private suspend fun hardDeleteEws(itemId: String, version: String) {
+        try {
+            executeEwsWithAuth(EwsDraftXml.hardDelete(version, itemId, deps.escapeXml), "DeleteItem")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("EasDraftsService", "hardDeleteEws: ${e.message}")
         }
     }
-    
-private suspend fun updateDraftEws(
-    serverId: String,
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String
-): EasResult<Boolean> {
-    return withContext(Dispatchers.IO) {
+
+    private fun ewsErrorDetails(xml: String): String =
+        EasPatterns.EWS_MESSAGE_TEXT.find(xml)?.groupValues?.get(1)
+            ?: EasPatterns.EWS_RESPONSE_CODE.find(xml)?.groupValues?.get(1)
+            ?: "Unknown error"
+
+    private suspend fun updateDraftEws(
+        serverId: String,
+        to: String,
+        cc: String,
+        bcc: String?,
+        subject: String,
+        body: String,
+        importance: Int
+    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
             val exchangeVersion = resolveEwsVersion()
 
-            // КРИТИЧНО: Получаем ChangeKey через GetItem перед UpdateItem
+            // ChangeKey текущей версии (GetItem IdOnly). Элемента нет или id не EWS — ошибка с кодом EWS
+            // сразу, без UpdateItem (вызывающий сохранит черновик заново).
             val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
@@ -870,90 +779,29 @@ private suspend fun updateDraftEws(
         </GetItem>
     </soap:Body>
 </soap:Envelope>""".trimIndent()
-            
             val getItemResponse = executeEwsWithAuth(getItemRequest, "GetItem")
                 ?: return@withContext EasResult.Error("Не удалось получить ChangeKey")
+            if (!EwsClient.isEwsSuccess(getItemResponse)) {
+                return@withContext EasResult.Error("Не удалось обновить черновик: ${ewsErrorDetails(getItemResponse)}")
+            }
 
-            // Извлекаем ChangeKey из ответа
-            val changeKey = XmlValueExtractor.extractAttribute(getItemResponse, "ItemId", "ChangeKey") ?: ""
-
-            val escapedServerId = deps.escapeXml(serverId)
-            val escapedChangeKey = deps.escapeXml(changeKey)
-            val escapedSubject = deps.escapeXml(subject)
-            val escapedBody = deps.escapeXml(body)
-
-            val toRecipients = formatRecipients(to)
-            val ccRecipients = formatRecipients(cc)
-            val bccRecipients = formatRecipients(bcc)
-
-            val changeKeyAttr = if (changeKey.isNotEmpty()) """ ChangeKey="$escapedChangeKey"""" else ""
-            val soapRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="$exchangeVersion"/>
-    </soap:Header>
-    <soap:Body>
-        <m:UpdateItem MessageDisposition="SaveOnly" ConflictResolution="AlwaysOverwrite">
-            <m:ItemChanges>
-                <t:ItemChange>
-                    <t:ItemId Id="$escapedServerId"$changeKeyAttr/>
-                    <t:Updates>
-                        <t:SetItemField>
-                            <t:FieldURI FieldURI="item:Subject"/>
-                            <t:Message>
-                                <t:Subject>$escapedSubject</t:Subject>
-                            </t:Message>
-                        </t:SetItemField>
-                        <t:SetItemField>
-                            <t:FieldURI FieldURI="item:Body"/>
-                            <t:Message>
-                                <t:Body BodyType="HTML">$escapedBody</t:Body>
-                            </t:Message>
-                        </t:SetItemField>
-                        <t:SetItemField>
-                            <t:FieldURI FieldURI="message:ToRecipients"/>
-                            <t:Message>
-                                <t:ToRecipients>${if (toRecipients.isNotBlank()) toRecipients else ""}</t:ToRecipients>
-                            </t:Message>
-                        </t:SetItemField>
-                        <t:SetItemField>
-                            <t:FieldURI FieldURI="message:CcRecipients"/>
-                            <t:Message>
-                                <t:CcRecipients>${if (ccRecipients.isNotBlank()) ccRecipients else ""}</t:CcRecipients>
-                            </t:Message>
-                        </t:SetItemField>
-                        <t:SetItemField>
-                            <t:FieldURI FieldURI="message:BccRecipients"/>
-                            <t:Message>
-                                <t:BccRecipients>${if (bccRecipients.isNotBlank()) bccRecipients else ""}</t:BccRecipients>
-                            </t:Message>
-                        </t:SetItemField>
-                    </t:Updates>
-                </t:ItemChange>
-            </m:ItemChanges>
-        </m:UpdateItem>
-    </soap:Body>
-</soap:Envelope>""".trimIndent()
-
-            val responseXml = executeEwsWithAuth(soapRequest, "UpdateItem")
+            val request = EwsDraftXml.updateItem(
+                exchangeVersion, serverId, EwsIds.parseChangeKey(getItemResponse),
+                subject = subject, htmlBody = body, to = to, cc = cc, bcc = bcc, easImportance = importance,
+                escape = deps.escapeXml
+            )
+            val responseXml = executeEwsWithAuth(request, "UpdateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
-
             if (EwsClient.isEwsSuccess(responseXml)) {
                 EasResult.Success(true)
             } else {
-                val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(responseXml)?.groupValues?.get(1)
-                val responseCode = EasPatterns.EWS_RESPONSE_CODE.find(responseXml)?.groupValues?.get(1)
-                val error = messageText ?: responseCode ?: "Unknown error"
-                EasResult.Error("Не удалось обновить черновик: $error")
+                EasResult.Error("Не удалось обновить черновик: ${ewsErrorDetails(responseXml)}")
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error(e.message ?: "Ошибка обновления черновика")
         }
     }
-}
 
     private suspend fun deleteDraftEws(serverId: String): EasResult<Boolean> {
         return withContext(Dispatchers.IO) {
@@ -1142,49 +990,6 @@ private suspend fun updateDraftEws(
             </soap:Envelope>
         """.trimIndent()
     }
-    
-    private fun buildCreateDraftRequest(
-        to: String,
-        cc: String,
-        bcc: String,
-        subject: String,
-        body: String,
-        exchangeVersion: String
-    ): String {
-        val escapedSubject = deps.escapeXml(subject)
-        val escapedBody = deps.escapeXml(body)
-        
-        val toRecipients = formatRecipients(to)
-        val ccRecipients = formatRecipients(cc)
-        val bccRecipients = formatRecipients(bcc)
-        
-        return """
-            <?xml version="1.0" encoding="utf-8"?>
-            <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-                           xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-                           xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-                <soap:Header>
-                    <t:RequestServerVersion Version="$exchangeVersion"/>
-                </soap:Header>
-                <soap:Body>
-                    <m:CreateItem MessageDisposition="SaveOnly">
-                        <m:SavedItemFolderId>
-                            <t:DistinguishedFolderId Id="drafts"/>
-                        </m:SavedItemFolderId>
-                        <m:Items>
-                            <t:Message>
-                                <t:Subject>$escapedSubject</t:Subject>
-                                <t:Body BodyType="HTML">$escapedBody</t:Body>
-                                ${if (toRecipients.isNotBlank()) "<t:ToRecipients>$toRecipients</t:ToRecipients>" else ""}
-                                ${if (ccRecipients.isNotBlank()) "<t:CcRecipients>$ccRecipients</t:CcRecipients>" else ""}
-                                ${if (bccRecipients.isNotBlank()) "<t:BccRecipients>$bccRecipients</t:BccRecipients>" else ""}
-                            </t:Message>
-                        </m:Items>
-                    </m:CreateItem>
-                </soap:Body>
-            </soap:Envelope>
-        """.trimIndent()
-    }
 
     /**
      * Определяет EWS RequestServerVersion на основе EAS версии.
@@ -1236,16 +1041,7 @@ private suspend fun updateDraftEws(
             </soap:Envelope>
         """.trimIndent()
     }
-    
-    private fun formatRecipients(recipients: String): String {
-        return recipients.split(",", ";")
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .joinToString("") { email ->
-                """<t:Mailbox><t:EmailAddress>${deps.escapeXml(email)}</t:EmailAddress></t:Mailbox>"""
-            }
-    }
-    
+
     private fun parseDraftsResponse(xml: String): List<EasDraft> {
     val drafts = mutableListOf<EasDraft>()
 

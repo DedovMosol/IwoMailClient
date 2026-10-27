@@ -226,8 +226,18 @@ class EmailDetailActions(
 
         withContext(Dispatchers.IO) {
             var totalInlineBytes = 0L
+            // Сначала — сохранённые на устройстве (черновики приложения: тело с cid:, картинки — файлы).
+            for (att in inlineAttachments) {
+                val file = att.localPath?.let { File(it) }?.takeIf { it.exists() } ?: continue
+                if (totalInlineBytes + att.estimatedSize > MAX_AUTO_INLINE_TOTAL_BYTES) continue
+                totalInlineBytes += att.estimatedSize
+                val dataUrl = "data:${att.contentType};base64," +
+                    android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)
+                att.contentId?.let { newImages[it] = dataUrl }
+                newImages[att.displayName] = dataUrl
+            }
             val attachmentsWithRef = inlineAttachments
-                .filter { it.fileReference.isNotBlank() }
+                .filter { it.fileReference.isNotBlank() && !newImages.containsKey(it.displayName) }
                 .filter { att ->
                     val nextTotal = totalInlineBytes + att.estimatedSize
                     if (nextTotal <= MAX_AUTO_INLINE_TOTAL_BYTES) {

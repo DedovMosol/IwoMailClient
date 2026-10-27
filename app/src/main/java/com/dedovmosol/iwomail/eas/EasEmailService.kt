@@ -87,7 +87,10 @@ class EasEmailService internal constructor(
         collectionId: String,
         syncKey: String = "0",
         windowSize: Int = 100,
-        includeMime: Boolean = false
+        includeMime: Boolean = false,
+        // Черновики — тело целиком: обрезанное тело, открытое на редактирование и сохранённое,
+        // перезаписало бы полное на сервере. [MS-ASAIRS] TruncationSize: без элемента — всё содержимое.
+        fullBody: Boolean = false
     ): EasResult<SyncResponse> {
         val safeKey = deps.escapeXml(syncKey)
         val safeCol = deps.escapeXml(collectionId)
@@ -102,7 +105,9 @@ class EasEmailService internal constructor(
     </Collections>
 </Sync>""".trimIndent()
         } else {
-            val mimeSupport = if (includeMime) "<MIMESupport xmlns=\"AirSyncBase\">2</MIMESupport>" else ""
+            // MIMESupport — элемент AirSync (MS-ASCMD), не AirSyncBase.
+            val mimeSupport = if (includeMime) "<MIMESupport xmlns=\"AirSync\">2</MIMESupport>" else ""
+            val truncation = if (fullBody) "" else "<TruncationSize>10240</TruncationSize>"
             """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync">
     <Collections>
@@ -116,7 +121,7 @@ class EasEmailService internal constructor(
                 <FilterType>0</FilterType>
                 <BodyPreference xmlns="AirSyncBase">
                     <Type>2</Type>
-                    <TruncationSize>10240</TruncationSize>
+                    $truncation
                 </BodyPreference>
                 $mimeSupport
             </Options>
@@ -1340,6 +1345,8 @@ $deleteCommands
 
                 val bodySection = XmlUtils.extractTagValue(changeXml, "Body")
                 val body = if (bodySection != null) extractBody(changeXml) else ""
+                // [MS-ASAIRS] Truncated (Body): TRUE — тело обрезано (TruncationSize или политика сервера).
+                val bodyTruncated = bodySection?.let { deps.extractValue(it, "Truncated") == "1" } ?: false
                 val bodyType = if (body.isNotBlank() && bodySection != null) {
                     deps.extractValue(bodySection, "Type")?.toIntOrNull() ?: 1
                 } else null
@@ -1350,7 +1357,8 @@ $deleteCommands
                     serverId, read, flagged,
                     body = body.takeIf { it.isNotBlank() },
                     bodyType = bodyType,
-                    attachments = attachments
+                    attachments = attachments,
+                    bodyTruncated = bodyTruncated
                 ))
             }
         }
@@ -1421,7 +1429,8 @@ $deleteCommands
             bodyType = bodyType,
             attachments = attachments,
             flagged = isFlagged,
-            messageClass = messageClass
+            messageClass = messageClass,
+            bodyTruncated = bodySectionAdd?.let { deps.extractValue(it, "Truncated") == "1" } ?: false
         )
     }
 

@@ -220,7 +220,7 @@ interface EmailDao {
         SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
-               mdnRequestedBy, mdnSent, messageClass, internetMessageId
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc
         FROM emails
         WHERE folderId = :folderId
         ORDER BY dateReceived DESC
@@ -265,6 +265,8 @@ interface EmailDao {
 
     @Query("UPDATE emails SET cc = :cc WHERE id = :id")
     suspend fun updateCc(id: String, cc: String)
+    @Query("UPDATE emails SET bcc = :bcc WHERE id = :id")
+    suspend fun updateBcc(id: String, bcc: String?)
 
     // Обновление полей черновика одним запросом БЕЗ REPLACE.
     // КРИТИЧНО: emailDao.insert() с REPLACE = DELETE + INSERT.
@@ -274,8 +276,8 @@ interface EmailDao {
     // в EAS Sync для черновиков (черновик не отправлен → нет отправителя).
     // После EAS миграции from="" → аватар "?". Обновление from/fromName
     // при каждом сохранении восстанавливает корректный аватар.
-    @Query("UPDATE emails SET `to` = :to, cc = :cc, subject = :subject, body = :body, preview = :preview, dateReceived = :dateReceived, `from` = :fromEmail, fromName = :fromName WHERE id = :id")
-    suspend fun updateDraftFields(id: String, to: String, cc: String, subject: String, body: String, preview: String, dateReceived: Long, fromEmail: String, fromName: String)
+    @Query("UPDATE emails SET `to` = :to, cc = :cc, subject = :subject, body = :body, preview = :preview, dateReceived = :dateReceived, `from` = :fromEmail, fromName = :fromName, bcc = :bcc, importance = :importance WHERE id = :id")
+    suspend fun updateDraftFields(id: String, to: String, cc: String, subject: String, body: String, preview: String, dateReceived: Long, fromEmail: String, fromName: String, bcc: String?, importance: Int)
 
     // Обновление from/fromName для черновиков при миграции.
     // Exchange 2007 SP1+ не гарантирует <From> для черновиков в EAS Sync.
@@ -414,7 +416,7 @@ interface EmailDao {
         SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
-               mdnRequestedBy, mdnSent, messageClass, internetMessageId
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc
         FROM emails
         WHERE accountId = :accountId AND flagged = 1
         ORDER BY dateReceived DESC
@@ -601,7 +603,7 @@ interface EmailDao {
                e.`to`, e.cc, e.subject, e.preview, '' AS body, e.bodyType,
                e.dateReceived, e.read, e.flagged, e.importance, e.hasAttachments,
                e.originalFolderId, e.mdnRequestedBy, e.mdnSent, e.messageClass,
-               e.internetMessageId
+               e.internetMessageId, e.bcc
         FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
         WHERE e.accountId = :accountId

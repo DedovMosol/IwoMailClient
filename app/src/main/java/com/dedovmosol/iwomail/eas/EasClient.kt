@@ -668,8 +668,9 @@ class EasClient(
         collectionId: String,
         syncKey: String = "0",
         windowSize: Int = 100,
-        includeMime: Boolean = false
-    ): EasResult<SyncResponse> = emailService.sync(collectionId, syncKey, windowSize, includeMime)
+        includeMime: Boolean = false,
+        fullBody: Boolean = false
+    ): EasResult<SyncResponse> = emailService.sync(collectionId, syncKey, windowSize, includeMime, fullBody)
 
     /**
      * Отправка письма (SendMail)
@@ -2358,34 +2359,40 @@ $foldersXml
      * Создание черновика на сервере Exchange
      * Делегирует в DraftsService
      */
-   suspend fun createDraft(
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    attachments: List<DraftAttachmentData> = emptyList()
-): EasResult<String> = draftsService.createDraft(to, cc, bcc, subject, body, attachments)
-
-    /**
-     * Получить ВСЕ ItemId черновиков с данным subject.
-     * Делегирует в DraftsService.findAllDraftItemIdsBySubject
-     */
-    suspend fun getAllItemIdsBySubject(subject: String): EasResult<List<String>> =
-        draftsService.findAllDraftItemIdsBySubject(subject)
+    suspend fun createDraft(
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String,
+        attachments: List<DraftAttachmentData> = emptyList(),
+        importance: Int = 1
+    ): EasResult<String> = draftsService.createDraft(to, cc, bcc, subject, body, attachments, importance)
 
     /**
      * Обновление черновика на сервере Exchange
      * Делегирует в DraftsService
      */
     suspend fun updateDraft(
-    serverId: String,
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String
-): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body)
+        serverId: String,
+        to: String,
+        cc: String,
+        bcc: String?,
+        subject: String,
+        body: String,
+        importance: Int = 1
+    ): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body, importance)
+
+    /**
+     * Полный EWS ItemId черновика по теме — только если черновик с такой темой ОДИН (не считая
+     * [excludeId]). Несколько совпадений (пустая тема, «Re: …») — null: угаданный id направил бы
+     * правку или удаление в чужой черновик. Exchange 2007 SP1+ (EWS FindItem).
+     */
+    suspend fun findUniqueDraftItemIdBySubject(subject: String, excludeId: String? = null): String? {
+        if (subject.isBlank()) return null
+        val ids = (draftsService.findAllDraftItemIdsBySubject(subject) as? EasResult.Success)?.data ?: return null
+        return DraftIds.uniqueMatch(ids, excludeId)
+    }
 
     /**
      * Полноценная синхронизация черновиков через EWS: FindItem + GetItem batch.
@@ -2399,103 +2406,6 @@ $foldersXml
      * Делегирует в DraftsService
      */
     suspend fun getDraftBody(serverId: String): EasResult<String> = draftsService.getDraftBody(serverId)
-
-    /**
-     * Получение ПОЛНОГО EWS ItemId из папки Drafts по Subject
-     * КРИТИЧНО для UpdateItem - EWS требует ПОЛНЫЙ ItemId, а ActiveSync возвращает КОРОТКИЙ
-     *
-     * @param subject Subject черновика для поиска
-     * @return ПОЛНЫЙ EWS ItemId (например "AAMkADNi...")
-     */
-    suspend fun getItemIdBySubject(subject: String): EasResult<String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val escapedSubject = escapeXml(subject)
-
-                val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="Exchange2007_SP1"/>
-    </soap:Header>
-    <soap:Body>
-        <m:FindItem Traversal="Shallow">
-            <m:ItemShape>
-                <t:BaseShape>IdOnly</t:BaseShape>
-            </m:ItemShape>
-            <m:Restriction>
-                <t:IsEqualTo>
-                    <t:FieldURI FieldURI="item:Subject"/>
-                    <t:FieldURIOrConstant>
-                        <t:Constant Value="$escapedSubject"/>
-                    </t:FieldURIOrConstant>
-                </t:IsEqualTo>
-            </m:Restriction>
-            <m:ParentFolderIds>
-                <t:DistinguishedFolderId Id="drafts"/>
-            </m:ParentFolderIds>
-        </m:FindItem>
-    </soap:Body>
-</soap:Envelope>""".trimIndent()
-
-                val responseXml = transport.executeEwsWithAuth(getItemRequest, "FindItem")
-                    ?: return@withContext EasResult.Error("Failed to execute FindItem")
-
-                // Извлекаем ItemId из ответа
-                val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-                val fullItemId = itemIdPattern.find(responseXml)?.groupValues?.get(1)
-
-                if (fullItemId != null) {
-                    EasResult.Success(fullItemId)
-                } else {
-                    EasResult.Error("ItemId not found for subject=$subject")
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Failed to get ItemId: ${e.message}")
-            }
-        }
-    }
-
-    /**
-     * Находит EWS ItemId черновика в папке Drafts по Subject (EWS FindItem с Restriction).
-     * Безопасная замена позиционного индекса, предотвращающая DATA LOSS.
-     */
-    suspend fun findDraftItemIdBySubject(subject: String): String? {
-        if (subject.isBlank()) return null
-        return withContext(Dispatchers.IO) {
-            try {
-                val escapedSubject = escapeXml(subject)
-                val findBody = """<m:FindItem Traversal="Shallow">
-    <m:ItemShape>
-        <t:BaseShape>IdOnly</t:BaseShape>
-    </m:ItemShape>
-    <m:Restriction>
-        <t:IsEqualTo>
-            <t:FieldURI FieldURI="item:Subject"/>
-            <t:FieldURIOrConstant>
-                <t:Constant Value="$escapedSubject"/>
-            </t:FieldURIOrConstant>
-        </t:IsEqualTo>
-    </m:Restriction>
-    <m:ParentFolderIds>
-        <t:DistinguishedFolderId Id="drafts"/>
-    </m:ParentFolderIds>
-</m:FindItem>""".trimIndent()
-                val findRequest = buildEwsSoapRequest(findBody)
-
-                val responseXml = transport.executeEwsWithAuth(findRequest, "FindItem")
-                    ?: return@withContext null
-
-                val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-                itemIdPattern.find(responseXml)?.groupValues?.get(1)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                null
-            }
-        }
-    }
 
     /**
      * Удаление черновика с сервера Exchange
@@ -2559,7 +2469,9 @@ data class EasEmailChange(
     val flagged: Boolean? = null,
     val body: String? = null,
     val bodyType: Int? = null,
-    val attachments: List<EasAttachment> = emptyList()
+    val attachments: List<EasAttachment> = emptyList(),
+    /** [MS-ASAIRS] Truncated: тело в ответе обрезано — для черновика это не полное тело. */
+    val bodyTruncated: Boolean = false
 )
 
 data class EasEmail(
@@ -2575,7 +2487,9 @@ data class EasEmail(
     val bodyType: Int = 1, // 1=text, 2=html
     val attachments: List<EasAttachment> = emptyList(),
     val flagged: Boolean = false, // Флаг избранного (FlagStatus=2 на сервере)
-    val messageClass: String = "" // MS-ASEMAIL MessageClass (IPM.Note, IPM.Schedule.Meeting.Request, etc.)
+    val messageClass: String = "", // MS-ASEMAIL MessageClass (IPM.Note, IPM.Schedule.Meeting.Request, etc.)
+    /** [MS-ASAIRS] Truncated: тело в ответе обрезано — для черновика это не полное тело. */
+    val bodyTruncated: Boolean = false
 )
 
 data class EasAttachment(

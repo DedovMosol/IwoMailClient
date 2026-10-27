@@ -71,6 +71,8 @@ import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_P_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.WHITESPACE_COLLAPSE_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
 import com.dedovmosol.iwomail.ui.screens.compose.extractEmailFromString
+import com.dedovmosol.iwomail.ui.screens.compose.DraftAttachmentRole
+import com.dedovmosol.iwomail.ui.screens.compose.draftAttachmentRole
 import com.dedovmosol.iwomail.ui.screens.compose.extractInlineImageAttachments
 import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlQuote
 import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlSignature
@@ -1025,6 +1027,11 @@ fun ComposeScreen(
     // Начальное состояние черновика — для определения были ли изменения
     var initialDraftTo by rememberSaveable { mutableStateOf("") }
     var initialDraftCc by rememberSaveable { mutableStateOf("") }
+    var initialDraftBcc by rememberSaveable { mutableStateOf("") }
+    var initialDraftHighPriority by rememberSaveable { mutableStateOf(false) }
+    // Скрытые копии черновика известны (их сохранило приложение). Черновик из Outlook приходит без них
+    // (EAS до 16.0 не передаёт Bcc): тогда пустое поле при сохранении не стирает их на сервере.
+    var draftBccKnown by rememberSaveable { mutableStateOf(true) }
     var initialDraftSubject by rememberSaveable { mutableStateOf("") }
     val initialDraftBodySaver = remember { createLargeStringSaver(context.cacheDir, "draft_body") }
     var initialDraftBody by rememberSaveable(stateSaver = initialDraftBodySaver) { mutableStateOf("") }
@@ -1047,6 +1054,9 @@ fun ComposeScreen(
             mailRepo.getEmailSync(draftId)?.let { draft ->
                 to = normalizeRecipients(draft.to)
                 cc = normalizeRecipients(draft.cc)
+                bcc = normalizeRecipients(draft.bcc.orEmpty())
+                draftBccKnown = draft.bcc != null
+                highPriority = draft.importance == 2
                 subject = draft.subject
                 // Черновик может быть HTML или plain text
                 body = if (draft.body.looksLikeHtml()) {
@@ -1054,20 +1064,23 @@ fun ComposeScreen(
                 } else {
                     draft.body.escapeHtml().replace("\n", "<br>")
                 }
-                if (cc.isNotBlank()) {
+                if (cc.isNotBlank() || bcc.isNotBlank()) {
                     showCcBcc = true
                 }
-                // Ленивая загрузка body если пустой (как в EmailDetailScreen)
-                if (body.isBlank() && draft.serverId.isNotBlank() && !draft.serverId.startsWith("local_draft_")) {
-                    val result = withContext(Dispatchers.IO) {
-                        mailRepo.loadEmailBody(draftId)
-                    }
-                    if (result is com.dedovmosol.iwomail.eas.EasResult.Success && result.data.isNotBlank()) {
-                        body = if (result.data.looksLikeHtml()) {
-                            result.data
-                        } else {
-                            result.data.escapeHtml().replace("\n", "<br>")
+                // Тело серверного черновика — свежее с сервера, по точному id: синхронизация могла
+                // сохранить его обрезанным (TruncationSize) или устаревшим (правка в Outlook), а сохранение
+                // такого тела перезаписало бы полное на сервере. Нет связи — остаётся сохранённое.
+                if (draft.serverId.isNotBlank() && !draft.serverId.startsWith("local_draft_")) {
+                    val fresh = withContext(Dispatchers.IO) {
+                        try {
+                            mailRepo.refreshDraftBody(draftId)
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
                         }
+                    }
+                    if (!fresh.isNullOrBlank()) {
+                        body = if (fresh.looksLikeHtml()) fresh else fresh.escapeHtml().replace("\n", "<br>")
                     }
                 }
                 // Обновляем метаданные вложений с сервера перед чтением из БД.
@@ -1088,14 +1101,19 @@ fun ComposeScreen(
                     val inlineImages = mutableMapOf<String, String>()
                     val account = accountRepo.getAccount(draft.accountId)
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
+                    val bodyForRoles = body
 
                     withContext(Dispatchers.IO) {
                         for (att in draftAttachments) {
                             try {
+                                // Inline — только картинка, на которую ссылается тело; Content-ID без ссылки —
+                                // обычный файл (иначе он пропал бы при пересохранении черновика).
+                                val role = draftAttachmentRole(bodyForRoles, att.contentId, att.isInline)
+                                if (role == DraftAttachmentRole.EMBEDDED) continue
                                 val localPath = att.localPath
                                 if (localPath != null && java.io.File(localPath).exists()) {
                                     val file = java.io.File(localPath)
-                                    if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                    if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
@@ -1117,7 +1135,7 @@ fun ComposeScreen(
                                             val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
                                             val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                                             java.io.FileOutputStream(file).use { it.write(result.data) }
-                                            if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                            if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                                 val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
                                                 val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
                                                 inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
@@ -1210,7 +1228,10 @@ fun ComposeScreen(
                 // для скачивания инлайн-картинок, который может упасть.
                 // С этим: body в БД всегда содержит data: URLs → отображается мгновенно.
                 val bodyForDb = body
-                if (bodyForDb.isNotBlank() && bodyForDb != draft.body && !bodyForDb.contains("cid:", ignoreCase = true)) {
+                // Не больше MAX_LOCAL_BODY_CHARS: строка БД крупнее окна курсора (2 МБ) не читается вовсе.
+                if (bodyForDb.isNotBlank() && bodyForDb != draft.body && !bodyForDb.contains("cid:", ignoreCase = true) &&
+                    bodyForDb.length <= com.dedovmosol.iwomail.data.repository.DraftUpload.MAX_LOCAL_BODY_CHARS
+                ) {
                     withContext(Dispatchers.IO) {
                         try {
                             database.emailDao().updateBody(draftId, bodyForDb)
@@ -1220,6 +1241,8 @@ fun ComposeScreen(
                 // Сохраняем начальное состояние для сравнения при выходе
                 initialDraftTo = to
                 initialDraftCc = cc
+                initialDraftBcc = bcc
+                initialDraftHighPriority = highPriority
                 initialDraftSubject = subject
                 initialDraftBody = body
                 initialDraftAttachments = attachmentStrings
@@ -1237,40 +1260,36 @@ fun ComposeScreen(
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
         if (isSavingDraft) return
+        // Флаг — синхронно, до launch: корутина стартует не сразу, и двойное нажатие успевало
+        // запустить два сохранения (два черновика на сервере).
+        isSavingDraft = true
         scope.launch {
-            isSavingDraft = true
-            flushEditorHtml()
-
-            val account = activeAccount
-            if (account == null) {
-                SafeToast.short(context, accountNotFoundMsg)
-                isSavingDraft = false
-                return@launch
-            }
-
-            // CS-1 / CS-2: та же защита от OOM, что и при отправке — суммарный бюджет
-            // (файловые вложения + inline-картинки в теле) проверяется ДО чтения байт в память.
-            // Без этого крупное вложение, отклоняемое при отправке, при сохранении черновика
-            // читалось в память целиком → OutOfMemoryError и «тихий» провал сохранения.
-            val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
-            if (budgetBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
-                SafeToast.short(context, attachmentLimitExceededMsg)
-                isSavingDraft = false
-                return@launch
-            }
-
             try {
-                val success: Boolean
+                flushEditorHtml()
+
+                val account = activeAccount
+                if (account == null) {
+                    SafeToast.short(context, accountNotFoundMsg)
+                    return@launch
+                }
+
+                // CS-1 / CS-2: та же защита от OOM, что и при отправке — суммарный бюджет
+                // (файловые вложения + inline-картинки в теле) проверяется ДО чтения байт в память.
+                val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
+                if (budgetBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+                    SafeToast.short(context, attachmentLimitExceededMsg)
+                    return@launch
+                }
+
                 // Файловые вложения — байты
                 val fileDraftAttachments = withContext(Dispatchers.IO) {
                     attachments.mapNotNull { att ->
                         try {
                             context.contentResolver.openInputStream(att.uri)?.use { input ->
-                                val bytes = input.readBytes()
                                 com.dedovmosol.iwomail.eas.DraftAttachmentData(
                                     name = att.name,
                                     mimeType = att.mimeType,
-                                    data = bytes
+                                    data = input.readBytes()
                                 )
                             }
                         } catch (e: Exception) {
@@ -1280,168 +1299,155 @@ fun ComposeScreen(
                     }
                 }
 
-                // Извлекаем inline-картинки из body: data: URL → cid: ссылки.
-                // На сервер отправляем cleanBody (с cid:) + вложения через CreateAttachment.
-                // Локально храним body (с data: URL) — для отображения в приложении.
-                // Outlook десктопный рендерит HTML через Word, который НЕ поддерживает data: URL,
-                // поэтому cid: + ContentId — единственный рабочий способ.
+                // Inline-картинки: data: URL → cid: + вложения с ContentId (Outlook рендерит HTML через
+                // Word, data: URL не показывает). На сервер — cleanBody, локально — body (с data: URL).
                 val (cleanBody, inlineDraftAttachments) = extractInlineImageAttachments(body)
-
                 val allServerAttachments = fileDraftAttachments + inlineDraftAttachments
                 val normalizedTo = normalizeRecipients(to)
                 val normalizedCc = normalizeRecipients(cc)
                 val normalizedBcc = normalizeRecipients(bcc)
+                val importance = if (highPriority) 2 else 1
 
-                // Если редактируем существующий черновик
-               if (editDraftId != null && editDraftId != "synced" && !editDraftId.startsWith("local_draft_")) {
-    val email = withContext(Dispatchers.IO) { database.emailDao().getEmail(editDraftId) }
-                    if (email != null) {
-                        // #3: delete+create нужен не только когда есть ТЕКУЩИЕ вложения, но и когда
-                        // исходный черновик ИМЕЛ вложения (email.hasAttachments), а пользователь их
-                        // все удалил: EWS UpdateItem/SetItemField НЕ умеет удалять вложения (MS docs),
-                        // поэтому updateDraft оставил бы удалённые вложения на серверном черновике.
-                        if (allServerAttachments.isNotEmpty() || email.hasAttachments) {
-                            // При наличии вложений: СНАЧАЛА создаём новый, ПОТОМ удаляем старый.
-                            // Если создание не удалось — старый черновик остаётся (защита от потери данных).
-                            // EWS UpdateItem НЕ обновляет вложения, поэтому нужен delete+create.
-                            val oldServerId = email.serverId
-                            // P1 FIX: Регистрируем старый черновик как "удалённый" ДО создания нового.
-                            // Это предотвращает восстановление старого черновика фоновой синхронизацией
-                            // (PushService/SyncWorker) в окне между create нового и delete старого.
-                            // Защита действует ~30 сек — достаточно для завершения операции.
-                            com.dedovmosol.iwomail.data.repository.EmailSyncService.registerDeletedEmail(editDraftId, context)
-                            val newServerId = withContext(Dispatchers.IO) {
-                                mailRepo.saveDraft(
-    accountId = account.id,
-    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
-    subject = subject,
-    serverBody = cleanBody,
-    localBody = body,
-    fromEmail = account.email,
-    fromName = account.displayName,
-    hasAttachments = allServerAttachments.isNotEmpty(),
-    attachmentFiles = allServerAttachments
-)
-                            }
-                            success = newServerId != null
-                            // Удаляем старый черновик ТОЛЬКО после успешного создания нового.
-                            // КРИТИЧНО: передаём excludeEwsItemId = newServerId,
-                            // чтобы deleteDraft НЕ удалил НОВЫЙ черновик при поиске по subject.
-                            if (success && newServerId != null) {
-                                withContext(Dispatchers.IO) {
-                                    try {
-                                        mailRepo.deleteDraft(account.id, oldServerId, excludeEwsItemId = newServerId)
-                                    } catch (e: Exception) {
-                                        if (e is kotlinx.coroutines.CancellationException) throw e else Unit
-                                    }
-                                }
-                                // ЗАЩИТА: верифицируем что новая запись существует в БД.
-                                // deleteDraft может случайно удалить не тот черновик или
-                                // sync-loop внутри deleteDraft может продвинуть syncKey
-                                // мимо нового Add. Если запись пропала — воссоздаём.
-                                val newEmailId = "${account.id}_$newServerId"
-                                val verified = withContext(Dispatchers.IO) {
-                                    database.emailDao().getEmail(newEmailId)
-                                }
-                                if (verified == null) {
-                                    val capturedBody = body
-                                    withContext(Dispatchers.IO) {
-                                        try {
-                                            val previewText = capturedBody.replace(HTML_TAG_STRIP_REGEX, " ")
-                                                .replace(WHITESPACE_COLLAPSE_REGEX, " ").trim().take(150)
-                                            val fallback = com.dedovmosol.iwomail.data.database.EmailEntity(
-                                                id = newEmailId,
-                                                accountId = account.id,
-                                                folderId = email.folderId,
-                                                serverId = newServerId,
-                                                from = account.email,
-                                                fromName = account.displayName,
-                                                to = normalizedTo,
-                                                cc = normalizedCc,
-                                                subject = subject,
-                                                preview = previewText,
-                                                body = capturedBody,
-                                                bodyType = 2,
-                                                dateReceived = System.currentTimeMillis(),
-                                                read = true,
-                                                hasAttachments = allServerAttachments.isNotEmpty()
-                                            )
-                                            database.emailDao().insert(fallback)
-                                            // P3 FIX: Восстанавливаем записи вложений.
-                                            // Без этого черновик появляется в списке, но при
-                                            // открытии вложений нет (AttachmentEntity не созданы).
-                                            if (allServerAttachments.isNotEmpty()) {
-                                                val attEntities = allServerAttachments.map { att ->
-                                                    com.dedovmosol.iwomail.data.database.AttachmentEntity(
-                                                        emailId = newEmailId,
-                                                        fileReference = "",
-                                                        displayName = att.name,
-                                                        contentType = att.mimeType,
-                                                        estimatedSize = att.data.size.toLong(),
-                                                        isInline = att.isInline,
-                                                        contentId = att.contentId
-                                                    )
-                                                }
-                                                database.attachmentDao().insertAll(attEntities)
-                                            }
-                                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
-                                    }
-                                }
-                            }
-                        } else {
-                            // Без вложений — обычный updateDraft
-                            val result = withContext(Dispatchers.IO) {
-                                mailRepo.updateDraft(
-    accountId = account.id,
-    serverId = email.serverId,
-    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
-    subject = subject,
-    body = body,
-    fromEmail = account.email,
-    fromName = account.displayName
-)
-                            }
-                            success = result is EasResult.Success
-                        }
-                    } else {
-                        val serverId = withContext(Dispatchers.IO) {
-                            mailRepo.saveDraft(
-    accountId = account.id,
-    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
-    subject = subject,
-    serverBody = cleanBody,
-    localBody = body,
-    fromEmail = account.email,
-    fromName = account.displayName,
-    hasAttachments = allServerAttachments.isNotEmpty(),
-    attachmentFiles = allServerAttachments
-)
-                        }
-                        success = serverId != null
-                    }
-                } else {
-                    // Новый черновик
-                    val serverId = withContext(Dispatchers.IO) {
-                        mailRepo.saveDraft(
-    accountId = account.id,
-    to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
-    subject = subject,
-    serverBody = cleanBody,
-    localBody = body,
-    fromEmail = account.email,
-    fromName = account.displayName,
-    hasAttachments = allServerAttachments.isNotEmpty(),
-    attachmentFiles = allServerAttachments
-)
-                    }
-                    success = serverId != null
+                suspend fun createDraft(): String? = withContext(Dispatchers.IO) {
+                    mailRepo.saveDraft(
+                        accountId = account.id,
+                        to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
+                        subject = subject,
+                        serverBody = cleanBody,
+                        localBody = body,
+                        fromEmail = account.email,
+                        fromName = account.displayName,
+                        hasAttachments = allServerAttachments.isNotEmpty(),
+                        attachmentFiles = allServerAttachments,
+                        importance = importance
+                    )
                 }
 
-                if (success) {
+                /**
+                 * Серверный черновик сохраняется заново: СНАЧАЛА новый, ПОТОМ удаление прежнего. Новый
+                 * на сервер не попал (local_draft_) — прежний остаётся, а локальная копия нового
+                 * убирается: иначе прежний был бы удалён, а правка жила бы только на телефоне.
+                 */
+                suspend fun replaceDraft(old: com.dedovmosol.iwomail.data.database.EmailEntity): Boolean {
+                    // P1 FIX: прежний — «удалённый» до создания нового, чтобы фоновая синхронизация не
+                    // вернула его в окне между созданием нового и удалением прежнего (~30 с).
+                    com.dedovmosol.iwomail.data.repository.EmailSyncService.registerDeletedEmail(old.id, context)
+                    val newServerId = createDraft() ?: return false
+                    val keptOnDevice = newServerId.startsWith("local_draft_") &&
+                        !old.serverId.startsWith("local_draft_") &&
+                        account.draftMode != com.dedovmosol.iwomail.data.database.DraftMode.LOCAL.name
+                    if (keptOnDevice) {
+                        withContext(Dispatchers.IO) { mailRepo.deleteDraft(account.id, newServerId) }
+                        return false
+                    }
+                    withContext(Dispatchers.IO) {
+                        try {
+                            // excludeEwsItemId: поиск прежнего по теме не заденет новый черновик
+                            mailRepo.deleteDraft(account.id, old.serverId, excludeEwsItemId = newServerId)
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e else Unit
+                        }
+                    }
+                    // ЗАЩИТА: запись нового черновика должна остаться в БД (удаление прежнего или
+                    // фоновый sync могли её задеть) — иначе воссоздаём вместе с вложениями.
+                    val newEmailId = "${account.id}_$newServerId"
+                    if (withContext(Dispatchers.IO) { database.emailDao().getEmail(newEmailId) } == null) {
+                        val capturedBody = body
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val previewText = capturedBody.replace(HTML_TAG_STRIP_REGEX, " ")
+                                    .replace(WHITESPACE_COLLAPSE_REGEX, " ").trim().take(150)
+                                database.emailDao().insert(
+                                    com.dedovmosol.iwomail.data.database.EmailEntity(
+                                        id = newEmailId,
+                                        accountId = account.id,
+                                        folderId = old.folderId,
+                                        serverId = newServerId,
+                                        from = account.email,
+                                        fromName = account.displayName,
+                                        to = normalizedTo,
+                                        cc = normalizedCc,
+                                        subject = subject,
+                                        preview = previewText,
+                                        body = capturedBody,
+                                        bodyType = 2,
+                                        dateReceived = System.currentTimeMillis(),
+                                        read = true,
+                                        importance = importance,
+                                        hasAttachments = allServerAttachments.isNotEmpty(),
+                                        bcc = normalizedBcc
+                                    )
+                                )
+                                // P3 FIX: и записи вложений — иначе черновик в списке без вложений.
+                                if (allServerAttachments.isNotEmpty()) {
+                                    database.attachmentDao().insertAll(allServerAttachments.map { att ->
+                                        com.dedovmosol.iwomail.data.database.AttachmentEntity(
+                                            emailId = newEmailId,
+                                            fileReference = "",
+                                            displayName = att.name,
+                                            contentType = att.mimeType,
+                                            estimatedSize = att.data.size.toLong(),
+                                            isInline = att.isInline,
+                                            contentId = att.contentId
+                                        )
+                                    })
+                                }
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e else Unit
+                            }
+                        }
+                    }
+                    return true
+                }
+
+                val existing = editDraftId?.takeIf { it != "synced" }
+                    ?.let { id -> withContext(Dispatchers.IO) { database.emailDao().getEmail(id) } }
+
+                // null — сохранено; "" — общая ошибка; иначе причина от сервера.
+                val saveError: String? = when {
+                    existing == null -> if (createDraft() != null) null else ""
+                    // #3: вложения есть сейчас или были у исходного черновика: EWS UpdateItem вложения
+                    // не добавляет и не удаляет (MS docs) — черновик сохраняется заново.
+                    allServerAttachments.isNotEmpty() || existing.hasAttachments ->
+                        if (replaceDraft(existing)) null else ""
+                    else -> {
+                        val result = withContext(Dispatchers.IO) {
+                            mailRepo.updateDraft(
+                                accountId = account.id,
+                                serverId = existing.serverId,
+                                to = normalizedTo, cc = normalizedCc,
+                                // Скрытые копии не известны (черновик из Outlook) и поле пустое — их не трогаем
+                                bcc = normalizedBcc.takeIf { draftBccKnown || it.isNotBlank() },
+                                subject = subject,
+                                body = body,
+                                fromEmail = account.email,
+                                fromName = account.displayName,
+                                importance = importance
+                            )
+                        }
+                        when (result) {
+                            is EasResult.Success -> null
+                            // Нет связи: черновик не сохранён — пользователь остаётся в письме, правка цела.
+                            is EasResult.Error -> if (com.dedovmosol.iwomail.data.model.isConnectionLevelError(result.message)) {
+                                result.message
+                            } else if (replaceDraft(existing)) {
+                                // id не определить однозначно или черновика на сервере уже нет — сохранён заново
+                                null
+                            } else {
+                                result.message
+                            }
+                        }
+                    }
+                }
+
+                if (saveError == null) {
                     SafeToast.short(context, draftSavedMsg)
                     handleBackNavigation()
                 } else {
-                    SafeToast.short(context, draftSaveErrorMsg)
+                    val reason = saveError.takeIf { it.isNotBlank() }?.let {
+                        com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(it, currentLanguage == AppLanguage.RUSSIAN)
+                    }
+                    SafeToast.long(context, if (reason != null) "$draftSaveErrorMsg: $reason" else draftSaveErrorMsg)
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1495,16 +1501,26 @@ fun ComposeScreen(
                                 }
                             }
                         }
-                        scheduleEmail(
-                            context, account.id,
-                            expandGroupTokens(to, groupMappings),
-                            expandGroupTokens(cc, groupMappings),
-                            expandGroupTokens(bcc, groupMappings),
-                            subject, body, delay,
-                            requestReadReceipt, requestDeliveryReceipt,
-                            if (highPriority) 2 else 1,
-                            scheduledAttachments
-                        )
+                        // Отправляемый черновик удалится после отправки, если его с тех пор не меняли.
+                        val scheduledDraftId = editDraftId?.takeIf { it != "synced" }
+                        val draftStamp = scheduledDraftId
+                            ?.let { id -> withContext(Dispatchers.IO) { database.emailDao().getEmail(id)?.dateReceived } }
+                            ?: -1L
+                        // Тело и вложения пишутся в файлы — не на главном потоке.
+                        withContext(Dispatchers.IO) {
+                            scheduleEmail(
+                                context, account.id,
+                                expandGroupTokens(to, groupMappings),
+                                expandGroupTokens(cc, groupMappings),
+                                expandGroupTokens(bcc, groupMappings),
+                                subject, body, delay,
+                                requestReadReceipt, requestDeliveryReceipt,
+                                if (highPriority) 2 else 1,
+                                scheduledAttachments,
+                                draftId = scheduledDraftId,
+                                draftStamp = draftStamp
+                            )
+                        }
                         SafeToast.short(context, sendScheduledMsg)
                         onSent()
                         return@launch
@@ -1988,7 +2004,9 @@ fun ComposeScreen(
         scope.launch {
             flushEditorHtml()
             if (editDraftId != null) {
-                val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || subject != initialDraftSubject || body != initialDraftBody || attachmentStrings != initialDraftAttachments
+                val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || bcc != initialDraftBcc ||
+                    highPriority != initialDraftHighPriority || subject != initialDraftSubject ||
+                    body != initialDraftBody || attachmentStrings != initialDraftAttachments
                 if (hasDraftChanges) showDiscardDialog = true else handleBackNavigation()
             } else {
                 // Проверяем есть ли реальный контент (body может содержать пустой HTML и подпись)

@@ -14,14 +14,16 @@ internal object MigrationTestSupport {
 
     /**
      * Создаёт БД [dbName] версии [version] по схеме [schemaResource] и вставляет аккаунт: NOT NULL колонки —
-     * нейтральными значениями, поверх — [accountOverrides]. Возвращает id аккаунта.
+     * нейтральными значениями, поверх — [accountOverrides]. Затем — [extraRows] (таблица → значения поверх
+     * нейтральных), например папка и письмо этого аккаунта. Возвращает id аккаунта.
      */
     fun createDatabaseWithAccount(
         context: Context,
         dbName: String,
         schemaResource: String,
         version: Int,
-        accountOverrides: ContentValues = ContentValues()
+        accountOverrides: ContentValues = ContentValues(),
+        extraRows: List<Pair<String, ContentValues>> = emptyList()
     ): Long {
         val json = requireNotNull(javaClass.getResource(schemaResource)) { "missing test resource $schemaResource" }.readText()
         val schema = JSONObject(json).getJSONObject("database")
@@ -30,9 +32,11 @@ internal object MigrationTestSupport {
         try {
             val entities = schema.getJSONArray("entities")
             var accountValues: ContentValues? = null
+            val fieldsByTable = HashMap<String, JSONArray>()
             for (i in 0 until entities.length()) {
                 val entity = entities.getJSONObject(i)
                 val table = entity.getString("tableName")
+                fieldsByTable[table] = entity.getJSONArray("fields")
                 db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
                 val indices = entity.optJSONArray("indices")
                 for (j in 0 until (indices?.length() ?: 0)) {
@@ -47,7 +51,18 @@ internal object MigrationTestSupport {
                 remove("id")
                 putAll(accountOverrides)
             }
-            return db.insertOrThrow("accounts", null, values)
+            val accountId = db.insertOrThrow("accounts", null, values)
+            for ((table, overrides) in extraRows) {
+                val fields = requireNotNull(fieldsByTable[table]) { "no $table table in $schemaResource" }
+                val row = neutralRow(fields).apply { putAll(overrides) }
+                val columns = row.keySet().toList()
+                // Имена в кавычках: у писем есть колонки `to` и `from` — ключевые слова SQL.
+                db.execSQL(
+                    "INSERT INTO `$table` (${columns.joinToString { "`$it`" }}) VALUES (${columns.joinToString { "?" }})",
+                    columns.map { row.get(it) }.toTypedArray()
+                )
+            }
+            return accountId
         } finally {
             db.close()
         }

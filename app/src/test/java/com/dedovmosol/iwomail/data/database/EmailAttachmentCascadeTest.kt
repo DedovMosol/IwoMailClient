@@ -100,14 +100,19 @@ class EmailAttachmentCascadeTest {
             preview = "body-2",
             dateReceived = 2_000L,
             fromEmail = "me@corp.local",
-            fromName = "Me"
+            fromName = "Me",
+            bcc = "hidden@corp.local",
+            importance = 2
         )
 
         val attachments = attachmentDao.getAttachmentsList("1_d")
         assertThat(attachments).hasSize(1)
         assertThat(attachments.first().displayName).isEqualTo("report.pdf")
-        // Поля письма действительно обновились.
-        assertThat(emailDao.getEmail("1_d")?.subject).isEqualTo("subject-2")
+        // Поля письма действительно обновились — и скрытые копии с важностью (EAS до 16.0 их не хранит).
+        val updated = emailDao.getEmail("1_d")
+        assertThat(updated?.subject).isEqualTo("subject-2")
+        assertThat(updated?.bcc).isEqualTo("hidden@corp.local")
+        assertThat(updated?.importance).isEqualTo(2)
     }
 
     @Test

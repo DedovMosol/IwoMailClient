@@ -32,7 +32,8 @@ class EmailSyncService(
         val subject: String, val body: String, val bodyType: Int,
         val dateReceived: Long, val to: String, val cc: String,
         val from: String, val fromName: String,
-        val attachments: List<AttachmentEntity>
+        val attachments: List<AttachmentEntity>,
+        val bcc: String? = null
     )
 
     // Результат обработки новых писем из одного батча Sync
@@ -104,7 +105,8 @@ class EmailSyncService(
             val to: String, val cc: String,
             val from: String, val fromName: String,
             val attachments: List<AttachmentEntity>,
-            val timestamp: Long = System.currentTimeMillis()
+            val timestamp: Long = System.currentTimeMillis(),
+            val bcc: String? = null
         )
         // Key = "${accountId}_${subject}" для матча по subject (serverId меняется).
         private val pendingDraftRestores = java.util.concurrent.ConcurrentHashMap<String, PendingDraftRestore>()
@@ -249,12 +251,19 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (easClient != null) {
                 if (folderDao.getFolder(folderId) != null) {
                     for (draft in trulyLocalDrafts) {
+                        // С вложениями, скрытыми копиями и важностью — как при сохранении с экрана письма.
+                        val stored = attachmentDao.getAttachmentsList(draft.id)
+                        val (serverBody, uploadAttachments) = DraftUpload.prepare(
+                            draft.body, stored, System.currentTimeMillis()
+                        ) { att -> att.localPath?.let { java.io.File(it) }?.takeIf { it.exists() }?.readBytes() }
                         val result = easClient.createDraft(
                             to = draft.to,
                             cc = draft.cc,
-                            bcc = "",
+                            bcc = draft.bcc.orEmpty(),
                             subject = draft.subject,
-                            body = draft.body
+                            body = serverBody,
+                            attachments = uploadAttachments,
+                            importance = draft.importance
                         )
 
                         when (result) {
@@ -266,8 +275,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                         serverId = serverItemId
                                     )
                                     database.withTransaction {
+                                        // delete каскадом удаляет записи вложений — переносим их на новый id
                                         emailDao.delete(draft.id)
                                         emailDao.insert(updatedEmail)
+                                        if (stored.isNotEmpty()) {
+                                            attachmentDao.insertAll(stored.map { it.copy(id = 0, emailId = updatedEmail.id) })
+                                        }
                                     }
                                 }
                             }
@@ -546,9 +559,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         sourceTo: String,
         sourceCc: String,
         sourceFrom: String,
-        sourceFromName: String
+        sourceFromName: String,
+        sourceBcc: String? = null
     ) {
         val current = emailDao.getEmail(targetEmailId) ?: return
+        // EAS до 16.0 не передаёт Bcc: у записи из Sync скрытые копии не известны (null) — берём прежние.
+        if (sourceBcc != null && current.bcc == null) {
+            emailDao.updateBcc(targetEmailId, sourceBcc)
+        }
         if (sourceTo.contains("@") && !current.to.contains("@")) {
             emailDao.updateTo(targetEmailId, sourceTo)
         }
@@ -640,7 +658,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             cc = draft.cc,
                             from = draft.from,
                             fromName = draft.fromName,
-                            attachments = atts.filter { !it.localPath.isNullOrBlank() }
+                            attachments = atts.filter { !it.localPath.isNullOrBlank() },
+                            bcc = draft.bcc
                         ))
                     }
                 }
@@ -694,7 +713,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
 
                 kotlinx.coroutines.yield()
 
-                when (val result = client.sync(folder.serverId, syncKey, windowSize, includeMime)) {
+                when (val result = client.sync(
+                    folder.serverId, syncKey, windowSize, includeMime,
+                    fullBody = folder.type == FolderType.DRAFTS
+                )) {
                     is EasResult.Success -> {
                         consecutiveErrors = 0
 
@@ -975,7 +997,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             subject = email.subject,
             preview = stripHtml(email.body).take(150).replace("\n", " ").trim(),
             body = existingEmail?.body?.takeIf { it.isNotBlank() }
-                ?: if (folder.type == FolderType.DRAFTS && email.body.isNotBlank()) email.body else "",
+                ?: if (folder.type == FolderType.DRAFTS && email.body.isNotBlank() && !email.bodyTruncated &&
+                    email.body.length <= DraftUpload.MAX_LOCAL_BODY_CHARS
+                ) email.body else "",
             bodyType = email.bodyType,
             dateReceived = effectiveDate,
             read = email.read,
@@ -995,6 +1019,13 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         val serverEmailMap = syncData.emails.associateBy { "${accountId}_${it.serverId}" }
         for (existingId in existingIds) {
             val serverEmail = serverEmailMap[existingId] ?: continue
+            // Обрезанное тело — не тело черновика: локальная копия устарела, при открытии тело загрузится
+            // с сервера целиком (сохранение обрезанного перезаписало бы полное на сервере). Слишком
+            // крупное для строки БД (окно курсора 2 МБ) — так же: при открытии берётся с сервера.
+            if (serverEmail.bodyTruncated || serverEmail.body.length > DraftUpload.MAX_LOCAL_BODY_CHARS) {
+                emailDao.updateBody(existingId, "")
+                continue
+            }
             if (serverEmail.body.isBlank()) continue
             val existing = existingEmailsMap[existingId] ?: continue
             val existingBody = existing.body
@@ -1165,7 +1196,9 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 to = if (matchedEws.to.contains("@")) matchedEws.to else newEas.to,
                                 cc = if (matchedEws.cc.contains("@")) matchedEws.cc else newEas.cc,
                                 from = if (matchedEws.from.isNotBlank()) matchedEws.from else newEas.from,
-                                fromName = if (matchedEws.fromName.isNotBlank()) matchedEws.fromName else newEas.fromName
+                                fromName = if (matchedEws.fromName.isNotBlank()) matchedEws.fromName else newEas.fromName,
+                                // Скрытые копии знает только локальная запись (EAS до 16.0 их не передаёт).
+                                bcc = matchedEws.bcc ?: newEas.bcc
                             )
                             emailDao.insert(migratedEmail)
                             migratedEasIds.add(newEas.id)
@@ -1262,7 +1295,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 val saved = savedDraftBodies[idx]
                 usedSaved.add(idx)
                 migrateDraftBodyToTarget(email.id, saved.body, saved.bodyType, saved.attachments)
-                migrateDraftFieldsToTarget(email.id, saved.to, saved.cc, saved.from, saved.fromName)
+                migrateDraftFieldsToTarget(email.id, saved.to, saved.cc, saved.from, saved.fromName, saved.bcc)
                 if (saved.attachments.isNotEmpty()) {
                     mergeAttachmentsToTarget(email.id, saved.attachments)
                 }
@@ -1291,7 +1324,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             pendingDraftRestores.remove(key)
 
             migrateDraftBodyToTarget(newDraft.id, pending.body, pending.bodyType, pending.attachments)
-            migrateDraftFieldsToTarget(newDraft.id, pending.to, pending.cc, pending.from, pending.fromName)
+            migrateDraftFieldsToTarget(newDraft.id, pending.to, pending.cc, pending.from, pending.fromName, pending.bcc)
             if (pending.attachments.isNotEmpty()) {
                 mergeAttachmentsToTarget(newDraft.id, pending.attachments)
             }
@@ -1348,7 +1381,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 usedMigrationIds.add(matchingNew.id)
                 val oldAtts = attachmentDao.getAttachmentsList(oldEmailId)
                 migrateDraftBodyToTarget(matchingNew.id, oldDraft.body, oldDraft.bodyType, oldAtts)
-                migrateDraftFieldsToTarget(matchingNew.id, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName)
+                migrateDraftFieldsToTarget(matchingNew.id, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc)
                 mergeAttachmentsToTarget(matchingNew.id, oldAtts)
             }
         }
@@ -1371,7 +1404,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (oldDraft.body.isNotBlank()) {
                 migrateDraftBodyToTarget(newEmailId, oldDraft.body, oldDraft.bodyType, oldAtts)
             }
-            migrateDraftFieldsToTarget(newEmailId, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName)
+            migrateDraftFieldsToTarget(newEmailId, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc)
             mergeAttachmentsToTarget(newEmailId, oldAtts)
 
             registerDeletedEmail(oldEmailId, context)
@@ -1414,7 +1447,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         cc = existingEmail.cc,
                         from = existingEmail.from,
                         fromName = existingEmail.fromName,
-                        attachments = localAtts
+                        attachments = localAtts,
+                        bcc = existingEmail.bcc
                     )
 
                     // ЗАЩИТА: если черновик был отредактирован пользователем в приложении
@@ -1472,7 +1506,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             change.flagged?.let { emailDao.updateFlagStatus(emailId, it) }
 
             if (folder.type == FolderType.DRAFTS) {
-                if (!change.body.isNullOrBlank()) {
+                if (change.bodyTruncated || (change.body?.length ?: 0) > DraftUpload.MAX_LOCAL_BODY_CHARS) {
+                    // Обрезанное (или слишком крупное для строки БД) тело — не тело черновика: локальная
+                    // копия устарела, при открытии тело загрузится с сервера целиком.
+                    emailDao.updateBody(emailId, "")
+                } else if (!change.body.isNullOrBlank()) {
                     val existing = emailDao.getEmail(emailId)
                     if (existing != null) {
                         val existingBody = existing.body
@@ -1650,7 +1688,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         val merged = mergeDraftBody(newBody, mergeAtts, orphan.body)
                         emailDao.updateBody(matchingNew.id, merged)
                     }
-                    migrateDraftFieldsToTarget(matchingNew.id, orphan.to, orphan.cc, orphan.from, orphan.fromName)
+                    migrateDraftFieldsToTarget(matchingNew.id, orphan.to, orphan.cc, orphan.from, orphan.fromName, orphan.bcc)
                     val orphanAtts = attachmentDao.getAttachmentsList(orphan.id)
                     mergeAttachmentsToTarget(matchingNew.id, orphanAtts)
                 }

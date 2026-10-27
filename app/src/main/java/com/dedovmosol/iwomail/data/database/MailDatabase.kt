@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
-    version = 44,
+    version = 45,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -236,6 +236,13 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `accounts` ADD COLUMN `alternatePinnedCertificateValidTo` INTEGER")
             }
         }
+
+        /** Скрытые копии черновика (EAS до 16.0 их не передаёт, хранит только приложение). SQL — из schemas/45.json. */
+        private val MIGRATION_44_45 = object : Migration(44, 45) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `bcc` TEXT")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -257,7 +264,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_40_41,
             MIGRATION_41_42,
             MIGRATION_42_43,
-            MIGRATION_43_44
+            MIGRATION_43_44,
+            MIGRATION_44_45
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -478,7 +486,10 @@ data class EmailEntity(
     val mdnRequestedBy: String? = null, // Email для отправки отчёта о прочтении (MDN)
     val mdnSent: Boolean = false, // Отчёт о прочтении уже отправлен
     val messageClass: String = "", // MS-ASEMAIL MessageClass (e.g. IPM.Schedule.Meeting.Request)
-    val internetMessageId: String? = null // RFC 5322 Message-ID для корреляции MDN
+    val internetMessageId: String? = null, // RFC 5322 Message-ID для корреляции MDN
+    // Скрытые копии черновика. null — не известны: EAS до 16.0 не передаёт Bcc, черновик из Outlook
+    // приходит без них, и на сервере их тогда не трогаем. "" — известно, что скрытых копий нет.
+    val bcc: String? = null
 )
 
 data class EmailDedupInfo(
