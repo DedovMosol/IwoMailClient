@@ -907,11 +907,10 @@ fun CertificatePinningCard(
 ) {
     var isLoading by remember { mutableStateOf(false) }
 
-    // Проверяем наличие изменения сертификата (ключ pinnedCertificateHash гарантирует
-    // перевычисление после принятия/отключения/обновления пина)
-    val certificateChange = remember(account.id, account.pinnedCertificateHash) {
-        com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.getChange(account.id)
-    }
+    // Обнаруженная смена сертификата — подписка: карточка обновляется сама после «Принять» (в том числе
+    // сертификата резервного сервера, когда пин основного не меняется), «Отключить» и при новом обнаружении.
+    val certificateChanges by com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.changes.collectAsStateWithLifecycle()
+    val certificateChange = certificateChanges[account.id]
 
     Card(
         modifier = Modifier
@@ -958,7 +957,10 @@ fun CertificatePinningCard(
                     accountId = account.id,
                     accountRepo = accountRepo,
                     isRu = isRu,
-                    hasDualUrl = account.alternateServerUrl != null,
+                    hasDualUrl = !account.alternateServerUrl.isNullOrBlank(),
+                    isAlternate = com.dedovmosol.iwomail.data.repository.CertificatePins
+                        .isAlternateEndpoint(account, certificateChange.hostname),
+                    isFirstAlternateCertificate = account.alternatePinnedCertificateHash == null,
                     onAccountUpdated = onAccountUpdated
                 )
             } else if (account.pinnedCertificateHash != null) {
@@ -1030,6 +1032,8 @@ private fun CertificateChangeWarning(
     accountRepo: AccountRepository,
     isRu: Boolean,
     hasDualUrl: Boolean = false,
+    isAlternate: Boolean = false,
+    isFirstAlternateCertificate: Boolean = false,
     onAccountUpdated: (AccountEntity) -> Unit
 ) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -1044,7 +1048,10 @@ private fun CertificateChangeWarning(
     Spacer(Modifier.height(8.dp))
 
     Text(
-        text = "${if (isRu) "Сервер" else "Server"}: ${certificateChange.hostname}",
+        text = "${when {
+            isAlternate -> if (isRu) "Резервный сервер" else "Backup server"
+            else -> if (isRu) "Сервер" else "Server"
+        }}: ${certificateChange.hostname}",
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Bold
     )
@@ -1081,13 +1088,23 @@ private fun CertificateChangeWarning(
         fontWeight = FontWeight.Bold
     )
 
-    if (hasDualUrl) {
+    if (isAlternate && isFirstAlternateCertificate) {
         Spacer(Modifier.height(4.dp))
         Text(
             text = if (isRu)
-                "ℹ️ У вас настроен Dual-URL. Если внутренний и внешний серверы используют разные сертификаты (не SAN), при переключении между сетями пин может не совпадать. Используйте SAN-сертификат или отключите pinning."
+                "ℹ️ Первое подключение к резервному серверу: его сертификат отличается от основного. «Принять» сохранит его отдельно — сертификат основного сервера не изменится."
             else
-                "ℹ️ You have Dual-URL configured. If internal and external servers use different certificates (not SAN), the pin may mismatch when switching networks. Use a SAN certificate or disable pinning.",
+                "ℹ️ First connection to the backup server: its certificate differs from the primary one. \"Accept\" stores it separately; the primary server certificate stays unchanged.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF2196F3)
+        )
+    } else if (hasDualUrl) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = if (isRu)
+                "ℹ️ Сертификаты основного и резервного серверов хранятся отдельно: принятие сертификата одного не меняет другой."
+            else
+                "ℹ️ Primary and backup server certificates are stored separately: accepting one does not change the other.",
             style = MaterialTheme.typography.bodySmall,
             color = Color(0xFF2196F3)
         )
@@ -1104,17 +1121,8 @@ private fun CertificateChangeWarning(
         Button(
             onClick = {
                 scope.launch {
-                    accountRepo.updatePinnedCertificate(
-                        accountId = accountId,
-                        hash = certificateChange.newCert.hash,
-                        cn = certificateChange.newCert.cn,
-                        org = certificateChange.newCert.organization,
-                        validFrom = certificateChange.newCert.validFrom,
-                        validTo = certificateChange.newCert.validTo
-                    )
-                    accountRepo.updateCertificatePinningFailCount(accountId, 0)
-                    com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.clearChange(accountId)
-                    accountRepo.clearEasClientCache(accountId)
+                    // В пин того сервера, где обнаружен сертификат (основной или резервный)
+                    accountRepo.acceptChangedCertificate(accountId, certificateChange)
                     accountRepo.getAccount(accountId)?.let { onAccountUpdated(it) }
                 }
             },
@@ -1191,18 +1199,22 @@ private fun CertificatePinnedInfo(
         fontFamily = FontFamily.Monospace
     )
 
-    val pinChange = remember(account.id, account.pinnedCertificateHash) {
-        com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.getChange(account.id)
-    }
-    if (pinChange != null) {
+    // Сертификат резервного сервера (Dual-URL) хранится отдельно — см. CertificatePins
+    account.alternatePinnedCertificateHash?.let { backupHash ->
         Spacer(Modifier.height(4.dp))
         Text(
-            "⚠️ ${if (isRu) "Обнаружено изменение сертификата" else "Certificate change detected"}",
+            "• ${if (isRu) "Резервный сервер" else "Backup server"}: ${account.alternatePinnedCertificateCN ?: "Unknown"}" +
+                (account.alternatePinnedCertificateValidTo?.let { ", ${if (isRu) "истекает" else "expires"} ${formatDate(it)}" } ?: ""),
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            "• Hash: ${backupHash.take(16)}...",
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFFF9800),
-            fontWeight = FontWeight.Bold
+            fontFamily = FontFamily.Monospace
         )
     }
+
+    // Обнаруженная смена сертификата показывается вместо этого блока — CertificateChangeWarning.
 
     Spacer(Modifier.height(12.dp))
 
@@ -1261,18 +1273,6 @@ private fun CertificatePinnedInfo(
         ) {
             Text(if (isRu) "Отключить" else "Disable", color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
-    }
-
-    if (pinChange != null) {
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = if (isRu)
-                "⚠️ Сертификат сервера изменился. Рекомендуется обновить или отключить защиту."
-            else
-                "⚠️ Server certificate has changed. Consider updating or disabling protection.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFFFF9800)
-        )
     }
 }
 
@@ -1535,10 +1535,12 @@ private fun ConnectionStatusBlock(
         }
     }
 
+    // host:port как в запросах: порт из адреса важнее порта аккаунта (ServerAddress)
+    fun endpointLabel(url: String) = com.dedovmosol.iwomail.eas.ServerAddress.parse(url, port)?.display ?: url
     val activeEndpoint = if (health.isUsingFallback && !alternateServerUrl.isNullOrBlank()) {
-        "$alternateServerUrl:$port"
+        endpointLabel(alternateServerUrl)
     } else {
-        "$serverUrl:$port"
+        endpointLabel(serverUrl)
     }
 
     val backupLabel = if (health.isUsingFallback) {

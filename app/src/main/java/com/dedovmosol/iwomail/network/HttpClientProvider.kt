@@ -1,5 +1,9 @@
 package com.dedovmosol.iwomail.network
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import okhttp3.ConnectionSpec
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -7,7 +11,6 @@ import java.io.File
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.*
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 
@@ -866,7 +869,11 @@ object HttpClientProvider {
      * Используется для показа диалога пользователю при обнаружении нового сертификата
      */
     object CertificateChangeDetector {
-        private val changes = ConcurrentHashMap<Long, CertificateChange>()
+        // StateFlow, а не просто Map: экран настроек подписан и обновляется сам — после «Принять»
+        // (в том числе сертификата резервного сервера, когда пин основного не меняется), «Отключить»
+        // и при новом обнаружении, пока экран открыт.
+        private val _changes = MutableStateFlow<Map<Long, CertificateChange>>(emptyMap())
+        val changes: StateFlow<Map<Long, CertificateChange>> = _changes.asStateFlow()
         
         data class CertificateChange(
             val oldCert: CertificateInfo,
@@ -881,7 +888,13 @@ object HttpClientProvider {
             newCert: CertificateInfo,
             hostname: String
         ) {
-            changes[accountId] = CertificateChange(oldCert, newCert, hostname)
+            // Каждое рукопожатие с несовпавшим пином сообщает заново: ту же смену не пересоздаём
+            // (время первого обнаружения сохраняется, подписчики не перерисовываются впустую).
+            _changes.update { current ->
+                val known = current[accountId]
+                if (known != null && known.oldCert == oldCert && known.newCert == newCert && known.hostname == hostname) current
+                else current + (accountId to CertificateChange(oldCert, newCert, hostname))
+            }
             android.util.Log.w("CertificateChange", """
                 ⚠️ Certificate mismatch detected!
                 Account ID: $accountId
@@ -892,10 +905,10 @@ object HttpClientProvider {
             """.trimIndent())
         }
         
-        fun getChange(accountId: Long): CertificateChange? = changes[accountId]
+        fun getChange(accountId: Long): CertificateChange? = _changes.value[accountId]
         
         fun clearChange(accountId: Long) {
-            changes.remove(accountId)
+            _changes.update { it - accountId }
         }
     }
 }

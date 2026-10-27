@@ -26,6 +26,12 @@ interface EndpointFailover {
      * вернуть true без повторного переключения (иначе два потока перекидывали бы его туда-обратно).
      */
     suspend fun switchToOtherEndpoint(accountId: Long, fromFallback: Boolean): Boolean
+
+    /**
+     * Отвечает ли по TCP сервер, через который аккаунт работает сейчас (учётные данные не отправляются).
+     * Нужна, когда попытка не уложилась во время: иначе медленный сервер не отличить от недоступного.
+     */
+    suspend fun isCurrentEndpointReachable(accountId: Long): Boolean
 }
 
 /**
@@ -57,6 +63,7 @@ suspend fun syncFolderWithRetry(
  * 3. Обрыв связи (таймаут, DNS, отказ, сброс, 5xx) и есть резервный адрес → переключение на другой
  *    сервер (TCP-проба без учётных данных) и один повтор. Авторизация, политика и сертификат не
  *    переключают: у резервного те же учётные данные, а сертификат основного нельзя обходить молча.
+ *    Попытка не уложилась во время — переключение, только если текущий сервер не отвечает и по TCP.
  * 4. CancellationException всегда пробрасывается.
  *
  * Исход попадает в [AccountServerHealthRepository] с тем сервером, где он случился.
@@ -76,13 +83,19 @@ internal suspend fun syncWithRetry(
     var failure = attempt(incrementalTimeoutMs) { sync(false) }
         ?: return reportSuccess(accountId, hasAlternate, usedFallback = startedOnFallback)
     // Отказ авторизации/политики/TLS полный resync не лечит, а лишний вход с неверным паролем
-    // приближает блокировку учётной записи в AD.
-    if (allowFullResync && !failure.connectionLevel && !failure.deterministic) {
+    // приближает блокировку учётной записи в AD. Не уложились во время — тоже нет: SyncKey
+    // сохраняется постранично, следующий запуск продолжит, а полный resync начал бы с нуля.
+    if (allowFullResync && !failure.connectionLevel && !failure.deterministic && !failure.isTimeout) {
         android.util.Log.w(tag, "Incremental sync failed (${failure.summary}), trying full resync")
         failure = attempt(fullResyncTimeoutMs) { sync(true) }
             ?: return reportSuccess(accountId, hasAlternate, usedFallback = startedOnFallback)
     }
-    if (failover == null || !hasAlternate || !failure.connectionLevel) {
+    // Попытка не уложилась во время. Сервер отвечает по TCP — он просто медленный (большая папка), это не
+    // повод уходить на резервный. Не отвечает — обрыв связи: время попытки съели таймауты подключения
+    // (OkHttp перебирает адреса хоста по очереди, по 30 с на каждый) или DNS вместе с подключением.
+    val slowButReachable = failure.isTimeout && failover != null && hasAlternate &&
+        failover.isCurrentEndpointReachable(accountId)
+    if (failover == null || !hasAlternate || !failure.connectionLevel || slowButReachable) {
         reportFailure(accountId, hasAlternate, failure, usedFallback = startedOnFallback)
         return false
     }

@@ -166,6 +166,8 @@ fun VerificationScreen(
     }
     
     var statusText by remember { mutableStateOf(verifyingAccountText) }
+    // Проверка прошла через резервный адрес (основной недоступен из этой сети)
+    var verifiedViaAlternate by remember { mutableStateOf(false) }
     var showMismatchDialog by remember { mutableStateOf(false) }
     var mismatchEnteredEmail by remember { mutableStateOf("") }
     var mismatchActualEmail by remember { mutableStateOf("") }
@@ -221,12 +223,17 @@ fun VerificationScreen(
             certificatePath = certificatePath,
             clientCertificatePath = clientCertificatePath,
             clientCertificatePassword = clientCertificatePassword,
-            alternateServerUrl = alternateServerUrl
+            alternateServerUrl = alternateServerUrl,
+            // FolderSync только что прошёл: повторная проверка стоила бы ещё одного таймаута основного
+            alreadyVerified = true
         )
 
         when (addResult) {
             is EasResult.Success -> {
                 val accountId = addResult.data
+                // Проверка прошла через резервный: сразу работаем через него — первая синхронизация не
+                // ждёт таймаута недоступного основного (возврат на основной — сам, после пробы).
+                if (verifiedViaAlternate) accountRepo.switchToOtherEndpoint(accountId, fromFallback = false)
                 tryEnableCertificatePinning(accountId, sourceTag)
                 startInitialSync(accountId)
                 onSuccess()
@@ -259,7 +266,8 @@ fun VerificationScreen(
             testEmailSubjectText = testEmailSubjectText,
             testEmailBodyText = testEmailBodyText,
             tryingBackupServerText = tryingBackupServerText,
-            onStatusChange = { statusText = it }
+            onStatusChange = { statusText = it },
+            onAlternateUsed = { verifiedViaAlternate = true }
         )
         
         when (result) {
@@ -480,7 +488,8 @@ fun VerificationScreen(
                                         // Создаём временный клиент для проверки
                                         val tempClient = try {
                                             EasClient(
-                                                serverUrl = serverUrl,
+                                                // Тот адрес, через который прошла проверка (основной может быть недоступен)
+                                                serverUrl = if (verifiedViaAlternate && !alternateServerUrl.isNullOrBlank()) alternateServerUrl else serverUrl,
                                                 username = username,
                                                 password = password,
                                                 domain = domain,
@@ -707,7 +716,8 @@ private suspend fun verifyEmail(
     testEmailSubjectText: String,
     testEmailBodyText: String,
     tryingBackupServerText: String = "",
-    onStatusChange: (String) -> Unit
+    onStatusChange: (String) -> Unit,
+    onAlternateUsed: () -> Unit = {}
 ): VerificationResult {
     val normalizedEmail = extractVerifiedEmail(email)
         ?: return VerificationResult.Error(VERIFICATION_INVALID_EMAIL)
@@ -766,6 +776,7 @@ private suspend fun verifyEmail(
         if (foldersResult is EasResult.Error) {
             return VerificationResult.Error(foldersResult.message)
         }
+        onAlternateUsed()
     }
 
     if (foldersResult is EasResult.Error) {

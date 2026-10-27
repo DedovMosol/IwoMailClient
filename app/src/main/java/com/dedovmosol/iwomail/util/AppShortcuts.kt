@@ -23,14 +23,23 @@ object AppShortcuts {
 
     private class Spec(val id: String, val action: String, val icon: Int, val ru: Label, val en: Label)
 
+    /**
+     * ID не совпадают с прежними статическими (widget/compose/inbox/sync из удалённого shortcuts.xml):
+     * закреплённый пользователем статический ярлык после удаления из манифеста остаётся неизменяемым,
+     * и setDynamicShortcuts с тем же ID бросает IllegalArgumentException («update immutable
+     * shortcuts», ShortcutManager) — ярлыки не публиковались бы вовсе. Старые закреплённые система
+     * отключает сама.
+     */
+    internal val LEGACY_MANIFEST_IDS = setOf("widget", "compose", "inbox", "sync")
+
     private val SPECS = listOf(
-        Spec("widget", MainActivity.ACTION_SHORTCUT_ADD_WIDGET, R.drawable.ic_shortcut_widget,
+        Spec("account_widget", MainActivity.ACTION_SHORTCUT_ADD_WIDGET, R.drawable.ic_shortcut_widget,
             Label("Виджет", "Добавить виджет"), Label("Widget", "Add widget")),
-        Spec("compose", MainActivity.ACTION_SHORTCUT_COMPOSE, R.drawable.ic_shortcut_compose,
+        Spec("account_compose", MainActivity.ACTION_SHORTCUT_COMPOSE, R.drawable.ic_shortcut_compose,
             Label("Написать", "Написать письмо"), Label("Compose", "Write new email")),
-        Spec("inbox", MainActivity.ACTION_SHORTCUT_INBOX, R.drawable.ic_shortcut_inbox,
+        Spec("account_inbox", MainActivity.ACTION_SHORTCUT_INBOX, R.drawable.ic_shortcut_inbox,
             Label("Входящие", "Открыть Входящие"), Label("Inbox", "Open Inbox")),
-        Spec("sync", MainActivity.ACTION_SHORTCUT_SYNC, R.drawable.ic_shortcut_sync,
+        Spec("account_sync", MainActivity.ACTION_SHORTCUT_SYNC, R.drawable.ic_shortcut_sync,
             Label("Синхронизация", "Синхронизировать"), Label("Sync", "Synchronize"))
     )
 

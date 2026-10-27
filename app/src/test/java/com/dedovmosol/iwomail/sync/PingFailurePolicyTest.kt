@@ -47,6 +47,25 @@ class PingFailurePolicyTest {
     }
 
     @Test
+    fun `unreachable server never disables push, whatever the cause`() {
+        for (cause in listOf(ConnectionFailure.DNS, ConnectionFailure.REFUSED, ConnectionFailure.UNREACHABLE, ConnectionFailure.TIMEOUT)) {
+            assertThat((1..20).none { network(it, hasAlternate = false, failure = cause).markPingUnsupported }).isTrue()
+        }
+    }
+
+    @Test
+    fun `proxy that breaks the long poll falls back to periodic sync`() {
+        // HTTP 502/504 от обратного прокси (TMG/ISA) на долгий Ping: сервер отвечает, Sync работает.
+        val gateway = (1..3).map { PingFailurePolicy.decide(it, ErrorKind.Server5xx, null, hasAlternate = false) }
+        assertThat(gateway.map { it.markPingUnsupported }).containsExactly(false, false, true).inOrder()
+
+        // Обрыв установленного соединения: сначала шанс другому серверу, затем периодическая синхронизация.
+        val reset = (1..6).map { PingFailurePolicy.decide(it, ErrorKind.Network, ConnectionFailure.RESET, hasAlternate = true) }
+        assertThat(reset.map { it.trySwitchEndpoint }).containsExactly(false, false, true, false, false, true).inOrder()
+        assertThat(reset.map { it.markPingUnsupported }).containsExactly(false, false, false, false, false, true).inOrder()
+    }
+
+    @Test
     fun `heartbeat shrinks only when the long poll is cut`() {
         assertThat(network(1, failure = ConnectionFailure.TIMEOUT).shrinkHeartbeat).isTrue()
         assertThat(network(1, failure = ConnectionFailure.RESET).shrinkHeartbeat).isTrue()

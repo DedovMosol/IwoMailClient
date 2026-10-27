@@ -119,8 +119,23 @@ interface AccountDao {
     @Query("UPDATE accounts SET certificatePinningEnabled = :enabled WHERE id = :accountId")
     suspend fun updateCertificatePinningEnabled(accountId: Long, enabled: Boolean)
 
-    @Query("UPDATE accounts SET alternateServerUrl = :url WHERE id = :accountId")
-    suspend fun updateAlternateServerUrl(accountId: Long, url: String?)
+    @Query("""
+        UPDATE accounts SET
+            alternatePinnedCertificateHash = :hash,
+            alternatePinnedCertificateCN = :cn,
+            alternatePinnedCertificateOrg = :org,
+            alternatePinnedCertificateValidFrom = :validFrom,
+            alternatePinnedCertificateValidTo = :validTo
+        WHERE id = :accountId
+    """)
+    suspend fun updateAlternatePinnedCertificate(
+        accountId: Long,
+        hash: String?,
+        cn: String?,
+        org: String?,
+        validFrom: Long?,
+        validTo: Long?
+    )
 
     @Query("UPDATE accounts SET draftMode = :mode WHERE id = :accountId")
     suspend fun updateDraftMode(accountId: Long, mode: String)

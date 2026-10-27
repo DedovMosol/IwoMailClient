@@ -361,50 +361,30 @@ class EasClient(
          * Проба безопасна: учётные данные не отправляются (только установка TCP-соединения).
          */
         suspend fun probeHost(serverUrl: String, port: Int): Boolean {
-            val host = extractHost(serverUrl)
-            if (host.isBlank()) return false
+            // Порт из адреса (host:port) важнее порта аккаунта — как и для самих запросов (normalizeUrl).
+            val address = ServerAddress.parse(serverUrl, port) ?: return false
             return withContext(Dispatchers.IO) {
                 try {
                     java.net.Socket().use { socket ->
-                        socket.connect(java.net.InetSocketAddress(host, port), FALLBACK_PROBE_TIMEOUT_MS)
+                        socket.connect(java.net.InetSocketAddress(address.host, address.port), FALLBACK_PROBE_TIMEOUT_MS)
                     }
-                    android.util.Log.d("EasClient", "Dual-URL: $host:$port reachable")
+                    android.util.Log.d("EasClient", "Dual-URL: ${address.display} reachable")
                     true
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.d("EasClient", "Dual-URL: $host:$port unreachable")
+                    android.util.Log.d("EasClient", "Dual-URL: ${address.display} unreachable")
                     false
                 }
             }
         }
 
-        private fun extractHost(url: String): String {
-            return url.trim()
-                .removePrefix("https://")
-                .removePrefix("http://")
-                .substringBefore("/")
-                .substringBefore(":")
-                .trim()
-        }
-
+        /** Базовый URL сервера: схема + хост + порт (явный из адреса, иначе [port]) — см. [ServerAddress]. */
         fun normalizeUrl(url: String, port: Int = 443, useHttps: Boolean = true): String {
-            // Убираем пробелы и существующую схему
-            val hostOnly = url.trim()
-                .removePrefix("https://")
-                .removePrefix("http://")
-                .substringBefore("/")  // убираем путь
-                .substringBefore(":")  // убираем порт если есть
-                .trim()
-
-            // Если хост пустой - возвращаем fallback (для обратной совместимости)
-            if (hostOnly.isEmpty()) {
-                android.util.Log.w("EasClient", "Empty server URL provided: $url")
-                val scheme = if (useHttps) "https" else "http"
-                return "$scheme://exchange.local:$port"
-            }
-
+            ServerAddress.parse(url, port)?.let { return it.baseUrl(useHttps) }
+            // Пустой хост — fallback для обратной совместимости
+            android.util.Log.w("EasClient", "Empty server URL provided: $url")
             val scheme = if (useHttps) "https" else "http"
-            return "$scheme://$hostOnly:$port"
+            return "$scheme://exchange.local:$port"
         }
 
         /**

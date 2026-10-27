@@ -831,8 +831,9 @@ fun SetupScreen(
 
             // Резервный сервер (опционально, только для Exchange)
             if (accountType == AccountType.EXCHANGE) {
+                // Тот же сервер с точностью до схемы, пути, регистра и порта (ServerAddress)
                 val altUrlError = if (alternateServerUrl.isNotBlank() &&
-                    alternateServerUrl.trim().equals(serverUrl.trim(), ignoreCase = true)) {
+                    com.dedovmosol.iwomail.eas.ServerAddress.isSameServer(alternateServerUrl, serverUrl, incomingPort.toIntOrNull() ?: 443)) {
                     if (isRussian()) "Совпадает с основным сервером" else "Same as primary server"
                 } else null
 
@@ -848,8 +849,8 @@ fun SetupScreen(
                             Text(altUrlError, color = MaterialTheme.colorScheme.error)
                         } else {
                             Text(
-                                if (isRussian()) "Внутренний или внешний адрес (автопереключение при недоступности основного)"
-                                else "Internal or external address (auto-fallback when primary is unreachable)"
+                                if (isRussian()) "Внутренний или внешний адрес, можно с портом (адрес:порт). Используется, когда основной недоступен"
+                                else "Internal or external address, optionally with a port (address:port). Used when the primary is unreachable"
                             )
                         }
                     },
@@ -867,6 +868,12 @@ fun SetupScreen(
                     onValueChange = { incomingPort = it.filter { c -> c.isDigit() } },
                     label = { Text(Strings.port) },
                     placeholder = { Text("443 (HTTPS)") },
+                    supportingText = {
+                        Text(
+                            if (isRussian()) "Используется, если в адресе сервера нет порта"
+                            else "Used when the server address has no port"
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
@@ -1358,7 +1365,9 @@ fun SetupScreen(
                                 // Обновление существующего аккаунта — без верификации
                                 val account = accountRepo.getAccount(editAccountId)
                                 if (account != null) {
-                                    val trimmedAltUrl = alternateServerUrl.trim().takeIf { it.isNotBlank() && !it.equals(serverUrl.trim(), ignoreCase = true) }
+                                    val trimmedAltUrl = alternateServerUrl.trim().takeIf {
+                                        it.isNotBlank() && !com.dedovmosol.iwomail.eas.ServerAddress.isSameServer(it, serverUrl, incomingPort.toIntOrNull() ?: 443)
+                                    }
                                     when (val updateResult = accountRepo.updateAccount(
                                         account.copy(
                                             displayName = displayName,
@@ -1402,7 +1411,9 @@ fun SetupScreen(
                                 // Для Exchange — переходим на экран верификации
                                 isLoading = false
                                 accountSaved = true
-                                val trimmedAltUrlForNav = alternateServerUrl.trim().takeIf { it.isNotBlank() && !it.equals(serverUrl.trim(), ignoreCase = true) }
+                                val trimmedAltUrlForNav = alternateServerUrl.trim().takeIf {
+                                    it.isNotBlank() && !com.dedovmosol.iwomail.eas.ServerAddress.isSameServer(it, serverUrl, incomingPort.toIntOrNull() ?: 443)
+                                }
                                 onNavigateToVerification(
                                     email, displayName, serverUrl, username, password, domain,
                                     acceptAllCerts, selectedColor,

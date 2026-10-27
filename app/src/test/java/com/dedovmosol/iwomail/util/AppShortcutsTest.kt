@@ -33,8 +33,11 @@ class AppShortcutsTest {
 
         AppShortcuts.update(context, hasAccounts = true, language = "ru")
         assertThat(published()).containsExactly(
-            "widget", "Виджет", "compose", "Написать", "inbox", "Входящие", "sync", "Синхронизация"
+            "account_widget", "Виджет", "account_compose", "Написать",
+            "account_inbox", "Входящие", "account_sync", "Синхронизация"
         )
+        // ID прежних статических ярлыков заняты закреплёнными неизменяемыми — не переиспользуются.
+        assertThat(published().keys.intersect(AppShortcuts.LEGACY_MANIFEST_IDS)).isEmpty()
 
         AppShortcuts.update(context, hasAccounts = false, language = "ru")
         assertThat(published()).isEmpty()
@@ -45,8 +48,8 @@ class AppShortcutsTest {
         AppShortcuts.update(context, hasAccounts = true, language = "ru")
         AppShortcuts.update(context, hasAccounts = true, language = "en")
 
-        assertThat(published()["sync"]).isEqualTo("Sync")
-        assertThat(published()["compose"]).isEqualTo("Compose")
+        assertThat(published()["account_sync"]).isEqualTo("Sync")
+        assertThat(published()["account_compose"]).isEqualTo("Compose")
     }
 
     @Test

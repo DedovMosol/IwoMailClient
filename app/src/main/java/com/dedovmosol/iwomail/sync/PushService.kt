@@ -623,6 +623,7 @@ class PushService : Service() {
             syncAccount(account)
 
             var quickPingCount = 0
+            var reprovisionedSinceSuccess = false
 
             // Кэш аккаунта: обновляем из БД раз в 5 минут (а не каждую итерацию)
             var cachedAccount: AccountEntity? = account
@@ -672,6 +673,7 @@ class PushService : Service() {
             }
 
             fun reportPingSuccess(hasAlternate: Boolean) {
+                reprovisionedSinceSuccess = false
                 AccountServerHealthRepository.reportSyncOutcome(
                     accountId, success = true,
                     usedFallback = accountRepo.isUsingFallback(accountId),
@@ -800,8 +802,11 @@ class PushService : Service() {
                         else -> {
                             // 449 на Ping: политика безопасности обновилась — заново согласуем её
                             // (Provision) и сразу повторим. Это не ошибка авторизации.
-                            if (ping.error?.contains("(449)") == true && consecutiveErrors == 0 && reprovision(accountId)) {
-                                continue
+                            // Один раз до следующего успешного Ping: если сервер снова отвечает 449,
+                            // это уже сбой (иначе Ping + Provision каждые 5 с без конца — батарея и нагрузка).
+                            if (ping.error?.contains("(449)") == true && !reprovisionedSinceSuccess) {
+                                reprovisionedSinceSuccess = true
+                                if (reprovision(accountId)) continue
                             }
                             val message = ping.error ?: "Ping status=$result"
                             AccountServerHealthRepository.reportSyncOutcome(

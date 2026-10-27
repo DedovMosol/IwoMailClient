@@ -26,9 +26,11 @@ class SyncWithRetryTest {
     private class FakeFailover(
         var hasAlternate: Boolean = true,
         var onFallback: Boolean = false,
-        var canSwitch: Boolean = true
+        var canSwitch: Boolean = true,
+        var currentReachable: Boolean = true
     ) : EndpointFailover {
         val switchesFrom = mutableListOf<Boolean>()
+        var probes = 0
         override suspend fun hasAlternateUrl(accountId: Long) = hasAlternate
         override fun isUsingFallback(accountId: Long) = onFallback
         override suspend fun switchToOtherEndpoint(accountId: Long, fromFallback: Boolean): Boolean {
@@ -36,6 +38,10 @@ class SyncWithRetryTest {
             if (!canSwitch) return false
             onFallback = !fromFallback
             return true
+        }
+        override suspend fun isCurrentEndpointReachable(accountId: Long): Boolean {
+            probes++
+            return currentReachable
         }
     }
 
@@ -131,20 +137,43 @@ class SyncWithRetryTest {
     }
 
     @Test
-    fun `attempt timeout is a connection failure without full resync`() {
+    fun `slow sync that does not finish in time neither resets SyncKey nor switches server`() {
+        val failover = FakeFailover()
         val calls = mutableListOf<Boolean>()
 
         val ok = runBlocking {
-            syncWithRetry(id, 50L, 50L, allowFullResync = true, tag = "test", failover = null) { forceFull ->
+            syncWithRetry(id, 50L, 50L, allowFullResync = true, tag = "test", failover = failover) { forceFull ->
                 calls += forceFull
                 awaitCancellation()
             }
         }
 
         assertThat(ok).isFalse()
+        // Без полного resync (он начал бы с SyncKey=0) и без ухода на резервный: сервер отвечает, просто долго.
         assertThat(calls).containsExactly(false)
+        assertThat(failover.probes).isEqualTo(1)
+        assertThat(failover.switchesFrom).isEmpty()
         assertThat(health.lastErrorKind).isEqualTo(ErrorKind.Timeout)
         assertThat(health.lastErrorMessage).startsWith("[NET:TIMEOUT]")
+    }
+
+    @Test
+    fun `attempt eaten by connect timeouts of a dead server switches to the backup`() {
+        // Хост с двумя адресами (A + AAAA): OkHttp 4 пробует их по очереди по 30 с — ошибка подключения
+        // не успевает вернуться до конца попытки. Сервер не отвечает и по TCP — это обрыв, а не медленность.
+        val failover = FakeFailover(currentReachable = false)
+        var call = 0
+
+        val ok = runBlocking {
+            syncWithRetry(id, 50L, 1_000L, allowFullResync = true, tag = "test", failover = failover) {
+                if (call++ == 0) awaitCancellation() else EasResult.Success(Unit)
+            }
+        }
+
+        assertThat(ok).isTrue()
+        assertThat(call).isEqualTo(2) // инкрементальная попытка и повтор через резервный, без полного resync
+        assertThat(failover.switchesFrom).containsExactly(false)
+        assertThat(health.isUsingFallback).isTrue()
     }
 
     @Test

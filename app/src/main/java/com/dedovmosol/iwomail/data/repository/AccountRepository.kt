@@ -1,8 +1,6 @@
 package com.dedovmosol.iwomail.data.repository
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.SyncMode
@@ -14,11 +12,8 @@ import com.dedovmosol.iwomail.imap.ImapClient
 import com.dedovmosol.iwomail.pop3.Pop3Client
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Репозиторий для управления аккаунтами Exchange
@@ -35,18 +30,24 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     // L-7: Centralized password storage with security telemetry
     private val passwordStorage = PasswordStorage.getInstance(context)
 
-    // Кэш EAS клиентов для предотвращения утечек памяти
-    // Каждый EasClient создаёт OkHttpClient с connection pool
-    private val easClientCache = ConcurrentHashMap<Long, EasClient>()
-    // Per-account Mutex для атомарного создания EasClient (избегаем computeIfAbsent из-за suspend)
-    private val easClientLocks = ConcurrentHashMap<Long, Mutex>()
-    // Метки времени fallback-клиентов для auto-switchback к primary (10 мин TTL)
-    private val fallbackTimestamps = ConcurrentHashMap<Long, Long>()
-    // Метки инвалидации для уведомления PushService о смене конфигурации клиента
-    private val clientInvalidationTimestamps = ConcurrentHashMap<Long, Long>()
-    private companion object {
-        const val FALLBACK_PROBE_INTERVAL_MS = 10 * 60 * 1000L
-    }
+    // Клиенты EAS по аккаунтам (каждый держит OkHttpClient с пулом соединений) и выбор сервера Dual-URL.
+    private val easClients = EndpointClientCache(object : EndpointClientCache.Backend<EasClient> {
+        override suspend fun endpoints(accountId: Long) = accountDao.getAccount(accountId)?.let {
+            EndpointClientCache.Endpoints(it.serverUrl, it.alternateServerUrl, it.incomingPort)
+        }
+
+        override suspend fun create(accountId: Long, useAlternate: Boolean): EasClient? {
+            val account = accountDao.getAccount(accountId) ?: return null
+            val password = getPassword(accountId) ?: return null
+            return buildEasClient(account, useAlternate, password)
+        }
+
+        override suspend fun isReachable(serverUrl: String, port: Int) = EasClient.probeHost(serverUrl, port)
+
+        // Только INTERNET, без VALIDATED: Exchange в сети организации без выхода в интернет (Android
+        // помечает её «без доступа к интернету») — штатный сценарий Dual-URL; доступность решает проба.
+        override fun hasNetwork() = com.dedovmosol.iwomail.network.NetworkMonitor.isNetworkAvailable(context)
+    })
     
     val accounts: Flow<List<AccountEntity>> = accountDao.getAllAccounts()
     val activeAccount: Flow<AccountEntity?> = accountDao.getActiveAccount()
@@ -102,7 +103,10 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         certificatePath: String? = null,
         clientCertificatePath: String? = null,
         clientCertificatePassword: String? = null,
-        alternateServerUrl: String? = null
+        alternateServerUrl: String? = null,
+        // Подключение уже проверено (экран проверки Exchange сделал FolderSync через основной или
+        // резервный адрес): повторная проверка стоила бы ещё одного таймаута недоступного основного.
+        alreadyVerified: Boolean = false
     ): EasResult<Long> {
         // Проверяем что аккаунт с таким email ещё не добавлен
         val existingAccounts = accountDao.getAllAccountsList()
@@ -110,13 +114,14 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
             return EasResult.Error("ACCOUNT_EXISTS")
         }
         
-        // Проверяем наличие интернета
-        if (!isNetworkAvailable()) {
+        // Есть ли сеть вообще. Не «интернет» (VALIDATED): Exchange в сети организации без выхода в
+        // интернет — штатный случай, его доступность покажет сама проверка подключения.
+        if (!alreadyVerified && !com.dedovmosol.iwomail.network.NetworkMonitor.isNetworkAvailable(context)) {
             return EasResult.Error("NO_INTERNET")
         }
         
         // Проверяем подключение в зависимости от типа
-        val connectionResult: EasResult<Unit> = try {
+        val connectionResult: EasResult<Unit> = if (alreadyVerified) EasResult.Success(Unit) else try {
             when (accountType) {
                 AccountType.EXCHANGE -> {
                     val primaryResult = testExchangeServer(
@@ -289,11 +294,21 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
             }
         }
         
+        // Пин резервного сервера относится к прежнему адресу: другой сервер подтверждается заново.
+        val alternateMoved = com.dedovmosol.iwomail.eas.ServerAddress.key(oldAccount.alternateServerUrl, oldAccount.incomingPort) !=
+            com.dedovmosol.iwomail.eas.ServerAddress.key(account.alternateServerUrl, account.incomingPort)
+        val toSave = if (alternateMoved) CertificatePins.withoutAlternatePin(account) else account
         // Сначала запись, потом сброс кэша и health: иначе параллельный createEasClient успевал
-        // закэшировать клиент из СТАРОЙ строки (основной клиент не истекает — старый адрес жил до
-        // следующей инвалидации), а запросы к старому серверу снова наполняли health.
-        accountDao.update(account)
+        // закэшировать клиент из СТАРОЙ строки, а запросы к старому серверу снова наполняли health
+        // (клиент, который собирается во время сброса, в кэш уже не попадёт — EndpointClientCache).
+        accountDao.update(toSave)
         password?.let { savePassword(account.id, it) }
+        // Предупреждение о смене сертификата сервера, которого в настройках больше нет, снимается
+        // (на оставшемся сервере несовпадение пина обнаружится заново при следующем подключении).
+        val detector = com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector
+        detector.getChange(account.id)?.let { change ->
+            if (CertificatePins.endpointOf(toSave, change.hostname) == null) detector.clearChange(account.id)
+        }
         clearEasClientCache(account.id)
         AccountServerHealthRepository.resetHealth(account.id)
         
@@ -305,9 +320,8 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     }
     
     suspend fun deleteAccount(accountId: Long) {
-        // Очищаем кэшированный клиент
-        clearEasClientCache(accountId)
-        clientInvalidationTimestamps.remove(accountId)
+        // Очищаем кэшированный клиент и выбор сервера
+        easClients.forget(accountId)
         
         // Очищаем кэш PushService (heartbeat и EasClient)
         com.dedovmosol.iwomail.sync.PushService.clearAccountCache(context, accountId)
@@ -468,56 +482,18 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     }
     
     /**
-     * Создаёт или возвращает кэшированный EAS клиент для указанного аккаунта
-     * Кэширование предотвращает создание множества OkHttpClient и утечки памяти
+     * EAS-клиент аккаунта для текущего сервера (основного или резервного) — из кэша или новый.
+     * Кэш и выбор сервера — [EndpointClientCache] (один OkHttp-клиент на аккаунт, без утечек).
      */
-    suspend fun createEasClient(accountId: Long): EasClient? {
-        // Fast path — без блокировки (истёкший резервный клиент разбирается под локом)
-        if (!isFallbackExpired(accountId)) easClientCache[accountId]?.let { return it }
-        
-        // Per-account Mutex: не блокируем другие аккаунты
-        val mutex = easClientLocks.computeIfAbsent(accountId) { Mutex() }
-        return mutex.withLock {
-            val account = accountDao.getAccount(accountId) ?: return@withLock null
-            // Резервный сервер — на FALLBACK_PROBE_INTERVAL_MS, затем возврат на основной. Сначала
-            // TCP-проба основного (без учётных данных): пока он лежит, не тратим на него запрос
-            // (таймаут подключения до 30 с) и остаёмся на резервном ещё интервал.
-            if (isFallbackExpired(accountId)) {
-                if (EasClient.probeHost(account.serverUrl, account.incomingPort)) {
-                    fallbackTimestamps.remove(accountId)
-                    easClientCache.remove(accountId)
-                    clientInvalidationTimestamps[accountId] = System.currentTimeMillis()
-                } else {
-                    fallbackTimestamps[accountId] = System.currentTimeMillis()
-                }
-            }
-            // Double-check под локом: другой поток мог создать клиент пока мы ждали
-            easClientCache[accountId]?.let { return@withLock it }
-            
-            val password = getPassword(accountId) ?: return@withLock null
-            val client = buildEasClient(account, account.serverUrl, password) ?: return@withLock null
-            easClientCache[accountId] = client
-            client
+    suspend fun createEasClient(accountId: Long): EasClient? = easClients.get(accountId)
+
+    /** EasClient аккаунта для основного или резервного сервера: адрес и пин сертификата — свои у каждого. */
+    private fun buildEasClient(account: AccountEntity, useAlternate: Boolean, password: String): EasClient? {
+        val serverUrl = if (useAlternate) {
+            account.alternateServerUrl?.takeIf { it.isNotBlank() } ?: return null
+        } else {
+            account.serverUrl
         }
-    }
-
-    private fun isFallbackExpired(accountId: Long): Boolean {
-        val since = fallbackTimestamps[accountId] ?: return false
-        return System.currentTimeMillis() - since > FALLBACK_PROBE_INTERVAL_MS
-    }
-
-    /** EasClient аккаунта для конкретного сервера (основного или резервного) — DRY для кэша и Dual-URL. */
-    private suspend fun buildEasClient(account: AccountEntity, serverUrl: String, password: String): EasClient? {
-        // Информация о привязанном сертификате для Certificate Pinning
-        val pinnedCertInfo = if (account.pinnedCertificateHash != null && account.certificatePinningEnabled) {
-            com.dedovmosol.iwomail.network.HttpClientProvider.CertificateInfo(
-                hash = account.pinnedCertificateHash,
-                cn = account.pinnedCertificateCN ?: "Unknown",
-                organization = account.pinnedCertificateOrg ?: "Unknown",
-                validFrom = account.pinnedCertificateValidFrom ?: 0L,
-                validTo = account.pinnedCertificateValidTo ?: 0L
-            )
-        } else null
         return try {
             EasClient(
                 serverUrl = serverUrl,
@@ -532,7 +508,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                 certificatePath = account.certificatePath,
                 clientCertificatePath = account.clientCertificatePath,
                 clientCertificatePassword = getClientCertPassword(account.id),
-                pinnedCertInfo = pinnedCertInfo,
+                pinnedCertInfo = CertificatePins.forEndpoint(account, useAlternate),
                 accountId = account.id
             )
         } catch (e: IllegalArgumentException) {
@@ -543,64 +519,39 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     }
 
     /** Dual-URL: аккаунт сейчас работает через резервный сервер. */
-    override fun isUsingFallback(accountId: Long): Boolean = fallbackTimestamps.containsKey(accountId)
+    override fun isUsingFallback(accountId: Long): Boolean = easClients.isUsingFallback(accountId)
+
+    override suspend fun isCurrentEndpointReachable(accountId: Long): Boolean =
+        easClients.isCurrentEndpointReachable(accountId)
 
     /**
      * Dual-URL: переключает аккаунт на ДРУГОЙ сервер — с основного на резервный или, если сбой
      * случился уже на резервном, обратно на основной. Вызывать только при обрыве связи
      * ([com.dedovmosol.iwomail.data.model.isConnectionLevelError]), не при ошибках авторизации.
-     *
-     * Перед переключением — TCP-проба целевого хоста (без учётных данных): недоступный сервер не
-     * тратит попытку синхронизации и не копит неудачные входы в AD. Резервный клиент живёт
-     * [FALLBACK_PROBE_INTERVAL_MS], затем [createEasClient] возвращает основной.
-     *
-     * @param fromFallback на каком сервере случился сбой. Если состояние уже другое — аккаунт
-     *   переключил параллельный вызов: возвращаем true без повторного переключения (без flip-flop).
+     * Перед переключением — TCP-проба целевого сервера (без учётных данных): недоступный сервер не
+     * тратит попытку синхронизации и не копит неудачные входы в AD. Подробности — [EndpointClientCache].
      */
     override suspend fun switchToOtherEndpoint(accountId: Long, fromFallback: Boolean): Boolean {
-        if (isUsingFallback(accountId) != fromFallback) return true
-        val account = accountDao.getAccount(accountId) ?: return false
-        val alternateUrl = account.alternateServerUrl?.takeIf { it.isNotBlank() } ?: return false
-        val targetUrl = if (fromFallback) account.serverUrl else alternateUrl
-        if (!isNetworkAvailable()) return false
-        if (!EasClient.probeHost(targetUrl, account.incomingPort)) return false
-        val password = getPassword(accountId) ?: return false
-
-        // N-7: все мутации кэша — под тем же per-account Mutex, что и в createEasClient. Сеть (проба)
-        // и чтение БД/паролей — выше, вне лока.
-        val mutex = easClientLocks.computeIfAbsent(accountId) { Mutex() }
-        return mutex.withLock {
-            if (isUsingFallback(accountId) != fromFallback) return@withLock true
-            val client = buildEasClient(account, targetUrl, password) ?: return@withLock false
-            val now = System.currentTimeMillis()
-            easClientCache[accountId] = client
-            if (fromFallback) fallbackTimestamps.remove(accountId) else fallbackTimestamps[accountId] = now
-            // PushService держит свой кэш клиентов: метка инвалидации заставит его взять новый.
-            clientInvalidationTimestamps[accountId] = now
+        val switched = easClients.switchToOtherEndpoint(accountId, fromFallback)
+        if (switched && easClients.isUsingFallback(accountId) != fromFallback) {
             android.util.Log.i(
                 "AccountRepository",
                 "Dual-URL: account $accountId switched to ${if (fromFallback) "primary" else "alternate"} server"
             )
-            true
         }
+        return switched
     }
 
     /**
-     * Очищает кэшированный клиент для аккаунта (при удалении или изменении настроек).
-     * Также помечает момент инвалидации, чтобы PushService подхватил изменение.
+     * Сброс клиента и выбора сервера (сменились адреса или учётные данные): следующий запрос пойдёт на
+     * основной. Отметка инвалидации заставит PushService взять новый клиент.
      */
-    fun clearEasClientCache(accountId: Long) {
-        easClientCache.remove(accountId)
-        // N-7: НЕ удаляем per-account Mutex из easClientLocks. Иначе, если он сейчас удерживается
-        // внутри createEasClient/switchToOtherEndpoint, следующий computeIfAbsent создаст ДРУГОЙ
-        // экземпляр Mutex → взаимное исключение нарушается (две корутины в критической секции).
-        // Мьютексы per-account, их немного (по числу аккаунтов) — держать их безопасно и без утечки.
-        fallbackTimestamps.remove(accountId)
-        clientInvalidationTimestamps[accountId] = System.currentTimeMillis()
-    }
+    fun clearEasClientCache(accountId: Long) = easClients.reset(accountId)
 
-    fun getLastClientInvalidation(accountId: Long): Long =
-        clientInvalidationTimestamps[accountId] ?: 0L
+    /** Сменились сертификат или пин: новый клиент для ТОГО ЖЕ сервера (резервный остаётся резервным). */
+    private fun refreshEasClient(accountId: Long) = easClients.refresh(accountId)
+
+    fun getLastClientInvalidation(accountId: Long): Long = easClients.lastInvalidation(accountId)
 
     /**
      * Сохраняет PolicyKey для аккаунта
@@ -639,9 +590,9 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         account?.certificatePath?.let { oldPath ->
             com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(oldPath)
         }
-        // Очищаем кэш клиента чтобы использовался новый сертификат
-        clearEasClientCache(accountId)
+        // Сначала запись, потом новый клиент: собранный в промежутке взял бы старый сертификат
         accountDao.updateCertificatePath(accountId, certificatePath)
+        refreshEasClient(accountId)
     }
     
     /**
@@ -653,9 +604,9 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         account?.clientCertificatePath?.let { oldPath ->
             com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(oldPath)
         }
-        // Очищаем кэш клиента чтобы использовался новый клиентский сертификат
-        clearEasClientCache(accountId)
+        // Сначала запись, потом новый клиент: собранный в промежутке взял бы старый сертификат
         accountDao.updateClientCertificatePath(accountId, clientCertificatePath)
+        refreshEasClient(accountId)
     }
     
     /**
@@ -668,13 +619,13 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
             com.dedovmosol.iwomail.network.HttpClientProvider.clearCertificateCache(certPath)
         }
         
-        // Очищаем кэш клиента чтобы использовался новый пароль
-        clearEasClientCache(accountId)
         if (password != null) {
             saveClientCertPassword(accountId, password)
         } else {
             deleteClientCertPassword(accountId)
         }
+        // Новый клиент — после сохранения пароля (собранный раньше взял бы старый)
+        refreshEasClient(accountId)
     }
     
     /**
@@ -818,19 +769,6 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
     }
     
     /**
-     * Проверяет наличие активного интернет-соединения
-     */
-    private fun isNetworkAvailable(): Boolean {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        
-        val network = connectivityManager.activeNetwork ?: return false
-        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-        
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-               capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-    }
-    
-    /**
      * Выполняет операцию с EasClient, инкапсулируя бойлерплейт-проверки
      * @param accountId ID аккаунта
      * @param exchangeOnlyError Сообщение об ошибке если аккаунт не Exchange
@@ -901,7 +839,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
                 accountDao.updateCertificatePinningEnabled(accountId, true)
                 accountDao.updateCertificatePinningFailCount(accountId, 0)
                 com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.clearChange(accountId)
-                clearEasClientCache(accountId)
+                refreshEasClient(accountId)
                 
                 EasResult.Success(certInfo.hash)
             } catch (e: Exception) {
@@ -917,15 +855,16 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
      */
     suspend fun updatePinnedCertHash(accountId: Long, hash: String?) {
         if (hash == null) {
-            // При отключении защиты очищаем всю информацию
+            // При отключении защиты очищаем всю информацию — у обоих серверов
             accountDao.updatePinnedCertificate(accountId, null, null, null, null, null)
+            accountDao.updateAlternatePinnedCertificate(accountId, null, null, null, null, null)
             accountDao.updateCertificatePinningFailCount(accountId, 0)
             com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.clearChange(accountId)
         } else {
             accountDao.updatePinnedCertHash(accountId, hash)
         }
-        // Очищаем кэш клиента чтобы использовались новые настройки
-        clearEasClientCache(accountId)
+        // Новый клиент с новыми настройками для того же сервера
+        refreshEasClient(accountId)
     }
     
     /**
@@ -948,7 +887,33 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         validTo: Long?
     ) {
         accountDao.updatePinnedCertificate(accountId, hash, cn, org, validFrom, validTo)
-        clearEasClientCache(accountId)
+        refreshEasClient(accountId)
+    }
+
+    /**
+     * Пользователь принял новый сертификат сервера (предупреждение о смене сертификата). Сохраняется в
+     * пин ТОГО сервера, где он обнаружен: резервный не перезаписывает пин основного и наоборот —
+     * иначе при разных сертификатах предупреждение появлялось бы при каждом переключении.
+     */
+    suspend fun acceptChangedCertificate(
+        accountId: Long,
+        change: com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.CertificateChange
+    ) {
+        val account = accountDao.getAccount(accountId) ?: return
+        val cert = change.newCert
+        when (CertificatePins.endpointOf(account, change.hostname)) {
+            CertificatePins.Endpoint.ALTERNATE ->
+                accountDao.updateAlternatePinnedCertificate(accountId, cert.hash, cert.cn, cert.organization, cert.validFrom, cert.validTo)
+            CertificatePins.Endpoint.PRIMARY ->
+                accountDao.updatePinnedCertificate(accountId, cert.hash, cert.cn, cert.organization, cert.validFrom, cert.validTo)
+            // Сервера с таким адресом в настройках уже нет: пинить нечего (иначе сертификат прежнего
+            // сервера стал бы пином основного), предупреждение просто снимается.
+            null -> Unit
+        }
+        accountDao.updateCertificatePinningFailCount(accountId, 0)
+        com.dedovmosol.iwomail.network.HttpClientProvider.CertificateChangeDetector.clearChange(accountId)
+        // Тот же сервер с новым пином: принятый на резервном сертификат сразу работает на резервном.
+        refreshEasClient(accountId)
     }
     
     /**
@@ -963,18 +928,12 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
      */
     suspend fun updateCertificatePinningEnabled(accountId: Long, enabled: Boolean) {
         accountDao.updateCertificatePinningEnabled(accountId, enabled)
-        // Очищаем кэш клиента чтобы использовались новые настройки
-        clearEasClientCache(accountId)
+        // Новый клиент с новыми настройками для того же сервера
+        refreshEasClient(accountId)
     }
     
     suspend fun updateDraftMode(accountId: Long, mode: String) {
         accountDao.updateDraftMode(accountId, mode)
-    }
-
-    suspend fun updateAlternateServerUrl(accountId: Long, url: String?) {
-        accountDao.updateAlternateServerUrl(accountId, url?.takeIf { it.isNotBlank() })
-        clearEasClientCache(accountId)
-        AccountServerHealthRepository.resetHealth(accountId)
     }
 
     override suspend fun hasAlternateUrl(accountId: Long): Boolean {

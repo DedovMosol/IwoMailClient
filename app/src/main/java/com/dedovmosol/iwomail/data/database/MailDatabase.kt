@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
-    version = 43,
+    version = 44,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -226,6 +226,16 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
 
+        /** Пин сертификата резервного сервера (Dual-URL): у основного и резервного — свой. SQL — из schemas/44.json. */
+        private val MIGRATION_43_44 = object : Migration(43, 44) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `alternatePinnedCertificateHash` TEXT")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `alternatePinnedCertificateCN` TEXT")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `alternatePinnedCertificateOrg` TEXT")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `alternatePinnedCertificateValidFrom` INTEGER")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `alternatePinnedCertificateValidTo` INTEGER")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -246,7 +256,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_39_40,
             MIGRATION_40_41,
             MIGRATION_41_42,
-            MIGRATION_42_43
+            MIGRATION_42_43,
+            MIGRATION_43_44
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -385,7 +396,14 @@ data class AccountEntity(
     val certificatePinningEnabled: Boolean = true,  // Можно отключить через UI
     val certificatePinningFailCount: Int = 0,  // Счётчик ошибок подряд
     // Режим черновиков: SERVER (на сервере Exchange) или LOCAL (только в локальной БД)
-    val draftMode: String = DraftMode.SERVER.name
+    val draftMode: String = DraftMode.SERVER.name,
+    // Certificate Pinning резервного сервера (Dual-URL): свой сертификат, подтверждённый пользователем
+    // при первом подключении к резервному. null — резервный проверяется по пину основного.
+    val alternatePinnedCertificateHash: String? = null,
+    val alternatePinnedCertificateCN: String? = null,
+    val alternatePinnedCertificateOrg: String? = null,
+    val alternatePinnedCertificateValidFrom: Long? = null,
+    val alternatePinnedCertificateValidTo: Long? = null
 )
 
 enum class DraftMode {
