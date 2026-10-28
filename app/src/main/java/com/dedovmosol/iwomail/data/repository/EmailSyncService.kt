@@ -2060,7 +2060,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                     try {
                         val bytes = localFile.readBytes()
                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                        val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                        val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
                         dataUrl = "data:$mimeType;base64,$base64"
                     } catch (e: Exception) {
                         android.util.Log.w("EmailSyncService", "mergeDraftBody: failed to read ${att.localPath}: ${e.message}")

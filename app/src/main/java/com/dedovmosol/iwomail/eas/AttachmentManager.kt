@@ -318,25 +318,7 @@ class AttachmentManager(
     private fun getMimeType(fileName: String): String {
         val extension = fileName.substringAfterLast('.', "").lowercase()
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-            ?: when (extension) {
-                "doc" -> "application/msword"
-                "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                "xls" -> "application/vnd.ms-excel"
-                "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                "ppt" -> "application/vnd.ms-powerpoint"
-                "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                "pdf" -> "application/pdf"
-                "txt" -> "text/plain"
-                "jpg", "jpeg" -> "image/jpeg"
-                "png" -> "image/png"
-                "gif" -> "image/gif"
-                "zip" -> "application/zip"
-                "rar" -> "application/x-rar-compressed"
-                "7z" -> "application/x-7z-compressed"
-                "msg" -> "application/vnd.ms-outlook"
-                "eml" -> "message/rfc822"
-                else -> "application/octet-stream"
-            }
+            ?: com.dedovmosol.iwomail.util.attachmentMimeType(null, fileName)
     }
 }
 
