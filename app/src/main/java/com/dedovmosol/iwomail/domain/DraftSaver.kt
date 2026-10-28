@@ -28,8 +28,8 @@ import com.dedovmosol.iwomail.util.referencedContentIds
  * - Нет связи — правка сохраняется на устройстве и заменит серверный черновик при подключении
  *   (EmailEntity.replacesServerId); прежняя версия на сервере не удаляется, пока новая не загружена.
  * - Сервер отказал — прежняя версия остаётся, пользователь получает причину.
- * - Скрытые копии прежней версии не узнать (черновик из Outlook: EAS их не передаёт, EWS не ответил) —
- *   прежняя версия остаётся рядом с новой: удалить её значило бы потерять получателей.
+ * - Скрытые копии черновика из Outlook (EAS их не передаёт) берутся у прежней версии по EWS; не прочитать —
+ *   прежняя версия всё равно заменяется (на сервере не остаётся второго черновика).
  *
  * Вложения, которые редактор не загрузил, в новую версию переносятся (скачиваются перед созданием);
  * скачать нельзя при работающей связи — сохранение не выполняется: новая версия была бы без них.
@@ -130,14 +130,9 @@ class DraftSaver(
         data object SavedOffline : Result
         /** Сервер не принял новый черновик: он сохранён только на устройстве. */
         data object SavedOnDeviceOnly : Result
-        /** Сохранён ([offline] — на устройстве), прежняя версия оставлена: её скрытые копии не узнать. */
-        data class SavedKeepingPrevious(val offline: Boolean) : Result
         /** Не сохранён, прежняя версия цела. [reason] — текст ошибки, [ATTACHMENTS_UNAVAILABLE] или [SERVER_REJECTED]. */
         data class Failed(val reason: String?) : Result
     }
-
-    /** Скрытые копии новой версии и прежние версии, которые удалять нельзя (их скрытые копии не узнать). */
-    private data class BccPlan(val bcc: String?, val keep: Set<String>)
 
     suspend fun save(account: AccountEntity, existingId: String?, content: Content): Result =
         store.exclusive(account.id) { saveExclusive(account, existingId, content) }
@@ -163,15 +158,10 @@ class DraftSaver(
                 !DraftIds.isUnconfirmed(existing.serverId)
             ) {
                 // Скрытые копии не известны (правка черновика из Outlook без связи): пустое поле их не стирает —
-                // их возьмут с заменяемой версии при загрузке. Введённые вдобавок не объединить: заменяемые остаются.
-                val keepPrevious = !content.bccKnown && content.bcc.isNotBlank() && existing.replacesServerId != null
+                // их прочитает загрузка с устройства у заменяемой версии.
                 val bcc = if (content.bccKnown || content.bcc.isNotBlank()) content.bcc else null
                 val updated = store.update(account, existing.serverId, content, bcc, content.body)
                 if (updated is EasResult.Error) return Result.Failed(updated.message)
-                if (keepPrevious) {
-                    store.markReplacing(existing.id, null)
-                    return Result.SavedKeepingPrevious(offline = serverMode)
-                }
                 return if (serverMode) Result.SavedOffline else Result.Saved
             }
             return replace(account, existing, content, online)
@@ -244,28 +234,25 @@ class DraftSaver(
         }
 
         // Прежние версии на сервере, которые заменяет новая: эта (если серверная) и не удалённые раньше.
-        val superseded = (listOfNotNull(old.serverId.takeUnless { oldIsLocal }) + DraftIds.replacedIds(old.replacesServerId))
+        val replaced = (listOfNotNull(old.serverId.takeUnless { oldIsLocal }) + DraftIds.replacedIds(old.replacesServerId))
             .distinct()
-        val plan = planBcc(account, content, superseded, online)
-        val replaced = superseded.filter { it !in plan.keep }
-        val keepsOld = old.serverId in plan.keep
+        val bcc = newVersionBcc(account, content, replaced, online)
 
         if (missing.isNotEmpty()) {
             // Со связью новая версия на сервере была бы без них, а прежняя — удалена.
             if (!serverMode || online) return Result.Failed(ATTACHMENTS_UNAVAILABLE)
-            return keepOnDevice(account, old, content, plan, replaced, restored, missing)
+            return keepOnDevice(account, old, content, bcc, replaced, restored, missing)
         }
 
-        if (!keepsOld) store.protect(old.id)
+        store.protect(old.id)
         val (serverBody, inline) = DraftUpload.inlineImages(content.body, clock())
         val attachments = content.files + inline + restored
-        val newId = store.create(account, newDraft(content, plan.bcc, serverBody, attachments), deviceOnly = !online)
+        val newId = store.create(account, newDraft(content, bcc, serverBody, attachments), deviceOnly = !online)
         if (newId == null) {
             store.unprotect(old.id)
             return Result.Failed(null)
         }
         val newEmailId = "${account.id}_$newId"
-        val kept = plan.keep.isNotEmpty()
 
         if (DraftIds.isLocal(newId) && !DraftIds.isUnconfirmed(newId)) {
             return when {
@@ -273,7 +260,7 @@ class DraftSaver(
                     // Локальный заменил локальный (на сервер не попал ни тот, ни другой).
                     store.markReplacing(newEmailId, DraftIds.replacedMarker(replaced))
                     store.removeLocally(old.id)
-                    if (kept) Result.SavedKeepingPrevious(offline = serverMode) else deviceResult(account, online)
+                    deviceResult(account, online)
                 }
                 // Режим «черновики на устройстве»: серверный черновик заменён локальным; прежние версии удаляются
                 // сейчас (есть связь) или синхронизацией (без связи — не ждём таймаутов).
@@ -284,8 +271,8 @@ class DraftSaver(
                         replaced
                     }
                     store.markReplacing(newEmailId, DraftIds.replacedMarker(failed))
-                    if (keepsOld) store.unprotect(old.id) else if (old.serverId in failed) store.removeLocally(old.id)
-                    if (kept) Result.SavedKeepingPrevious(offline = false) else Result.Saved
+                    if (old.serverId in failed) store.removeLocally(old.id)
+                    Result.Saved
                 }
                 // Сервер отвечает, но не принял: прежняя версия остаётся на сервере, копия на устройстве не нужна.
                 online && store.serverReachable(account.id) -> {
@@ -296,8 +283,8 @@ class DraftSaver(
                 // Нет связи: копия на устройстве заменит серверный черновик при подключении.
                 else -> {
                     store.markReplacing(newEmailId, DraftIds.replacedMarker(replaced))
-                    if (keepsOld) store.unprotect(old.id) else store.removeLocally(old.id)
-                    if (kept) Result.SavedKeepingPrevious(offline = true) else Result.SavedOffline
+                    store.removeLocally(old.id)
+                    Result.SavedOffline
                 }
             }
         }
@@ -317,35 +304,28 @@ class DraftSaver(
         }
         store.markReplacing(newEmailId, DraftIds.replacedMarker(pending))
         if (oldIsLocal || old.serverId in pending) store.removeLocally(old.id)
-        if (keepsOld) store.unprotect(old.id)
 
         // Запись новой версии должна остаться (её могла убрать фоновая синхронизация).
         if (store.draft(newEmailId) == null &&
             !store.hasOtherDraftWithSubject(old.folderId, content.subject, setOf(old.id))
         ) {
-            val record = recordOf(account, old.folderId, newId, content, plan.bcc, attachments.isNotEmpty(), DraftIds.replacedMarker(pending))
+            val record = recordOf(account, old.folderId, newId, content, bcc, attachments.isNotEmpty(), DraftIds.replacedMarker(pending))
             store.restore(record, attachments)
         }
-        return if (kept) Result.SavedKeepingPrevious(offline = false) else Result.Saved
+        return Result.Saved
     }
 
     /**
-     * Скрытые копии черновика из Outlook (EAS их не передаёт) — с прежних версий на сервере; чьи не узнать, те
-     * версии остаются. Без связи на устройстве они остаются неизвестными (null) — их возьмут при загрузке; введённые
-     * вдобавок к неизвестным не объединить — прежние версии остаются.
+     * Скрытые копии новой версии. Черновик из Outlook (EAS их не передаёт): к введённым добавляются скрытые копии
+     * прежних версий, прочитанные по EWS. Не прочитать — прежняя версия всё равно заменяется: оставить её значило бы
+     * второй черновик на каждое сохранение. Без связи — неизвестны (null): их прочитает загрузка с устройства.
      */
-    private suspend fun planBcc(account: AccountEntity, content: Content, superseded: List<String>, online: Boolean): BccPlan {
-        if (content.bccKnown || superseded.isEmpty()) return BccPlan(content.bcc, emptySet())
-        if (!online) {
-            return if (content.bcc.isBlank()) BccPlan(null, emptySet()) else BccPlan(content.bcc, superseded.toSet())
+    private suspend fun newVersionBcc(account: AccountEntity, content: Content, replaced: List<String>, online: Boolean): String? {
+        if (content.bccKnown || replaced.isEmpty()) return content.bcc
+        if (!online) return content.bcc.ifBlank { null }
+        return replaced.fold(content.bcc) { bcc, serverId ->
+            store.serverBcc(account.id, serverId)?.let { mergeRecipients(bcc, it) } ?: bcc
         }
-        var bcc = content.bcc
-        val keep = HashSet<String>()
-        for (serverId in superseded) {
-            val serverBcc = store.serverBcc(account.id, serverId)
-            if (serverBcc == null) keep += serverId else bcc = mergeRecipients(bcc, serverBcc)
-        }
-        return BccPlan(bcc, keep)
     }
 
     /** Без связи и с вложениями, которые не скачать: правка — на устройстве, вложения — ссылками на сервер. */
@@ -353,22 +333,20 @@ class DraftSaver(
         account: AccountEntity,
         old: EmailEntity,
         content: Content,
-        plan: BccPlan,
+        bcc: String?,
         replaced: List<String>,
         restored: List<DraftAttachmentData>,
         missing: List<AttachmentEntity>
     ): Result {
         val (serverBody, inline) = DraftUpload.inlineImages(content.body, clock())
-        val newId = store.create(account, newDraft(content, plan.bcc, serverBody, content.files + inline + restored), deviceOnly = true)
+        val newId = store.create(account, newDraft(content, bcc, serverBody, content.files + inline + restored), deviceOnly = true)
             ?: return Result.Failed(null)
         val newEmailId = "${account.id}_$newId"
         store.carryAttachments(missing, newEmailId)
         store.markReplacing(newEmailId, DraftIds.replacedMarker(replaced))
-        if (old.serverId !in plan.keep) {
-            store.protect(old.id)
-            store.removeLocally(old.id)
-        }
-        return if (plan.keep.isEmpty()) Result.SavedOffline else Result.SavedKeepingPrevious(offline = true)
+        store.protect(old.id)
+        store.removeLocally(old.id)
+        return Result.SavedOffline
     }
 
     private fun deviceResult(account: AccountEntity, online: Boolean): Result = when {

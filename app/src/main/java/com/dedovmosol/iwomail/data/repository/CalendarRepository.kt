@@ -1114,10 +1114,9 @@ class CalendarRepository(private val context: Context) {
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return@withContext EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
 
-                // EAS FileReference содержит ":" (формат "22:2:1")
-                // EWS AttachmentId — длинная base64 строка без ":"
-                // Для EWS (Exchange 2007) нужен EWS GetAttachment, а не EAS ItemOperations
-                if (fileReference.contains(":")) {
+                // EAS FileReference ("22:2:1", от сервера — в URL-кодировке "22%3a2%3a1") — ItemOperations;
+                // EWS AttachmentId (base64) — EWS GetAttachment (Exchange 2007)
+                if (com.dedovmosol.iwomail.eas.isEasFileReference(fileReference)) {
                     easClient.downloadAttachment(fileReference)
                 } else {
                     easClient.downloadDraftAttachment(fileReference)

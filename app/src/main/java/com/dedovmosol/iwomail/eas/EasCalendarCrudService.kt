@@ -681,7 +681,7 @@ class EasCalendarCrudService(
         attachments: List<CalendarAttachmentRef>
     ): EasResult<Boolean> {
         if (attachments.isEmpty()) return EasResult.Success(true)
-        val onServer = if (attachments.any { CalendarAttachmentService.isEasFileReference(it.fileReference) }) {
+        val onServer = if (attachments.any { isEasFileReference(it.fileReference) }) {
             val found = if (isRecurring) findRecurringMasterItemId(subject) else findCalendarItemIdBySubject(subject, startTime)
             val itemId = (found as? EasResult.Success)?.data?.substringBefore("|")
             if (itemId == null) {

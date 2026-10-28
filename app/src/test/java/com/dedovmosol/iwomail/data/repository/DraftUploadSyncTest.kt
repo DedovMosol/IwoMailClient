@@ -115,14 +115,16 @@ class DraftUploadSyncTest {
     }
 
     @Test
-    fun `replaced version whose Bcc cannot be read is kept on the server, not deleted`() = runBlocking<Unit> {
+    fun `replaced version whose Bcc cannot be read is still replaced, not left as a second draft`() = runBlocking<Unit> {
         db.emailDao().insert(draft(DraftIds.newDeviceOnly(), replaces = "5:9", bcc = null))
         coEvery { easClient.findDraftBcc(any(), any()) } returns null
-        coEvery { easClient.createDraft(any(), any(), any(), any(), any(), any(), any()) } returns EasResult.Success("AAMkNEW=")
+        val bcc = slot<String>()
+        coEvery { easClient.createDraft(any(), any(), capture(bcc), any(), any(), any(), any()) } returns EasResult.Success("AAMkNEW=")
 
         service.syncDraftsFull(accountId, folderId)
 
-        assertThat(deletedServerDrafts).isEmpty()
+        assertThat(bcc.captured).isEmpty()
+        assertThat(deletedServerDrafts).containsExactly("5:9" to "AAMkNEW=")
         assertThat(drafts().single().replacesServerId).isNull()
     }
 
@@ -140,23 +142,19 @@ class DraftUploadSyncTest {
     }
 
     @Test
-    fun `device-only mode deletes a replaced version only after learning its Bcc`() = runBlocking<Unit> {
+    fun `device-only mode takes the Bcc it can read from the replaced version, then deletes it`() = runBlocking<Unit> {
         coEvery { accountRepo.getAccount(accountId) } returns AccountEntity(
             id = accountId, email = "me@corp.example", displayName = "Me", serverUrl = "mail.corp.example", username = "me",
             draftMode = com.dedovmosol.iwomail.data.database.DraftMode.LOCAL.name
         )
-        val local = draft(DraftIds.newDeviceOnly(), replaces = "5:9", bcc = null)
+        val local = draft(DraftIds.newDeviceOnly(), replaces = "5:9\n5:8", bcc = null)
         db.emailDao().insert(local)
-        coEvery { easClient.findDraftBcc("5", "5:9") } returns null
-
-        service.syncDraftsFull(accountId, folderId)
-        // Не узнать — прежняя версия с её скрытыми копиями остаётся.
-        assertThat(deletedServerDrafts).isEmpty()
-
         coEvery { easClient.findDraftBcc("5", "5:9") } returns "boss@corp.example"
+        coEvery { easClient.findDraftBcc("5", "5:8") } returns null // не прочитать — не ждём
+
         service.syncDraftsFull(accountId, folderId)
 
-        assertThat(deletedServerDrafts).containsExactly("5:9" to null)
+        assertThat(deletedServerDrafts).containsExactly("5:9" to null, "5:8" to null)
         val record = db.emailDao().getEmail(local.id)!!
         assertThat(record.bcc).isEqualTo("boss@corp.example")
         assertThat(record.replacesServerId).isNull()

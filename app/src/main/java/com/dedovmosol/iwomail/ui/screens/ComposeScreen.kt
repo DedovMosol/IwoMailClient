@@ -1342,8 +1342,6 @@ fun ComposeScreen(
     val draftSavedOnDeviceOnlyMsg = Strings.draftSavedOnDeviceOnly
     val draftServerRejectedMsg = Strings.draftServerRejected
     val draftAttachmentsUnavailableMsg = Strings.draftAttachmentsUnavailable
-    val draftSavedKeepingPreviousMsg = Strings.draftSavedKeepingPrevious
-    val draftSavedOfflineKeepingPreviousMsg = Strings.draftSavedOfflineKeepingPrevious
 
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
@@ -1428,10 +1426,6 @@ fun ComposeScreen(
                     }
                     com.dedovmosol.iwomail.domain.DraftSaver.Result.SavedOnDeviceOnly -> {
                         SafeToast.long(context, draftSavedOnDeviceOnlyMsg)
-                        handleBackNavigation()
-                    }
-                    is com.dedovmosol.iwomail.domain.DraftSaver.Result.SavedKeepingPrevious -> {
-                        SafeToast.long(context, if (result.offline) draftSavedOfflineKeepingPreviousMsg else draftSavedKeepingPreviousMsg)
                         handleBackNavigation()
                     }
                     // Не сохранён: пользователь остаётся в письме, правка цела.

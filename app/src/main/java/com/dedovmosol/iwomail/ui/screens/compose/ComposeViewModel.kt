@@ -917,10 +917,6 @@ class ComposeViewModel(
                         _events.send(ComposeEvent.DraftSavedOnDevice(offline = false))
                         _events.send(ComposeEvent.NavigateBack)
                     }
-                    is DraftSaver.Result.SavedKeepingPrevious -> {
-                        _events.send(ComposeEvent.DraftSavedKeepingPrevious(result.offline))
-                        _events.send(ComposeEvent.NavigateBack)
-                    }
                     is DraftSaver.Result.Failed -> _events.send(ComposeEvent.Error(draftFailureMessage(result.reason)))
                 }
             } catch (e: CancellationException) {

@@ -504,9 +504,6 @@ class CalendarAttachmentService(
         private const val TAG = "CalendarAttachmentSvc"
         private const val MAX_ATTACHMENT_SUPPLEMENT_WINDOWS = 36
 
-        /** EAS FileReference (Sync) содержит ':'; EWS AttachmentId — base64 без ':' (как в downloadCalendarAttachment). */
-        internal fun isEasFileReference(reference: String): Boolean = reference.contains(":")
-
         /** Вложения из attachments-JSON события (формат CalendarXmlParser / attachFilesEws). */
         internal fun parseAttachmentRefs(json: String): List<CalendarAttachmentRef> {
             if (json.isBlank()) return emptyList()

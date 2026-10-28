@@ -80,6 +80,28 @@ class EmailSyncService(
                 kotlin.math.abs(serverDate - localDateReceived) < DRAFT_DEDUP_WINDOW_MS
         }
 
+        /** Окно, в котором копия черновика без темы из EAS Sync считается тем же черновиком, что запись приложения. */
+        const val DRAFT_MIGRATION_WINDOW_MS = 300_000L
+
+        /** Тема без темы: локально "", из EAS Sync — "(No subject)" (элемент Subject не пришёл). */
+        internal fun sameDraftSubject(server: String, local: String): Boolean {
+            fun norm(s: String) = s.trim().takeUnless { it == "(No subject)" }.orEmpty()
+            return norm(server) == norm(local)
+        }
+
+        /**
+         * Запись черновика, созданного приложением (EWS ItemId), для его копии из EAS Sync: та же тема (без темы —
+         * "" и "(No subject)" одно и то же), ближайшая по времени. Без темы — только в окне
+         * [DRAFT_MIGRATION_WINDOW_MS]: иначе тела и вложения двух черновиков без темы поменялись бы местами.
+         * Не нашлась — EAS-копия стала бы вторым черновиком рядом с записью приложения.
+         */
+        internal fun matchAppDraft(eas: EmailEntity, appDrafts: List<EmailEntity>): EmailEntity? {
+            val closest = appDrafts.filter { sameDraftSubject(it.subject, eas.subject) }
+                .minByOrNull { kotlin.math.abs(it.dateReceived - eas.dateReceived) } ?: return null
+            val near = kotlin.math.abs(closest.dateReceived - eas.dateReceived) < DRAFT_MIGRATION_WINDOW_MS
+            return closest.takeIf { near || !sameDraftSubject(eas.subject, "") }
+        }
+
         // КРИТИЧНО: activeSyncs ОБЯЗАН быть общим (companion object / static) для ВСЕХ экземпляров!
         // SyncWorker и PushService создают РАЗНЫЕ экземпляры MailRepository → EmailSyncService.
         // Без общего activeSyncs они могут одновременно синхронизировать одну папку,
@@ -284,11 +306,6 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         return changed
     }
 
-    /** Тема без темы: локально "", из EAS Sync — "(No subject)" (элемент Subject не пришёл). */
-    private fun sameDraftSubject(server: String, local: String): Boolean {
-        fun norm(s: String) = s.trim().takeUnless { it == "(No subject)" }.orEmpty()
-        return norm(server) == norm(local)
-    }
 
     /**
      * Черновики, сохранённые только на устройстве, — на сервер: с вложениями, скрытыми копиями и важностью,
@@ -307,18 +324,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         for (draft in localDrafts) {
             val replaced = com.dedovmosol.iwomail.eas.DraftIds.replacedIds(draft.replacesServerId)
             val stored = withLocalFiles(easClient, attachmentDao.getAttachmentsList(draft.id), folderId, replaced.firstOrNull()) ?: continue
-            // Скрытые копии не известны (правка черновика из Outlook без связи) — с заменяемых версий; чьи не узнать,
-            // те версии остаются: удалить их значило бы потерять получателей.
-            var bcc = draft.bcc
-            val keep = mutableSetOf<String>()
-            if (bcc == null) {
-                var merged = ""
-                for (id in replaced) {
-                    val serverBcc = easClient.findDraftBcc(collectionId, id)
-                    if (serverBcc == null) keep += id else merged = com.dedovmosol.iwomail.util.mergeRecipients(merged, serverBcc)
-                }
-                bcc = merged
-            }
+            // Скрытые копии не известны (правка черновика из Outlook без связи) — с заменяемых версий, что прочитаются.
+            val bcc = draft.bcc ?: bccOfReplaced(easClient, collectionId, replaced)
             val (serverBody, uploadAttachments) = DraftUpload.prepare(
                 draft.body, stored, System.currentTimeMillis()
             ) { att -> att.localPath?.let { java.io.File(it) }?.takeIf { it.exists() }?.readBytes() }
@@ -336,13 +343,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (com.dedovmosol.iwomail.eas.DraftIds.isLocal(newId) &&
                 !com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(newId)
             ) continue
-            val toDelete = replaced.filter { it !in keep }
-            val uploaded = draft.copy(
-                id = "${accountId}_$newId",
-                serverId = newId,
-                bcc = bcc,
-                replacesServerId = com.dedovmosol.iwomail.eas.DraftIds.replacedMarker(toDelete)
-            )
+            val uploaded = draft.copy(id = "${accountId}_$newId", serverId = newId, bcc = bcc)
             database.withTransaction {
                 // delete каскадом удаляет записи вложений — переносим их на новый id
                 emailDao.delete(draft.id)
@@ -355,8 +356,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             DraftSuccessors.record(draft.id, uploaded.id)
             changed = true
             val exclude = newId.takeUnless { com.dedovmosol.iwomail.eas.DraftIds.isLocal(it) }
-            val failed = toDelete.filterNot { deleteServerDraft(accountId, it, exclude) }
-            if (failed.size != toDelete.size) {
+            val failed = replaced.filterNot { deleteServerDraft(accountId, it, exclude) }
+            if (failed.size != replaced.size) {
                 emailDao.updateReplacesServerId(uploaded.id, com.dedovmosol.iwomail.eas.DraftIds.replacedMarker(failed))
             }
         }
@@ -433,8 +434,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val isLocal = com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)
             if (isLocal && serverMode) continue
             // Режим «на устройстве», скрытые копии записи не известны (правка черновика из Outlook без связи): сначала
-            // они — с заменяемых версий; не узнать все — версии не удаляются (попытка — при следующей синхронизации).
-            if (isLocal && draft.bcc == null && !learnBccFromReplaced(accountId, folderId, draft.id, replaced)) continue
+            // они — с заменяемых версий, что прочитаются, потом версии удаляются.
+            if (isLocal && draft.bcc == null) {
+                val client = accountRepo.createEasClient(accountId) ?: continue
+                val collectionId = folderDao.getFolder(folderId)?.serverId ?: folderId.substringAfter("_")
+                emailDao.updateBcc(draft.id, bccOfReplaced(client, collectionId, replaced))
+            }
             val failed = replaced.filterNot { deleteServerDraft(accountId, it, draft.serverId.takeUnless { isLocal }) }
             if (failed.size != replaced.size) {
                 emailDao.updateReplacesServerId(draft.id, com.dedovmosol.iwomail.eas.DraftIds.replacedMarker(failed))
@@ -444,17 +449,16 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         return changed
     }
 
-    /** Скрытые копии всех заменяемых версий — в запись [emailId]; true — узнаны все. */
-    private suspend fun learnBccFromReplaced(accountId: Long, folderId: String, emailId: String, replaced: List<String>): Boolean {
-        val client = accountRepo.createEasClient(accountId) ?: return false
-        val collectionId = folderDao.getFolder(folderId)?.serverId ?: folderId.substringAfter("_")
-        var merged = ""
-        for (id in replaced) {
-            val bcc = client.findDraftBcc(collectionId, id) ?: return false
-            merged = com.dedovmosol.iwomail.util.mergeRecipients(merged, bcc)
-        }
-        emailDao.updateBcc(emailId, merged)
-        return true
+    /**
+     * Скрытые копии заменяемых версий, которые удалось прочитать по EWS (EAS до 16.0 их не передаёт). Не прочитанные
+     * не ждём: версия всё равно заменяется, иначе на сервере остался бы второй черновик.
+     */
+    private suspend fun bccOfReplaced(
+        client: com.dedovmosol.iwomail.eas.EasClient,
+        collectionId: String,
+        replaced: List<String>
+    ): String = replaced.fold("") { merged, id ->
+        client.findDraftBcc(collectionId, id)?.let { com.dedovmosol.iwomail.util.mergeRecipients(merged, it) } ?: merged
     }
 
     /**
@@ -1351,17 +1355,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 if (ewsDrafts.isNotEmpty()) {
                     val remainingEws = ewsDrafts.toMutableList()
                     for (newEas in finalFiltered) {
-                        val matchedEws = remainingEws.firstOrNull { ews ->
-                            ews.subject == newEas.subject &&
-                                    kotlin.math.abs(ews.dateReceived - newEas.dateReceived) < 300_000
-                        } ?: remainingEws.firstOrNull { ews ->
-                            ews.subject == newEas.subject
-                        }
-                        if (matchedEws != null && matchedEws.body.isNotBlank()) {
+                        val matchedEws = matchAppDraft(newEas, remainingEws)
+                        if (matchedEws != null) {
                             remainingEws.remove(matchedEws)
+                            // Тело записи приложения (с картинками) — если есть, иначе из Sync.
+                            val keepsLocalBody = matchedEws.body.isNotBlank()
                             val migratedEmail = newEas.copy(
-                                body = matchedEws.body,
-                                bodyType = matchedEws.bodyType,
+                                body = if (keepsLocalBody) matchedEws.body else newEas.body,
+                                bodyType = if (keepsLocalBody) matchedEws.bodyType else newEas.bodyType,
                                 hasAttachments = matchedEws.hasAttachments || newEas.hasAttachments,
                                 to = if (matchedEws.to.contains("@")) matchedEws.to else newEas.to,
                                 cc = if (matchedEws.cc.contains("@")) matchedEws.cc else newEas.cc,

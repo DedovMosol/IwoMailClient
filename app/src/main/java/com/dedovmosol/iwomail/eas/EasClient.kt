@@ -1138,8 +1138,9 @@ class EasClient(
         destFile: java.io.File
     ): EasResult<java.io.File> = attachmentService.downloadAttachmentToFile(fileReference, destFile)
 
+    /** Вложение черновика: EAS FileReference — ItemOperations, EWS AttachmentId — GetAttachment. */
     suspend fun downloadDraftAttachment(fileReference: String): EasResult<ByteArray> {
-        return if (fileReference.contains(":")) {
+        return if (isEasFileReference(fileReference)) {
             attachmentService.downloadAttachment(fileReference)
         } else {
             draftsService.downloadAttachmentEws(fileReference)

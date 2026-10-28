@@ -411,16 +411,17 @@ class DraftSaverTest {
     }
 
     @Test
-    fun `unknown Bcc that the server cannot tell keeps the previous version instead of losing recipients`() {
+    fun `previous version is replaced, not kept as a second draft, when its Bcc cannot be read`() {
         val old = serverDraft()
-        store.serverBccValue = null // GetItem не ответил или адреса не SMTP
+        store.serverBccValue = null // GetItem не ответил, тема не однозначна или адреса не SMTP
 
         val result = save(old.id, content(bcc = "", bccKnown = false, filesUnchanged = false))
 
-        assertThat(result).isEqualTo(DraftSaver.Result.SavedKeepingPrevious(offline = false))
-        assertThat(store.deleted).isEmpty()
-        assertThat(store.drafts).containsKey(old.id)
-        assertThat(store.protectedIds).doesNotContain(old.id)
+        // аньше прежняя версия оставалась — на каждое сохранение второй черновик.
+        assertThat(result).isEqualTo(DraftSaver.Result.Saved)
+        assertThat(store.created.single().first.bcc).isEmpty()
+        assertThat(store.deleted).containsExactly("5:1" to "AAMkNEW=")
+        assertThat(store.drafts).doesNotContainKey(old.id)
     }
 
     @Test

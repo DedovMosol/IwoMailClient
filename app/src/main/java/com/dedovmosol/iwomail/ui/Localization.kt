@@ -559,12 +559,6 @@ object Strings {
     val draftAttachmentsUnavailable: String @Composable get() = if (isRussian())
         "Не все вложения черновика загружены с сервера — сохранение удалило бы их. Проверьте подключение и повторите"
         else "Not all draft attachments are loaded from the server — saving would remove them. Check the connection and try again"
-    val draftSavedKeepingPrevious: String @Composable get() = if (isRussian())
-        "Черновик сохранён. Прежняя версия оставлена на сервере: её скрытые копии (Bcc) не удалось узнать"
-        else "Draft saved. The previous version is kept on the server: its Bcc recipients could not be read"
-    val draftSavedOfflineKeepingPrevious: String @Composable get() = if (isRussian())
-        "Нет связи с сервером: черновик сохранён на устройстве. Прежняя версия останется на сервере: её скрытые копии (Bcc) не известны"
-        else "No connection to the server: the draft is saved on the device. The previous version stays on the server: its Bcc recipients are unknown"
     val draftAttachmentsNotLoaded: String @Composable get() = if (isRussian())
         "Часть вложений черновика не загружена с сервера — они сохранятся в черновике"
         else "Some draft attachments are not loaded from the server — they will be kept in the draft"

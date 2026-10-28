@@ -23,12 +23,6 @@ sealed class ComposeEvent {
      */
     data class DraftSavedOnDevice(val offline: Boolean) : ComposeEvent()
 
-    /**
-     * Черновик сохранён ([offline] — на устройстве), прежняя версия на сервере оставлена: её скрытые копии (Bcc)
-     * не узнать, а удалить её значило бы потерять получателей.
-     */
-    data class DraftSavedKeepingPrevious(val offline: Boolean) : ComposeEvent()
-
     // Ошибки
 
     /** Общая ошибка операции */

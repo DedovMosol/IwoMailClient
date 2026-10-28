@@ -151,20 +151,39 @@ class LockScreenUiTest {
     }
 
     @Test
-    fun `fingerprint button click requests biometric prompt`() {
+    fun `fingerprint prompt opens by itself once when the lock screen appears`() {
         plantPassword("secret")
-        var requested = false
-        setContent(
-            biometricAvailable = true,
-            biometricEnabled = true,
-            onBiometricRequest = { requested = true }
-        )
+        var requests = 0
+        setContent(biometricAvailable = true, biometricEnabled = true, onBiometricRequest = { requests++ })
+        composeTestRule.waitForIdle()
+
+        // Как в банковских приложениях: сразу «приложите палец», без лишнего нажатия — и только один раз.
+        assertThat(requests).isEqualTo(1)
+        // Биометрия — только запрос промпта; сессия заблокирована до его результата.
+        assertThat(AppLockManager.isLocked()).isTrue()
+    }
+
+    @Test
+    fun `no fingerprint prompt by itself when fingerprint is off or unavailable`() {
+        plantPassword("secret")
+        var requests = 0
+        setContent(biometricAvailable = true, biometricEnabled = false, onBiometricRequest = { requests++ })
+        composeTestRule.waitForIdle()
+
+        assertThat(requests).isEqualTo(0)
+    }
+
+    @Test
+    fun `fingerprint button asks again after the automatic prompt was dismissed`() {
+        plantPassword("secret")
+        var requests = 0
+        setContent(biometricAvailable = true, biometricEnabled = true, onBiometricRequest = { requests++ })
+        composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithContentDescription("Unlock with fingerprint").performClick()
         composeTestRule.waitForIdle()
 
-        assertThat(requested).isTrue()
-        // Биометрия — только запрос промпта; сессия заблокирована до его результата.
+        assertThat(requests).isEqualTo(2)
         assertThat(AppLockManager.isLocked()).isTrue()
     }
 

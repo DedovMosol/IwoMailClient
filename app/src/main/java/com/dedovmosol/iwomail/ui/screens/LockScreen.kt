@@ -19,12 +19,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.Lifecycle
 import com.dedovmosol.iwomail.data.security.AppLockManager
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import com.dedovmosol.iwomail.ui.theme.ThemeButton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -71,10 +74,26 @@ fun LockScreen(
     var passwordVisible by remember { mutableStateOf(false) }
     var isChecking by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+    val fingerprintOffered = biometricEnabled && biometricAvailable
+    // Запрос отпечатка уже показан в этой блокировке. rememberSaveable — чтобы поворот экрана не открыл второй
+    // системный диалог (BiometricPrompt сам переживает смену конфигурации); с разблокировкой экран уходит из
+    // композиции, и следующая блокировка начинает заново.
+    var biometricAutoRequested by rememberSaveable { mutableStateOf(false) }
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
 
-    // Автофокус на поле пароля после первого появления экрана.
+    // Отпечаток разрешён — сразу системный запрос «приложите палец» (как в банковских приложениях), один раз за
+    // блокировку: отменил — пароль или кнопка отпечатка. Флаг из настроек может прийти позже первого кадра —
+    // эффект ждёт его. Диалог показывается только у Activity на экране (RESUMED).
+    LaunchedEffect(fingerprintOffered) {
+        if (!fingerprintOffered || biometricAutoRequested) return@LaunchedEffect
+        lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
+        biometricAutoRequested = true
+        onBiometricRequest()
+    }
+
+    // Автофокус на поле пароля — когда отпечатка нет: иначе клавиатура открылась бы под системным диалогом.
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+        if (!fingerprintOffered) focusRequester.requestFocus()
     }
 
     /** Общая точка проверки пароля (кнопка + IME-действие). Тяжёлый PBKDF2 — на IO. */
@@ -197,7 +216,7 @@ fun LockScreen(
 
             // Кнопка отпечатка: только если пользователь её разрешил И устройство
             // поддерживает биометрию (оба условия проверяются до показа).
-            if (biometricEnabled && biometricAvailable) {
+            if (fingerprintOffered) {
                 Spacer(modifier = Modifier.height(24.dp))
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally
