@@ -143,7 +143,7 @@ class AttachmentLoaderTest {
         val imageBytes = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47) // PNG header
         testFile.writeBytes(imageBytes)
 
-        val email = createEmail(id = "1")
+        val email = createEmail(id = "1", body = """<p>Hi</p><img src="cid:image001">""")
         val attachment = AttachmentEntity(
             id = 1,
             emailId = "1",
@@ -271,7 +271,7 @@ class AttachmentLoaderTest {
         val regularFile = File(tempDir, "document.txt")
         regularFile.writeText("Text content")
 
-        val email = createEmail(id = "1")
+        val email = createEmail(id = "1", body = """<img src="cid:img001">""")
         val attachments = listOf(
             AttachmentEntity(
                 id = 1,
@@ -318,7 +318,7 @@ class AttachmentLoaderTest {
 
     @Test
     fun `loadAttachments respects MAX_INLINE_IMAGES limit (CS-4)`() = runTest {
-        val email = createEmail(id = "1")
+        val email = createEmail(id = "1", body = (0 until 30).joinToString("") { """<img src="cid:cid${it}">""" })
 
         // Создать 25 inline-картинок (лимит 20)
         val attachments = (1..25).map { index ->
@@ -359,7 +359,7 @@ class AttachmentLoaderTest {
         val testFile = File(tempDir, "image.png")
         testFile.writeBytes(byteArrayOf(1, 2, 3))
 
-        val email = createEmail(id = "1")
+        val email = createEmail(id = "1", body = """<img src="cid:img001">""")
         val attachment = AttachmentEntity(
             id = 1,
             emailId = "1",
@@ -553,9 +553,30 @@ class AttachmentLoaderTest {
         assertThat(progressValues).containsExactly(0f, 0.5f, 1f).inOrder()
     }
 
+    @Test
+    fun `inline-flagged file next to a data url picture stays a file, the picture already in the body is embedded`() = runTest {
+        // Синхронизация помечает inline любое вложение с Content-ID; тело черновика — с data:-картинкой.
+        val logo = byteArrayOf(1, 2, 3, 4)
+        val body = """<p>Hi</p><img src="data:image/png;base64,${java.util.Base64.getEncoder().encodeToString(logo)}">"""
+        val pdfFile = File(tempDir, "report.pdf").apply { writeBytes(byteArrayOf(9, 9)) }
+        val logoFile = File(tempDir, "logo.png").apply { writeBytes(logo) }
+        coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(
+            createAttachment(1, pdfFile.absolutePath, isInline = true, contentId = "report@corp"),
+            createAttachment(2, logoFile.absolutePath, isInline = true, contentId = "logo@corp")
+        )
+
+        val result = loader.loadAttachments(
+            AttachmentLoader.AttachmentSource.Draft, createEmail("1", body), null, null, null
+        ) as AttachmentLoader.LoadResult.Success
+
+        // Файл с Content-ID не спрятан (иначе пропал бы при пересохранении); картинка — уже в теле, не файл.
+        assertThat(result.fileAttachments.map { it.name }).containsExactly("file1.txt")
+        assertThat(result.embeddedImages.keys).containsExactly("logo@corp")
+    }
+
     // ========== Helper Functions ==========
 
-    private fun createEmail(id: String): EmailEntity {
+    private fun createEmail(id: String, body: String = "Test Body"): EmailEntity {
         return EmailEntity(
             id = id,
             accountId = 1,
@@ -564,7 +585,7 @@ class AttachmentLoaderTest {
             from = "sender@example.com",
             to = "recipient@example.com",
             subject = "Test Subject",
-            body = "Test Body",
+            body = body,
             dateReceived = System.currentTimeMillis(),
             read = false,
             flagged = false,

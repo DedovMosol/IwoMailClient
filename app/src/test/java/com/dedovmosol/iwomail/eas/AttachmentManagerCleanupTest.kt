@@ -51,7 +51,7 @@ class AttachmentManagerCleanupTest {
         val oldInline = fileIn(cacheRoot, "calendar_inline", "old.bin", eightDaysMs)
         val recentInline = fileIn(cacheRoot, "calendar_inline", "recent.bin", 0L)
 
-        AttachmentManager.cleanupOldAttachments(context())
+        AttachmentManager.cleanupOldAttachments(context(), draftFilesInUse = emptySet())
 
         assertThat(oldCache.exists()).isFalse()
         assertThat(oldReply.exists()).isFalse()
@@ -63,8 +63,24 @@ class AttachmentManagerCleanupTest {
     }
 
     @Test
+    fun `draft files that records point to are never removed by age, unknown records keep the whole draft dir`() {
+        // Вложение черновика на устройстве — единственная копия: через неделю оно не должно пропасть.
+        val inUse = fileIn(filesRoot, "draft_attachments", "report.pdf", eightDaysMs)
+        val orphan = fileIn(filesRoot, "draft_attachments", "orphan.pdf", eightDaysMs)
+
+        AttachmentManager.cleanupOldAttachments(context(), draftFilesInUse = setOf(inUse.absolutePath))
+
+        assertThat(inUse.exists()).isTrue()
+        assertThat(orphan.exists()).isFalse()
+
+        val unknown = fileIn(filesRoot, "draft_attachments", "unknown.pdf", eightDaysMs)
+        AttachmentManager.cleanupOldAttachments(context(), draftFilesInUse = null)
+        assertThat(unknown.exists()).isTrue()
+    }
+
+    @Test
     fun `missing dirs are a safe no-op`() {
         // Каталоги не создаём — вызов не должен бросать исключений.
-        AttachmentManager.cleanupOldAttachments(context())
+        AttachmentManager.cleanupOldAttachments(context(), draftFilesInUse = emptySet())
     }
 }

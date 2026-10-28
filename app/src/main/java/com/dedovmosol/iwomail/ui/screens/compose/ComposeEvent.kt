@@ -17,6 +17,18 @@ sealed class ComposeEvent {
     /** Черновик сохранён */
     data object DraftSaved : ComposeEvent()
 
+    /**
+     * Черновик сохранён только на устройстве: [offline] — нет связи с сервером (загрузится при подключении),
+     * иначе сервер не принял новый черновик.
+     */
+    data class DraftSavedOnDevice(val offline: Boolean) : ComposeEvent()
+
+    /**
+     * Черновик сохранён ([offline] — на устройстве), прежняя версия на сервере оставлена: её скрытые копии (Bcc)
+     * не узнать, а удалить её значило бы потерять получателей.
+     */
+    data class DraftSavedKeepingPrevious(val offline: Boolean) : ComposeEvent()
+
     // Ошибки
 
     /** Общая ошибка операции */

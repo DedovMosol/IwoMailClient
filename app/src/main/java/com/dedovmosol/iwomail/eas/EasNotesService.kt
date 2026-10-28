@@ -714,7 +714,7 @@ class EasNotesService internal constructor(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("NOT", "syncNotesEws: EXCEPTION ${e.message}", e)
-            EasResult.Error("EWS: ошибка синхронизации заметок: ${e.message}")
+            EasResult.Error("EWS: ошибка синхронизации заметок: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     
@@ -909,7 +909,7 @@ class EasNotesService internal constructor(
             EasResult.Success(EwsClient.isEwsSuccessOrNotFound(responseXml))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка EWS: ${e.message}")
+            EasResult.Error("Ошибка EWS: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -967,7 +967,7 @@ $itemIdsXml
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка batch EWS notes: ${e.message}")
+            EasResult.Error("Ошибка batch EWS notes: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     

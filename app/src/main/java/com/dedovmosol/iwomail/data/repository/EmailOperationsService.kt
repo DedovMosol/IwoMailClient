@@ -30,6 +30,9 @@ class EmailOperationsService(
     private val moveItemsStatusRegex = Regex("status=(\\d+)")
     private val previewWhitespaceRegex = Regex("\\s+")
 
+    /** Тело из ItemOperations (TruncationSize = 1 МиБ) меньше этого — точно не обрезано. */
+    private val EAS_COMPLETE_BODY_BYTES = 1_040_000
+
     private fun toEwsFolderType(folderType: Int?): String? = when (folderType) {
         FolderType.INBOX -> "inbox"
         FolderType.SENT_ITEMS -> "sentitems"
@@ -365,28 +368,57 @@ class EmailOperationsService(
         return EasResult.Error("Загрузка тела не поддерживается для этого типа аккаунта")
     }
 
+    /** Что узнали о серверном черновике при открытии: тело для редактора и скрытые копии (null — нет новых данных). */
+    data class DraftRefresh(val body: String?, val bcc: String?)
+
     /**
-     * Тело серверного черновика перед редактированием — с сервера, по точному идентификатору: EWS
-     * ItemId → GetItem, EAS ServerId → ItemOperations Fetch. Без поиска по теме (fallback из
-     * [loadEmailBody] мог бы вернуть чужой черновик с той же темой). Синхронизация могла сохранить тело
-     * обрезанным или устаревшим, а сохранение такого тела перезаписало бы полное на сервере.
-     * Свежее тело записывается в БД; null — получить не удалось (остаётся сохранённое).
+     * Серверный черновик перед редактированием: свежее тело и скрытые копии, по точному идентификатору.
+     * Синхронизация могла сохранить тело обрезанным или устаревшим, а сохранение такого тела
+     * перезаписало бы полное на сервере; скрытые копии EAS до 16.0 не передаёт вовсе.
+     *
+     * - EWS ItemId → GetItem (тело, Bcc, время изменения).
+     * - EAS ServerId → ItemOperations Fetch; EWS GetItem — если тело не пришло (Exchange 2007 для
+     *   черновиков отдаёт пустое), скрытые копии не известны или версии расходятся. EWS-id для EAS-id —
+     *   только по однозначной теме (иначе можно открыть чужой черновик).
+     *
+     * Выбор тела — [DraftBodies.choose]; найденное записывается в БД. null — черновик не серверный или
+     * сервер недоступен (остаётся сохранённое).
      */
-    suspend fun refreshDraftBody(emailId: String): String? {
+    suspend fun refreshServerDraft(emailId: String): DraftRefresh? {
         val email = emailDao.getEmail(emailId) ?: return null
         val serverId = email.serverId
         if (serverId.isBlank() || com.dedovmosol.iwomail.eas.DraftIds.isLocal(serverId)) return null
         val client = accountRepo.createEasClient(email.accountId) ?: return null
-        val fresh = if (com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(serverId)) {
-            (client.getDraftBody(serverId) as? EasResult.Success)?.data
+
+        var details: com.dedovmosol.iwomail.eas.EwsDraftXml.DraftDetails? = null
+        val serverBody: String?
+        if (com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(serverId)) {
+            details = (client.getDraftDetails(serverId) as? EasResult.Success)?.data
+            serverBody = details?.body
         } else {
-            (client.fetchEmailBodyWithMdn(email.folderId.substringAfter("_"), serverId, fetchMimeHeaders = false)
-                as? EasResult.Success)?.data?.body
+            // ItemOperations отдаёт тело не больше 1 МиБ (TruncationSize запроса): у самой границы оно, возможно,
+            // обрезано — тогда только тело из EWS (без ограничения), иначе сохранённое. Обрезанное сервером
+            // (Truncated, в том числе политикой ActiveSync) или текстовая замена HTML — тоже не тело черновика.
+            val easBody = (client.fetchEmailBodyWithMdn(email.folderId.substringAfter("_"), serverId, fetchMimeHeaders = false)
+                as? EasResult.Success)?.data?.takeIf { it.complete }?.body?.takeIf { it.isNotBlank() }
+                ?.takeIf { it.toByteArray(Charsets.UTF_8).size < EAS_COMPLETE_BODY_BYTES }
+            if (easBody == null || email.bcc == null || DraftBodies.differ(email.body, easBody)) {
+                details = client.findUniqueDraftItemIdBySubject(email.subject)
+                    ?.let { (client.getDraftDetails(it) as? EasResult.Success)?.data }
+            }
+            serverBody = details?.body?.takeIf { it.isNotBlank() } ?: easBody
         }
-        val body = fresh?.takeIf { it.isNotBlank() } ?: return null
+
+        val body = DraftBodies.choose(email.body, email.dateReceived, serverBody, details?.lastModified)
         // В БД — только помещающееся в строку (окно курсора 2 МБ), иначе черновик не прочитать вовсе.
-        if (body.length <= DraftUpload.MAX_LOCAL_BODY_CHARS) emailDao.updateBody(emailId, body)
-        return body
+        if (body != null && body.length <= DraftUpload.MAX_LOCAL_BODY_CHARS) emailDao.updateBody(emailId, body)
+        // Скрытые копии с сервера: сохранённых нет — или на сервере их изменили позже (Outlook), иначе следующее
+        // сохранение вернуло бы прежние.
+        val bcc = details?.bcc?.takeIf {
+            it != email.bcc && (email.bcc == null || DraftBodies.serverIsNewer(email.dateReceived, details.lastModified))
+        }
+        if (bcc != null) emailDao.updateBcc(emailId, bcc)
+        return DraftRefresh(body, bcc)
     }
 
     private fun cachedBodyMatchesPreview(preview: String, body: String): Boolean {
@@ -870,7 +902,7 @@ class EmailOperationsService(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Delete error: ${e.message}")
+            EasResult.Error("Delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -1113,7 +1145,7 @@ class EmailOperationsService(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Delete error: ${e.message}")
+            EasResult.Error("Delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 

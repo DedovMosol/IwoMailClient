@@ -128,31 +128,6 @@ internal fun extractInlineImageAttachments(
 ): Pair<String, List<com.dedovmosol.iwomail.eas.DraftAttachmentData>> =
     com.dedovmosol.iwomail.data.repository.DraftUpload.inlineImages(html, System.currentTimeMillis(), knownCids)
 
-/** Роль вложения черновика, открытого на редактирование. */
-internal enum class DraftAttachmentRole {
-    /** Картинка в тексте: тело ссылается на неё через cid:. */
-    INLINE,
-    /** Картинка уже встроена в тело как data: URL — повторно не нужна. */
-    EMBEDDED,
-    /** Обычное вложение. */
-    FILE
-}
-
-/**
- * Inline — только картинка, на которую ссылается тело (cid:, без учёта регистра). Вложение с Content-ID
- * без ссылки в теле (Outlook и Apple Mail ставят его и обычным файлам) — файл: иначе при пересохранении
- * черновика оно пропало бы. Помеченная inline картинка без ссылки при встроенных data:-картинках —
- * уже в теле.
- */
-internal fun draftAttachmentRole(body: String, contentId: String?, isInline: Boolean): DraftAttachmentRole {
-    val cid = contentId?.removeSurrounding("<", ">")?.takeIf { it.isNotBlank() }
-    return when {
-        cid != null && body.contains("cid:$cid", ignoreCase = true) -> DraftAttachmentRole.INLINE
-        isInline && body.contains("data:image", ignoreCase = true) -> DraftAttachmentRole.EMBEDDED
-        else -> DraftAttachmentRole.FILE
-    }
-}
-
 /**
  * Нормализует строку получателей: разбивает по запятым/точкам с запятой, извлекает валидные
  * email-адреса (в т.ч. из формата "Name <email>"), убирает дубликаты. Токены групп [GroupName]

@@ -289,3 +289,12 @@ fun stripHtml(html: String): String {
         .replace(WHITESPACE_REGEX, " ")
         .trim()
 }
+
+/** Адреса через запятую: объединение без повторов (без учёта регистра), порядок — как введено. */
+fun mergeRecipients(typed: String, fromServer: String?): String {
+    val seen = HashSet<String>()
+    return (typed.split(',', ';') + fromServer.orEmpty().split(',', ';'))
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && seen.add(it.lowercase(java.util.Locale.ROOT)) }
+        .joinToString(", ")
+}

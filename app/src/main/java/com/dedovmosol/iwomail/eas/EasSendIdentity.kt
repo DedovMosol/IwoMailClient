@@ -20,3 +20,14 @@ internal fun buildStableMessageId(clientId: String?, deviceId: String): String =
  * Единый формат гарантирует, что токен совпадает во всех путях отправки (с вложениями и без).
  */
 internal fun freshSendToken(): String = "${System.currentTimeMillis()}.${System.nanoTime()}"
+
+/**
+ * MIME-тип inline-картинки по подтипу из data URL (`data:image/<подтип>;base64,…`). «jpg» — не
+ * зарегистрированный тип (IANA: image/jpeg), почтовые клиенты на него не полагаются. Общий для обоих
+ * путей отправки (с вложениями и без) — DRY.
+ */
+internal fun inlineImageMimeType(subtype: String): String =
+    when (val normalized = subtype.trim().lowercase(java.util.Locale.ROOT)) {
+        "jpg", "pjpeg" -> "image/jpeg"
+        else -> "image/$normalized"
+    }

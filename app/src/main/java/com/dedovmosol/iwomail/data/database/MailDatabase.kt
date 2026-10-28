@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
-    version = 45,
+    version = 46,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -243,6 +243,13 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `emails` ADD COLUMN `bcc` TEXT")
             }
         }
+
+        /** Черновик, заменяющий серверный (правка без связи): прежний удаляется после загрузки нового. SQL — из schemas/46.json. */
+        private val MIGRATION_45_46 = object : Migration(45, 46) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `replacesServerId` TEXT")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -265,7 +272,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_41_42,
             MIGRATION_42_43,
             MIGRATION_43_44,
-            MIGRATION_44_45
+            MIGRATION_44_45,
+            MIGRATION_45_46
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -489,7 +497,11 @@ data class EmailEntity(
     val internetMessageId: String? = null, // RFC 5322 Message-ID для корреляции MDN
     // Скрытые копии черновика. null — не известны: EAS до 16.0 не передаёт Bcc, черновик из Outlook
     // приходит без них, и на сервере их тогда не трогаем. "" — известно, что скрытых копий нет.
-    val bcc: String? = null
+    val bcc: String? = null,
+    // Черновик заменяет серверный черновик с этим ServerId/ItemId (правка сохранена без связи или прежний
+    // не удалось удалить): после загрузки этого черновика прежний удаляется на сервере, до того —
+    // не показывается, даже если синхронизация пришлёт его снова. null — ничего не заменяет.
+    val replacesServerId: String? = null
 )
 
 data class EmailDedupInfo(

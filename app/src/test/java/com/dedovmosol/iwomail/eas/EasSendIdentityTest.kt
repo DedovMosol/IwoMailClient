@@ -58,3 +58,13 @@ class EasSendIdentityTest {
         assertThat(inner).matches("\\d+\\.\\d+")
     }
 }
+
+class InlineImageMimeTypeTest {
+    @org.junit.Test
+    fun `jpg from a data url is sent as the registered image-jpeg type`() {
+        com.google.common.truth.Truth.assertThat(inlineImageMimeType("jpg")).isEqualTo("image/jpeg")
+        com.google.common.truth.Truth.assertThat(inlineImageMimeType("JPEG")).isEqualTo("image/jpeg")
+        com.google.common.truth.Truth.assertThat(inlineImageMimeType("webp")).isEqualTo("image/webp")
+        com.google.common.truth.Truth.assertThat(inlineImageMimeType(" png ")).isEqualTo("image/png")
+    }
+}

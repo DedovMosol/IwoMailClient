@@ -1230,7 +1230,12 @@ fun EmailDetailScreen(
                 }
 
                 // Вложения (исключаем inline изображения)
-                val visibleAttachments = attachments.filter { !it.isInline }
+                val visibleAttachments = attachments.filter { att ->
+                    !com.dedovmosol.iwomail.ui.screens.emaildetail.isShownInBody(
+                        att.contentId, att.displayName, att.isInline,
+                        uiState.inlineContentIds, inlineImages, uiState.isLoadingInlineImages
+                    )
+                }
                 if (visibleAttachments.isNotEmpty()) {
                     AttachmentsSection(
                         attachments = visibleAttachments,

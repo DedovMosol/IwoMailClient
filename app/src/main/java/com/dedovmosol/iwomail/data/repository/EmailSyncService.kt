@@ -25,6 +25,9 @@ class EmailSyncService(
     private val accountDao: AccountDao,
     private val accountRepo: AccountRepository,
     private val database: MailDatabase,
+    /** далить серверный черновик (true — удалён на сервере): прежние версии заменённых черновиков. */
+    private val deleteServerDraft: suspend (accountId: Long, serverId: String, excludeServerId: String?) -> Boolean =
+        { _, _, _ -> false },
     private val onNameResolved: ((email: String, name: String) -> Unit)? = null
 ) {
     // Данные сохранённых тел черновиков (для восстановления при full resync)
@@ -33,7 +36,8 @@ class EmailSyncService(
         val dateReceived: Long, val to: String, val cc: String,
         val from: String, val fromName: String,
         val attachments: List<AttachmentEntity>,
-        val bcc: String? = null
+        val bcc: String? = null,
+        val replacesServerId: String? = null
     )
 
     // Результат обработки новых писем из одного батча Sync
@@ -106,7 +110,8 @@ class EmailSyncService(
             val from: String, val fromName: String,
             val attachments: List<AttachmentEntity>,
             val timestamp: Long = System.currentTimeMillis(),
-            val bcc: String? = null
+            val bcc: String? = null,
+            val replacesServerId: String? = null
         )
         // Key = "${accountId}_${subject}" для матча по subject (serverId меняется).
         private val pendingDraftRestores = java.util.concurrent.ConcurrentHashMap<String, PendingDraftRestore>()
@@ -136,6 +141,10 @@ class EmailSyncService(
 
         fun registerDeletedEmail(emailId: String, context: Context? = null) =
             deletedTracker.register(emailId, context)
+
+        /** Снять защиту: черновик не был заменён (сохранение не удалось) — синхронизация снова его видит. */
+        fun unregisterDeletedEmail(emailId: String, context: Context? = null) =
+            deletedTracker.remove(emailId, context)
 
         fun isDeletedByUser(emailId: String): Boolean =
             deletedTracker.isTracked(emailId)
@@ -199,106 +208,254 @@ class EmailSyncService(
      * Загружает локальные черновики на сервер при появлении интернета
      */
 suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditCheck: Boolean = false): EasResult<Int> {
-    // 1. СНАЧАЛА синхронизируем черновики с сервера.
-    // Это КРИТИЧНО для предотвращения дубликатов:
-    // Если createDraftMime() создал черновик на сервере, но ItemId не удалось извлечь
-    // (→ local_draft_ fallback), синхронизация найдёт серверный черновик
-    // и миграция EWS→EAS обработает его. Только ПОСЛЕ этого загружаем
-    // оставшиеся local_draft_ записи (действительно оффлайн-черновики).
+    // 1. СНАЧАЛА изменения с сервера: черновик, созданный без подтверждения id (DraftIds.newUnconfirmed),
+    // уже там — синхронизация его принесёт, и локальная копия окажется лишней.
     val syncResult = syncEmailsEas(accountId, folderId, skipRecentEditCheck = skipRecentEditCheck)
+    // Сервер не ответил (сбой связи): загрузку и удаление не пробуем — они ждали бы таймаутов, а сохранение
+    // черновика с экрана письма — замка.
+    val unreachable = (syncResult as? EasResult.Error)
+        ?.let { com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(it.message)?.connectionLevel } == true
 
-    // 2. Найти оставшиеся локальные черновики (созданные без интернета)
-    val localDrafts = emailDao.getEmailsByFolderList(folderId)
-        .filter { it.serverId.startsWith("local_draft_") }
-
-    // 3. Перед загрузкой проверяем: нет ли на сервере черновика с таким же subject?
-    // createDraftMime() мог успешно создать черновик, но парсинг ответа не удался.
-    // В этом случае sync (шаг 1) уже нашёл серверный черновик.
-    // Если local_draft_ имеет совпадение по subject — удаляем как дубликат.
-    if (localDrafts.isNotEmpty()) {
-        val allDrafts = emailDao.getEmailsByFolderList(folderId)
-        val serverDrafts = allDrafts.filter { !it.serverId.startsWith("local_draft_") }
-
-        val trulyLocalDrafts = localDrafts.filter { localDraft ->
-            val hasServerMatch = isDraftDuplicate(
-                localSubject = localDraft.subject,
-                localDateReceived = localDraft.dateReceived,
-                serverDrafts = serverDrafts.map { it.subject to it.dateReceived }
-            )
-            if (hasServerMatch) {
-                // Дубликат: черновик уже на сервере (sync нашёл его).
-                // Удаляем local_draft_ запись.
-                try {
-                    attachmentDao.deleteByEmail(localDraft.id)
-                    emailDao.delete(localDraft.id)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                }
-                false // Не загружаем
-            } else {
-                true // Действительно оффлайн-черновик — загружаем
+    // 2–4 под замком аккаунта: экран письма загружает и заменяет черновики тем же путём (без дублей).
+    DraftUploadLock.withLock(accountId) {
+        val account = accountRepo.getAccount(accountId)
+        val serverMode = try {
+            DraftMode.valueOf(account?.draftMode ?: DraftMode.SERVER.name) != DraftMode.LOCAL
+        } catch (_: Exception) {
+            true
+        }
+        var changed = dropLocalCopiesAlreadyOnServer(folderId)
+        if (!unreachable) {
+            // Сначала прежние версии, не удалённые раньше, потом загрузка: только что загруженный черновик удаляет
+            // заменённые им сам — повторная попытка в тот же проход была бы лишним запросом.
+            changed = deleteReplacedServerDrafts(accountId, folderId, serverMode) || changed
+            if (serverMode && folderDao.getFolder(folderId) != null) {
+                changed = uploadLocalDrafts(accountId, folderId) || changed
             }
         }
+        if (changed) {
+            val totalCount = emailDao.getCountByFolder(folderId)
+            val unreadCount = emailDao.getUnreadCount(folderId)
+            folderDao.updateCounts(folderId, unreadCount, totalCount)
+        }
+    }
+    return syncResult
+}
 
-        // Проверяем draftMode: если LOCAL — НЕ загружаем на сервер
-        val account = accountRepo.getAccount(accountId)
-        val draftMode = try {
-            DraftMode.valueOf(account?.draftMode ?: DraftMode.SERVER.name)
-        } catch (_: Exception) { DraftMode.SERVER }
+    /**
+     * Локальная копия черновика, который уже на сервере, удаляется. Только если черновик МОГ попасть на
+     * сервер (DraftIds.mayExistOnServer): успех без id — по теме, прежний формат id — по теме и дате (как
+     * раньше). Черновик «только на устройстве» по теме не удаляется: совпадение темы с серверным — не
+     * дубликат (правка без связи, тот же «Re: …»). Отметка «заменяет» переходит на серверную запись.
+     */
+    private suspend fun dropLocalCopiesAlreadyOnServer(folderId: String): Boolean {
+        val locals = emailDao.getLocalDrafts(folderId).filter { com.dedovmosol.iwomail.eas.DraftIds.mayExistOnServer(it.serverId) }
+        if (locals.isEmpty()) return false
+        // Серверные — без тел (тело черновика бывает до 1 млн символов): нужны тема и дата.
+        val serverDrafts = emailDao.getDedupInfoByFolder(folderId).filter { !com.dedovmosol.iwomail.eas.DraftIds.isLocal(it.serverId) }
+        if (serverDrafts.isEmpty()) return false
+        var changed = false
+        for (local in locals) {
+            val match = serverDrafts.firstOrNull { server ->
+                sameDraftSubject(server.subject, local.subject) && (
+                    com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(local.serverId) ||
+                        isDraftDuplicate(local.subject, local.dateReceived, listOf(server.subject to server.dateReceived))
+                    )
+            } ?: continue
+            try {
+                if (local.replacesServerId != null) {
+                    val current = emailDao.getEmail(match.id)?.replacesServerId
+                    emailDao.updateReplacesServerId(
+                        match.id,
+                        com.dedovmosol.iwomail.eas.DraftIds.mergeReplaced(current, local.replacesServerId, except = match.serverId)
+                    )
+                }
+                val files = attachmentDao.getAttachmentsList(local.id).mapNotNull { it.localPath }
+                attachmentDao.deleteByEmail(local.id)
+                emailDao.delete(local.id)
+                files.forEach { path -> try { java.io.File(path).delete() } catch (_: Exception) {} }
+                // Черновик мог быть открыт в редакторе: его сохранение найдёт серверную запись.
+                DraftSuccessors.record(local.id, match.id)
+                changed = true
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            }
+        }
+        return changed
+    }
 
-        if (trulyLocalDrafts.isNotEmpty() && draftMode != DraftMode.LOCAL) {
-            val easClient = accountRepo.createEasClient(accountId)
-            if (easClient != null) {
-                if (folderDao.getFolder(folderId) != null) {
-                    for (draft in trulyLocalDrafts) {
-                        // С вложениями, скрытыми копиями и важностью — как при сохранении с экрана письма.
-                        val stored = attachmentDao.getAttachmentsList(draft.id)
-                        val (serverBody, uploadAttachments) = DraftUpload.prepare(
-                            draft.body, stored, System.currentTimeMillis()
-                        ) { att -> att.localPath?.let { java.io.File(it) }?.takeIf { it.exists() }?.readBytes() }
-                        val result = easClient.createDraft(
-                            to = draft.to,
-                            cc = draft.cc,
-                            bcc = draft.bcc.orEmpty(),
-                            subject = draft.subject,
-                            body = serverBody,
-                            attachments = uploadAttachments,
-                            importance = draft.importance
-                        )
+    /** Тема без темы: локально "", из EAS Sync — "(No subject)" (элемент Subject не пришёл). */
+    private fun sameDraftSubject(server: String, local: String): Boolean {
+        fun norm(s: String) = s.trim().takeUnless { it == "(No subject)" }.orEmpty()
+        return norm(server) == norm(local)
+    }
 
-                        when (result) {
-                            is EasResult.Success -> {
-                                val serverItemId = result.data
-                                if (!serverItemId.startsWith("local_draft_")) {
-                                    val updatedEmail = draft.copy(
-                                        id = "${accountId}_${serverItemId}",
-                                        serverId = serverItemId
-                                    )
-                                    database.withTransaction {
-                                        // delete каскадом удаляет записи вложений — переносим их на новый id
-                                        emailDao.delete(draft.id)
-                                        emailDao.insert(updatedEmail)
-                                        if (stored.isNotEmpty()) {
-                                            attachmentDao.insertAll(stored.map { it.copy(id = 0, emailId = updatedEmail.id) })
-                                        }
-                                    }
-                                }
-                            }
-                            is EasResult.Error -> {}
+    /**
+     * Черновики, сохранённые только на устройстве, — на сервер: с вложениями, скрытыми копиями и важностью,
+     * как при сохранении с экрана письма. Вложения, перенесённые ссылкой на сервер (правка без связи), сначала
+     * скачиваются; не вышло — черновик ждёт следующей синхронизации. После загрузки заменённый серверный
+     * черновик (replacesServerId) удаляется по его id.
+     */
+    private suspend fun uploadLocalDrafts(accountId: Long, folderId: String): Boolean {
+        val localDrafts = emailDao.getLocalDrafts(folderId).filter {
+            !com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(it.serverId)
+        }
+        if (localDrafts.isEmpty()) return false
+        val easClient = accountRepo.createEasClient(accountId) ?: return false
+        val collectionId = folderDao.getFolder(folderId)?.serverId ?: folderId.substringAfter("_")
+        var changed = false
+        for (draft in localDrafts) {
+            val replaced = com.dedovmosol.iwomail.eas.DraftIds.replacedIds(draft.replacesServerId)
+            val stored = withLocalFiles(easClient, attachmentDao.getAttachmentsList(draft.id), folderId, replaced.firstOrNull()) ?: continue
+            // Скрытые копии не известны (правка черновика из Outlook без связи) — с заменяемых версий; чьи не узнать,
+            // те версии остаются: удалить их значило бы потерять получателей.
+            var bcc = draft.bcc
+            val keep = mutableSetOf<String>()
+            if (bcc == null) {
+                var merged = ""
+                for (id in replaced) {
+                    val serverBcc = easClient.findDraftBcc(collectionId, id)
+                    if (serverBcc == null) keep += id else merged = com.dedovmosol.iwomail.util.mergeRecipients(merged, serverBcc)
+                }
+                bcc = merged
+            }
+            val (serverBody, uploadAttachments) = DraftUpload.prepare(
+                draft.body, stored, System.currentTimeMillis()
+            ) { att -> att.localPath?.let { java.io.File(it) }?.takeIf { it.exists() }?.readBytes() }
+            val result = easClient.createDraft(
+                to = draft.to,
+                cc = draft.cc,
+                bcc = bcc,
+                subject = draft.subject,
+                body = serverBody,
+                attachments = uploadAttachments,
+                importance = draft.importance
+            )
+            val newId = (result as? EasResult.Success)?.data ?: continue
+            // Снова только на устройстве (нет связи или сервер отказал) — в следующий раз.
+            if (com.dedovmosol.iwomail.eas.DraftIds.isLocal(newId) &&
+                !com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(newId)
+            ) continue
+            val toDelete = replaced.filter { it !in keep }
+            val uploaded = draft.copy(
+                id = "${accountId}_$newId",
+                serverId = newId,
+                bcc = bcc,
+                replacesServerId = com.dedovmosol.iwomail.eas.DraftIds.replacedMarker(toDelete)
+            )
+            database.withTransaction {
+                // delete каскадом удаляет записи вложений — переносим их на новый id
+                emailDao.delete(draft.id)
+                emailDao.insert(uploaded)
+                if (stored.isNotEmpty()) {
+                    attachmentDao.insertAll(stored.map { it.copy(id = 0, emailId = uploaded.id) })
+                }
+            }
+            // Черновик мог быть открыт в редакторе: его сохранение найдёт новую запись.
+            DraftSuccessors.record(draft.id, uploaded.id)
+            changed = true
+            val exclude = newId.takeUnless { com.dedovmosol.iwomail.eas.DraftIds.isLocal(it) }
+            val failed = toDelete.filterNot { deleteServerDraft(accountId, it, exclude) }
+            if (failed.size != toDelete.size) {
+                emailDao.updateReplacesServerId(uploaded.id, com.dedovmosol.iwomail.eas.DraftIds.replacedMarker(failed))
+            }
+        }
+        return changed
+    }
+
+    /**
+     * Вложения со ссылкой на сервер, но без файла на устройстве (перенесены ссылкой при правке без связи),
+     * скачиваются в draft_attachments/. Ссылка не сработала — свежие ссылки берутся у заменяемого черновика
+     * ([replacedServerId], EAS ItemOperations): после ресинхронизации EAS 12.1 ссылки меняются. Заменяемого
+     * черновика на сервере уже нет (удалён, например, в Outlook) или в нём нет этого вложения — вложение
+     * взять неоткуда, оно отбрасывается. null — не скачалось по другой причине (нет связи): загрузку
+     * черновика откладываем, вложения не теряем.
+     */
+    private suspend fun withLocalFiles(
+        easClient: com.dedovmosol.iwomail.eas.EasClient,
+        rows: List<AttachmentEntity>,
+        folderId: String,
+        replacedServerId: String?
+    ): List<AttachmentEntity>? {
+        val ready = mutableListOf<AttachmentEntity>()
+        // Свежие метаданные заменяемого черновика: null — ещё не запрашивали
+        var fresh: EasResult<List<com.dedovmosol.iwomail.eas.EasAttachment>>? = null
+        for (row in rows) {
+            val hasFile = row.localPath?.let { java.io.File(it).exists() } == true
+            if (hasFile || row.fileReference.isBlank()) {
+                ready += row
+                continue
+            }
+            var bytes = (easClient.downloadDraftAttachment(row.fileReference) as? EasResult.Success)?.data
+            var reference = row.fileReference
+            if (bytes == null) {
+                if (replacedServerId == null || !replacedServerId.contains(':')) return null
+                val metadata = fresh ?: easClient.fetchAttachmentMetadata(folderId.substringAfter("_"), replacedServerId)
+                    .also { fresh = it }
+                when (metadata) {
+                    is EasResult.Error -> {
+                        // Fetch status 6/8 — элемента нет (так Exchange отвечает на удалённый ServerId)
+                        val gone = metadata.message.endsWith("status=6") || metadata.message.endsWith("status=8")
+                        if (!gone) return null
+                        attachmentDao.deleteByIds(listOf(row.id))
+                        continue
+                    }
+                    is EasResult.Success -> {
+                        val match = metadata.data.firstOrNull { it.displayName == row.displayName && it.fileReference.isNotBlank() }
+                        if (match == null) {
+                            attachmentDao.deleteByIds(listOf(row.id))
+                            continue
                         }
+                        reference = match.fileReference
+                        bytes = (easClient.downloadDraftAttachment(reference) as? EasResult.Success)?.data ?: return null
                     }
                 }
             }
+            val dir = java.io.File(context.filesDir, "draft_attachments").apply { mkdirs() }
+            val safeName = row.displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            val file = java.io.File(dir, "${System.currentTimeMillis()}_$safeName")
+            file.writeBytes(bytes)
+            attachmentDao.updateLocalPath(row.id, file.absolutePath)
+            ready += row.copy(localPath = file.absolutePath, downloaded = true, fileReference = reference)
         }
-
-        // Обновляем счётчики после очистки
-        val totalCount = emailDao.getCountByFolder(folderId)
-        val unreadCount = emailDao.getUnreadCount(folderId)
-        folderDao.updateCounts(folderId, unreadCount, totalCount)
+        return ready
     }
 
-    return syncResult
-}
+    /**
+     * Прежние версии заменённых черновиков (replacesServerId), которые не удалось удалить сразу, —
+     * удаляются по id. Локальный черновик в режиме SERVER заменяет серверный только после своей
+     * загрузки ([uploadLocalDrafts]); в режиме «на устройстве» — сразу.
+     */
+    private suspend fun deleteReplacedServerDrafts(accountId: Long, folderId: String, serverMode: Boolean): Boolean {
+        var changed = false
+        for (draft in emailDao.getReplacingEmails(folderId)) {
+            val replaced = com.dedovmosol.iwomail.eas.DraftIds.replacedIds(draft.replacesServerId)
+            val isLocal = com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)
+            if (isLocal && serverMode) continue
+            // Режим «на устройстве», скрытые копии записи не известны (правка черновика из Outlook без связи): сначала
+            // они — с заменяемых версий; не узнать все — версии не удаляются (попытка — при следующей синхронизации).
+            if (isLocal && draft.bcc == null && !learnBccFromReplaced(accountId, folderId, draft.id, replaced)) continue
+            val failed = replaced.filterNot { deleteServerDraft(accountId, it, draft.serverId.takeUnless { isLocal }) }
+            if (failed.size != replaced.size) {
+                emailDao.updateReplacesServerId(draft.id, com.dedovmosol.iwomail.eas.DraftIds.replacedMarker(failed))
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /** Скрытые копии всех заменяемых версий — в запись [emailId]; true — узнаны все. */
+    private suspend fun learnBccFromReplaced(accountId: Long, folderId: String, emailId: String, replaced: List<String>): Boolean {
+        val client = accountRepo.createEasClient(accountId) ?: return false
+        val collectionId = folderDao.getFolder(folderId)?.serverId ?: folderId.substringAfter("_")
+        var merged = ""
+        for (id in replaced) {
+            val bcc = client.findDraftBcc(collectionId, id) ?: return false
+            merged = com.dedovmosol.iwomail.util.mergeRecipients(merged, bcc)
+        }
+        emailDao.updateBcc(emailId, merged)
+        return true
+    }
 
     /**
      * Полная ресинхронизация папки Отправленные
@@ -560,9 +717,15 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         sourceCc: String,
         sourceFrom: String,
         sourceFromName: String,
-        sourceBcc: String? = null
+        sourceBcc: String? = null,
+        sourceReplaces: String? = null
     ) {
         val current = emailDao.getEmail(targetEmailId) ?: return
+        // Отметка «заменяет серверный черновик» живёт на актуальной записи — иначе прежняя версия не удалится.
+        if (sourceReplaces != null) {
+            val merged = com.dedovmosol.iwomail.eas.DraftIds.mergeReplaced(current.replacesServerId, sourceReplaces, except = current.serverId)
+            if (merged != current.replacesServerId) emailDao.updateReplacesServerId(targetEmailId, merged)
+        }
         // EAS до 16.0 не передаёт Bcc: у записи из Sync скрытые копии не известны (null) — берём прежние.
         if (sourceBcc != null && current.bcc == null) {
             emailDao.updateBcc(targetEmailId, sourceBcc)
@@ -659,7 +822,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             from = draft.from,
                             fromName = draft.fromName,
                             attachments = atts.filter { !it.localPath.isNullOrBlank() },
-                            bcc = draft.bcc
+                            bcc = draft.bcc,
+                            replacesServerId = draft.replacesServerId
                         ))
                     }
                 }
@@ -896,8 +1060,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         val isDrafts = folder.type == FolderType.DRAFTS
         val contentResult = deduplicateByContent(filteredByServerId, folderId, isDrafts, syncData.deletedIds.toSet())
 
+        // Серверные черновики, заменённые правкой без связи, не возвращаем: их удалит загрузка замены.
+        val replacedServerIds = if (isDrafts) {
+            emailDao.getReplacedServerIds(folderId).flatMap { com.dedovmosol.iwomail.eas.DraftIds.replacedIds(it) }.toSet()
+        } else {
+            emptySet()
+        }
         val filteredByRecentDelete = contentResult.filtered.filter { email ->
-            val blocked = isDeletedByUser(email.id)
+            val blocked = isDeletedByUser(email.id) || email.serverId in replacedServerIds
             if (blocked && isDrafts) {
                 android.util.Log.w("EmailSync",
                     "Draft blocked by deletedEmailIds: id=${email.id}, subj='${email.subject}'")
@@ -1198,10 +1368,16 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 from = if (matchedEws.from.isNotBlank()) matchedEws.from else newEas.from,
                                 fromName = if (matchedEws.fromName.isNotBlank()) matchedEws.fromName else newEas.fromName,
                                 // Скрытые копии знает только локальная запись (EAS до 16.0 их не передаёт).
-                                bcc = matchedEws.bcc ?: newEas.bcc
+                                bcc = matchedEws.bcc ?: newEas.bcc,
+                                // И отметку о заменённом черновике: иначе прежняя версия не удалится
+                                replacesServerId = com.dedovmosol.iwomail.eas.DraftIds.mergeReplaced(
+                                    matchedEws.replacesServerId, newEas.replacesServerId, except = newEas.serverId
+                                )
                             )
                             emailDao.insert(migratedEmail)
                             migratedEasIds.add(newEas.id)
+                            // Черновик мог быть открыт в редакторе: его сохранение найдёт запись под EAS ServerId.
+                            DraftSuccessors.record(matchedEws.id, newEas.id)
 
                             val ewsAttachments = attachmentDao.getAttachmentsList(matchedEws.id)
                             val serverAtts = syncData.emails
@@ -1295,7 +1471,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 val saved = savedDraftBodies[idx]
                 usedSaved.add(idx)
                 migrateDraftBodyToTarget(email.id, saved.body, saved.bodyType, saved.attachments)
-                migrateDraftFieldsToTarget(email.id, saved.to, saved.cc, saved.from, saved.fromName, saved.bcc)
+                migrateDraftFieldsToTarget(email.id, saved.to, saved.cc, saved.from, saved.fromName, saved.bcc, saved.replacesServerId)
                 if (saved.attachments.isNotEmpty()) {
                     mergeAttachmentsToTarget(email.id, saved.attachments)
                 }
@@ -1324,7 +1500,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             pendingDraftRestores.remove(key)
 
             migrateDraftBodyToTarget(newDraft.id, pending.body, pending.bodyType, pending.attachments)
-            migrateDraftFieldsToTarget(newDraft.id, pending.to, pending.cc, pending.from, pending.fromName, pending.bcc)
+            migrateDraftFieldsToTarget(newDraft.id, pending.to, pending.cc, pending.from, pending.fromName, pending.bcc, pending.replacesServerId)
             if (pending.attachments.isNotEmpty()) {
                 mergeAttachmentsToTarget(newDraft.id, pending.attachments)
             }
@@ -1381,7 +1557,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 usedMigrationIds.add(matchingNew.id)
                 val oldAtts = attachmentDao.getAttachmentsList(oldEmailId)
                 migrateDraftBodyToTarget(matchingNew.id, oldDraft.body, oldDraft.bodyType, oldAtts)
-                migrateDraftFieldsToTarget(matchingNew.id, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc)
+                migrateDraftFieldsToTarget(matchingNew.id, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc, oldDraft.replacesServerId)
                 mergeAttachmentsToTarget(matchingNew.id, oldAtts)
             }
         }
@@ -1404,7 +1580,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (oldDraft.body.isNotBlank()) {
                 migrateDraftBodyToTarget(newEmailId, oldDraft.body, oldDraft.bodyType, oldAtts)
             }
-            migrateDraftFieldsToTarget(newEmailId, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc)
+            migrateDraftFieldsToTarget(newEmailId, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc, oldDraft.replacesServerId)
             mergeAttachmentsToTarget(newEmailId, oldAtts)
 
             registerDeletedEmail(oldEmailId, context)
@@ -1448,7 +1624,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         from = existingEmail.from,
                         fromName = existingEmail.fromName,
                         attachments = localAtts,
-                        bcc = existingEmail.bcc
+                        bcc = existingEmail.bcc,
+                        replacesServerId = existingEmail.replacesServerId
                     )
 
                     // ЗАЩИТА: если черновик был отредактирован пользователем в приложении
@@ -1688,7 +1865,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         val merged = mergeDraftBody(newBody, mergeAtts, orphan.body)
                         emailDao.updateBody(matchingNew.id, merged)
                     }
-                    migrateDraftFieldsToTarget(matchingNew.id, orphan.to, orphan.cc, orphan.from, orphan.fromName, orphan.bcc)
+                    migrateDraftFieldsToTarget(matchingNew.id, orphan.to, orphan.cc, orphan.from, orphan.fromName, orphan.bcc, orphan.replacesServerId)
                     val orphanAtts = attachmentDao.getAttachmentsList(orphan.id)
                     mergeAttachmentsToTarget(matchingNew.id, orphanAtts)
                 }

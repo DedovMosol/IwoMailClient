@@ -11,6 +11,7 @@ import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.ui.screens.compose.AttachmentInfo
 import com.dedovmosol.iwomail.ui.screens.compose.SAFE_FILENAME_COMPOSE_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.withLocalCopyUnlessEmbedded
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -69,11 +70,16 @@ class AttachmentLoader(
          * @param fileAttachments Файловые вложения (для списка в UI)
          * @param inlineImages Inline-картинки (contentId -> data:image/...;base64,...)
          * @param skippedCount Количество пропущенных вложений (ошибки/лимиты)
+         * @param unloadedAttachmentIds Вложения со ссылкой на сервер, которые не скачались (id записей):
+         *   черновик при сохранении переносит их в новую версию (DraftSaver)
+         * @param embeddedImages Картинки, уже встроенные в тело data: URL (те же байты): contentId -> data URL
          */
         data class Success(
             val fileAttachments: List<AttachmentInfo>,
             val inlineImages: Map<String, String>,
-            val skippedCount: Int = 0
+            val skippedCount: Int = 0,
+            val unloadedAttachmentIds: List<Long> = emptyList(),
+            val embeddedImages: Map<String, String> = emptyMap()
         ) : LoadResult()
 
         /**
@@ -147,14 +153,33 @@ class AttachmentLoader(
             val fileAttachments = mutableListOf<AttachmentInfo>()
             val inlineImages = mutableMapOf<String, String>()
             var skippedCount = 0
+            val unloadedIds = mutableListOf<Long>()
+            // Inline — только картинка, на которую ссылается тело (MIME — по его HTML-части); Content-ID
+            // без ссылки — обычный файл (Outlook и Apple Mail ставят его и файлам), иначе он пропал бы.
+            val rolesBody = com.dedovmosol.iwomail.util.processEmailBodyForDisplay(email.body, email.bodyType).text
+            val embedded = com.dedovmosol.iwomail.util.EmbeddedImages(rolesBody)
+            val embeddedImages = mutableMapOf<String, String>()
 
-            attachments.forEachIndexed { index, att ->
+            attachments.forEachIndexed { index, stored ->
                 // Обновить прогресс
                 onProgress(index.toFloat() / attachments.size)
 
                 try {
+                    val role = com.dedovmosol.iwomail.data.repository.draftAttachmentRole(rolesBody, stored.contentId)
+                    // Картинка уже в теле data: URL (те же байты) — не файл; её cid нужен правке текста без новой версии.
+                    val att = withLocalCopyUnlessEmbedded(
+                        stored, role, embedded, File(context.filesDir, source.attachmentsDirName),
+                        download = { ref ->
+                            easClient?.let { client ->
+                                if (source == AttachmentSource.Draft) client.downloadDraftAttachment(ref) else client.downloadAttachment(ref)
+                            }
+                        },
+                        onEmbedded = { dataUrl -> stored.contentId?.takeIf { it.isNotBlank() }?.let { embeddedImages[it] = dataUrl } }
+                    ) ?: return@forEachIndexed
+                    val inline = role == com.dedovmosol.iwomail.data.repository.DraftAttachmentRole.INLINE &&
+                        !att.contentId.isNullOrBlank()
                     // Проверка лимита inline-картинок (CS-4)
-                    if (att.isInline && !att.contentId.isNullOrBlank()) {
+                    if (inline) {
                         if (inlineImages.size >= MAX_INLINE_IMAGES) {
                             android.util.Log.w(
                                 TAG,
@@ -168,7 +193,7 @@ class AttachmentLoader(
                     // Попытка 1: localPath существует
                     val localPath = att.localPath
                     if (localPath != null && File(localPath).exists()) {
-                        processLocalAttachment(att, source, fileAttachments, inlineImages)
+                        processLocalAttachment(att, source, inline, fileAttachments, inlineImages)
                         return@forEachIndexed
                     }
 
@@ -186,9 +211,10 @@ class AttachmentLoader(
                         else -> null
                     }
                     if (downloaded != null) {
-                        processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, fileAttachments, inlineImages)
+                        processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, inline, fileAttachments, inlineImages)
                         return@forEachIndexed
                     }
+                    if (att.fileReference.isNotBlank()) unloadedIds += att.id
 
                     // Вложение недоступно
                     android.util.Log.w(
@@ -200,7 +226,7 @@ class AttachmentLoader(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    android.util.Log.w(TAG, "$source: Error loading attachment ${att.displayName}: ${e.message}")
+                    android.util.Log.w(TAG, "$source: Error loading attachment ${stored.displayName}: ${e.message}")
                     skippedCount++
                 }
             }
@@ -210,7 +236,9 @@ class AttachmentLoader(
             LoadResult.Success(
                 fileAttachments = fileAttachments,
                 inlineImages = inlineImages,
-                skippedCount = skippedCount
+                skippedCount = skippedCount,
+                unloadedAttachmentIds = unloadedIds,
+                embeddedImages = embeddedImages
             )
 
         } catch (e: CancellationException) {
@@ -227,12 +255,13 @@ class AttachmentLoader(
     private fun processLocalAttachment(
         att: AttachmentEntity,
         source: AttachmentSource,
+        inline: Boolean,
         fileAttachments: MutableList<AttachmentInfo>,
         inlineImages: MutableMap<String, String>
     ) {
         val file = File(att.localPath!!)
 
-        if (att.isInline && !att.contentId.isNullOrBlank()) {
+        if (inline && !att.contentId.isNullOrBlank()) {
             // Inline-картинка: читать в base64
             val bytes = file.readBytes()
             val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)

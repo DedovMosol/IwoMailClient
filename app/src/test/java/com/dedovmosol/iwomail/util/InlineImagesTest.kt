@@ -52,6 +52,38 @@ class InlineImagesTest {
     }
 
     @Test
+    fun `content id case differs between the body and the attachment - same picture`() {
+        // Тело: cid:IMAGE001.PNG@01D9, вложение: image001.png@01D9 (так бывает у разных почтовых клиентов).
+        assertThat(replaceInlineCids("""<img src="CID:IMAGE001.PNG@01D9">""", mapOf("<image001.png@01D9>" to "D")))
+            .isEqualTo("""<img src="D">""")
+        // Точное совпадение важнее совпадения без учёта регистра.
+        assertThat(replaceInlineCids("""<img src="cid:Img"><img src="cid:img">""", mapOf("img" to "LOWER", "Img" to "EXACT")))
+            .isEqualTo("""<img src="EXACT"><img src="LOWER">""")
+    }
+
+    @Test
+    fun `content id lookup is whole and case-insensitive`() {
+        val refs = referencedContentIds("""<img src="cid:IMG1@x">""")
+        assertThat(containsContentId(refs, "<img1@x>")).isTrue()
+        // Не по префиксу: img1 не равен img10.
+        assertThat(containsContentId(referencedContentIds("""<img src="cid:img10">"""), "img1")).isFalse()
+        assertThat(containsContentId(refs, null)).isFalse()
+        assertThat(containsContentId(refs, " <> ")).isFalse()
+    }
+
+    @Test
+    fun `data urls of the body are listed exactly as matched and keyed briefly`() {
+        val url = "data:image/png;base64,AAAA"
+        val html = """<img src="$url"><img src = "data:image/gif;base64,BBBB"><img src="https://x/y.png">"""
+        assertThat(dataUrlsIn(html)).containsExactly(url, "data:image/gif;base64,BBBB").inOrder()
+        assertThat(dataUrlsIn("<p>none</p>")).isEmpty()
+        // Ключ для сохранённого состояния экрана: короткий и одинаковый для одной картинки.
+        assertThat(dataUrlKey(url)).hasLength(64)
+        assertThat(dataUrlKey(url)).isEqualTo(dataUrlKey(url))
+        assertThat(dataUrlKey(url)).isNotEqualTo(dataUrlKey("data:image/gif;base64,BBBB"))
+    }
+
+    @Test
     fun `image mime is detected from signature only`() {
         val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A)
         val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte())

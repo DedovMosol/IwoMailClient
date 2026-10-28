@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.eas
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -365,8 +366,17 @@ class EasClient(
             val address = ServerAddress.parse(serverUrl, port) ?: return false
             return withContext(Dispatchers.IO) {
                 try {
+                    // Запросы (OkHttp) идут через системный прокси, если он задан: прямого пути к серверу тогда
+                    // может не быть — проверяется прокси.
+                    val (host, targetPort) = systemProxyFor(address.host, address.port) ?: (address.host to address.port)
+                    // DNS — в пределах того же таймаута: InetSocketAddress разрешает имя без ограничения по времени.
+                    val resolved = resolveWithin(host, FALLBACK_PROBE_TIMEOUT_MS.toLong())
+                    if (resolved == null) {
+                        android.util.Log.d("EasClient", "Dual-URL: ${address.display} unresolved")
+                        return@withContext false
+                    }
                     java.net.Socket().use { socket ->
-                        socket.connect(java.net.InetSocketAddress(address.host, address.port), FALLBACK_PROBE_TIMEOUT_MS)
+                        socket.connect(java.net.InetSocketAddress(resolved, targetPort), FALLBACK_PROBE_TIMEOUT_MS)
                     }
                     android.util.Log.d("EasClient", "Dual-URL: ${address.display} reachable")
                     true
@@ -376,6 +386,29 @@ class EasClient(
                     false
                 }
             }
+        }
+
+        /** Разрешение имени в фоне: зависший DNS не держит пробу дольше [timeoutMs] (сам поиск завершится позже). */
+        private val probeDnsScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
+        private suspend fun resolveWithin(host: String, timeoutMs: Long): java.net.InetAddress? {
+            val lookup = probeDnsScope.async { java.net.InetAddress.getByName(host) }
+            return try {
+                kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { lookup.await() }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            }
+        }
+
+        /** HTTP-прокси системы для https://[host]:[port] (его же использует OkHttp); null — напрямую. */
+        internal fun systemProxyFor(host: String, port: Int): Pair<String, Int>? = try {
+            val proxy = java.net.ProxySelector.getDefault()
+                ?.select(java.net.URI("https", null, host, port, "/", null, null))
+                ?.firstOrNull { it.type() == java.net.Proxy.Type.HTTP }
+            (proxy?.address() as? java.net.InetSocketAddress)?.let { it.hostString to it.port }
+        } catch (e: Exception) {
+            null
         }
 
         /** Базовый URL сервера: схема + хост + порт (явный из адреса, иначе [port]) — см. [ServerAddress]. */
@@ -653,7 +686,7 @@ class EasClient(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                return EasResult.Error("SyncKey retry failed: ${e.message}")
+                return EasResult.Error("SyncKey retry failed: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
 
@@ -986,7 +1019,7 @@ class EasClient(
                 EasResult.Success(EmailBodyResult(""))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("EWS error: ${e.message}")
+                EasResult.Error("EWS error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -1854,7 +1887,7 @@ $foldersXml
                 EasResult.Error(errorMsg)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка EWS: ${e.message}")
+                EasResult.Error("Ошибка EWS: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -2270,7 +2303,7 @@ $foldersXml
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка отправки: ${e.message}")
+            EasResult.Error("Ошибка отправки: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
         }
     }
@@ -2380,8 +2413,9 @@ $foldersXml
         bcc: String?,
         subject: String,
         body: String,
-        importance: Int = 1
-    ): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body, importance)
+        importance: Int = 1,
+        appendBcc: Boolean = false
+    ): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body, importance, appendBcc)
 
     /**
      * Полный EWS ItemId черновика по теме — только если черновик с такой темой ОДИН (не считая
@@ -2406,6 +2440,26 @@ $foldersXml
      * Делегирует в DraftsService
      */
     suspend fun getDraftBody(serverId: String): EasResult<String> = draftsService.getDraftBody(serverId)
+
+    /** Тело, скрытые копии и время изменения черновика по EWS ItemId (GetItem) — см. EasDraftsService.getDraftDetails. */
+    internal suspend fun getDraftDetails(itemId: String): EasResult<EwsDraftXml.DraftDetails> = draftsService.getDraftDetails(itemId)
+
+    /**
+     * Скрытые копии черновика по id (EAS до 16.0 их не передаёт): EWS ItemId — GetItem; EAS ServerId — тема того же
+     * элемента (ItemOperations), затем EWS по однозначной теме. null — не узнать.
+     */
+    suspend fun findDraftBcc(collectionId: String, serverId: String): String? {
+        val itemId = if (DraftIds.isEwsItemId(serverId)) {
+            serverId
+        } else {
+            val subject = (emailService.fetchItemSubject(collectionId, serverId) as? EasResult.Success)?.data ?: return null
+            findUniqueDraftItemIdBySubject(subject) ?: return null
+        }
+        return (getDraftDetails(itemId) as? EasResult.Success)?.data?.bcc
+    }
+
+    /** Окончательное удаление черновика по EWS ItemId — см. EasDraftsService.hardDeleteDraft. */
+    suspend fun hardDeleteDraft(itemId: String): EasResult<Unit> = draftsService.hardDeleteDraft(itemId)
 
     /**
      * Удаление черновика с сервера Exchange
@@ -2726,6 +2780,8 @@ data class TasksSyncResult(
 data class EmailBodyResult(
     val body: String,
     val mdnRequestedBy: String? = null, // Email для отправки MDN
-    val originalMessageId: String? = null // RFC 5322 Message-ID исходного письма
+    val originalMessageId: String? = null, // RFC 5322 Message-ID исходного письма
+    // HTML целиком: не обрезан сервером ([MS-ASAIRS] Truncated) и не заменён текстовой версией
+    val complete: Boolean = true
 )
 

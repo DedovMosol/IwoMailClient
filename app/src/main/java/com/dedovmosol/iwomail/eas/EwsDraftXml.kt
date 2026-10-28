@@ -56,6 +56,8 @@ internal object EwsDraftXml {
      * SetItemField с пустой коллекцией получателей не очищает поле). [bcc] = null — скрытые копии
      * не известны приложению (EAS до 16.0 их не передаёт): поле на сервере не трогается.
      * [subject]/[htmlBody] = null — не меняются (например, дописать скрытые копии к MIME-черновику).
+     * [appendBcc] — скрытые копии на сервере не известны: [bcc] добавляется к ним (AppendToItemField),
+     * а не заменяет.
      */
     fun updateItem(
         version: String,
@@ -67,7 +69,8 @@ internal object EwsDraftXml {
         cc: String?,
         bcc: String?,
         easImportance: Int?,
-        escape: (String) -> String
+        escape: (String) -> String,
+        appendBcc: Boolean = false
     ): String {
         val updates = StringBuilder()
         subject?.let { updates.append(setField("item:Subject", "<t:Subject>${escape(it)}</t:Subject>")) }
@@ -75,7 +78,16 @@ internal object EwsDraftXml {
         easImportance?.let { updates.append(setField("item:Importance", "<t:Importance>${importance(it)}</t:Importance>")) }
         to?.let { updates.append(recipientsUpdate("ToRecipients", it, escape)) }
         cc?.let { updates.append(recipientsUpdate("CcRecipients", it, escape)) }
-        bcc?.let { updates.append(recipientsUpdate("BccRecipients", it, escape)) }
+        bcc?.let { value ->
+            if (appendBcc) {
+                // обавить к неизвестным скрытым копиям; пустое — ничего не менять (не DeleteItemField)
+                recipientsElement("BccRecipients", value, escape)?.let { append ->
+                    updates.append("<t:AppendToItemField><t:FieldURI FieldURI=\"message:BccRecipients\"/><t:Message>$append</t:Message></t:AppendToItemField>")
+                }
+            } else {
+                updates.append(recipientsUpdate("BccRecipients", value, escape))
+            }
+        }
         val changeKeyAttr = changeKey?.takeIf { it.isNotBlank() }?.let { " ChangeKey=\"${escape(it)}\"" }.orEmpty()
         return envelope(
             version,
@@ -100,6 +112,65 @@ internal object EwsDraftXml {
             "<m:SortOrder><t:FieldOrder Order=\"Descending\"><t:FieldURI FieldURI=\"item:DateTimeReceived\"/></t:FieldOrder></m:SortOrder>" +
             "<m:ParentFolderIds><t:DistinguishedFolderId Id=\"drafts\"/></m:ParentFolderIds></m:FindItem>"
     )
+
+    /**
+     * GetItem черновика: тело (HTML), скрытые копии и PR_LAST_MODIFICATION_TIME (0x3008) — свойство MAPI,
+     * доступное и на Exchange 2007 SP1 (item:LastModifiedTime — только с Exchange 2010). Порядок в
+     * ItemShape по схеме: BaseShape, BodyType, AdditionalProperties.
+     */
+    fun getDraftDetails(version: String, itemId: String, escape: (String) -> String): String = envelope(
+        version,
+        "<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:BodyType>HTML</t:BodyType>" +
+            "<t:AdditionalProperties><t:FieldURI FieldURI=\"item:Body\"/><t:FieldURI FieldURI=\"message:BccRecipients\"/>" +
+            "<t:ExtendedFieldURI PropertyTag=\"0x3008\" PropertyType=\"SystemTime\"/></t:AdditionalProperties>" +
+            "</m:ItemShape><m:ItemIds><t:ItemId Id=\"${escape(itemId)}\"/></m:ItemIds></m:GetItem>"
+    )
+
+    /** Тело, скрытые копии и время последнего изменения черновика на сервере. */
+    data class DraftDetails(
+        val body: String,
+        /** null — не известны: среди адресов есть не SMTP (X.500 из адресной книги) — их не трогаем. */
+        val bcc: String?,
+        val lastModified: Long?
+    )
+
+    private val BODY = Regex("<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>", RegexOption.DOT_MATCHES_ALL)
+    private val BCC = Regex("<(?:t:)?BccRecipients>(.*?)</(?:t:)?BccRecipients>", RegexOption.DOT_MATCHES_ALL)
+    private val MAILBOX = Regex("<(?:t:)?Mailbox>(.*?)</(?:t:)?Mailbox>", RegexOption.DOT_MATCHES_ALL)
+    private val EMAIL_ADDRESS = Regex("<(?:t:)?EmailAddress>(.*?)</(?:t:)?EmailAddress>", RegexOption.DOT_MATCHES_ALL)
+    private val ROUTING_TYPE = Regex("<(?:t:)?RoutingType>(.*?)</(?:t:)?RoutingType>")
+    private val LAST_MODIFIED = Regex(
+        """PropertyTag="(?:0x3008|12296)"[^>]*/>\s*<(?:t:)?Value>([^<]+)</(?:t:)?Value>""", RegexOption.IGNORE_CASE
+    )
+
+    /** Ответ [getDraftDetails]. Нет элемента BccRecipients — скрытых копий нет (пустые свойства EWS не отдаёт). */
+    fun parseDraftDetails(response: String): DraftDetails {
+        val rawBody = BODY.find(response)?.groupValues?.get(1)?.trim().orEmpty()
+        // Exchange 2007 SP1 отдаёт тело и экранированным (&lt;html&gt;), и как есть.
+        val body = if (rawBody.startsWith("&lt;") || (!rawBody.startsWith("<") && rawBody.contains("&lt;"))) {
+            XmlUtils.unescape(rawBody)
+        } else {
+            rawBody
+        }
+        // Нет элемента — скрытых копий нет (""); есть адрес не SMTP — неизвестны (null).
+        val bccBlock = BCC.find(response)?.groupValues?.get(1)
+        val bcc: String? = if (bccBlock == null) "" else {
+            val addresses = MAILBOX.findAll(bccBlock).map { it.groupValues[1] }.map { mailbox ->
+                val address = EMAIL_ADDRESS.find(mailbox)?.groupValues?.get(1)?.let { XmlUtils.unescape(it).trim() }.orEmpty()
+                val routing = ROUTING_TYPE.find(mailbox)?.groupValues?.get(1)?.trim()
+                address.takeIf { it.contains('@') && (routing == null || routing.equals("SMTP", ignoreCase = true)) }
+            }.toList()
+            if (addresses.any { it == null }) null else addresses.filterNotNull().joinToString(", ")
+        }
+        val lastModified = LAST_MODIFIED.find(response)?.groupValues?.get(1)?.trim()?.let { value ->
+            try {
+                java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+            } catch (_: Exception) {
+                null
+            }
+        }
+        return DraftDetails(body, bcc, lastModified)
+    }
 
     private fun envelope(version: String, body: String): String =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope $NS><soap:Header>" +

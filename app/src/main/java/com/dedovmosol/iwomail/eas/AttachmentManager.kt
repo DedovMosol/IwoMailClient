@@ -52,13 +52,36 @@ class AttachmentManager(
         // помимо основного кэша "attachments" — временные копии, создаваемые при ответе/пересылке/
         // редактировании черновика в ComposeScreen (reply/forward/draft_attachments). Возрастной
         // порог (7 дней) исключает удаление файлов активной сессии написания письма.
+        private const val DRAFT_ATTACHMENTS_DIR = "draft_attachments"
         private val ATTACHMENT_TEMP_DIRS = listOf(
-            "attachments", "reply_attachments", "forward_attachments", "draft_attachments"
+            "attachments", "reply_attachments", "forward_attachments", DRAFT_ATTACHMENTS_DIR
         )
 
-        fun cleanupOldAttachments(context: Context) {
+        /**
+         * Очистка при старте. Файлы вложений черновиков, на которые есть записи, — часто единственная копия
+         * (черновик на устройстве, картинки тела крупного черновика): по возрасту и размеру не удаляются, только
+         * вместе с черновиком.
+         */
+        suspend fun cleanupOldAttachments(context: Context) {
+            val draftDir = File(context.filesDir, DRAFT_ATTACHMENTS_DIR)
+            val inUse: Set<String>? = try {
+                com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context).attachmentDao()
+                    .getLocalPathsUnder(draftDir.absolutePath + File.separator).toHashSet()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            }
+            cleanupOldAttachments(context, inUse)
+        }
+
+        /** [draftFilesInUse] — файлы черновиков с записями (остаются); null — не известны: каталог черновиков не трогаем. */
+        fun cleanupOldAttachments(context: Context, draftFilesInUse: Set<String>?) {
             for (name in ATTACHMENT_TEMP_DIRS) {
-                cleanupDirByAgeAndSize(File(context.filesDir, name))
+                if (name == DRAFT_ATTACHMENTS_DIR) {
+                    if (draftFilesInUse != null) cleanupDirByAgeAndSize(File(context.filesDir, name), keep = draftFilesInUse)
+                } else {
+                    cleanupDirByAgeAndSize(File(context.filesDir, name))
+                }
             }
             // Кэш inline-картинок событий календаря (cacheDir) — тот же возрастной/размерный порог.
             cleanupDirByAgeAndSize(
@@ -71,10 +94,10 @@ class AttachmentManager(
          * удаляет самые старые сверх лимита (файлы отсортированы по времени изменения). Отсутствие
          * каталога / ошибка — тихий no-op (не роняем старт приложения).
          */
-        private fun cleanupDirByAgeAndSize(dir: File) {
+        private fun cleanupDirByAgeAndSize(dir: File, keep: Set<String> = emptySet()) {
             try {
                 if (!dir.exists()) return
-                val files = dir.listFiles() ?: return
+                val files = dir.listFiles()?.filter { it.absolutePath !in keep }?.toTypedArray() ?: return
                 val now = System.currentTimeMillis()
                 var totalSize = files.sumOf { it.length() }
 
@@ -242,7 +265,7 @@ class AttachmentManager(
             
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка: ${e.message}")
+            EasResult.Error("Ошибка: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     

@@ -209,16 +209,16 @@ class EmailDetailActions(
             if (mimeImages.isNotEmpty()) return mimeImages
         }
 
-        val cidRefs = com.dedovmosol.iwomail.util.CID_REGEX
-            .findAll(emailBody).map { it.groupValues[1] }.toSet()
+        // Ссылки cid: — нормализованные и без учёта регистра (Content-ID в теле и у вложения расходятся по регистру)
+        val cidRefs = com.dedovmosol.iwomail.util.referencedContentIds(emailBody)
         if (cidRefs.isEmpty()) return emptyMap()
 
         val inlineAttachments = attachments.filter { att ->
             if (att.contentId == null) return@filter false
             if (!att.contentType.startsWith("image/", ignoreCase = true)) return@filter false
             if (att.estimatedSize <= 0L || att.estimatedSize > MAX_AUTO_INLINE_IMAGE_BYTES) return@filter false
-            val cleanCid = att.contentId.removeSurrounding("<", ">")
-            cidRefs.contains(cleanCid) || cidRefs.contains(att.contentId) || cidRefs.contains(att.displayName)
+            com.dedovmosol.iwomail.util.containsContentId(cidRefs, att.contentId) ||
+                com.dedovmosol.iwomail.util.containsContentId(cidRefs, att.displayName)
         }
 
         val account = accountRepo.getActiveAccountSync() ?: return emptyMap()
@@ -272,9 +272,8 @@ class EmailDetailActions(
                 }
             }
 
-            val missingCids = cidRefs.filter { cid ->
-                !newImages.containsKey(cid) && !newImages.containsKey("<$cid>")
-            }
+            val loadedIds = newImages.keys.mapTo(HashSet()) { com.dedovmosol.iwomail.util.normalizeContentId(it) }
+            val missingCids = cidRefs.filter { cid -> !com.dedovmosol.iwomail.util.containsContentId(loadedIds, cid) }
             val canUseMimeFallback = attachments.isNotEmpty() &&
                 attachments.all { it.estimatedSize > 0L && it.estimatedSize <= MAX_AUTO_INLINE_IMAGE_BYTES } &&
                 attachments.sumOf { it.estimatedSize } <= MAX_AUTO_INLINE_TOTAL_BYTES

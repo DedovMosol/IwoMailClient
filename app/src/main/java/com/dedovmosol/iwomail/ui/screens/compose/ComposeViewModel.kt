@@ -17,6 +17,8 @@ import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
 import com.dedovmosol.iwomail.domain.AttachmentLoader
+import com.dedovmosol.iwomail.domain.DraftSaver
+import com.dedovmosol.iwomail.domain.RepositoryDraftStore
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.eas.EasClient
 import com.dedovmosol.iwomail.eas.EasResult
@@ -131,6 +133,14 @@ class ComposeViewModel(
     private var initialDraftSubject: String? = null
     private var initialDraftBody: String? = null
     private var initialDraftAttachments: List<AttachmentItem> = emptyList()
+    // Черновик: скрытые копии известны (false — черновик из Outlook: EAS до 16.0 их не передаёт)
+    private var draftBccKnown = true
+    // Вложения черновика, которые не загрузились (переносятся при сохранении), и картинки тела, уже
+    // существующие на сервере (data URL → Content-ID) — см. DraftSaver.Content
+    private var draftUnloadedAttachmentIds: Set<Long> = emptySet()
+    private var draftKnownImageCids: Map<String, String> = emptyMap()
+    // Сохранение черновика — общее с экраном письма (DRY)
+    private val draftSaver = DraftSaver(RepositoryDraftStore(context, mailRepository, accountRepository))
 
     init {
         // Инициализация в init блоке (строго последовательно)
@@ -858,70 +868,60 @@ class ComposeViewModel(
                     return@launch
                 }
 
-                // CS-1 / CS-2: та же защита от OOM, что и при отправке
+                // CS-1 / CS-2: та же защита от OOM, что и при отправке; вложения, которые не загрузились при
+                // открытии, сохранение скачает в память — тоже в бюджет.
                 val budgetBytes = withContext(dispatcher) {
-                    composeAttachmentBudgetBytes(context, state.attachments.toAttachmentInfoList(), state.body)
+                    val unloadedBytes = if (draftUnloadedAttachmentIds.isEmpty()) 0L else {
+                        editDraftId?.let { id ->
+                            mailRepository.getAttachmentsSync(id).filter { it.id in draftUnloadedAttachmentIds }.sumOf { it.estimatedSize }
+                        } ?: 0L
+                    }
+                    composeAttachmentBudgetBytes(context, state.attachments.toAttachmentInfoList(), state.body) + unloadedBytes
                 }
                 if (budgetBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
                     _events.send(ComposeEvent.AttachmentLimitExceeded(MAX_ATTACHMENT_LIMIT_MB))
                     return@launch
                 }
 
-                val rawAttachments = readRawAttachmentBytes(state.attachments)
-                val fileDraftAttachments = rawAttachments.map { (name, mimeType, bytes) ->
+                val files = readRawAttachmentBytes(state.attachments).map { (name, mimeType, bytes) ->
                     DraftAttachmentData(name = name, mimeType = mimeType, data = bytes)
                 }
-
-                // Извлекаем inline-картинки из body: data: URL → cid: ссылки.
-                // На сервер отправляем cleanBody (с cid:) + вложения через CreateAttachment.
-                // Локально храним body (с data: URL) — для отображения в приложении.
-                val (cleanBody, inlineDraftAttachments) = extractInlineImageAttachments(state.body)
-
-                val allServerAttachments = fileDraftAttachments + inlineDraftAttachments
-                val normalizedTo = normalizeRecipients(state.to)
-                val normalizedCc = normalizeRecipients(state.cc)
-                val normalizedBcc = normalizeRecipients(state.bcc)
-
-                val currentDraftId = editDraftId
-                val success = if (currentDraftId != null && currentDraftId != "synced" &&
-                    !currentDraftId.startsWith("local_draft_")
-                ) {
-                    saveExistingDraft(
-                        draftId = currentDraftId,
-                        account = account,
-                        to = normalizedTo,
-                        cc = normalizedCc,
-                        bcc = normalizedBcc,
-                        subject = state.subject,
-                        serverBody = cleanBody,
-                        localBody = state.body,
-                        allServerAttachments = allServerAttachments
-                    )
-                } else {
-                    // Новый черновик
-                    val serverId = withContext(dispatcher) {
-                        mailRepository.saveDraft(
-                            accountId = account.id,
-                            to = normalizedTo,
-                            cc = normalizedCc,
-                            bcc = normalizedBcc,
-                            subject = state.subject,
-                            serverBody = cleanBody,
-                            localBody = state.body,
-                            fromEmail = account.email,
-                            fromName = account.displayName,
-                            hasAttachments = allServerAttachments.isNotEmpty(),
-                            attachmentFiles = allServerAttachments
-                        )
+                // Сохранение — общее с экраном письма (DraftSaver): UpdateItem или новая версия,
+                // правка без связи на устройстве, вложения, которые не загрузились, — сохраняются.
+                val content = DraftSaver.Content(
+                    to = normalizeRecipients(state.to),
+                    cc = normalizeRecipients(state.cc),
+                    bcc = normalizeRecipients(state.bcc),
+                    bccKnown = draftBccKnown,
+                    subject = state.subject,
+                    body = state.body,
+                    importance = state.importance,
+                    fromEmail = account.email,
+                    fromName = account.displayName,
+                    files = files,
+                    filesUnchanged = state.attachments == initialDraftAttachments,
+                    knownImageCids = draftKnownImageCids,
+                    unloadedAttachmentIds = draftUnloadedAttachmentIds
+                )
+                val existingId = editDraftId?.takeIf { it != "synced" }
+                when (val result = withContext(dispatcher) { draftSaver.save(account, existingId, content) }) {
+                    DraftSaver.Result.Saved -> {
+                        _events.send(ComposeEvent.DraftSaved)
+                        _events.send(ComposeEvent.NavigateBack)
                     }
-                    serverId != null
-                }
-
-                if (success) {
-                    _events.send(ComposeEvent.DraftSaved)
-                    _events.send(ComposeEvent.NavigateBack)
-                } else {
-                    _events.send(ComposeEvent.Error(draftSaveErrorMessage()))
+                    DraftSaver.Result.SavedOffline -> {
+                        _events.send(ComposeEvent.DraftSavedOnDevice(offline = true))
+                        _events.send(ComposeEvent.NavigateBack)
+                    }
+                    DraftSaver.Result.SavedOnDeviceOnly -> {
+                        _events.send(ComposeEvent.DraftSavedOnDevice(offline = false))
+                        _events.send(ComposeEvent.NavigateBack)
+                    }
+                    is DraftSaver.Result.SavedKeepingPrevious -> {
+                        _events.send(ComposeEvent.DraftSavedKeepingPrevious(result.offline))
+                        _events.send(ComposeEvent.NavigateBack)
+                    }
+                    is DraftSaver.Result.Failed -> _events.send(ComposeEvent.Error(draftFailureMessage(result.reason)))
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1281,18 +1281,27 @@ class ComposeViewModel(
             } else {
                 draft.body.escapeHtml().replace("\n", "<br>")
             }
-            if (draft.body.isBlank() && isServerDraft) {
-                val bodyResult = withContext(dispatcher) {
-                    mailRepository.loadEmailBody(draftId)
-                }
-                if (bodyResult is EasResult.Success && bodyResult.data.isNotBlank()) {
-                    draftBody = if (bodyResult.data.looksLikeHtml()) {
-                        bodyResult.data
-                    } else {
-                        bodyResult.data.escapeHtml().replace("\n", "<br>")
+            var draftBcc = draft.bcc
+            if (isServerDraft) {
+                // Свежее тело и скрытые копии с сервера по точному id — как на экране письма: синхронизация
+                // могла сохранить тело обрезанным или устаревшим, а скрытые копии EAS до 16.0 не передаёт.
+                val refresh = withContext(dispatcher) {
+                    try {
+                        mailRepository.refreshServerDraft(draftId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "refreshServerDraft failed: ${e.message}")
+                        null
                     }
                 }
+                refresh?.body?.takeIf { it.isNotBlank() }?.let { fresh ->
+                    draftBody = if (fresh.looksLikeHtml()) fresh else fresh.escapeHtml().replace("\n", "<br>")
+                }
+                refresh?.bcc?.let { draftBcc = it }
             }
+            draftBccKnown = draftBcc != null
+            val normalizedBcc = normalizeRecipients(draftBcc.orEmpty())
 
             // Обновляем метаданные вложений с сервера перед чтением из БД (эталон).
             // Если вложение добавлено в Outlook на ПК — без этого вызова его не будет
@@ -1324,9 +1333,11 @@ class ComposeViewModel(
             val collectionId = folder?.serverId
             val emailServerId = draft.serverId
 
+            // Роли вложений — по телу, которое откроется (обновлённому с сервера, с cid:), а не по прежней записи.
+            val rolesBody = draftBody
             val attachmentResult = attachmentLoader.loadAttachments(
                 source = AttachmentLoader.AttachmentSource.Draft,
-                email = draft,
+                email = draft.copy(body = rolesBody),
                 easClient = easClient,
                 collectionId = collectionId,
                 emailServerId = emailServerId
@@ -1364,6 +1375,25 @@ class ComposeViewModel(
                     val loadedAttachments = attachmentResult.fileAttachments.map { att ->
                         AttachmentItem(att.uri, att.name, att.mimeType, att.size)
                     }
+                    // Картинки, загруженные при открытии, есть на сервере — правка текста уходит UpdateItem.
+                    draftKnownImageCids = if (isServerDraft) {
+                        (attachmentResult.inlineImages + attachmentResult.embeddedImages).entries.associate { (cid, dataUrl) ->
+                            dataUrl to com.dedovmosol.iwomail.util.normalizeContentId(cid)
+                        }
+                    } else {
+                        emptyMap()
+                    }
+                    // Не загрузившаяся картинка, которую подставил запасной путь (MIME с сервера), — уже в теле.
+                    draftUnloadedAttachmentIds = if (attachmentResult.unloadedAttachmentIds.isEmpty()) emptySet() else {
+                        val rows = withContext(dispatcher) { mailRepository.getAttachmentsSync(draftId) }.associateBy { it.id }
+                        val stillReferenced = com.dedovmosol.iwomail.util.referencedContentIds(draftBody)
+                        attachmentResult.unloadedAttachmentIds.filter { id ->
+                            val row = rows[id] ?: return@filter false
+                            com.dedovmosol.iwomail.data.repository.draftAttachmentRole(rolesBody, row.contentId) ==
+                                com.dedovmosol.iwomail.data.repository.DraftAttachmentRole.FILE ||
+                                com.dedovmosol.iwomail.util.containsContentId(stillReferenced, row.contentId)
+                        }.toSet()
+                    }
 
                     _uiState.update { state ->
                         state.copy(
@@ -1371,9 +1401,9 @@ class ComposeViewModel(
                             editingDraft = draft,
                             to = normalizedTo,
                             cc = normalizedCc,
-                            // Bcc черновиков не хранится в EAS (MS-AS_EMAIL: поле отсутствует),
-                            // поле остаётся пустым — совпадает с поведением старого ComposeScreen
-                            bcc = "",
+                            // Скрытые копии EAS до 16.0 не передаёт: известны — сохранённые приложением
+                            // или узнанные по EWS при открытии; иначе поле пустое и их не стирает.
+                            bcc = normalizedBcc,
                             subject = draft.subject,
                             body = draftBody,
                             importance = draft.importance,
@@ -1382,8 +1412,8 @@ class ComposeViewModel(
                             // Пересчёт валидации и флагов для загруженных значений
                             toValid = isValidRecipientList(normalizedTo),
                             ccValid = isValidRecipientList(normalizedCc),
-                            bccValid = true,
-                            hasRecipients = calculateHasRecipients(normalizedTo, normalizedCc, ""),
+                            bccValid = isValidRecipientList(normalizedBcc),
+                            hasRecipients = calculateHasRecipients(normalizedTo, normalizedCc, normalizedBcc),
                             isLoading = false
                         )
                     }
@@ -1530,149 +1560,6 @@ class ComposeViewModel(
     }
 
     // ========== Private: отправка/черновик — внутренние шаги ==========
-
-    /**
-     * Сохранение существующего черновика (ветка редактирования). Портировано из
-     * ComposeScreen.saveDraft: delete+create при вложениях (EWS UpdateItem не умеет
-     * удалять вложения — MS docs), защита от «воскрешения», верификация новой записи.
-     */
-    private suspend fun saveExistingDraft(
-        draftId: String,
-        account: AccountEntity,
-        to: String,
-        cc: String,
-        bcc: String,
-        subject: String,
-        serverBody: String,
-        localBody: String,
-        allServerAttachments: List<DraftAttachmentData>
-    ): Boolean {
-        val email = withContext(dispatcher) { mailRepository.getEmailSync(draftId) }
-
-        if (email == null) {
-            // Запись не найдена (удалена фоном) — создаём новый черновик
-            val serverId = withContext(dispatcher) {
-                mailRepository.saveDraft(
-                    accountId = account.id,
-                    to = to, cc = cc, bcc = bcc,
-                    subject = subject,
-                    serverBody = serverBody,
-                    localBody = localBody,
-                    fromEmail = account.email,
-                    fromName = account.displayName,
-                    hasAttachments = allServerAttachments.isNotEmpty(),
-                    attachmentFiles = allServerAttachments
-                )
-            }
-            return serverId != null
-        }
-
-        // #3: delete+create нужен не только когда есть ТЕКУЩИЕ вложения, но и когда
-        // исходный черновик ИМЕЛ вложения (email.hasAttachments), а пользователь их
-        // все удалил: EWS UpdateItem/SetItemField НЕ умеет удалять вложения.
-        if (allServerAttachments.isNotEmpty() || email.hasAttachments) {
-            // При наличии вложений: СНАЧАЛА создаём новый, ПОТОМ удаляем старый.
-            // Если создание не удалось — старый черновик остаётся (защита от потери данных).
-            val oldServerId = email.serverId
-            // P1 FIX: регистрируем старый черновик как «удалённый» ДО создания нового.
-            // Это предотвращает восстановление старого черновика фоновой синхронизацией
-            // (PushService/SyncWorker) в окне между create нового и delete старого.
-            EmailSyncService.registerDeletedEmail(draftId, context)
-
-            val newServerId = withContext(dispatcher) {
-                mailRepository.saveDraft(
-                    accountId = account.id,
-                    to = to, cc = cc, bcc = bcc,
-                    subject = subject,
-                    serverBody = serverBody,
-                    localBody = localBody,
-                    fromEmail = account.email,
-                    fromName = account.displayName,
-                    hasAttachments = allServerAttachments.isNotEmpty(),
-                    attachmentFiles = allServerAttachments
-                )
-            }
-            val success = newServerId != null
-
-            // Удаляем старый черновик ТОЛЬКО после успешного создания нового.
-            // КРИТИЧНО: передаём excludeEwsItemId = newServerId,
-            // чтобы deleteDraft НЕ удалил НОВЫЙ черновик при поиске по subject.
-            if (success && newServerId != null) {
-                withContext(dispatcher) {
-                    try {
-                        mailRepository.deleteDraft(account.id, oldServerId, excludeEwsItemId = newServerId)
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e else Unit
-                    }
-                }
-                // ЗАЩИТА: верифицируем что новая запись существует в БД.
-                // deleteDraft может случайно удалить не тот черновик или
-                // sync-loop внутри deleteDraft может продвинуть syncKey
-                // мимо нового Add. Если запись пропала — воссоздаём.
-                val newEmailId = "${account.id}_$newServerId"
-                val verified = withContext(dispatcher) { mailRepository.getEmailSync(newEmailId) }
-                if (verified == null) {
-                    withContext(dispatcher) {
-                        try {
-                            val previewText = localBody
-                                .replace(HTML_TAG_STRIP_REGEX, " ")
-                                .replace(WHITESPACE_COLLAPSE_REGEX, " ")
-                                .trim().take(150)
-                            val fallback = EmailEntity(
-                                id = newEmailId,
-                                accountId = account.id,
-                                folderId = email.folderId,
-                                serverId = newServerId,
-                                from = account.email,
-                                fromName = account.displayName,
-                                to = to,
-                                cc = cc,
-                                subject = subject,
-                                preview = previewText,
-                                body = localBody,
-                                bodyType = 2,
-                                dateReceived = System.currentTimeMillis(),
-                                read = true,
-                                hasAttachments = allServerAttachments.isNotEmpty()
-                            )
-                            // P3 FIX: восстанавливаем записи вложений (иначе черновик
-                            // появляется в списке, но при открытии вложений нет).
-                            val attEntities = allServerAttachments.map { att ->
-                                AttachmentEntity(
-                                    emailId = newEmailId,
-                                    fileReference = "",
-                                    displayName = att.name,
-                                    contentType = att.mimeType,
-                                    estimatedSize = att.data.size.toLong(),
-                                    isInline = att.isInline,
-                                    contentId = att.contentId
-                                )
-                            }
-                            // Атомарная вставка (единая точка записи — репозиторий)
-                            mailRepository.insertDraftRecord(fallback, attEntities)
-                        } catch (e: Exception) {
-                            if (e is CancellationException) throw e else Unit
-                        }
-                    }
-                }
-            }
-            return success
-        } else {
-            // Без вложений — обычный updateDraft
-            val result = withContext(dispatcher) {
-                mailRepository.updateDraft(
-                    accountId = account.id,
-                    serverId = email.serverId,
-                    to = to, cc = cc, bcc = bcc,
-                    subject = subject,
-                    body = localBody,
-                    fromEmail = account.email,
-                    fromName = account.displayName
-                )
-            }
-            return result is EasResult.Success
-        }
-    }
 
     /**
      * Читает байты вложений (общий для отправки/черновика/планирования).
@@ -1913,6 +1800,18 @@ class ComposeViewModel(
 
     private fun accountNotFoundMessage(): String =
         if (isRussian()) "Аккаунт не найден" else "Account not found"
+
+    /** Текст для Failed из DraftSaver: причина сохранения не удалось, прежняя версия цела. */
+    private fun draftFailureMessage(reason: String?): String = when (reason) {
+        DraftSaver.ATTACHMENTS_UNAVAILABLE -> if (isRussian())
+            "Не все вложения черновика загружены с сервера — сохранение удалило бы их. Проверьте подключение и повторите"
+            else "Not all draft attachments are loaded from the server — saving would remove them. Check the connection and try again"
+        DraftSaver.SERVER_REJECTED -> if (isRussian())
+            "Сервер не принял черновик — на сервере осталась прежняя версия"
+            else "The server did not accept the draft — the previous version stays on the server"
+        null, "" -> draftSaveErrorMessage()
+        else -> "${draftSaveErrorMessage()}: ${com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(reason, isRussian())}"
+    }
 
     private fun draftSaveErrorMessage(): String =
         if (isRussian()) "Ошибка сохранения черновика" else "Draft save error"

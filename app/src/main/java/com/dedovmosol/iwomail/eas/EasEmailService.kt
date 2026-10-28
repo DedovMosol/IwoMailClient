@@ -261,7 +261,7 @@ class EasEmailService internal constructor(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка отправки письма: ${e.message}")
+                EasResult.Error("Ошибка отправки письма: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -382,7 +382,7 @@ class EasEmailService internal constructor(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("SmartForward ошибка: ${e.message}")
+                EasResult.Error("SmartForward ошибка: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -400,6 +400,8 @@ class EasEmailService internal constructor(
             var mdnRequestedBy: String? = null
             var originalMessageId: String? = null
             var bodyContent = ""
+            // HTML целиком: не обрезано сервером (TruncationSize запроса или политика) и не текстовая замена
+            var complete = false
 
             // HTML fallback (Type=2)
             val htmlResult = fetchItemBody(
@@ -407,12 +409,13 @@ class EasEmailService internal constructor(
                 bodyType = 2, truncationSize = BODY_TRUNCATION_SIZE
             )
 
-            if (htmlResult is EasResult.Success && htmlResult.data == SENTINEL_NOT_FOUND) {
+            if (htmlResult is EasResult.Success && htmlResult.data.data == SENTINEL_NOT_FOUND) {
                 return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
             }
 
-            if (htmlResult is EasResult.Success && htmlResult.data.isNotBlank()) {
-                bodyContent = htmlResult.data
+            if (htmlResult is EasResult.Success && htmlResult.data.data.isNotBlank()) {
+                bodyContent = htmlResult.data.data
+                complete = !htmlResult.data.truncated
             }
 
             // Plain text fallback (Type=1)
@@ -422,12 +425,12 @@ class EasEmailService internal constructor(
                     bodyType = 1, truncationSize = BODY_TRUNCATION_SIZE
                 )
 
-                if (plainResult is EasResult.Success && plainResult.data == SENTINEL_NOT_FOUND) {
+                if (plainResult is EasResult.Success && plainResult.data.data == SENTINEL_NOT_FOUND) {
                     return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
                 }
 
                 if (plainResult is EasResult.Success) {
-                    bodyContent = plainResult.data
+                    bodyContent = plainResult.data.data
                 } else if (plainResult is EasResult.Error) {
                     return@withTimeoutOrNull EasResult.Error(plainResult.message)
                 }
@@ -440,12 +443,12 @@ class EasEmailService internal constructor(
                     mimeSupport = 2, includeBodyFallback = false
                 )
 
-                if (mimeResult is EasResult.Success && mimeResult.data == SENTINEL_NOT_FOUND && bodyContent.isEmpty()) {
+                if (mimeResult is EasResult.Success && mimeResult.data.data == SENTINEL_NOT_FOUND && bodyContent.isEmpty()) {
                     return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
                 }
 
-                if (mimeResult is EasResult.Success && mimeResult.data.isNotEmpty() && mimeResult.data != SENTINEL_NOT_FOUND) {
-                    val decodedMimeData = decodeMimeData(mimeResult.data)
+                if (mimeResult is EasResult.Success && mimeResult.data.data.isNotEmpty() && mimeResult.data.data != SENTINEL_NOT_FOUND) {
+                    val decodedMimeData = decodeMimeData(mimeResult.data.data)
                     val mimeHeaders = extractTopLevelMimeHeaders(decodedMimeData)
                     mdnRequestedBy = parseMdnHeader(mimeHeaders)
                     originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
@@ -456,7 +459,8 @@ class EasEmailService internal constructor(
                 EmailBodyResult(
                     body = bodyContent,
                     mdnRequestedBy = mdnRequestedBy,
-                    originalMessageId = originalMessageId
+                    originalMessageId = originalMessageId,
+                    complete = complete
                 )
             )
         } ?: EasResult.Error("Timeout loading email body")
@@ -467,7 +471,8 @@ class EasEmailService internal constructor(
      * Поддерживает EAS 12.1+: BodyPreference (Type + TruncationSize) и MIMESupport.
      *
      * @param includeBodyFallback true для HTML/Plain (где Data может быть в <Body>), false для MIME
-     * @return EasResult.Success с телом (или SENTINEL_NOT_FOUND / пустая строка при Truncated)
+     * @return EasResult.Success с телом (или SENTINEL_NOT_FOUND / пустая строка при Truncated) и признаком
+     *   обрезки ([MS-ASAIRS] Truncated)
      */
     private suspend fun fetchItemBody(
         collectionId: String,
@@ -476,7 +481,7 @@ class EasEmailService internal constructor(
         truncationSize: Int,
         mimeSupport: Int? = null,
         includeBodyFallback: Boolean = true
-    ): EasResult<String> {
+    ): EasResult<FetchedBody> {
         val safeCollectionId = deps.escapeXml(collectionId)
         val safeServerId = deps.escapeXml(serverId)
         val mimeSupportXml = if (mimeSupport != null)
@@ -502,7 +507,7 @@ class EasEmailService internal constructor(
                 .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
                 ?: deps.extractValue(responseXml, "Status")?.toIntOrNull()
             if (status == 8) {
-                return@executeEasCommand SENTINEL_NOT_FOUND
+                return@executeEasCommand FetchedBody(SENTINEL_NOT_FOUND, truncated = false)
             }
 
             val data = XmlUtils.unescape(
@@ -511,11 +516,43 @@ class EasEmailService internal constructor(
                     ?: AIRSYNC_DATA_REGEX.find(responseXml)?.groupValues?.get(1)
                     ?: ""
             )
-            val truncated = deps.extractValue(responseXml, "Truncated")
-            if (truncated == "1" && data.isBlank()) {
-                return@executeEasCommand ""
+            val truncated = deps.extractValue(responseXml, "Truncated") == "1"
+            FetchedBody(if (truncated && data.isBlank()) "" else data, truncated)
+        }
+    }
+
+    /** Тело из ItemOperations Fetch: [truncated] — сервер прислал не всё. */
+    private data class FetchedBody(val data: String, val truncated: Boolean)
+
+    /**
+     * Тема элемента по его EAS ServerId (ItemOperations Fetch, без тела). Нужна, чтобы найти тот же элемент через EWS
+     * (EAS ServerId в EWS ItemId не переводится). Пустая тема — Success(""); нет элемента — ошибка со статусом.
+     */
+    suspend fun fetchItemSubject(collectionId: String, serverId: String): EasResult<String> {
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+<ItemOperations xmlns="ItemOperations">
+    <Fetch>
+        <Store>Mailbox</Store>
+        <CollectionId xmlns="AirSync">${deps.escapeXml(collectionId)}</CollectionId>
+        <ServerId xmlns="AirSync">${deps.escapeXml(serverId)}</ServerId>
+        <Options>
+            <BodyPreference xmlns="AirSyncBase">
+                <Type>1</Type>
+                <TruncationSize>0</TruncationSize>
+            </BodyPreference>
+        </Options>
+    </Fetch>
+</ItemOperations>""".trimIndent()
+        val result = deps.executeEasCommand("ItemOperations", xml) { responseXml ->
+            val status = EasPatterns.ITEM_OPS_FETCH_STATUS.find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
+            status to XmlUtils.unescape(deps.extractValue(responseXml, "Subject").orEmpty())
+        }
+        return when (result) {
+            is EasResult.Success -> {
+                val (status, subject) = result.data
+                if (status == null || status == 1) EasResult.Success(subject) else EasResult.Error("ItemOperations Fetch status=$status")
             }
-            data
+            is EasResult.Error -> result
         }
     }
 
@@ -1009,7 +1046,7 @@ $itemChanges
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("EWS delete error: ${e.message}")
+            EasResult.Error("EWS delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -1240,7 +1277,9 @@ $deleteCommands
         val date = dateFormat.format(java.util.Date())
 
         // Извлекаем inline картинки из data: URLs
-        val dataImagePattern = Regex("""<img[^>]*src="data:image/(jpeg|jpg|png|gif);base64,([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
+        // Те же форматы, что в пути с вложениями (EasAttachmentService): webp/bmp раньше оставались data: URL,
+        // которые Outlook (рендер через Word) не показывает.
+        val dataImagePattern = Regex("""<img[^>]*src="data:image/(jpeg|jpg|png|gif|webp|bmp);base64,([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
         val matches = dataImagePattern.findAll(body).toList()
 
         val sb = StringBuilder()
@@ -1298,7 +1337,7 @@ $deleteCommands
                 val contentId = "image${index + 1}@$deviceId"
 
                 sb.append("--$boundary\r\n")
-                sb.append("Content-Type: image/$imageType\r\n")
+                sb.append("Content-Type: ${inlineImageMimeType(imageType)}\r\n")
                 sb.append("Content-Transfer-Encoding: base64\r\n")
                 sb.append("Content-ID: <$contentId>\r\n")
                 sb.append("Content-Disposition: inline\r\n")

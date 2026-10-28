@@ -132,7 +132,8 @@ fun VerificationScreen(
                 }
             }
             message.startsWith("Ошибка отправки письма:") -> {
-                val details = message.substringAfter(":").trim()
+                // Сетевой сбой ([NET:…]) — понятным текстом на языке интерфейса, а не меткой
+                val details = NotificationStrings.localizeError(message.substringAfter(":").trim(), isRussianLang)
                 if (isRussianLang) {
                     "Ошибка отправки письма: $details"
                 } else {

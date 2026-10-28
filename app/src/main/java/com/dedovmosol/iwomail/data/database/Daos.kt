@@ -220,7 +220,7 @@ interface EmailDao {
         SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
-               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId
         FROM emails
         WHERE folderId = :folderId
         ORDER BY dateReceived DESC
@@ -235,6 +235,17 @@ interface EmailDao {
 
     @Query("SELECT id, serverId, subject, `from`, `to`, dateReceived FROM emails WHERE folderId = :folderId")
     suspend fun getDedupInfoByFolder(folderId: String): List<EmailDedupInfo>
+
+    /** Черновики на устройстве (local_draft_) — целиком: их загружает синхронизация (тела остальных не читаются). */
+    @Query("SELECT * FROM emails WHERE folderId = :folderId AND substr(serverId, 1, 12) = 'local_draft_'")
+    suspend fun getLocalDrafts(folderId: String): List<EmailEntity>
+
+    /** Записи с отметкой «заменяет» (прежние версии на сервере ещё не удалены). */
+    @Query("SELECT * FROM emails WHERE folderId = :folderId AND replacesServerId IS NOT NULL")
+    suspend fun getReplacingEmails(folderId: String): List<EmailEntity>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM emails WHERE folderId = :folderId AND subject = :subject AND id NOT IN (:exceptIds))")
+    suspend fun hasEmailWithSubject(folderId: String, subject: String, exceptIds: List<String>): Boolean
 
     @Query("SELECT * FROM emails WHERE folderId = :folderId ORDER BY dateReceived DESC LIMIT :limit OFFSET :offset")
     suspend fun getEmailsByFolderPaged(folderId: String, limit: Int, offset: Int): List<EmailEntity>
@@ -267,6 +278,13 @@ interface EmailDao {
     suspend fun updateCc(id: String, cc: String)
     @Query("UPDATE emails SET bcc = :bcc WHERE id = :id")
     suspend fun updateBcc(id: String, bcc: String?)
+    @Query("UPDATE emails SET hasAttachments = :hasAttachments WHERE id = :id")
+    suspend fun updateHasAttachments(id: String, hasAttachments: Boolean)
+    @Query("UPDATE emails SET replacesServerId = :serverId WHERE id = :id")
+    suspend fun updateReplacesServerId(id: String, serverId: String?)
+    // Серверные черновики, которые заменены (правка без связи) и ждут удаления — синхронизация их не показывает
+    @Query("SELECT replacesServerId FROM emails WHERE folderId = :folderId AND replacesServerId IS NOT NULL")
+    suspend fun getReplacedServerIds(folderId: String): List<String>
 
     // Обновление полей черновика одним запросом БЕЗ REPLACE.
     // КРИТИЧНО: emailDao.insert() с REPLACE = DELETE + INSERT.
@@ -416,7 +434,7 @@ interface EmailDao {
         SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
-               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId
         FROM emails
         WHERE accountId = :accountId AND flagged = 1
         ORDER BY dateReceived DESC
@@ -603,7 +621,7 @@ interface EmailDao {
                e.`to`, e.cc, e.subject, e.preview, '' AS body, e.bodyType,
                e.dateReceived, e.read, e.flagged, e.importance, e.hasAttachments,
                e.originalFolderId, e.mdnRequestedBy, e.mdnSent, e.messageClass,
-               e.internetMessageId, e.bcc
+               e.internetMessageId, e.bcc, e.replacesServerId
         FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
         WHERE e.accountId = :accountId
@@ -775,6 +793,10 @@ interface AttachmentDao {
         WHERE e.accountId = :accountId AND a.localPath IS NOT NULL
     """)
     suspend fun getLocalPathsByAccount(accountId: Long): List<String>
+
+    /** Пути файлов в каталоге [dir] (с разделителем на конце), на которые есть записи вложений. */
+    @Query("SELECT localPath FROM attachments WHERE localPath IS NOT NULL AND substr(localPath, 1, length(:dir)) = :dir")
+    suspend fun getLocalPathsUnder(dir: String): List<String>
 }
 
 /**

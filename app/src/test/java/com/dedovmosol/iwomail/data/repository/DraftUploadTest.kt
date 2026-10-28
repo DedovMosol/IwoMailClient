@@ -51,4 +51,37 @@ class DraftUploadTest {
             Triple("logo.png", false, null)
         )
     }
+
+    @Test
+    fun `carried attachment flagged inline is uploaded as a file unless its bytes are a picture of the body`() {
+        // Перенесены ссылкой на сервер (правка без связи); синхронизация пометила их inline по Content-ID.
+        val pdf = byteArrayOf(5, 6, 7)
+        val logo = java.util.Base64.getDecoder().decode(png)
+        val stored = listOf(
+            att("report.pdf", isInline = true, contentId = "report@corp", type = "application/pdf").copy(fileReference = "5%3a1%3a0"),
+            att("logo.png", isInline = true, contentId = "logo@corp").copy(fileReference = "5%3a1%3a1")
+        )
+        val body = """<p>Hi</p><img src="data:image/png;base64,$png">"""
+
+        val (_, parts) = DraftUpload.prepare(body, stored, stamp = 3L) { a -> if (a.displayName == "report.pdf") pdf else logo }
+
+        // Файл не пропал; логотип уже в теле — второй копией не уходит.
+        assertThat(parts.map { Triple(it.name, it.isInline, it.contentId) }).containsExactly(
+            Triple("image_1.png", true, "img1_3"),
+            Triple("report.pdf", false, null)
+        )
+    }
+
+    @Test
+    fun `images removed from a device draft body are found, referenced, plain and not downloaded ones are kept`() {
+        val kept = att("kept.png", isInline = true, contentId = "<IMG2@corp>")
+        val removed = att("image_1.png", isInline = true, contentId = "img1_5")
+        val file = att("logo.png", isInline = false, contentId = "logo@corp")
+        // Ещё не скачанная картинка серверного черновика (перенесена без связи) — ссылка на сервер, не трогаем.
+        val notDownloaded = att("server.png", isInline = true, contentId = "srv@corp").copy(fileReference = "5%3a1%3a0", localPath = null)
+        val body = """<p>Hi</p><img src="cid:img2@corp"><img src="data:image/png;base64,$png">"""
+
+        assertThat(DraftUpload.unreferencedInlineImages(listOf(kept, removed, file, notDownloaded), body))
+            .containsExactly(removed)
+    }
 }

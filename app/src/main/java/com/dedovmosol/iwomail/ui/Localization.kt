@@ -547,6 +547,27 @@ object Strings {
     val saveDraft: String @Composable get() = if (isRussian()) "Сохранить" else "Save"
     val draftSaved: String @Composable get() = if (isRussian()) "Черновик сохранён" else "Draft saved"
     val draftSaveError: String @Composable get() = if (isRussian()) "Ошибка сохранения черновика" else "Draft save error"
+    val draftSavedOffline: String @Composable get() = if (isRussian())
+        "Нет связи с сервером: черновик сохранён на устройстве и загрузится на сервер при подключении"
+        else "No connection to the server: the draft is saved on the device and will be uploaded when online"
+    val draftSavedOnDeviceOnly: String @Composable get() = if (isRussian())
+        "Сервер не принял черновик — он сохранён только на устройстве"
+        else "The server did not accept the draft — it is saved on the device only"
+    val draftServerRejected: String @Composable get() = if (isRussian())
+        "Сервер не принял черновик — на сервере осталась прежняя версия"
+        else "The server did not accept the draft — the previous version stays on the server"
+    val draftAttachmentsUnavailable: String @Composable get() = if (isRussian())
+        "Не все вложения черновика загружены с сервера — сохранение удалило бы их. Проверьте подключение и повторите"
+        else "Not all draft attachments are loaded from the server — saving would remove them. Check the connection and try again"
+    val draftSavedKeepingPrevious: String @Composable get() = if (isRussian())
+        "Черновик сохранён. Прежняя версия оставлена на сервере: её скрытые копии (Bcc) не удалось узнать"
+        else "Draft saved. The previous version is kept on the server: its Bcc recipients could not be read"
+    val draftSavedOfflineKeepingPrevious: String @Composable get() = if (isRussian())
+        "Нет связи с сервером: черновик сохранён на устройстве. Прежняя версия останется на сервере: её скрытые копии (Bcc) не известны"
+        else "No connection to the server: the draft is saved on the device. The previous version stays on the server: its Bcc recipients are unknown"
+    val draftAttachmentsNotLoaded: String @Composable get() = if (isRussian())
+        "Часть вложений черновика не загружена с сервера — они сохранятся в черновике"
+        else "Some draft attachments are not loaded from the server — they will be kept in the draft"
     val discardDraftQuestion: String @Composable get() = if (isRussian()) "Сохранить черновик?" else "Save draft?"
     val draftWillBeDeleted: String @Composable get() = if (isRussian()) "Сохранить письмо в черновики?" else "Save email to drafts?"
     val selectSender: String @Composable get() = if (isRussian()) "Выберите отправителя" else "Select sender"

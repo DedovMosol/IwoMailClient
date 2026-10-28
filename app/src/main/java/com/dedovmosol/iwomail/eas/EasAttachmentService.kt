@@ -124,7 +124,7 @@ class EasAttachmentService internal constructor(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка отправки: ${e.message}")
+            EasResult.Error("Ошибка отправки: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -208,7 +208,7 @@ class EasAttachmentService internal constructor(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("SmartForward ошибка: ${e.message}")
+            EasResult.Error("SmartForward ошибка: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -303,7 +303,7 @@ class EasAttachmentService internal constructor(
                 val contentId = "image${index + 1}@$deviceId"
 
                 sb.append("--$relatedBoundary\r\n")
-                sb.append("Content-Type: image/$imageType\r\n")
+                sb.append("Content-Type: ${inlineImageMimeType(imageType)}\r\n")
                 sb.append("Content-Transfer-Encoding: base64\r\n")
                 sb.append("Content-ID: <$contentId>\r\n")
                 sb.append("Content-Disposition: inline\r\n")
@@ -383,7 +383,7 @@ class EasAttachmentService internal constructor(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка отправки MDN: ${e.message}")
+            EasResult.Error("Ошибка отправки MDN: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -659,7 +659,7 @@ class EasAttachmentService internal constructor(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка: ${e.message}")
+                EasResult.Error("Ошибка: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -716,7 +716,7 @@ class EasAttachmentService internal constructor(
             } catch (e: Exception) {
                 destFile.delete()
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка: ${e.message}")
+                EasResult.Error("Ошибка: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }

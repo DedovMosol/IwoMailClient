@@ -93,6 +93,8 @@ class ComposeViewModelTest {
         coEvery { contactRepo.searchForAutocomplete(any(), any(), any(), any()) } returns emptyList()
         coEvery { mailRepo.searchEmailHistory(any(), any(), any(), any()) } returns emptyList()
         coEvery { contactRepo.searchGAL(any(), any(), any()) } returns EasResult.Error("no network")
+        // Сервер отвечает: черновик сохраняется на сервере (DraftSaver проверяет связь до сохранения)
+        coEvery { accountRepo.isCurrentEndpointReachable(any()) } returns true
     }
 
     @After
@@ -107,6 +109,7 @@ class ComposeViewModelTest {
         every { acc.displayName } returns "Me"
         every { acc.signature } returns ""
         every { acc.isActive } returns true
+        every { acc.draftMode } returns com.dedovmosol.iwomail.data.database.DraftMode.SERVER.name
         return acc
     }
 
@@ -606,7 +609,7 @@ class ComposeViewModelTest {
         vm.setSubject("Draft")
         vm.setBody("text")
         coEvery {
-            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns "ewsItemId123"
 
         vm.saveDraft()
@@ -625,7 +628,7 @@ class ComposeViewModelTest {
         advanceUntilIdle()
         vm.setTo("john@corp.com")
         coEvery {
-            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
         } throws IOException("Network error")
 
         vm.saveDraft()
@@ -649,7 +652,7 @@ class ComposeViewModelTest {
         assertThat(event).isInstanceOf(ComposeEvent.AttachmentLimitExceeded::class.java)
         assertThat(vm.uiState.value.isSavingDraft).isFalse()
         coVerify(exactly = 0) {
-            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
         }
     }
 
@@ -660,7 +663,7 @@ class ComposeViewModelTest {
         vm.setTo("John Doe <john@corp.com>, john@corp.com")
         vm.setSubject("S")
         coEvery {
-            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns "id1"
 
         vm.saveDraft()
@@ -678,7 +681,9 @@ class ComposeViewModelTest {
                 fromEmail = "me@corp.com",
                 fromName = "Me",
                 hasAttachments = false,
-                attachmentFiles = emptyList()
+                attachmentFiles = emptyList(),
+                importance = 1,
+                forceLocal = false
             )
         }
     }
@@ -928,13 +933,16 @@ class ComposeViewModelTest {
         coEvery { mailRepo.getFolderSync("folder_1") } returns folderEntity()
         coEvery { accountRepo.getAccount(ACCOUNT_ID) } returns account()
         coEvery { accountRepo.createEasClient(ACCOUNT_ID) } returns mockk()
-        coEvery { mailRepo.loadEmailBody("d1") } returns EasResult.Success("<p>from server</p>")
+        // Тело серверного черновика — свежее с сервера по точному id (не поиск по теме, как loadEmailBody)
+        coEvery { mailRepo.refreshServerDraft("d1") } returns
+            com.dedovmosol.iwomail.data.repository.EmailOperationsService.DraftRefresh(body = "<p>from server</p>", bcc = null)
 
         val vm = createViewModel(editDraftId = "d1")
         advanceUntilIdle()
 
         assertThat(vm.uiState.value.body).isEqualTo("<p>from server</p>")
-        coVerify(exactly = 1) { mailRepo.loadEmailBody("d1") }
+        coVerify(exactly = 1) { mailRepo.refreshServerDraft("d1") }
+        coVerify(exactly = 0) { mailRepo.loadEmailBody(any(), any()) }
     }
 
     @Test
@@ -950,6 +958,7 @@ class ComposeViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) { mailRepo.loadEmailBody(any()) }
+        coVerify(exactly = 0) { mailRepo.refreshServerDraft(any()) }
         coVerify(exactly = 0) { mailRepo.refreshAttachmentMetadata(any()) }
     }
 
@@ -1324,7 +1333,7 @@ class ComposeViewModelTest {
 
         assertThat(vm.uiState.value.showDiscardDialog).isFalse()
         // saveDraft сохранил черновик и закрыл экран (проверяем через репозиторий)
-        coVerify { mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify { mailRepo.saveDraft(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
     }
 
     @Test

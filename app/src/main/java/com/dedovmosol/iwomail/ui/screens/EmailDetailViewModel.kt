@@ -68,6 +68,8 @@ data class EmailDetailUiState(
     val bodyLoadError: BodyLoadError? = null,
     val inlineImages: Map<String, String> = emptyMap(),
     val isLoadingInlineImages: Boolean = false,
+    // Content-ID, на которые ссылается тело (cid:); null — тело ещё не разобрано (см. isShownInBody)
+    val inlineContentIds: Set<String>? = null,
     val isMoving: Boolean = false,
     val isRestoring: Boolean = false,
     val isDeleting: Boolean = false,
@@ -183,8 +185,23 @@ class EmailDetailViewModel(
             combine(emailFlow, attachmentsFlow) { email, attachments ->
                 email?.let { InlineKey(it.body, it.bodyType, it.serverId, it.folderId, it.accountId, attachments) }
             }.distinctUntilChanged().collectLatest { key ->
-                if (key == null || key.body.isEmpty()) return@collectLatest
-                _uiState.update { it.copy(isLoadingInlineImages = true) }
+                if (key == null || key.body.isEmpty()) {
+                    _uiState.update { it.copy(inlineContentIds = null) }
+                    return@collectLatest
+                }
+                // Ссылки cid: тела (MIME — по его HTML-части): какие вложения показаны в тексте, а какие — файлы.
+                val referenced = try {
+                    withContext(ioDispatcher) {
+                        com.dedovmosol.iwomail.util.referencedContentIds(
+                            com.dedovmosol.iwomail.util.processEmailBodyForDisplay(key.body, key.bodyType).text
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                _uiState.update { it.copy(isLoadingInlineImages = true, inlineContentIds = referenced) }
                 try {
                     val loaded = withTimeoutOrNull(20_000L) {
                         actions.loadInlineImages(

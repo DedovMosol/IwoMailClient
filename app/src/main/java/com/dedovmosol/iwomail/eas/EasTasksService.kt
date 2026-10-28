@@ -758,7 +758,7 @@ class EasTasksService internal constructor(
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.e("EasTasksService", "syncTasksEws: exception: ${e.message}")
             // Раньше: Success(emptyList()) — репозиторий принимал сбой за пустой сервер.
-            EasResult.Error("EWS: ошибка синхронизации задач: ${e.message}")
+            EasResult.Error("EWS: ошибка синхронизации задач: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     
@@ -991,7 +991,7 @@ class EasTasksService internal constructor(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка EWS: ${e.message}")
+                EasResult.Error("Ошибка EWS: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     
@@ -1046,7 +1046,7 @@ $itemIdsXml
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка batch EWS tasks: ${e.message}")
+            EasResult.Error("Ошибка batch EWS tasks: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     
@@ -1100,7 +1100,7 @@ $itemIdsXml
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка восстановления: ${e.message}")
+            EasResult.Error("Ошибка восстановления: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     
@@ -1226,7 +1226,7 @@ $itemIdsXml
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка EWS: ${e.message}")
+            EasResult.Error("Ошибка EWS: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     

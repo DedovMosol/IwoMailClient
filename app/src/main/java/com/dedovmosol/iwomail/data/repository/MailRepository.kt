@@ -110,7 +110,13 @@ class MailRepository(private val context: Context) {
     }
     
     private val emailSyncService by lazy {
-        EmailSyncService(context, folderDao, emailDao, attachmentDao, accountDao, accountRepo, database) { email, name ->
+        EmailSyncService(
+            context, folderDao, emailDao, attachmentDao, accountDao, accountRepo, database,
+            // Удаление прежней версии заменённого черновика — тем же путём, что и с экрана письма (DRY)
+            deleteServerDraft = { accountId, serverId, excludeServerId ->
+                deleteDraft(accountId, serverId, excludeServerId, requireServerDeletion = true) is EasResult.Success
+            }
+        ) { email, name ->
             cacheName(email, name)
         }
     }
@@ -155,8 +161,9 @@ class MailRepository(private val context: Context) {
     suspend fun loadEmailBody(emailId: String, forceReload: Boolean = false): EasResult<String> = 
         emailOperationsService.loadEmailBody(emailId, forceReload)
 
-    /** Свежее тело серверного черновика перед редактированием (по точному id) — [EmailOperationsService.refreshDraftBody]. */
-    suspend fun refreshDraftBody(emailId: String): String? = emailOperationsService.refreshDraftBody(emailId)
+    /** Серверный черновик перед редактированием: свежее тело и скрытые копии — [EmailOperationsService.refreshServerDraft]. */
+    suspend fun refreshServerDraft(emailId: String): EmailOperationsService.DraftRefresh? =
+        emailOperationsService.refreshServerDraft(emailId)
     
     suspend fun refreshAttachmentMetadata(emailId: String) = 
         emailOperationsService.refreshAttachmentMetadata(emailId)
@@ -366,7 +373,8 @@ class MailRepository(private val context: Context) {
     accountId: Long,
     to: String,
     cc: String,
-    bcc: String = "",
+    // null — скрытые копии не известны (только для черновика на устройстве: их возьмут с заменяемой версии)
+    bcc: String? = "",
     subject: String,
     serverBody: String,
     localBody: String,
@@ -374,7 +382,9 @@ class MailRepository(private val context: Context) {
     fromName: String,
     hasAttachments: Boolean,
     attachmentFiles: List<com.dedovmosol.iwomail.eas.DraftAttachmentData> = emptyList(),
-    importance: Int = 1
+    importance: Int = 1,
+    // Только на устройстве, без обращения к серверу (известно, что связи нет)
+    forceLocal: Boolean = false
 ): String? {
         val account = accountRepo.getAccount(accountId) ?: return null
         val draftsFolder = folderDao.getFolderByType(accountId, FolderType.DRAFTS)
@@ -391,9 +401,9 @@ class MailRepository(private val context: Context) {
                 DraftMode.SERVER
             }
             
-            val result: EasResult<String> = if (draftMode == DraftMode.LOCAL) {
-                // Локальный режим — сразу генерируем local_draft_ ID без обращения к серверу
-                EasResult.Success("local_draft_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}")
+            val result: EasResult<String> = if (draftMode == DraftMode.LOCAL || forceLocal) {
+                // Локальный режим (или нет связи) — сразу local_draft_ ID без обращения к серверу
+                EasResult.Success(com.dedovmosol.iwomail.eas.DraftIds.newDeviceOnly())
             } else {
                 val easClient = accountRepo.createEasClient(accountId)
                     ?: return null
@@ -405,7 +415,7 @@ class MailRepository(private val context: Context) {
                 easClient.createDraft(
                     to = to,
                     cc = cc,
-                    bcc = bcc,
+                    bcc = bcc.orEmpty(),
                     subject = subject,
                     body = serverBody,
                     attachments = attachmentFiles,
@@ -540,6 +550,84 @@ if (result is EasResult.Success) {
         }
     }
 
+    // === Помощники DraftSaver (domain): замена черновика, правка без связи ===
+
+    /** Отметить, что черновик [emailId] заменяет серверный [serverId] (удалить его после загрузки). */
+    suspend fun markDraftReplacing(emailId: String, serverId: String?) {
+        emailDao.updateReplacesServerId(emailId, serverId)
+    }
+
+    /** Перенести записи вложений (например, ещё не скачанных) на черновик [toEmailId]. */
+    suspend fun carryDraftAttachments(rows: List<AttachmentEntity>, toEmailId: String) {
+        if (rows.isEmpty()) return
+        val target = emailDao.getEmail(toEmailId) ?: return
+        attachmentDao.insertAll(rows.map { it.copy(id = 0, emailId = target.id) })
+        if (!target.hasAttachments) emailDao.updateHasAttachments(target.id, true)
+    }
+
+    /** Убрать черновик только на устройстве (сервер не трогается): запись, вложения и их файлы. */
+    suspend fun removeDraftLocally(emailId: String) {
+        val email = emailDao.getEmail(emailId) ?: return
+        cleanupDraftAttachmentFiles(emailId)
+        database.withTransaction {
+            attachmentDao.deleteByEmail(emailId)
+            emailDao.delete(emailId)
+        }
+        updateDraftsFolderCount(email.folderId)
+    }
+
+    /** Убрать записи вложений черновика (сначала записи, потом файлы: без записей на пропавшие файлы). */
+    private suspend fun deleteDraftAttachmentRows(emailId: String, rows: List<AttachmentEntity>) {
+        if (rows.isEmpty()) return
+        attachmentDao.deleteByIds(rows.map { it.id })
+        if (attachmentDao.getAttachmentsList(emailId).isEmpty()) emailDao.updateHasAttachments(emailId, false)
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            for (row in rows) {
+                val path = row.localPath ?: continue
+                try { java.io.File(path).delete() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    /**
+     * Байты вложения черновика: локальный файл, иначе (при [allowNetwork]) — с сервера (EAS ItemOperations или
+     * EWS GetAttachment).
+     */
+    suspend fun draftAttachmentBytes(accountId: Long, attachment: AttachmentEntity, allowNetwork: Boolean = true): ByteArray? {
+        attachment.localPath?.let { path ->
+            val file = java.io.File(path)
+            if (file.exists()) return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { file.readBytes() }
+        }
+        if (!allowNetwork || attachment.fileReference.isBlank()) return null
+        val client = accountRepo.createEasClient(accountId) ?: return null
+        return (client.downloadDraftAttachment(attachment.fileReference) as? EasResult.Success)?.data
+    }
+
+    /** Восстановить запись черновика с вложениями (файлы — заново), если её убрала фоновая синхронизация. */
+    suspend fun restoreDraftRecord(email: EmailEntity, attachments: List<com.dedovmosol.iwomail.eas.DraftAttachmentData>) {
+        val rows = prepareDraftAttachmentFiles(email.id, attachments)
+        database.withTransaction {
+            emailDao.insert(email)
+            if (rows.isNotEmpty()) attachmentDao.insertAll(rows)
+        }
+        updateDraftsFolderCount(email.folderId)
+    }
+
+    /** В папке есть другой черновик с этой темой (например, синхронизация перенесла запись под EAS ServerId). */
+    suspend fun hasOtherDraftWithSubject(folderId: String, subject: String, exceptIds: Set<String>): Boolean =
+        emailDao.hasEmailWithSubject(folderId, subject, exceptIds.toList())
+
+    /**
+     * Скрытые копии серверного черновика по его id (EWS; EAS до 16.0 их не передаёт). Записи на устройстве может
+     * уже не быть (заменённая версия). null — не узнать.
+     */
+    suspend fun serverDraftBcc(accountId: Long, serverId: String): String? {
+        if (serverId.isBlank() || com.dedovmosol.iwomail.eas.DraftIds.isLocal(serverId)) return null
+        val collectionId = folderDao.getFolderByType(accountId, FolderType.DRAFTS)?.serverId ?: return null
+        val client = accountRepo.createEasClient(accountId) ?: return null
+        return client.findDraftBcc(collectionId, serverId)
+    }
+
     /**
      * Удаляет локальные файлы вложений черновика из draft_attachments/
      */
@@ -574,7 +662,11 @@ if (result is EasResult.Success) {
         body: String,
         fromEmail: String,
         fromName: String,
-        importance: Int = 1
+        importance: Int = 1,
+        // Тело локальной копии: с data:-картинками ([body] — то, что уходит на сервер, с cid:)
+        localBody: String = body,
+        // Скрытые копии на сервере не известны: [bcc] добавляется к ним, локально они остаются неизвестными
+        appendBcc: Boolean = false
     ): EasResult<String> {
         val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error("Аккаунт не найден")
@@ -586,6 +678,8 @@ if (result is EasResult.Success) {
         val draftsFolder = folderDao.getFolderByType(accountId, FolderType.DRAFTS)
             ?: return EasResult.Error("Папка черновиков не найдена")
         val emailId = "${accountId}_${serverId}"
+        // Не крупнее окна курсора БД: иначе строку не прочитать (картинки тогда — файлы вложений).
+        val storedBody = if (localBody.length <= DraftUpload.MAX_LOCAL_BODY_CHARS) localBody else body
 
         // UPDATE in place, не insert(): REPLACE = DELETE + INSERT, а DELETE каскадом удаляет вложения.
         suspend fun saveLocally() {
@@ -594,12 +688,12 @@ if (result is EasResult.Success) {
                 to = to,
                 cc = cc,
                 subject = subject,
-                body = body,
-                preview = stripHtml(body).take(150).replace("\n", " ").trim(),
+                body = storedBody,
+                preview = stripHtml(localBody).take(150).replace("\n", " ").trim(),
                 dateReceived = System.currentTimeMillis(),
                 fromEmail = fromEmail,
                 fromName = fromName,
-                bcc = bcc,
+                bcc = bcc.takeUnless { appendBcc },
                 importance = importance
             )
             updateDraftsFolderCount(draftsFolder.id)
@@ -607,6 +701,11 @@ if (result is EasResult.Success) {
 
         if (com.dedovmosol.iwomail.eas.DraftIds.isLocal(serverId)) {
             saveLocally()
+            // Картинки, удалённые из тела (или уже встроенные data: URL), — не вложения черновика.
+            deleteDraftAttachmentRows(
+                emailId,
+                DraftUpload.unreferencedInlineImages(attachmentDao.getAttachmentsList(emailId), storedBody)
+            )
             return EasResult.Success(serverId)
         }
 
@@ -623,7 +722,7 @@ if (result is EasResult.Success) {
                 ?: return EasResult.Error(com.dedovmosol.iwomail.eas.DraftIds.NOT_RESOLVED)
         }
 
-        return when (val result = easClient.updateDraft(ewsItemId, to, cc, bcc, subject, body, importance)) {
+        return when (val result = easClient.updateDraft(ewsItemId, to, cc, bcc, subject, body, importance, appendBcc)) {
             is EasResult.Success -> {
                 // Без syncEmails: гонка SyncKey с фоновой синхронизацией (INVALID_SYNCKEY → полный resync).
                 // UpdateItem не меняет ItemId; изменения подтянет следующий фоновый sync.
@@ -638,7 +737,15 @@ if (result is EasResult.Success) {
      * @param excludeEwsItemId — EWS ItemId нового черновика (созданного saveDraft),
      *   который НЕ должен быть удалён. Защита от случайного удаления при поиске по subject.
      */
-    suspend fun deleteDraft(accountId: Long, serverId: String, excludeEwsItemId: String? = null): EasResult<Boolean> {
+    suspend fun deleteDraft(
+        accountId: Long,
+        serverId: String,
+        excludeEwsItemId: String? = null,
+        // Успех — только если черновик удалён на сервере: на Exchange 2007 неудачный EAS Delete иначе
+        // считается успехом (локальная очистка, «вернётся при синхронизации»). Нужен замене черновика:
+        // не удалённый прежний удалит синхронизация позже (EmailEntity.replacesServerId).
+        requireServerDeletion: Boolean = false
+    ): EasResult<Boolean> {
         val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error("Аккаунт не найден")
         
@@ -652,11 +759,15 @@ if (result is EasResult.Success) {
         val emailId = "${accountId}_${serverId}"
         
         if (serverId.startsWith("local_draft_")) {
+            // Черновик на устройстве мог заменять серверный (правка без связи): тот удаляется тоже —
+            // иначе прежняя версия осталась бы на сервере (в Outlook и OWA).
+            val replaced = com.dedovmosol.iwomail.eas.DraftIds.replacedIds(emailDao.getEmail(emailId)?.replacesServerId)
             // Удаляем вложения (записи + файлы)
             cleanupDraftAttachmentFiles(emailId)
             attachmentDao.deleteByEmail(emailId)
             emailDao.delete(emailId)
             updateDraftsFolderCount(draftsFolder.id)
+            for (id in replaced) deleteDraft(accountId, id, requireServerDeletion = true)
             return EasResult.Success(true)
         }
         
@@ -677,29 +788,39 @@ if (result is EasResult.Success) {
             attachmentDao.deleteByEmail(emailId)
             emailDao.delete(emailId)
             updateDraftsFolderCount(draftsFolder.id)
+            // Прежняя версия, которую этот черновик заменял и которую не удалось удалить сразу, — тоже
+            // (иначе с удалением записи пропала бы и отметка, а версия осталась бы на сервере).
+            for (id in com.dedovmosol.iwomail.eas.DraftIds.replacedIds(freshEmail?.replacesServerId)) {
+                if (id != serverId && id != excludeEwsItemId) deleteDraft(accountId, id, requireServerDeletion = true)
+            }
         }
         
         // КРИТИЧНО: Exchange 2007 игнорирует DeletesAsMoves=0 в EAS Sync Delete.
         // Черновик перемещается в "Удалённые" вместо безвозвратного удаления,
         // вызывая ошибки IMAP4 при просмотре через Outlook.
         // Решение: для Exchange 2007 используем EWS HardDelete как ОСНОВНОЙ метод.
-        if (easClient.isExchange2007()) {
-            // Шаг 1: Если serverId — полный EWS ItemId (>50 символов без ":"), удаляем напрямую
-            if (actualServerId.length >= 50 && !actualServerId.contains(":")) {
-                val ewsResult = easClient.deleteEmailPermanentlyViaEWS(actualServerId)
-                if (ewsResult is EasResult.Success) {
-                    finalizeDraftDeletion()
-                    return EasResult.Success(true)
-                }
+        // Черновик, созданный приложением (EWS ItemId, до первой синхронизации), — только через EWS, на любой
+        // версии Exchange: EAS Sync Delete с таким id ничего не удаляет, а ответ (Status коллекции = 1) выглядел
+        // бы успехом — прежняя версия оставалась на сервере.
+        if (com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(actualServerId)) {
+            val ewsResult = easClient.hardDeleteDraft(actualServerId)
+            if (ewsResult is EasResult.Error) {
+                if (requireServerDeletion) return EasResult.Error(ewsResult.message)
+                // Как и для Exchange 2007 ниже: локально удаляется, на сервере остался — вернётся с синхронизацией.
+                android.util.Log.w("MailRepository", "EWS draft delete failed (will reappear on next sync): ${ewsResult.message}")
             }
-            
+            finalizeDraftDeletion()
+            return EasResult.Success(true)
+        }
+
+        if (easClient.isExchange2007()) {
             if (actualServerId.contains(":")) {
                 val draftSubject = freshEmail?.subject ?: ""
                 if (draftSubject.isNotBlank()) {
                     // Только однозначное совпадение по теме: иначе удалился бы чужой черновик с той же темой.
                     val draftItemId = easClient.findUniqueDraftItemIdBySubject(draftSubject, excludeEwsItemId)
                     if (draftItemId != null) {
-                        val ewsDeleteResult = easClient.deleteEmailPermanentlyViaEWS(draftItemId)
+                        val ewsDeleteResult = easClient.hardDeleteDraft(draftItemId)
                         if (ewsDeleteResult is EasResult.Success) {
                             finalizeDraftDeletion()
                             return EasResult.Success(true)
@@ -721,11 +842,14 @@ if (result is EasResult.Success) {
             // Используем текущий syncKey. Если он устарел — delete может вернуть ошибку,
             // но finalizeDraftDeletion() всё равно очистит локально.
             val syncKey = folderDao.getFolder(draftsFolder.id)?.syncKey ?: draftsFolder.syncKey
-            if (syncKey != "0") {
-                val delResult = easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, syncKey)
-                if (delResult is EasResult.Error) {
-                    android.util.Log.w("MailRepository", "EAS draft delete failed (will reappear on next sync): ${delResult.message}")
-                }
+            val delResult = if (syncKey != "0") {
+                easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, syncKey)
+            } else {
+                EasResult.Error("SyncKey is 0")
+            }
+            if (delResult is EasResult.Error) {
+                if (requireServerDeletion) return EasResult.Error(delResult.message)
+                android.util.Log.w("MailRepository", "EAS draft delete failed (will reappear on next sync): ${delResult.message}")
             }
             finalizeDraftDeletion()
             return EasResult.Success(true)
@@ -778,20 +902,14 @@ if (result is EasResult.Success) {
                 // Только однозначное совпадение по теме (кроме нового черновика): иначе удалился бы чужой.
                 val uniqueItemId = easClient.findUniqueDraftItemIdBySubject(freshEmail?.subject ?: "", excludeEwsItemId)
                 if (uniqueItemId != null) {
-                    val ewsDeleteResult = easClient.deleteEmailPermanentlyViaEWS(uniqueItemId)
+                    val ewsDeleteResult = easClient.hardDeleteDraft(uniqueItemId)
                     if (ewsDeleteResult is EasResult.Success) {
                         finalizeDraftDeletion()
                         return EasResult.Success(true)
                     }
                 }
             }
-            
-            // Пробуем EWS с текущим serverId (для длинных EWS ItemIds)
-            val ewsResult = easClient.deleteEmailPermanentlyViaEWS(actualServerId)
-            if (ewsResult is EasResult.Success) {
-                finalizeDraftDeletion()
-                return EasResult.Success(true)
-            }
+            // EWS ItemId сюда не доходит (удалён выше через EWS).
         }
         
         return when (deleteResult) {

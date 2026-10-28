@@ -71,8 +71,9 @@ import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_P_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.WHITESPACE_COLLAPSE_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
 import com.dedovmosol.iwomail.ui.screens.compose.extractEmailFromString
-import com.dedovmosol.iwomail.ui.screens.compose.DraftAttachmentRole
-import com.dedovmosol.iwomail.ui.screens.compose.draftAttachmentRole
+import com.dedovmosol.iwomail.data.repository.DraftAttachmentRole
+import com.dedovmosol.iwomail.data.repository.draftAttachmentRole
+import com.dedovmosol.iwomail.ui.screens.compose.withLocalCopyUnlessEmbedded
 import com.dedovmosol.iwomail.ui.screens.compose.extractInlineImageAttachments
 import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlQuote
 import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlSignature
@@ -733,12 +734,23 @@ fun ComposeScreen(
                     val emailServerId = email.serverId
 
                     withContext(Dispatchers.IO) {
-                        for (att in originalAttachments) {
+                        // MIME-тело (тправленные) — по его HTML-части: ссылки cid: в ней
+                        val rolesBody = com.dedovmosol.iwomail.util.processEmailBodyForDisplay(email.body, email.bodyType).text
+                        val embedded = com.dedovmosol.iwomail.util.EmbeddedImages(rolesBody)
+                        for (stored in originalAttachments) {
+                            // Inline — только картинка, на которую ссылается тело письма; Content-ID без ссылки —
+                            // обычный файл (Outlook и Apple Mail ставят его и файлам), иначе он пропал бы из письма.
+                            val role = draftAttachmentRole(rolesBody, stored.contentId)
+                            // Картинка уже в теле data: URL (те же байты) — второй раз не добавляем.
+                            val att = withLocalCopyUnlessEmbedded(
+                                stored, role, embedded, java.io.File(context.filesDir, "reply_attachments"),
+                                download = { ref -> easClient?.downloadAttachment(ref) }
+                            ) ?: continue
                             try {
                                 val localPath = att.localPath
                                 if (localPath != null && java.io.File(localPath).exists()) {
                                     val file = java.io.File(localPath)
-                                    if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                    if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
@@ -762,7 +774,7 @@ fun ComposeScreen(
                                         val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                                         java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
 
-                                        if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                        if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
                                             val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
                                             inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
@@ -904,12 +916,23 @@ fun ComposeScreen(
                     val emailServerId = email.serverId
 
                     withContext(Dispatchers.IO) {
-                        for (att in originalAttachments) {
+                        // MIME-тело (тправленные) — по его HTML-части: ссылки cid: в ней
+                        val rolesBody = com.dedovmosol.iwomail.util.processEmailBodyForDisplay(email.body, email.bodyType).text
+                        val embedded = com.dedovmosol.iwomail.util.EmbeddedImages(rolesBody)
+                        for (stored in originalAttachments) {
+                            // Inline — только картинка, на которую ссылается тело письма; Content-ID без ссылки —
+                            // обычный файл (Outlook и Apple Mail ставят его и файлам), иначе он пропал бы из письма.
+                            val role = draftAttachmentRole(rolesBody, stored.contentId)
+                            // Картинка уже в теле data: URL (те же байты) — второй раз не пересылаем.
+                            val att = withLocalCopyUnlessEmbedded(
+                                stored, role, embedded, java.io.File(context.filesDir, "forward_attachments"),
+                                download = { ref -> easClient?.downloadAttachment(ref) }
+                            ) ?: continue
                             try {
                                 val localPath = att.localPath
                                 if (localPath != null && java.io.File(localPath).exists()) {
                                     val file = java.io.File(localPath)
-                                    if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                    if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
@@ -933,7 +956,7 @@ fun ComposeScreen(
                                         val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                                         java.io.FileOutputStream(file).use { it.write(downloadResult.data) }
 
-                                        if (att.isInline && !att.contentId.isNullOrBlank()) {
+                                        if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
                                             val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
                                             inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
@@ -1032,6 +1055,17 @@ fun ComposeScreen(
     // Скрытые копии черновика известны (их сохранило приложение). Черновик из Outlook приходит без них
     // (EAS до 16.0 не передаёт Bcc): тогда пустое поле при сохранении не стирает их на сервере.
     var draftBccKnown by rememberSaveable { mutableStateOf(true) }
+    // Вложения черновика, которые не удалось загрузить при открытии (id записей): при сохранении переносятся
+    var draftUnloadedAttachmentIds by rememberSaveable { mutableStateOf(listOf<Long>()) }
+    // Картинки тела, уже существующие на сервере: ключ data URL (dataUrlKey) → Content-ID. Правка только
+    // текста уходит UpdateItem без повторной загрузки картинок.
+    var draftKnownImageKeys by rememberSaveable { mutableStateOf(mapOf<String, String>()) }
+    val draftSaver = remember {
+        com.dedovmosol.iwomail.domain.DraftSaver(
+            com.dedovmosol.iwomail.domain.RepositoryDraftStore(context.applicationContext, mailRepo, accountRepo)
+        )
+    }
+    val draftAttachmentsNotLoadedMsg = Strings.draftAttachmentsNotLoaded
     var initialDraftSubject by rememberSaveable { mutableStateOf("") }
     val initialDraftBodySaver = remember { createLargeStringSaver(context.cacheDir, "draft_body") }
     var initialDraftBody by rememberSaveable(stateSaver = initialDraftBodySaver) { mutableStateOf("") }
@@ -1071,16 +1105,22 @@ fun ComposeScreen(
                 // сохранить его обрезанным (TruncationSize) или устаревшим (правка в Outlook), а сохранение
                 // такого тела перезаписало бы полное на сервере. Нет связи — остаётся сохранённое.
                 if (draft.serverId.isNotBlank() && !draft.serverId.startsWith("local_draft_")) {
-                    val fresh = withContext(Dispatchers.IO) {
+                    val refresh = withContext(Dispatchers.IO) {
                         try {
-                            mailRepo.refreshDraftBody(draftId)
+                            mailRepo.refreshServerDraft(draftId)
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             null
                         }
                     }
-                    if (!fresh.isNullOrBlank()) {
+                    refresh?.body?.takeIf { it.isNotBlank() }?.let { fresh ->
                         body = if (fresh.looksLikeHtml()) fresh else fresh.escapeHtml().replace("\n", "<br>")
+                    }
+                    // Скрытые копии черновика из Outlook (EAS их не передаёт) — узнаны по EWS
+                    refresh?.bcc?.let { serverBcc ->
+                        bcc = normalizeRecipients(serverBcc)
+                        draftBccKnown = true
+                        if (bcc.isNotBlank()) showCcBcc = true
                     }
                 }
                 // Обновляем метаданные вложений с сервера перед чтением из БД.
@@ -1096,20 +1136,40 @@ fun ComposeScreen(
                     }
                 }
                 val draftAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(draftId) }
+                // Не загрузились (есть ссылка на сервере, но скачать не вышло): сохранение их перенесёт
+                val unloadedRoles = HashMap<Long, DraftAttachmentRole>()
+                // Картинки тела, загруженные с сервера или с устройства: data URL → Content-ID
+                val imageKeys = HashMap<String, String>()
+                fun rememberImage(contentId: String, dataUrl: String) {
+                    imageKeys[com.dedovmosol.iwomail.util.dataUrlKey(dataUrl)] =
+                        com.dedovmosol.iwomail.util.normalizeContentId(contentId)
+                }
                 if (draftAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
                     val inlineImages = mutableMapOf<String, String>()
                     val account = accountRepo.getAccount(draft.accountId)
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
                     val bodyForRoles = body
+                    val embedded = com.dedovmosol.iwomail.util.EmbeddedImages(bodyForRoles)
+                    val isServerDraft = !com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)
 
                     withContext(Dispatchers.IO) {
-                        for (att in draftAttachments) {
+                        for (stored in draftAttachments) {
                             try {
                                 // Inline — только картинка, на которую ссылается тело; Content-ID без ссылки —
                                 // обычный файл (иначе он пропал бы при пересохранении черновика).
-                                val role = draftAttachmentRole(bodyForRoles, att.contentId, att.isInline)
-                                if (role == DraftAttachmentRole.EMBEDDED) continue
+                                val role = draftAttachmentRole(bodyForRoles, stored.contentId)
+                                // Картинка уже в теле data: URL (те же байты): не файл. Серверная — правка текста
+                                // сохранит её ссылкой на её cid (UpdateItem), а не новой версией черновика.
+                                val att = withLocalCopyUnlessEmbedded(
+                                    stored, role, embedded, java.io.File(context.filesDir, "draft_attachments"),
+                                    download = { ref -> easClient?.downloadDraftAttachment(ref) },
+                                    onDownloaded = { file -> mailRepo.updateAttachmentPath(stored.id, file.absolutePath) },
+                                    onEmbedded = { dataUrl ->
+                                        val cid = stored.contentId
+                                        if (isServerDraft && !cid.isNullOrBlank()) rememberImage(cid, dataUrl)
+                                    }
+                                ) ?: continue
                                 val localPath = att.localPath
                                 if (localPath != null && java.io.File(localPath).exists()) {
                                     val file = java.io.File(localPath)
@@ -1117,7 +1177,9 @@ fun ComposeScreen(
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                         val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                        inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
+                                        val dataUrl = "data:$mimeType;base64,$base64"
+                                        inlineImages[att.contentId] = dataUrl
+                                        if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(att.contentId, dataUrl)
                                     } else {
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
@@ -1135,10 +1197,14 @@ fun ComposeScreen(
                                             val safeFileName = att.displayName.replace(SAFE_FILENAME_COMPOSE_REGEX, "_")
                                             val file = java.io.File(attachmentsDir, "${System.currentTimeMillis()}_$safeFileName")
                                             java.io.FileOutputStream(file).use { it.write(result.data) }
+                                            // Скачанное — к записи: следующее открытие возьмёт его с устройства
+                                            mailRepo.updateAttachmentPath(att.id, file.absolutePath)
                                             if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                                 val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
                                                 val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
-                                                inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
+                                                val dataUrl = "data:$mimeType;base64,$base64"
+                                                inlineImages[att.contentId] = dataUrl
+                                                if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(att.contentId, dataUrl)
                                             } else {
                                                 val uri = androidx.core.content.FileProvider.getUriForFile(
                                                     context,
@@ -1150,6 +1216,7 @@ fun ComposeScreen(
                                             }
                                         }
                                         is com.dedovmosol.iwomail.eas.EasResult.Error -> {
+                                            unloadedRoles[att.id] = role
                                             android.util.Log.w("ComposeScreen", "downloadDraftAttachment failed for '${att.displayName}': ${result.message}")
                                         }
                                     }
@@ -1160,7 +1227,10 @@ fun ComposeScreen(
                                 }
                             } catch (e: Exception) {
                                 if (e is kotlinx.coroutines.CancellationException) throw e
-                                android.util.Log.w("ComposeScreen", "Error processing att '${att.displayName}': ${e.message}")
+                                if (stored.fileReference.isNotBlank()) {
+                                    unloadedRoles.getOrPut(stored.id) { draftAttachmentRole(bodyForRoles, stored.contentId) }
+                                }
+                                android.util.Log.w("ComposeScreen", "Error processing att '${stored.displayName}': ${e.message}")
                             }
                         }
                     }
@@ -1187,7 +1257,7 @@ fun ComposeScreen(
                         }
                         val collId = draftFolder?.serverId
                         val easServerId = draft.serverId
-                        val isEwsItemId = easServerId.length > 50 && easServerId.contains("=")
+                        val isEwsItemId = com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(easServerId)
                         if (collId != null && !isEwsItemId && !easServerId.startsWith("local_draft_") && easServerId.isNotBlank()) {
                             try {
                                 val fetchResult = withContext(Dispatchers.IO) {
@@ -1197,6 +1267,7 @@ fun ComposeScreen(
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         if (fetchResult.data.isNotEmpty()) {
                                             body = replaceCidWithDataUrl(body, fetchResult.data)
+                                            fetchResult.data.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
                                         }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
@@ -1210,6 +1281,7 @@ fun ComposeScreen(
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         if (ewsResult.data.isNotEmpty()) {
                                             body = replaceCidWithDataUrl(body, ewsResult.data)
+                                            ewsResult.data.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
                                         }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
@@ -1238,6 +1310,16 @@ fun ComposeScreen(
                         } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e else Unit }
                     }
                 }
+                // Не загрузившаяся картинка, которую подставил запасной путь (MIME с сервера), — уже в теле.
+                val stillReferenced = com.dedovmosol.iwomail.util.referencedContentIds(body)
+                val rowsById = draftAttachments.associateBy { it.id }
+                val unloaded = unloadedRoles.filter { (id, role) ->
+                    role == DraftAttachmentRole.FILE ||
+                        com.dedovmosol.iwomail.util.containsContentId(stillReferenced, rowsById[id]?.contentId)
+                }.keys.toList()
+                draftUnloadedAttachmentIds = ArrayList(unloaded)
+                draftKnownImageKeys = imageKeys
+                if (unloaded.isNotEmpty()) SafeToast.long(context, draftAttachmentsNotLoadedMsg)
                 // Сохраняем начальное состояние для сравнения при выходе
                 initialDraftTo = to
                 initialDraftCc = cc
@@ -1256,6 +1338,12 @@ fun ComposeScreen(
     val sendScheduledMsg = Strings.sendScheduled
     val draftSavedMsg = Strings.draftSaved
     val draftSaveErrorMsg = Strings.draftSaveError
+    val draftSavedOfflineMsg = Strings.draftSavedOffline
+    val draftSavedOnDeviceOnlyMsg = Strings.draftSavedOnDeviceOnly
+    val draftServerRejectedMsg = Strings.draftServerRejected
+    val draftAttachmentsUnavailableMsg = Strings.draftAttachmentsUnavailable
+    val draftSavedKeepingPreviousMsg = Strings.draftSavedKeepingPrevious
+    val draftSavedOfflineKeepingPreviousMsg = Strings.draftSavedOfflineKeepingPrevious
 
     // Функция сохранения черновика (на сервер для Exchange, локально для остальных)
     fun saveDraft() {
@@ -1276,7 +1364,12 @@ fun ComposeScreen(
                 // CS-1 / CS-2: та же защита от OOM, что и при отправке — суммарный бюджет
                 // (файловые вложения + inline-картинки в теле) проверяется ДО чтения байт в память.
                 val budgetBytes = withContext(Dispatchers.IO) { composeAttachmentBudgetBytes(context, attachments, body) }
-                if (budgetBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+                // Вложения, которые не загрузились при открытии, сохранение скачает в память — тоже в бюджет.
+                val unloadedIds = draftUnloadedAttachmentIds.toSet()
+                val unloadedBytes = if (unloadedIds.isEmpty()) 0L else withContext(Dispatchers.IO) {
+                    editDraftId?.let { id -> mailRepo.getAttachmentsSync(id).filter { it.id in unloadedIds }.sumOf { it.estimatedSize } } ?: 0L
+                }
+                if (budgetBytes + unloadedBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
                     SafeToast.short(context, attachmentLimitExceededMsg)
                     return@launch
                 }
@@ -1298,156 +1391,61 @@ fun ComposeScreen(
                         }
                     }
                 }
-
-                // Inline-картинки: data: URL → cid: + вложения с ContentId (Outlook рендерит HTML через
-                // Word, data: URL не показывает). На сервер — cleanBody, локально — body (с data: URL).
-                val (cleanBody, inlineDraftAttachments) = extractInlineImageAttachments(body)
-                val allServerAttachments = fileDraftAttachments + inlineDraftAttachments
-                val normalizedTo = normalizeRecipients(to)
-                val normalizedCc = normalizeRecipients(cc)
-                val normalizedBcc = normalizeRecipients(bcc)
-                val importance = if (highPriority) 2 else 1
-
-                suspend fun createDraft(): String? = withContext(Dispatchers.IO) {
-                    mailRepo.saveDraft(
-                        accountId = account.id,
-                        to = normalizedTo, cc = normalizedCc, bcc = normalizedBcc,
-                        subject = subject,
-                        serverBody = cleanBody,
-                        localBody = body,
-                        fromEmail = account.email,
-                        fromName = account.displayName,
-                        hasAttachments = allServerAttachments.isNotEmpty(),
-                        attachmentFiles = allServerAttachments,
-                        importance = importance
-                    )
+                val bodyNow = body
+                val knownKeys = draftKnownImageKeys
+                // Картинки тела, уже существующие на сервере: при правке только текста уходят ссылками на свои cid.
+                val knownImageCids = if (knownKeys.isEmpty()) emptyMap() else withContext(Dispatchers.Default) {
+                    com.dedovmosol.iwomail.util.dataUrlsIn(bodyNow).mapNotNull { url ->
+                        knownKeys[com.dedovmosol.iwomail.util.dataUrlKey(url)]?.let { url to it }
+                    }.toMap()
                 }
+                val content = com.dedovmosol.iwomail.domain.DraftSaver.Content(
+                    to = normalizeRecipients(to),
+                    cc = normalizeRecipients(cc),
+                    bcc = normalizeRecipients(bcc),
+                    bccKnown = draftBccKnown,
+                    subject = subject,
+                    body = bodyNow,
+                    importance = if (highPriority) 2 else 1,
+                    fromEmail = account.email,
+                    fromName = account.displayName,
+                    files = fileDraftAttachments,
+                    filesUnchanged = attachmentStrings == initialDraftAttachments,
+                    knownImageCids = knownImageCids,
+                    unloadedAttachmentIds = draftUnloadedAttachmentIds.toSet()
+                )
+                val existingId = editDraftId?.takeIf { it != "synced" }
+                val result = withContext(Dispatchers.IO) { draftSaver.save(account, existingId, content) }
 
-                /**
-                 * Серверный черновик сохраняется заново: СНАЧАЛА новый, ПОТОМ удаление прежнего. Новый
-                 * на сервер не попал (local_draft_) — прежний остаётся, а локальная копия нового
-                 * убирается: иначе прежний был бы удалён, а правка жила бы только на телефоне.
-                 */
-                suspend fun replaceDraft(old: com.dedovmosol.iwomail.data.database.EmailEntity): Boolean {
-                    // P1 FIX: прежний — «удалённый» до создания нового, чтобы фоновая синхронизация не
-                    // вернула его в окне между созданием нового и удалением прежнего (~30 с).
-                    com.dedovmosol.iwomail.data.repository.EmailSyncService.registerDeletedEmail(old.id, context)
-                    val newServerId = createDraft() ?: return false
-                    val keptOnDevice = newServerId.startsWith("local_draft_") &&
-                        !old.serverId.startsWith("local_draft_") &&
-                        account.draftMode != com.dedovmosol.iwomail.data.database.DraftMode.LOCAL.name
-                    if (keptOnDevice) {
-                        withContext(Dispatchers.IO) { mailRepo.deleteDraft(account.id, newServerId) }
-                        return false
+                when (result) {
+                    com.dedovmosol.iwomail.domain.DraftSaver.Result.Saved -> {
+                        SafeToast.short(context, draftSavedMsg)
+                        handleBackNavigation()
                     }
-                    withContext(Dispatchers.IO) {
-                        try {
-                            // excludeEwsItemId: поиск прежнего по теме не заденет новый черновик
-                            mailRepo.deleteDraft(account.id, old.serverId, excludeEwsItemId = newServerId)
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e else Unit
-                        }
+                    com.dedovmosol.iwomail.domain.DraftSaver.Result.SavedOffline -> {
+                        SafeToast.long(context, draftSavedOfflineMsg)
+                        handleBackNavigation()
                     }
-                    // ЗАЩИТА: запись нового черновика должна остаться в БД (удаление прежнего или
-                    // фоновый sync могли её задеть) — иначе воссоздаём вместе с вложениями.
-                    val newEmailId = "${account.id}_$newServerId"
-                    if (withContext(Dispatchers.IO) { database.emailDao().getEmail(newEmailId) } == null) {
-                        val capturedBody = body
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val previewText = capturedBody.replace(HTML_TAG_STRIP_REGEX, " ")
-                                    .replace(WHITESPACE_COLLAPSE_REGEX, " ").trim().take(150)
-                                database.emailDao().insert(
-                                    com.dedovmosol.iwomail.data.database.EmailEntity(
-                                        id = newEmailId,
-                                        accountId = account.id,
-                                        folderId = old.folderId,
-                                        serverId = newServerId,
-                                        from = account.email,
-                                        fromName = account.displayName,
-                                        to = normalizedTo,
-                                        cc = normalizedCc,
-                                        subject = subject,
-                                        preview = previewText,
-                                        body = capturedBody,
-                                        bodyType = 2,
-                                        dateReceived = System.currentTimeMillis(),
-                                        read = true,
-                                        importance = importance,
-                                        hasAttachments = allServerAttachments.isNotEmpty(),
-                                        bcc = normalizedBcc
-                                    )
-                                )
-                                // P3 FIX: и записи вложений — иначе черновик в списке без вложений.
-                                if (allServerAttachments.isNotEmpty()) {
-                                    database.attachmentDao().insertAll(allServerAttachments.map { att ->
-                                        com.dedovmosol.iwomail.data.database.AttachmentEntity(
-                                            emailId = newEmailId,
-                                            fileReference = "",
-                                            displayName = att.name,
-                                            contentType = att.mimeType,
-                                            estimatedSize = att.data.size.toLong(),
-                                            isInline = att.isInline,
-                                            contentId = att.contentId
-                                        )
-                                    })
-                                }
-                            } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e else Unit
-                            }
-                        }
+                    com.dedovmosol.iwomail.domain.DraftSaver.Result.SavedOnDeviceOnly -> {
+                        SafeToast.long(context, draftSavedOnDeviceOnlyMsg)
+                        handleBackNavigation()
                     }
-                    return true
-                }
-
-                val existing = editDraftId?.takeIf { it != "synced" }
-                    ?.let { id -> withContext(Dispatchers.IO) { database.emailDao().getEmail(id) } }
-
-                // null — сохранено; "" — общая ошибка; иначе причина от сервера.
-                val saveError: String? = when {
-                    existing == null -> if (createDraft() != null) null else ""
-                    // #3: вложения есть сейчас или были у исходного черновика: EWS UpdateItem вложения
-                    // не добавляет и не удаляет (MS docs) — черновик сохраняется заново.
-                    allServerAttachments.isNotEmpty() || existing.hasAttachments ->
-                        if (replaceDraft(existing)) null else ""
-                    else -> {
-                        val result = withContext(Dispatchers.IO) {
-                            mailRepo.updateDraft(
-                                accountId = account.id,
-                                serverId = existing.serverId,
-                                to = normalizedTo, cc = normalizedCc,
-                                // Скрытые копии не известны (черновик из Outlook) и поле пустое — их не трогаем
-                                bcc = normalizedBcc.takeIf { draftBccKnown || it.isNotBlank() },
-                                subject = subject,
-                                body = body,
-                                fromEmail = account.email,
-                                fromName = account.displayName,
-                                importance = importance
+                    is com.dedovmosol.iwomail.domain.DraftSaver.Result.SavedKeepingPrevious -> {
+                        SafeToast.long(context, if (result.offline) draftSavedOfflineKeepingPreviousMsg else draftSavedKeepingPreviousMsg)
+                        handleBackNavigation()
+                    }
+                    // Не сохранён: пользователь остаётся в письме, правка цела.
+                    is com.dedovmosol.iwomail.domain.DraftSaver.Result.Failed -> {
+                        val message = when (val reason = result.reason) {
+                            com.dedovmosol.iwomail.domain.DraftSaver.ATTACHMENTS_UNAVAILABLE -> draftAttachmentsUnavailableMsg
+                            com.dedovmosol.iwomail.domain.DraftSaver.SERVER_REJECTED -> draftServerRejectedMsg
+                            null, "" -> draftSaveErrorMsg
+                            else -> "$draftSaveErrorMsg: " + com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(
+                                reason, currentLanguage == AppLanguage.RUSSIAN
                             )
                         }
-                        when (result) {
-                            is EasResult.Success -> null
-                            // Нет связи: черновик не сохранён — пользователь остаётся в письме, правка цела.
-                            is EasResult.Error -> if (com.dedovmosol.iwomail.data.model.isConnectionLevelError(result.message)) {
-                                result.message
-                            } else if (replaceDraft(existing)) {
-                                // id не определить однозначно или черновика на сервере уже нет — сохранён заново
-                                null
-                            } else {
-                                result.message
-                            }
-                        }
+                        SafeToast.long(context, message)
                     }
-                }
-
-                if (saveError == null) {
-                    SafeToast.short(context, draftSavedMsg)
-                    handleBackNavigation()
-                } else {
-                    val reason = saveError.takeIf { it.isNotBlank() }?.let {
-                        com.dedovmosol.iwomail.ui.NotificationStrings.localizeError(it, currentLanguage == AppLanguage.RUSSIAN)
-                    }
-                    SafeToast.long(context, if (reason != null) "$draftSaveErrorMsg: $reason" else draftSaveErrorMsg)
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e

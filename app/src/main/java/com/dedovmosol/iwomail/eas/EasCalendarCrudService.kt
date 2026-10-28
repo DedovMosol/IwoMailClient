@@ -845,7 +845,7 @@ class EasCalendarCrudService(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e("EasCalendarCrudService",
                     "deleteCalendarEventsBatch: exception: ${e.message}")
-                EasResult.Error("Batch delete error: ${e.message}")
+                EasResult.Error("Batch delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -1706,7 +1706,7 @@ class EasCalendarCrudService(
                 result
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка удаления события: ${e.message}")
+                EasResult.Error("Ошибка удаления события: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -1780,7 +1780,7 @@ class EasCalendarCrudService(
                 result
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка отклонения встречи: ${e.message}")
+                EasResult.Error("Ошибка отклонения встречи: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -1820,7 +1820,7 @@ class EasCalendarCrudService(
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("MeetingResponse failed: ${e.message}")
+            EasResult.Error("MeetingResponse failed: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -1992,7 +1992,7 @@ $itemIdsXml
                 EasResult.Error("ItemId not found for subject=$subject")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Failed to find ItemId: ${e.message}")
+                EasResult.Error("Failed to find ItemId: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }
@@ -2067,7 +2067,7 @@ $itemIdsXml
                 EasResult.Error("RecurringMaster ItemId not found for subject=$subject")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Failed to find RecurringMaster ItemId: ${e.message}")
+                EasResult.Error("Failed to find RecurringMaster ItemId: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }

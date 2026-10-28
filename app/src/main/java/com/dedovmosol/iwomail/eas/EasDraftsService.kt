@@ -3,7 +3,6 @@ package com.dedovmosol.iwomail.eas
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.UUID
 
 data class DraftAttachmentData(
     val name: String,
@@ -120,7 +119,9 @@ class EasDraftsService internal constructor(
         if (attachments.isNotEmpty()) {
             val mimeResult = createDraftMime(to, cc, bcc, subject, body, attachments)
             if (mimeResult is EasResult.Success) {
-                applyDraftExtrasEws(mimeResult.data, bcc, importance)
+                // Успех без id (DraftIds.newUnconfirmed) — черновик уже на сервере: второй CreateItem
+                // создал бы дубликат, а дописать Bcc/важность без id нельзя.
+                if (!DraftIds.isLocal(mimeResult.data)) applyDraftExtrasEws(mimeResult.data, bcc, importance)
                 return mimeResult
             }
             // Ошибку MIME не «чиним» поиском по теме: самый свежий черновик с той же темой — обычно
@@ -134,7 +135,25 @@ class EasDraftsService internal constructor(
         }
         android.util.Log.w("EasDraftsService", "createDraft: not saved on the server (${(ewsResult as EasResult.Error).message})")
         // НЕ createDraftEas: он сбрасывает SyncKey на "0" (полная ресинхронизация теряет pending Adds).
-        return EasResult.Success("local_draft_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}")
+        return EasResult.Success(DraftIds.newDeviceOnly())
+    }
+
+    /**
+     * Тело, скрытые копии и время последнего изменения черновика по EWS ItemId (GetItem). EAS до 16.0
+     * скрытые копии не передаёт — только так их можно узнать у черновика из Outlook. Exchange 2007 SP1+.
+     */
+    internal suspend fun getDraftDetails(itemId: String): EasResult<EwsDraftXml.DraftDetails> = withContext(Dispatchers.IO) {
+        try {
+            val response = executeEwsWithAuth(EwsDraftXml.getDraftDetails(resolveEwsVersion(), itemId, deps.escapeXml), "GetItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
+            if (!EwsClient.isEwsSuccess(response)) {
+                return@withContext EasResult.Error("Не удалось загрузить черновик: ${ewsErrorDetails(response)}")
+            }
+            EasResult.Success(EwsDraftXml.parseDraftDetails(response))
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            EasResult.Error("Не удалось загрузить черновик: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
+        }
     }
 
     /**
@@ -148,7 +167,8 @@ class EasDraftsService internal constructor(
         bcc: String?,
         subject: String,
         body: String,
-        importance: Int = 1
+        importance: Int = 1,
+        appendBcc: Boolean = false
     ): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -159,7 +179,7 @@ class EasDraftsService internal constructor(
             return EasResult.Success(true)
         }
 
-        return updateDraftEws(serverId, to, cc, bcc, subject, body, importance)
+        return updateDraftEws(serverId, to, cc, bcc, subject, body, importance, appendBcc)
     }
     /**
  * Загрузка Body черновика через EWS GetItem
@@ -247,7 +267,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             EasResult.Success(enriched)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("EWS syncDrafts: ${e.message}")
+            EasResult.Error("EWS syncDrafts: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -320,7 +340,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             EasResult.Success(String(mimeBytes, Charsets.UTF_8))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка загрузки MIME: ${e.message}")
+            EasResult.Error("Ошибка загрузки MIME: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     
@@ -341,7 +361,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             EasResult.Success(bytes)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка скачивания вложения: ${e.message}")
+            EasResult.Error("Ошибка скачивания вложения: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
        
@@ -428,19 +448,23 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
                 }
             }
             
-            if (itemId != null) {
-                EasResult.Success(itemId)
-            } else {
-                val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(responseXml)?.groupValues?.get(1)
-                val details = messageText ?: if (hasError) "Server error" else "ItemId not found"
-                EasResult.Error("MIME CreateItem: $details")
+            when {
+                itemId != null -> EasResult.Success(itemId)
+                // Сервер подтвердил создание, но id не узнать: черновик есть на сервере — не создаём второй,
+                // синхронизация найдёт его и сверит с локальной копией (DraftIds.mayExistOnServer).
+                !hasError && EwsClient.isEwsSuccess(responseXml) -> EasResult.Success(DraftIds.newUnconfirmed())
+                else -> {
+                    val messageText = EasPatterns.EWS_MESSAGE_TEXT.find(responseXml)?.groupValues?.get(1)
+                    val details = messageText ?: if (hasError) "Server error" else "ItemId not found"
+                    EasResult.Error("MIME CreateItem: $details")
+                }
             }
             } finally {
                 tempFile.delete()
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("MIME CreateItem: ${e.message}")
+            EasResult.Error("MIME CreateItem: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
     
@@ -694,6 +718,11 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
                 itemId = findDraftItemIdBySubject(subject)
             }
             if (itemId == null) {
+                // Успех без id: черновик на сервере есть, второй не создаём (см. createDraftMime). Вложения без id не
+                // добавить — тогда ошибка (как раньше): иначе новая версия без них, а прежняя удалена.
+                if (EwsClient.isEwsSuccess(response) && attachments.isEmpty()) {
+                    return@withContext EasResult.Success(DraftIds.newUnconfirmed())
+                }
                 return@withContext EasResult.Error("Не удалось создать черновик: ${ewsErrorDetails(response)}")
             }
             if (attachments.isNotEmpty()) {
@@ -706,7 +735,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             EasResult.Success(itemId)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка создания черновика: ${e.message}")
+            EasResult.Error("Ошибка создания черновика: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
     }
 
@@ -733,6 +762,21 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         }
     }
 
+    /**
+     * Окончательное удаление черновика по EWS ItemId (без «Удалённых»): Basic, затем NTLM — как при его создании.
+     * Черновика уже нет (ErrorItemNotFound) — тоже успех.
+     */
+    suspend fun hardDeleteDraft(itemId: String): EasResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val response = executeEwsWithAuth(EwsDraftXml.hardDelete(resolveEwsVersion(), itemId, deps.escapeXml), "DeleteItem")
+                ?: return@withContext EasResult.Error("Не удалось выполнить EWS DeleteItem")
+            if (EwsClient.isEwsSuccessOrNotFound(response)) EasResult.Success(Unit) else EasResult.Error(ewsErrorDetails(response))
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            EasResult.Error("EWS delete error: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
+        }
+    }
+
     /** Уборка черновика, который не удалось собрать целиком (без «Удалённых»). */
     private suspend fun hardDeleteEws(itemId: String, version: String) {
         try {
@@ -755,7 +799,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         bcc: String?,
         subject: String,
         body: String,
-        importance: Int
+        importance: Int,
+        appendBcc: Boolean
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
             val exchangeVersion = resolveEwsVersion()
@@ -788,7 +833,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val request = EwsDraftXml.updateItem(
                 exchangeVersion, serverId, EwsIds.parseChangeKey(getItemResponse),
                 subject = subject, htmlBody = body, to = to, cc = cc, bcc = bcc, easImportance = importance,
-                escape = deps.escapeXml
+                escape = deps.escapeXml, appendBcc = appendBcc
             )
             val responseXml = executeEwsWithAuth(request, "UpdateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")

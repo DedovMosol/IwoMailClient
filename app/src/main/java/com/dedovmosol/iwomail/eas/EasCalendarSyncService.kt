@@ -321,7 +321,7 @@ class EasCalendarSyncService(
                                 syncCalendarEwsNtlm()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                EasResult.Error("Ошибка синхронизации календаря: ${e.message}")
+                EasResult.Error("Ошибка синхронизации календаря: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
             }
         }
     }

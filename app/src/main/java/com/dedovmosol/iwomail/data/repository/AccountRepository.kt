@@ -202,7 +202,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка подключения: ${e.message ?: "Неизвестная ошибка"}")
+            EasResult.Error("Ошибка подключения: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
         }
         
         return when (connectionResult) {

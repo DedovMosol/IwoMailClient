@@ -95,6 +95,78 @@ class EwsDraftXmlTest {
     }
 
     @Test
+    fun `unknown Bcc is appended, never replaced or deleted`() {
+        val appended = EwsDraftXml.updateItem(
+            "Exchange2007_SP1", "ID", null, "S", "B", "a@corp.example", "", "boss@corp.example", 1, escape, appendBcc = true
+        )
+        val root = parse(appended)
+        val append = root.getElementsByTagNameNS(typesNs, "AppendToItemField").item(0) as Element
+        assertThat(append.firstByName("FieldURI").getAttribute("FieldURI")).isEqualTo("message:BccRecipients")
+        assertThat(append.firstByName("EmailAddress").textContent).isEqualTo("boss@corp.example")
+        val setFields = root.getElementsByTagNameNS(typesNs, "SetItemField")
+        assertThat((0 until setFields.length).map { (setFields.item(it) as Element).firstByName("FieldURI").getAttribute("FieldURI") })
+            .doesNotContain("message:BccRecipients")
+
+        // Добавлять нечего — поле не трогается (а не DeleteItemField, который стёр бы неизвестные копии).
+        val nothing = EwsDraftXml.updateItem("Exchange2007_SP1", "ID", null, "S", "B", "", "", "", 1, escape, appendBcc = true)
+        assertThat(nothing).doesNotContain("BccRecipients")
+    }
+
+    @Test
+    fun `draft details request asks for body, Bcc and the MAPI last-modified time in schema order`() {
+        val root = parse(EwsDraftXml.getDraftDetails("Exchange2007_SP1", "AAMk=", escape))
+        val shape = root.getElementsByTagNameNS("http://schemas.microsoft.com/exchange/services/2006/messages", "ItemShape")
+            .item(0) as Element
+        assertThat(shape.children().map { it.localName }).containsExactly("BaseShape", "BodyType", "AdditionalProperties").inOrder()
+        val extended = shape.firstByName("ExtendedFieldURI")
+        // PR_LAST_MODIFICATION_TIME — есть и на Exchange 2007 SP1 (item:LastModifiedTime — только с 2010).
+        assertThat(extended.getAttribute("PropertyTag")).isEqualTo("0x3008")
+        assertThat(extended.getAttribute("PropertyType")).isEqualTo("SystemTime")
+    }
+
+    @Test
+    fun `draft details are parsed - escaped body, SMTP Bcc, last-modified time`() {
+        val response = """<m:GetItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode><m:Items>
+            <t:Message><t:ItemId Id="AAMk=" ChangeKey="CK"/><t:Body BodyType="HTML">&lt;p&gt;Тело &amp;amp; ещё&lt;/p&gt;</t:Body>
+            <t:ExtendedProperty><t:ExtendedFieldURI PropertyTag="0x3008" PropertyType="SystemTime"/><t:Value>2026-10-26T10:00:00Z</t:Value></t:ExtendedProperty>
+            <t:BccRecipients><t:Mailbox><t:Name>Boss</t:Name><t:EmailAddress>boss@corp.example</t:EmailAddress><t:RoutingType>SMTP</t:RoutingType></t:Mailbox>
+            <t:Mailbox><t:EmailAddress>me2@corp.example</t:EmailAddress></t:Mailbox></t:BccRecipients></t:Message></m:Items></m:GetItemResponseMessage>"""
+
+        val details = EwsDraftXml.parseDraftDetails(response)
+
+        assertThat(details.body).isEqualTo("<p>Тело &amp; ещё</p>")
+        assertThat(details.bcc).isEqualTo("boss@corp.example, me2@corp.example")
+        assertThat(details.lastModified).isEqualTo(java.time.Instant.parse("2026-10-26T10:00:00Z").toEpochMilli())
+    }
+
+    @Test
+    fun `Bcc with an Exchange-only address is unknown, absent Bcc is empty`() {
+        val exchangeOnly = """<t:Message><t:Body BodyType="HTML">x</t:Body><t:BccRecipients><t:Mailbox>
+            <t:EmailAddress>/O=CORP/OU=EXCHANGE/CN=RECIPIENTS/CN=BOSS</t:EmailAddress><t:RoutingType>EX</t:RoutingType>
+            </t:Mailbox></t:BccRecipients></t:Message>"""
+        // X.500-адрес не SMTP: заменить им скрытые копии нельзя — неизвестны (их не трогаем).
+        assertThat(EwsDraftXml.parseDraftDetails(exchangeOnly).bcc).isNull()
+        // EWS не отдаёт пустые свойства: нет элемента — скрытых копий нет.
+        assertThat(EwsDraftXml.parseDraftDetails("""<t:Message><t:Body BodyType="HTML">x</t:Body></t:Message>""").bcc).isEmpty()
+        assertThat(EwsDraftXml.parseDraftDetails("""<t:Message><t:Body BodyType="HTML">x</t:Body></t:Message>""").lastModified).isNull()
+    }
+
+    @Test
+    fun `draft ids - device-only and unconfirmed local drafts are told apart`() {
+        val deviceOnly = DraftIds.newDeviceOnly()
+        val unconfirmed = DraftIds.newUnconfirmed()
+        assertThat(DraftIds.isLocal(deviceOnly)).isTrue()
+        assertThat(DraftIds.isLocal(unconfirmed)).isTrue()
+        // Только на устройстве — синхронизация не сочтёт его копией серверного по теме.
+        assertThat(DraftIds.mayExistOnServer(deviceOnly)).isFalse()
+        assertThat(DraftIds.mayExistOnServer(unconfirmed)).isTrue()
+        assertThat(DraftIds.isUnconfirmed(unconfirmed)).isTrue()
+        assertThat(DraftIds.isUnconfirmed(deviceOnly)).isFalse()
+        // Прежний формат (до разделения) — как раньше: может быть на сервере.
+        assertThat(DraftIds.mayExistOnServer("local_draft_1700000000000_ab12cd34")).isTrue()
+    }
+
+    @Test
     fun `draft ids - EWS, EAS and local are told apart, only a unique match is trusted`() {
         assertThat(DraftIds.isEwsItemId("AAMkADNi+/xyz=")).isTrue()
         assertThat(DraftIds.isEwsItemId("5:12")).isFalse()

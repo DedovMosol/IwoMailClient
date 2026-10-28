@@ -129,6 +129,78 @@ class EasDraftsServerTest {
     }
 
     @Test
+    fun `MIME draft confirmed without an id is not created a second time`() = runBlocking<Unit> {
+        // Exchange 2007 может не вернуть ItemId для MimeContent; тема пустая — найти по ней нельзя.
+        val exchange = FakeExchange { call ->
+            if (call.command == "CreateItem") Reply.Text(EwsXml.success("CreateItem")) else Reply.Http(500)
+        }
+        val file = DraftAttachmentData("report.txt", "text/plain", "data".toByteArray())
+
+        val result = exchange.draftsService().createDraft("a@corp.example", "", "", "", "<p>B</p>", listOf(file))
+
+        val id = (result as EasResult.Success).data
+        assertThat(DraftIds.isUnconfirmed(id)).isTrue()
+        // Один CreateItem: второй (EWS после MIME) создал бы дубликат на сервере.
+        assertThat(exchange.ews("CreateItem")).hasSize(1)
+    }
+
+    @Test
+    fun `EWS draft confirmed without an id while attachments wait is not reported as saved`() = runBlocking<Unit> {
+        // MIME не принят; обычный CreateItem — успех без ItemId: вложения без id не добавить.
+        val exchange = FakeExchange { call ->
+            when {
+                call.command == "CreateItem" && call.xml.contains("MimeContent") ->
+                    Reply.Text(EwsXml.error("CreateItem", "ErrorMimeContentConversionFailed"))
+                call.command == "CreateItem" -> Reply.Text(EwsXml.success("CreateItem"))
+                else -> Reply.Http(500)
+            }
+        }
+        val file = DraftAttachmentData("report.txt", "text/plain", "data".toByteArray())
+
+        val id = (exchange.draftsService().createDraft("a@corp.example", "", "", "", "<p>B</p>", listOf(file)) as EasResult.Success).data
+
+        // «На сервере» (u_) значило бы: прежнюю версию с вложением можно удалять, — а новая без него.
+        assertThat(DraftIds.isLocal(id)).isTrue()
+        assertThat(DraftIds.isUnconfirmed(id)).isFalse()
+        assertThat(exchange.ews("CreateAttachment")).isEmpty()
+    }
+
+    @Test
+    fun `hard delete of a draft by EWS id goes through Basic auth and a missing draft counts as deleted`() = runBlocking<Unit> {
+        val exchange = FakeExchange { call ->
+            if (call.command == "DeleteItem") Reply.Text(EwsXml.error("DeleteItem", "ErrorItemNotFound")) else Reply.Http(500)
+        }
+
+        val result = exchange.draftsService().hardDeleteDraft("AAMkOLD=")
+
+        assertThat(result).isEqualTo(EasResult.Success(Unit))
+        val delete = exchange.ews("DeleteItem").single().xml
+        assertThat(delete).contains("""DeleteType="HardDelete"""")
+        assertThat(delete).contains("""Id="AAMkOLD="""")
+    }
+
+    @Test
+    fun `draft details come from GetItem by exact id`() = runBlocking<Unit> {
+        val exchange = FakeExchange { call ->
+            if (call.command == "GetItem") {
+                Reply.Text(EwsXml.getItem(listOf(
+                    """<t:Message><t:ItemId Id="AAMkD1=" ChangeKey="CK"/><t:Body BodyType="HTML">&lt;p&gt;Полное&lt;/p&gt;</t:Body>""" +
+                        """<t:BccRecipients><t:Mailbox><t:EmailAddress>boss@corp.example</t:EmailAddress><t:RoutingType>SMTP</t:RoutingType>""" +
+                        "</t:Mailbox></t:BccRecipients></t:Message>"
+                )))
+            } else {
+                Reply.Http(500)
+            }
+        }
+
+        val details = (exchange.draftsService().getDraftDetails("AAMkD1=") as EasResult.Success).data
+
+        assertThat(details.body).isEqualTo("<p>Полное</p>")
+        assertThat(details.bcc).isEqualTo("boss@corp.example")
+        assertThat(exchange.ews("GetItem").single().itemIds).containsExactly("AAMkD1=")
+    }
+
+    @Test
     fun `plain create sends importance and recipients in schema order`() = runBlocking<Unit> {
         val exchange = FakeExchange { call ->
             if (call.command == "CreateItem") Reply.Text(EwsXml.success("CreateItem", message("AAMkP="))) else Reply.Http(500)
