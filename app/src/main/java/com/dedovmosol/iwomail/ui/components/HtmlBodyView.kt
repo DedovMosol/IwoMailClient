@@ -171,22 +171,14 @@ fun HtmlBodyView(
 
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
-                                val measureJs = "(function(){var b=document.body,d=document.documentElement;return Math.max(b.scrollHeight||0,b.offsetHeight||0,d.scrollHeight||0);})()"
                                 fun measure(v: WebView) {
                                     if (v !== webViewRef) return
                                     try {
-                                        v.evaluateJavascript(measureJs) { result ->
+                                        v.evaluateJavascript(MEASURE_CONTENT_JS) { result ->
                                             if (v !== webViewRef) return@evaluateJavascript
-                                            val cssH = result?.replace("\"", "")?.toIntOrNull()
-                                            if (cssH != null && cssH > 0) {
-                                                @Suppress("DEPRECATION")
-                                                val scale = v.scale
-                                                val density = v.resources.displayMetrics.density
-                                                val dpH = (cssH.toFloat() * scale / density).toInt()
-                                                if (dpH > 0 && dpH < 20000) {
-                                                    webViewHeight = dpH + 16
-                                                }
-                                            }
+                                            val dpH = contentHeightDp(result, v.width, v.resources.displayMetrics.density)
+                                            // + отступы WebView внутри карточки (padding 8.dp сверху и снизу)
+                                            if (dpH != null) webViewHeight = dpH + 16
                                         }
                                     } catch (_: Exception) { }
                                 }
@@ -203,13 +195,20 @@ fun HtmlBodyView(
 
                     val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
 
+                    // DOCTYPE XHTML Transitional — «почти стандартный» режим, как в вёрстке писем: без него (quirks)
+                    // body и height:100% растягиваются на высоту окна, и замер не меньше уже выставленной высоты —
+                    // карточка не уменьшается и внизу остаются пустые белые листы.
                     val styledHtml = """
+                        <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
                         <html>
                         <head>
                             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src https: data:;">
                             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
                             <style>
                                 html { margin: 0 !important; padding: 0 !important; }
+                                /* Высота страницы — по содержимому: body/таблицы height:100% из вёрстки писем иначе
+                                   равны высоте окна, и карточка не уменьшается (пустые белые листы под письмом). */
+                                html, body { height: auto !important; min-height: 0 !important; }
                                 body {
                                     background-color: white !important;
                                     color: black !important;
@@ -358,4 +357,34 @@ fun HtmlBodyView(
             )
     }
 }
+}
+
+/**
+ * Высота содержимого и ширина видимой области, обе в CSS px: "высота,ширина". Нижняя граница содержимого (Range по
+ * всему body), а не documentElement.scrollHeight — тот не бывает меньше окна WebView, и карточка не уменьшалась бы.
+ */
+internal const val MEASURE_CONTENT_JS =
+    "(function(){var b=document.body;if(!b)return '';" +
+        "var r=document.createRange();r.selectNodeContents(b);" +
+        "var bottom=Math.ceil(r.getBoundingClientRect().bottom+(window.scrollY||0));" +
+        "var h=Math.max(b.scrollHeight||0,bottom);" +
+        "var w=(window.visualViewport&&window.visualViewport.width)||window.innerWidth||0;" +
+        "return h+','+w;})()"
+
+/** Предел высоты карточки письма (dp): защита от ошибочного замера. */
+private const val MAX_CONTENT_HEIGHT_DP = 20_000
+
+/**
+ * Высота содержимого в dp по ответу [MEASURE_CONTENT_JS]. Пикселей экрана на CSS px — по фактической ширине
+ * ([viewWidthPx] / ширина видимой области), а не по WebView.scale: тот устарел и сразу после загрузки ещё не
+ * учитывает уменьшение широкого письма под экран (высота выходила в 2–3 раза больше). null — замер не годится.
+ */
+internal fun contentHeightDp(jsResult: String?, viewWidthPx: Int, density: Float): Int? {
+    val parts = jsResult?.trim('"')?.split(',') ?: return null
+    if (parts.size != 2 || viewWidthPx <= 0 || density <= 0f) return null
+    val cssHeight = parts[0].toDoubleOrNull() ?: return null
+    val cssWidth = parts[1].toDoubleOrNull() ?: return null
+    if (cssHeight <= 0.0 || cssWidth <= 0.0) return null
+    val dp = (cssHeight * (viewWidthPx / cssWidth) / density).toInt()
+    return dp.takeIf { it in 1 until MAX_CONTENT_HEIGHT_DP }
 }
