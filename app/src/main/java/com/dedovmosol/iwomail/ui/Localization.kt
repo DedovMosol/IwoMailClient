@@ -70,6 +70,7 @@ object Strings {
     val spam: String @Composable get() = if (isRussian()) "Спам" else "Spam"
     val toPrefix: String @Composable get() = if (isRussian()) "Кому:" else "To:"
     val unknownSender: String @Composable get() = if (isRussian()) "(Без отправителя)" else "(No sender)"
+    val noRecipients: String @Composable get() = if (isRussian()) "(Без получателей)" else "(No recipients)"
     val userFolders: String @Composable get() = if (isRussian()) "Папки" else "Folders"
     val userFoldersEmpty: String @Composable get() = if (isRussian()) "Нет пользовательских папок" else "No user folders"
     val foldersSynced: String @Composable get() = if (isRussian()) "Папки синхронизированы" else "Folders synced"

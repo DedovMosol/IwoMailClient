@@ -753,7 +753,7 @@ fun ComposeScreen(
                                     if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                        val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                        val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
                                         inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                     } else {
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
@@ -776,7 +776,7 @@ fun ComposeScreen(
 
                                         if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
-                                            val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                            val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(downloadResult.data, att.contentType, att.displayName)
                                             inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                         } else {
                                             val uri = androidx.core.content.FileProvider.getUriForFile(
@@ -935,7 +935,7 @@ fun ComposeScreen(
                                     if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                        val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                        val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
                                         inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                     } else {
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
@@ -958,7 +958,7 @@ fun ComposeScreen(
 
                                         if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                             val base64 = android.util.Base64.encodeToString(downloadResult.data, android.util.Base64.NO_WRAP)
-                                            val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                            val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(downloadResult.data, att.contentType, att.displayName)
                                             inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
                                         } else {
                                             val uri = androidx.core.content.FileProvider.getUriForFile(
@@ -1176,7 +1176,7 @@ fun ComposeScreen(
                                     if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                         val bytes = file.readBytes()
                                         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                        val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                        val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
                                         val dataUrl = "data:$mimeType;base64,$base64"
                                         inlineImages[att.contentId] = dataUrl
                                         if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(att.contentId, dataUrl)
@@ -1201,7 +1201,7 @@ fun ComposeScreen(
                                             mailRepo.updateAttachmentPath(att.id, file.absolutePath)
                                             if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
                                                 val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
-                                                val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+                                                val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(result.data, att.contentType, att.displayName)
                                                 val dataUrl = "data:$mimeType;base64,$base64"
                                                 inlineImages[att.contentId] = dataUrl
                                                 if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(att.contentId, dataUrl)

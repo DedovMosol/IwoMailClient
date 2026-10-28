@@ -1381,7 +1381,8 @@ $foldersXml
                 attachments.add(EasAttachment(
                     fileReference = fileRef,
                     displayName = displayName,
-                    contentType = extractValue(attXml, "ContentType") ?: "application/octet-stream",
+                    // [MS-ASAIRS] у Attachment нет ContentType — тип по имени файла
+                    contentType = com.dedovmosol.iwomail.util.attachmentMimeType(extractValue(attXml, "ContentType"), displayName),
                     estimatedSize = extractValue(attXml, "EstimatedDataSize")?.toLongOrNull() ?: 0,
                     isInline = isInline,
                     contentId = contentId

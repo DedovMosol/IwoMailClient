@@ -747,7 +747,8 @@ interface AttachmentDao {
     suspend fun getAttachment(id: Long): AttachmentEntity?
 
     @Query("UPDATE attachments SET localPath = :localPath, downloaded = 1 WHERE id = :id")
-    suspend fun updateLocalPath(id: Long, localPath: String)
+    /** Число изменённых записей: 0 — вложения уже нет (черновик удалён или заменён). */
+    suspend fun updateLocalPath(id: Long, localPath: String): Int
 
     @Query("UPDATE attachments SET fileReference = :fileReference WHERE emailId = :emailId AND displayName = :displayName")
     suspend fun updateFileReference(emailId: String, displayName: String, fileReference: String)

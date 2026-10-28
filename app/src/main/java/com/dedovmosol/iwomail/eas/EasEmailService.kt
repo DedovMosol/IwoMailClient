@@ -574,7 +574,8 @@ class EasEmailService internal constructor(
             attachments.add(EasAttachment(
                 fileReference = fileRef,
                 displayName = name,
-                contentType = deps.extractValue(attXml, "ContentType") ?: "application/octet-stream",
+                // [MS-ASAIRS] у Attachment нет ContentType — тип по имени файла (иначе картинка не картинка)
+                contentType = com.dedovmosol.iwomail.util.attachmentMimeType(deps.extractValue(attXml, "ContentType"), name),
                 estimatedSize = deps.extractValue(attXml, "EstimatedDataSize")?.toLongOrNull() ?: 0,
                 isInline = isInline,
                 contentId = contentId

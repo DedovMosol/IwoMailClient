@@ -265,7 +265,7 @@ class AttachmentLoader(
             // Inline-картинка: читать в base64
             val bytes = file.readBytes()
             val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            val mimeType = if (att.contentType.isNotBlank()) att.contentType else "image/png"
+            val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
             inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
 
             android.util.Log.d(TAG, "$source: Loaded inline image cid:${att.contentId} (${bytes.size} bytes)")

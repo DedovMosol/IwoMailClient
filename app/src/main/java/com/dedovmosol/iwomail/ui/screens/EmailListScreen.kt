@@ -61,6 +61,7 @@ import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
@@ -1035,8 +1036,31 @@ private fun EmailListContent(
     val stableOnLongClick by rememberUpdatedState(onLongClick)
     val stableOnStarClick by rememberUpdatedState(onStarClick)
 
-    var imagePreviewCache by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    // Миниатюры — только найденные: письма без картинки проверяются снова (её могли скачать при открытии письма)
+    var imagePreviewCache by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val emailById = remember(emails) { emails.associateBy { it.id } }
+    val previewScope = rememberCoroutineScope()
+    val imagePreviews = remember(mailRepo) {
+        val settingsRepo = com.dedovmosol.iwomail.data.repository.SettingsRepository.getInstance(context)
+        com.dedovmosol.iwomail.ui.screens.emaillist.ListImagePreviews(
+            attachmentsOf = { ids ->
+                withContext(Dispatchers.IO) { ids.chunked(50).flatMap { database.attachmentDao().getAttachmentsForEmails(it) } }
+            },
+            downloadToFile = { accountId, row ->
+                withContext(Dispatchers.IO) { mailRepo.downloadDraftAttachmentToFile(accountId, row) }
+            },
+            fileExists = { path -> withContext(Dispatchers.IO) { java.io.File(path).exists() } },
+            // «Синхронизация только по Wi-Fi» — и миниатюры не качаем по мобильной сети
+            downloadAllowed = {
+                !settingsRepo.syncOnWifiOnly.first() ||
+                    context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == false
+            }
+        )
+    }
+    fun withPreviews(added: Map<String, String>): Map<String, String> {
+        val combined = imagePreviewCache + added
+        return if (combined.size > 200) combined.entries.toList().takeLast(200).associate { it.toPair() } else combined
+    }
 
     LaunchedEffect(emails) {
         val emailIds = emails.map { it.id }.toSet()
@@ -1055,28 +1079,14 @@ private fun EmailListContent(
         }.distinctUntilChanged().collect { visibleEmailIds ->
             val missingIds = visibleEmailIds.filter { it !in imagePreviewCache }
             if (missingIds.isEmpty()) return@collect
-
-            val newPreviews = withContext(Dispatchers.IO) {
-                val allAttachments = missingIds.chunked(50).flatMap { database.attachmentDao().getAttachmentsForEmails(it) }
-                val attachmentsByEmail = allAttachments.groupBy { it.emailId }
-
-                missingIds.associateWith { emailId ->
-                    attachmentsByEmail[emailId]
-                        ?.firstOrNull { att ->
-                            att.downloaded &&
-                                att.localPath != null &&
-                                att.contentType.startsWith("image/", ignoreCase = true)
-                        }
-                        ?.localPath
-                }
-            }
-
-            if (newPreviews.isNotEmpty()) {
-                val combined = imagePreviewCache + newPreviews
-                imagePreviewCache = if (combined.size > 200) {
-                    combined.entries.toList().takeLast(200).associate { it.toPair() }
-                } else {
-                    combined
+            // Черновикам недостающая картинка скачивается (свои, их немного); остальным — только скачанные.
+            val found = imagePreviews.find(missingIds, download = isDrafts && imagePreviews.downloadAllowed())
+            if (found.local.isNotEmpty()) imagePreviewCache = withPreviews(found.local)
+            for ((emailId, row) in found.toDownload) {
+                val accountId = emailById[emailId]?.accountId ?: continue
+                // Не в collect: загрузка не задерживает разбор следующей прокрутки
+                previewScope.launch {
+                    imagePreviews.download(accountId, row)?.let { path -> imagePreviewCache = withPreviews(mapOf(emailId to path)) }
                 }
             }
         }
@@ -1180,8 +1190,14 @@ private fun EmailListItem(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.Top
         ) {
+            // Отправленные и черновики — «Кому»: отправитель в них вы сами (как в Outlook). У черновика из Outlook
+            // отправителя нет вовсе (From появляется при отправке), у созданного приложением — имя аккаунта в приложении.
+            val showsRecipient = isSent || isDrafts
+            val recipientName = remember(email.to) { com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientName(email.to) }
             val cachedSenderName = remember(email.from) {
-                if (email.fromName.isBlank() || email.fromName.contains("@")) {
+                if (isDrafts) {
+                    null // своё имя в черновике — не имя отправителя для кэша имён
+                } else if (email.fromName.isBlank() || email.fromName.contains("@")) {
                     mailRepo.getCachedName(email.from)
                 } else {
                     mailRepo.cacheName(email.from, email.fromName)
@@ -1205,15 +1221,8 @@ private fun EmailListItem(
                 }
             }
 
-            // Для папки Отправленные показываем получателя, иначе отправителя
-            val displayName = if (isSent) {
-                val toField = email.to
-                val recipientName = when {
-                    toField.contains("<") -> toField.substringBefore("<").trim().trim('"')
-                    toField.contains("@") -> toField.substringBefore("@")
-                    else -> toField
-                }.ifEmpty { toField }
-                "${Strings.toPrefix} $recipientName"
+            val displayName = if (showsRecipient) {
+                if (recipientName.isBlank()) Strings.noRecipients else "${Strings.toPrefix} $recipientName"
             } else {
                 val finalName = if (cleanFromName != null && !cleanFromName.contains("@")) {
                     cleanFromName
@@ -1227,15 +1236,9 @@ private fun EmailListItem(
                 finalName.ifBlank { Strings.unknownSender }
             }
 
-            // Аватар с цветом на основе имени (получателя для Отправленных, отправителя для остальных)
-            val avatarName = if (isSent) {
-                // Извлекаем чистое имя для аватара
-                val toField = email.to
-                when {
-                    toField.contains("<") -> toField.substringBefore("<").trim().trim('"')
-                    toField.contains("@") -> toField.substringBefore("@")
-                    else -> toField
-                }.ifEmpty { toField }
+            // Аватар с цветом на основе имени (получателя для Отправленных и черновиков, отправителя для остальных)
+            val avatarName = if (showsRecipient) {
+                recipientName
             } else {
                 cachedSenderName ?: cleanFromName ?: email.from
             }

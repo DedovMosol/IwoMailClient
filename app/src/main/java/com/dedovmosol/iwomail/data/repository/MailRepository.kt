@@ -603,6 +603,25 @@ if (result is EasResult.Success) {
         return (client.downloadDraftAttachment(attachment.fileReference) as? EasResult.Success)?.data
     }
 
+    /**
+     * Вложение черновика — в файл draft_attachments/ (как сохранённые приложением): миниатюра в списке и открытие без
+     * сети. Путь — в записи; записи уже нет (черновик удалён или заменён) — файл не оставляем. null — не скачалось.
+     */
+    suspend fun downloadDraftAttachmentToFile(accountId: Long, attachment: AttachmentEntity): String? {
+        val bytes = draftAttachmentBytes(accountId, attachment) ?: return null
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val dir = java.io.File(context.filesDir, "draft_attachments").apply { mkdirs() }
+            val file = java.io.File(dir, "${System.currentTimeMillis()}_${attachment.displayName.replace(SAFE_FILENAME_REGEX, "_")}")
+            file.writeBytes(bytes)
+            if (attachmentDao.updateLocalPath(attachment.id, file.absolutePath) > 0) {
+                file.absolutePath
+            } else {
+                file.delete()
+                null
+            }
+        }
+    }
+
     /** Восстановить запись черновика с вложениями (файлы — заново), если её убрала фоновая синхронизация. */
     suspend fun restoreDraftRecord(email: EmailEntity, attachments: List<com.dedovmosol.iwomail.eas.DraftAttachmentData>) {
         val rows = prepareDraftAttachmentFiles(email.id, attachments)
