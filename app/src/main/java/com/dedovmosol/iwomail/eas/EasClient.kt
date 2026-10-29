@@ -291,6 +291,7 @@ class EasClient(
             getEasVersion = { transport.easVersion },
             provision = { transport.provision() },
             wbxmlGenerateSendMail = { clientId, mimeBytes -> wbxmlParser.generateSendMail(clientId, mimeBytes) },
+            postComposeMail = { command, legacyQuery, mime, wbxml -> emailService.postComposeMail(command, legacyQuery, mime, wbxml) },
             wbxmlGenerateSmartForward = { clientId, folderId, itemIdParam, mimeBytes -> wbxmlParser.generateSmartForward(clientId, folderId, itemIdParam, mimeBytes) },
             getFromEmail = {
                 if (deviceIdSuffix.contains("@")) deviceIdSuffix
@@ -329,14 +330,10 @@ class EasClient(
 
         // Regex паттерны вынесены в EasPatterns.kt (DRY)
         // Алиасы для обратной совместимости
-        private val EMAIL_BRACKET_REGEX get() = EasPatterns.EMAIL_BRACKET
         private val EWS_ITEM_ID_REGEX get() = EasPatterns.EWS_ITEM_ID
         private val EWS_MESSAGE_TEXT_REGEX get() = EasPatterns.EWS_MESSAGE_TEXT
         private val EWS_RESPONSE_CODE_REGEX get() = EasPatterns.EWS_RESPONSE_CODE
         private val CALENDAR_CATEGORY_REGEX get() = EasPatterns.CALENDAR_CATEGORY
-        private val MDN_DISPOSITION_REGEX get() = EasPatterns.MDN_DISPOSITION
-        private val MDN_RETURN_RECEIPT_REGEX get() = EasPatterns.MDN_RETURN_RECEIPT
-        private val MDN_CONFIRM_READING_REGEX get() = EasPatterns.MDN_CONFIRM_READING
         private val MOVE_RESPONSE_REGEX get() = EasPatterns.MOVE_RESPONSE
         private val ITEM_OPS_GLOBAL_STATUS_REGEX get() = EasPatterns.ITEM_OPS_GLOBAL_STATUS
         private val ITEM_OPS_FETCH_STATUS_REGEX get() = EasPatterns.ITEM_OPS_FETCH_STATUS
@@ -738,11 +735,13 @@ class EasClient(
         itemId: String,
         importance: Int = 1,
         requestReadReceipt: Boolean = false,
-        requestDeliveryReceipt: Boolean = false
+        requestDeliveryReceipt: Boolean = false,
+        stableClientId: String? = null
     ): EasResult<Boolean> = emailService.smartForward(
         to = to, subject = subject, body = body, cc = cc, bcc = bcc,
         collectionId = collectionId, itemId = itemId, importance = importance,
-        requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt
+        requestReadReceipt = requestReadReceipt, requestDeliveryReceipt = requestDeliveryReceipt,
+        stableClientId = stableClientId
     )
 
     /**
@@ -760,12 +759,13 @@ class EasClient(
         itemId: String,
         requestReadReceipt: Boolean = false,
         requestDeliveryReceipt: Boolean = false,
-        importance: Int = 1
+        importance: Int = 1,
+        stableClientId: String? = null
     ): EasResult<Boolean> = attachmentService.smartForwardWithAttachments(
         to = to, subject = subject, body = body, cc = cc, bcc = bcc,
         attachments = attachments, requestReadReceipt = requestReadReceipt,
         requestDeliveryReceipt = requestDeliveryReceipt, importance = importance,
-        collectionId = collectionId, itemId = itemId
+        collectionId = collectionId, itemId = itemId, stableClientId = stableClientId
     )
 
     /**
@@ -1103,23 +1103,16 @@ class EasClient(
      */
     private fun unescapeXml(text: String): String = XmlUtils.unescape(text)
 
-    /**
-     * Отправка отчёта о прочтении (MDN - Message Disposition Notification)
-     * @param to email получателя отчёта (из заголовка Disposition-Notification-To)
-     * @param originalSubject тема оригинального письма
-     * @param originalMessageId Message-ID оригинального письма (опционально)
-     */
-    /**
-     * Отправка отчёта о прочтении (MDN)
-     * @see EasAttachmentService.sendMdn
-     */
-    suspend fun sendMdn(
-        to: String,
-        originalSubject: String,
-        originalMessageId: String? = null
-    ): EasResult<Boolean> = attachmentService.sendMdn(to, originalSubject, originalMessageId)
+    private val readReceipts by lazy {
+        EwsReadReceipts(transport::executeEwsWithAuth, transport::buildEwsSoapRequest)
+    }
 
-    // buildMdnMessage перенесён в EasAttachmentService
+    /**
+     * Отказ от отчёта о прочтении до пометки письма прочитанным (иначе Exchange отправит отчёт сам).
+     * @see EwsReadReceipts.suppress
+     */
+    suspend fun suppressReadReceipt(internetMessageId: String, folder: EwsMailFolder): Boolean =
+        withContext(Dispatchers.IO) { readReceipts.suppress(internetMessageId, folder) }
 
     /**
      * Скачивание вложения в память (ByteArray).
@@ -1292,8 +1285,8 @@ $foldersXml
         serverId: String,
         syncKey: String,
         read: Boolean = true,
-        subject: String? = null
-    ): EasResult<String> = emailService.markAsRead(collectionId, serverId, syncKey, read, subject)
+        internetMessageId: String? = null
+    ): EasResult<String> = emailService.markAsRead(collectionId, serverId, syncKey, read, internetMessageId)
 
     /**
      * Батч-пометка нескольких писем как прочитанных одним Sync-запросом

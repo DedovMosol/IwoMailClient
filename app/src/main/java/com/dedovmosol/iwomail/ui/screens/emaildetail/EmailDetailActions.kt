@@ -175,11 +175,11 @@ class EmailDetailActions(
     suspend fun restoreFromTrash(emailIds: List<String>): EasResult<Any> =
         withContext(Dispatchers.IO) { mailRepo.restoreFromTrash(emailIds) }
 
-    suspend fun sendMdn(emailId: String): EasResult<Unit> =
-        mailRepo.sendMdn(emailId).toUnit()
+    suspend fun pendingReadReceipt(emailId: String): String? =
+        mailRepo.pendingReadReceipt(emailId)
 
-    suspend fun markMdnSent(emailId: String) =
-        mailRepo.markMdnSent(emailId)
+    suspend fun answerReadReceipt(emailId: String, send: Boolean): EasResult<Unit> =
+        mailRepo.answerReadReceipt(emailId, send).toUnit()
 
     suspend fun toggleFlag(emailId: String) =
         mailRepo.toggleFlag(emailId)

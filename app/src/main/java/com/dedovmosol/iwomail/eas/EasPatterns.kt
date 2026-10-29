@@ -9,7 +9,6 @@ import java.util.concurrent.ConcurrentHashMap
 object EasPatterns {
     
     // === Email patterns ===
-    val EMAIL_BRACKET = "<([^>]+)>".toRegex()
     
     // === EWS patterns ===
     val EWS_ITEM_ID = """<t:ItemId Id="([^"]+)"""".toRegex()
@@ -27,9 +26,6 @@ object EasPatterns {
     val CALENDAR_CATEGORY = "<calendar:Category>(.*?)</calendar:Category>".toRegex()
     
     // === MDN (Message Disposition Notification) patterns ===
-    val MDN_DISPOSITION = "Disposition-Notification-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
-    val MDN_RETURN_RECEIPT = "Return-Receipt-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
-    val MDN_CONFIRM_READING = "X-Confirm-Reading-To:\\s*<?([^>\\r\\n]+)>?".toRegex(RegexOption.IGNORE_CASE)
     val MIME_MESSAGE_ID = """(?im)^Message-ID:\s*(<[^>\r\n]+>|[^\r\n]+)$""".toRegex()
     
     // === MIME patterns ===

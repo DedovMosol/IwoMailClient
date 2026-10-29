@@ -5,10 +5,16 @@ import com.dedovmosol.iwomail.util.isImageAttachment
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
+/** Миниатюра строки списка: файл первой картинки и сколько картинок у письма всего (на миниатюре — «+ ещё»). */
+internal data class ListPreview(val path: String, val imageCount: Int) {
+    /** Сколько картинок не видно на миниатюре; 0 — подпись не нужна. */
+    val moreCount: Int get() = (imageCount - 1).coerceAtLeast(0)
+}
+
 /**
  * Миниатюры картинок в строках списка писем.
  *
- * Миниатюра — картинка-вложение, уже скачанная на устройство. Черновикам ([resolve] с `download = true`) недостающую
+ * Миниатюра — картинка-вложение, уже скачанная на устройство. Черновикам ([find] с `download = true`) недостающую
  * небольшую картинку скачивают: EAS не отдаёт уменьшенных копий (ItemOperations Fetch — только файл целиком), а без
  * этого черновики с сервера были без миниатюр, хотя созданные в приложении — с ними.
  *
@@ -30,29 +36,34 @@ internal class ListImagePreviews(
     private val gate = Semaphore(maxParallelDownloads)
     private val attempted = HashSet<Long>()
 
-    /** Что есть для писем [emailIds]: пути скачанных картинок и картинки, которые стоит скачать (по одной на письмо). */
-    class Found(val local: Map<String, String>, val toDownload: Map<String, AttachmentEntity>)
+    /** Картинка, которую стоит скачать для миниатюры, и сколько картинок у письма. */
+    class Pending(val row: AttachmentEntity, val imageCount: Int)
+
+    /** Что есть для писем [emailIds]: миниатюры из скачанных картинок и картинки, которые стоит скачать (по одной на письмо). */
+    class Found(val local: Map<String, ListPreview>, val toDownload: Map<String, Pending>)
 
     suspend fun find(emailIds: List<String>, download: Boolean): Found {
         val byEmail = attachmentsOf(emailIds).groupBy { it.emailId }
-        val local = HashMap<String, String>()
-        val toDownload = HashMap<String, AttachmentEntity>()
+        val local = HashMap<String, ListPreview>()
+        val toDownload = HashMap<String, Pending>()
         for ((emailId, rows) in byEmail) {
             val images = rows.filter { isImageAttachment(it.contentType, it.displayName) }
+            if (images.isEmpty()) continue
             val path = images.firstNotNullOfOrNull { row -> row.localPath?.takeIf { fileExists(it) } }
             if (path != null) {
-                local[emailId] = path
+                local[emailId] = ListPreview(path, images.size)
             } else if (download) {
-                images.firstOrNull { canDownload(it) && it.id !in attempted }?.let { toDownload[emailId] = it }
+                images.firstOrNull { canDownload(it) && it.id !in attempted }?.let { toDownload[emailId] = Pending(it, images.size) }
             }
         }
         return Found(local, toDownload)
     }
 
     /** Скачать картинку для миниатюры (один раз на вложение); null — уже пробовали или не вышло. */
-    suspend fun download(accountId: Long, row: AttachmentEntity): String? {
-        if (!attempted.add(row.id)) return null
-        return gate.withPermit { downloadToFile(accountId, row) }
+    suspend fun download(accountId: Long, pending: Pending): ListPreview? {
+        if (!attempted.add(pending.row.id)) return null
+        val path = gate.withPermit { downloadToFile(accountId, pending.row) } ?: return null
+        return ListPreview(path, pending.imageCount)
     }
 
     companion object {

@@ -22,7 +22,13 @@ import java.io.IOException
 internal class FakeExchange(private val route: (Call) -> Reply) {
 
     /** Запрос к фейку: EAS `Cmd` или EWS SOAPAction, тело — как XML (EAS — после WBXML-декода). */
-    data class Call(val command: String, val xml: String, val isEws: Boolean) {
+    data class Call(
+        val command: String,
+        val xml: String,
+        val isEws: Boolean,
+        val url: String = "",
+        val contentType: String = ""
+    ) {
         val syncKey: String? get() = SYNC_KEY.find(xml)?.groupValues?.get(1)
         val collectionId: String? get() = COLLECTION_ID.find(xml)?.groupValues?.get(1)
         val windowSize: Int? get() = WINDOW_SIZE.find(xml)?.groupValues?.get(1)?.toIntOrNull()
@@ -65,7 +71,16 @@ internal class FakeExchange(private val route: (Call) -> Reply) {
                 isEws = true
             )
         } else {
-            Call(command = request.url.queryParameter("Cmd").orEmpty(), xml = wbxml.parse(body), isEws = false)
+            // EAS 12.x SendMail/SmartForward: тело — MIME (message/rfc822), не WBXML
+            val contentType = request.body?.contentType()?.toString().orEmpty()
+            val raw = contentType.startsWith("message/rfc822")
+            Call(
+                command = request.url.queryParameter("Cmd").orEmpty(),
+                xml = if (raw) String(body, Charsets.UTF_8) else wbxml.parse(body),
+                isEws = false,
+                url = request.url.toString(),
+                contentType = contentType
+            )
         }
         calls += call
 

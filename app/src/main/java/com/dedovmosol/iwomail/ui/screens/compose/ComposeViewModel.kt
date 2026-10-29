@@ -36,7 +36,6 @@ import com.dedovmosol.iwomail.ui.screens.extractAllEmails
 import com.dedovmosol.iwomail.ui.screens.findDuplicateField
 import com.dedovmosol.iwomail.ui.screens.formatEmailDate
 import com.dedovmosol.iwomail.ui.screens.isValidRecipientList
-import com.dedovmosol.iwomail.ui.screens.scheduleEmail
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.loggingExceptionHandler
 import kotlinx.coroutines.CancellationException
@@ -779,16 +778,26 @@ class ComposeViewModel(
                     val sendDelay = scheduledTime - System.currentTimeMillis()
                     if (sendDelay > 0) {
                         val rawAttachments = readRawAttachmentBytes(state.attachments)
-                        scheduleEmail(
-                            context, account.id,
-                            expandGroupTokens(state.to, state.groupMappings),
-                            expandGroupTokens(state.cc, state.groupMappings),
-                            expandGroupTokens(state.bcc, state.groupMappings),
-                            state.subject, state.body, sendDelay,
-                            state.requestReadReceipt, state.requestDeliveryReceipt,
-                            state.importance,
-                            rawAttachments
+                        val job = com.dedovmosol.iwomail.sync.ScheduledSend.Job(
+                            accountId = account.id,
+                            mail = com.dedovmosol.iwomail.domain.OutgoingMail(
+                                to = expandGroupTokens(state.to, state.groupMappings),
+                                cc = expandGroupTokens(state.cc, state.groupMappings),
+                                bcc = expandGroupTokens(state.bcc, state.groupMappings),
+                                subject = state.subject,
+                                body = cleanOutgoingBody(state.body),
+                                attachments = rawAttachments,
+                                importance = state.importance,
+                                requestReadReceipt = state.requestReadReceipt,
+                                requestDeliveryReceipt = state.requestDeliveryReceipt,
+                                forwardFolderId = state.forwardSourceFolderServerId,
+                                forwardItemId = state.forwardSourceEmailServerId
+                            ),
+                            sendAt = scheduledTime,
+                            clientId = java.util.UUID.randomUUID().toString().replace("-", ""),
+                            draftId = editDraftId?.takeIf { it != "synced" }
                         )
+                        withContext(dispatcher) { com.dedovmosol.iwomail.sync.ScheduledSend.schedule(context, job) }
                         _events.send(ComposeEvent.EmailScheduled)
                         _events.send(ComposeEvent.EmailSent)
                         _uiState.update { it.copy(isSending = false) }

@@ -12,12 +12,6 @@ class EasPatternsTest {
         find(input)?.groupValues?.getOrNull(1)
 
     @Test
-    fun `EMAIL_BRACKET extracts address between angle brackets`() {
-        assertThat(EasPatterns.EMAIL_BRACKET.firstGroup("Name <john@x.com>"))
-            .isEqualTo("john@x.com")
-    }
-
-    @Test
     fun `EWS_ITEM_ID extracts item id`() {
         assertThat(EasPatterns.EWS_ITEM_ID.firstGroup("<t:ItemId Id=\"abc123\"/>"))
             .isEqualTo("abc123")
@@ -45,12 +39,6 @@ class EasPatternsTest {
     fun `EWS_RESPONSE_CODE extracts code`() {
         assertThat(EasPatterns.EWS_RESPONSE_CODE.firstGroup("<m:ResponseCode>NoError</m:ResponseCode>"))
             .isEqualTo("NoError")
-    }
-
-    @Test
-    fun `MDN_DISPOSITION extracts recipient and strips brackets`() {
-        assertThat(EasPatterns.MDN_DISPOSITION.firstGroup("Disposition-Notification-To: <a@b.com>"))
-            .isEqualTo("a@b.com")
     }
 
     @Test

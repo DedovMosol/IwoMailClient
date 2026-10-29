@@ -30,47 +30,20 @@ fun ScheduleSendDialog(
     // Кэшируем Calendar и варианты времени для оптимизации recomposition
     
     // Варианты времени (вычисляются один раз)
-    val tomorrowMorning = remember {
-        Calendar.getInstance().apply {
-            add(Calendar.DAY_OF_YEAR, 1)
-            set(Calendar.HOUR_OF_DAY, 8)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-        }
-    }
-    
-    val tomorrowAfternoon = remember {
-        Calendar.getInstance().apply {
-            add(Calendar.DAY_OF_YEAR, 1)
-            set(Calendar.HOUR_OF_DAY, 13)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-        }
-    }
-    
-    val mondayMorning = remember {
-        Calendar.getInstance().apply {
-            // Находим следующий понедельник
-            while (get(Calendar.DAY_OF_WEEK) != Calendar.MONDAY) {
-                add(Calendar.DAY_OF_YEAR, 1)
-            }
-            if (timeInMillis <= System.currentTimeMillis()) {
-                add(Calendar.WEEK_OF_YEAR, 1)
-            }
-            set(Calendar.HOUR_OF_DAY, 8)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-        }
-    }
+    val now = remember { System.currentTimeMillis() }
+    val tomorrowMorning = remember { Calendar.getInstance().apply { timeInMillis = ScheduleSendTimes.tomorrowAt(now, 8) } }
+    val tomorrowAfternoon = remember { Calendar.getInstance().apply { timeInMillis = ScheduleSendTimes.tomorrowAt(now, 13) } }
+    val mondayMorning = remember { Calendar.getInstance().apply { timeInMillis = ScheduleSendTimes.nextMondayAt(now, 8) } }
     
     val dateFormat = remember { java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault()) }
     val fullDateFormat = remember { java.text.SimpleDateFormat("d MMM yyyy, HH:mm:ss", java.util.Locale.getDefault()) }
     
     if (showCustomPicker) {
         // Отдельные state для редактирования времени
-        var hourText by rememberSaveable { mutableStateOf(String.format("%02d", customDate.get(Calendar.HOUR_OF_DAY))) }
-        var minuteText by rememberSaveable { mutableStateOf(String.format("%02d", customDate.get(Calendar.MINUTE))) }
-        var secondText by rememberSaveable { mutableStateOf(String.format("%02d", customDate.get(Calendar.SECOND))) }
+        // Locale.ROOT: цифры ASCII при любом языке системы (поле ждёт 0–9)
+        var hourText by rememberSaveable { mutableStateOf(String.format(java.util.Locale.ROOT, "%02d", customDate.get(Calendar.HOUR_OF_DAY))) }
+        var minuteText by rememberSaveable { mutableStateOf(String.format(java.util.Locale.ROOT, "%02d", customDate.get(Calendar.MINUTE))) }
+        var secondText by rememberSaveable { mutableStateOf(String.format(java.util.Locale.ROOT, "%02d", customDate.get(Calendar.SECOND))) }
         
         // Диалог выбора кастомной даты и времени
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(

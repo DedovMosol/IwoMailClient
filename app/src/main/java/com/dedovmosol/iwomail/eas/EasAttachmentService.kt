@@ -13,7 +13,6 @@ import android.util.Base64
  *
  * Отвечает за:
  * - Отправку писем с вложениями (SendMail)
- * - Отправку MDN (уведомлений о прочтении)
  * - Скачивание вложений (ItemOperations, GetAttachment)
  */
 class EasAttachmentService internal constructor(
@@ -32,6 +31,8 @@ class EasAttachmentService internal constructor(
         val getEasVersion: () -> String,
         val provision: suspend () -> EasResult<String>,
         val wbxmlGenerateSendMail: (String, ByteArray) -> ByteArray,
+        /** Команда ComposeMail — общий транспорт отправки ([EasEmailService.postComposeMail]). */
+        val postComposeMail: suspend (command: String, legacyQuery: String, mime: ByteArray, wbxml: (ByteArray) -> ByteArray) -> EasResult<Boolean>,
         val wbxmlGenerateSmartForward: (String, String, String, ByteArray) -> ByteArray,
         val getFromEmail: () -> String,
         val getDeviceId: () -> String,
@@ -42,6 +43,9 @@ class EasAttachmentService internal constructor(
 
     companion object {
         private const val CONTENT_TYPE_WBXML = "application/vnd.ms-sync.wbxml"
+        /** Пределы письма с вложениями (типичные лимиты Exchange: maxReceiveSize / maxRequestLength). */
+        private const val MAX_ATTACHMENTS_BYTES = 7L * 1024 * 1024
+        private const val MAX_MIME_BYTES = 10 * 1024 * 1024
 
         // Regex для парсинга ItemOperations ответов
         private val ITEM_OPS_FETCH_STATUS_REGEX get() = EasPatterns.ITEM_OPS_FETCH_STATUS
@@ -65,66 +69,17 @@ class EasAttachmentService internal constructor(
         requestDeliveryReceipt: Boolean = false,
         importance: Int = 1,
         stableClientId: String? = null
-    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
-        val totalSize = attachments.sumOf { it.third.size }
-        val maxAttachmentSize = 7 * 1024 * 1024
-        if (totalSize > maxAttachmentSize) {
-            val sizeMB = totalSize / 1024 / 1024
-            return@withContext EasResult.Error("Размер вложений ($sizeMB МБ) превышает лимит сервера (7 МБ)")
+    ): EasResult<Boolean> {
+        recipientsError(to, cc, bcc)?.let { return EasResult.Error(it) }
+        attachmentsSizeError(attachments)?.let { return EasResult.Error(it) }
+        // SYNC-6: стабильный идентификатор отправки (переживает retry через inputData воркера) — DRY с путём без вложений.
+        val clientId = stableClientId ?: freshSendToken()
+        val mimeBytes = withContext(Dispatchers.IO) {
+            buildMimeWithAttachments(to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
         }
-
-        try {
-            // SYNC-6: стабильный идентификатор отправки (переживает retry через inputData воркера).
-            // Токен из единого источника freshSendToken() (EasSendIdentity.kt) — DRY с путём без вложений.
-            val clientId = stableClientId ?: freshSendToken()
-            val mimeBytes = buildMimeWithAttachments(to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
-
-            val maxMimeSize = 10 * 1024 * 1024
-            if (mimeBytes.size > maxMimeSize) {
-                val sizeMB = mimeBytes.size / 1024 / 1024
-                return@withContext EasResult.Error("Размер письма ($sizeMB МБ) превышает лимит сервера (10 МБ)")
-            }
-
-            val easVersion = deps.getEasVersion()
-            val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
-            val url = deps.buildUrl("SendMail") +
-                if (majorVersion < 14) "&SaveInSent=T" else ""
-
-            // Для EAS 14.0+ используем WBXML формат, для 12.x - message/rfc822
-            val (requestBody, contentType) = if (majorVersion >= 14) {
-                val wbxml = deps.wbxmlGenerateSendMail(clientId, mimeBytes)
-                Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
-            } else {
-                Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
-            }
-
-            val requestBuilder = Request.Builder()
-                .url(url)
-                .post(requestBody)
-                .header("Authorization", deps.getAuthHeader())
-                .header("MS-ASProtocolVersion", easVersion)
-                .header("Content-Type", contentType)
-                .header("User-Agent", "Android/12-EAS-2.0")
-
-            deps.getPolicyKey()?.let { key ->
-                requestBuilder.header("X-MS-PolicyKey", key)
-            }
-
-            deps.executeRequest(requestBuilder.build()).use { response ->
-                if (response.isSuccessful || response.code == 200) {
-                    EasResult.Success(true)
-                } else {
-                    val errorMsg = when (response.code) {
-                        500 -> "Сервер отклонил письмо. Возможно, размер вложений превышает лимит сервера."
-                        413 -> "Размер письма слишком большой для сервера"
-                        else -> "Ошибка отправки: HTTP ${response.code}"
-                    }
-                    EasResult.Error(errorMsg)
-                }
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка отправки: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
+        mimeSizeError(mimeBytes)?.let { return EasResult.Error(it) }
+        return deps.postComposeMail("SendMail", "&SaveInSent=T", mimeBytes) { mime ->
+            deps.wbxmlGenerateSendMail(clientId, mime)
         }
     }
 
@@ -144,73 +99,31 @@ class EasAttachmentService internal constructor(
         requestDeliveryReceipt: Boolean = false,
         importance: Int = 1,
         collectionId: String,
-        itemId: String
-    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
-        val totalSize = attachments.sumOf { it.third.size }
-        val maxAttachmentSize = 7 * 1024 * 1024
-        if (totalSize > maxAttachmentSize) {
-            val sizeMB = totalSize / 1024 / 1024
-            return@withContext EasResult.Error("Размер вложений ($sizeMB МБ) превышает лимит сервера (7 МБ)")
+        itemId: String,
+        stableClientId: String? = null
+    ): EasResult<Boolean> {
+        recipientsError(to, cc, bcc)?.let { return EasResult.Error(it) }
+        attachmentsSizeError(attachments)?.let { return EasResult.Error(it) }
+        val clientId = stableClientId ?: freshSendToken()
+        val mimeBytes = withContext(Dispatchers.IO) {
+            buildMimeWithAttachments(to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
         }
-
-        try {
-            val mimeBytes = buildMimeWithAttachments(to, subject, body, cc, bcc, attachments, requestReadReceipt, requestDeliveryReceipt, importance)
-
-            val maxMimeSize = 10 * 1024 * 1024
-            if (mimeBytes.size > maxMimeSize) {
-                val sizeMB = mimeBytes.size / 1024 / 1024
-                return@withContext EasResult.Error("Размер письма ($sizeMB МБ) превышает лимит сервера (10 МБ)")
-            }
-
-            val easVersion = deps.getEasVersion()
-            val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
-
-            // MS-ASCMD: EAS 12.1 → CollectionId/ItemId в URL query params
-            // EAS 14.0+ → WBXML с Source/FolderId/ItemId
-            val url = deps.buildUrl("SmartForward") +
-                if (majorVersion < 14) {
-                    "&CollectionId=${java.net.URLEncoder.encode(collectionId, "UTF-8")}" +
-                    "&ItemId=${java.net.URLEncoder.encode(itemId, "UTF-8")}" +
-                    "&SaveInSent=T"
-                } else ""
-
-            val (requestBody, contentType) = if (majorVersion >= 14) {
-                val clientId = System.currentTimeMillis().toString()
-                val wbxml = deps.wbxmlGenerateSmartForward(clientId, collectionId, itemId, mimeBytes)
-                Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
-            } else {
-                Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
-            }
-
-            val requestBuilder = Request.Builder()
-                .url(url)
-                .post(requestBody)
-                .header("Authorization", deps.getAuthHeader())
-                .header("MS-ASProtocolVersion", easVersion)
-                .header("Content-Type", contentType)
-                .header("User-Agent", "Android/12-EAS-2.0")
-
-            deps.getPolicyKey()?.let { key ->
-                requestBuilder.header("X-MS-PolicyKey", key)
-            }
-
-            deps.executeRequest(requestBuilder.build()).use { response ->
-                if (response.isSuccessful || response.code == 200) {
-                    EasResult.Success(true)
-                } else {
-                    val errorMsg = when (response.code) {
-                        500 -> "SmartForward: сервер отклонил письмо."
-                        413 -> "SmartForward: размер письма слишком большой"
-                        else -> "SmartForward ошибка: HTTP ${response.code}"
-                    }
-                    EasResult.Error(errorMsg)
-                }
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("SmartForward ошибка: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
+        mimeSizeError(mimeBytes)?.let { return EasResult.Error(it) }
+        return deps.postComposeMail("SmartForward", smartForwardQuery(collectionId, itemId), mimeBytes) { mime ->
+            deps.wbxmlGenerateSmartForward(clientId, collectionId, itemId, mime)
         }
     }
+
+    /** Вложения крупнее предела сервера — до сборки MIME (base64 увеличивает размер на треть). */
+    private fun attachmentsSizeError(attachments: List<Triple<String, String, ByteArray>>): String? {
+        val totalSize = attachments.sumOf { it.third.size.toLong() }
+        if (totalSize <= MAX_ATTACHMENTS_BYTES) return null
+        return "Размер вложений (${totalSize / 1024 / 1024} МБ) превышает лимит сервера (7 МБ)"
+    }
+
+    private fun mimeSizeError(mime: ByteArray): String? =
+        if (mime.size <= MAX_MIME_BYTES) null
+        else "Размер письма (${mime.size / 1024 / 1024} МБ) превышает лимит сервера (10 МБ)"
 
     /**
      * Строит MIME сообщение с вложениями
@@ -341,105 +254,6 @@ class EasAttachmentService internal constructor(
             sb.append(Base64.encodeToString(data, Base64.CRLF))
             sb.append("\r\n")
         }
-
-        sb.append("--$boundary--\r\n")
-
-        return sb.toString().toByteArray(Charsets.UTF_8)
-    }
-
-    // ==================== MDN (Message Disposition Notification) ====================
-
-    /**
-     * Отправка отчёта о прочтении (MDN)
-     */
-    suspend fun sendMdn(
-        to: String,
-        originalSubject: String,
-        originalMessageId: String? = null
-    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
-        try {
-            val mimeBytes = buildMdnMessage(to, originalSubject, originalMessageId)
-            val url = deps.buildUrl("SendMail") + "&SaveInSent=F" // Не сохраняем MDN в Отправленные
-            val contentType = "message/rfc822"
-
-            val requestBuilder = Request.Builder()
-                .url(url)
-                .post(mimeBytes.toRequestBody(contentType.toMediaType()))
-                .header("Authorization", deps.getAuthHeader())
-                .header("MS-ASProtocolVersion", deps.getEasVersion())
-                .header("Content-Type", contentType)
-                .header("User-Agent", "Android/12-EAS-2.0")
-
-            deps.getPolicyKey()?.let { key ->
-                requestBuilder.header("X-MS-PolicyKey", key)
-            }
-
-            deps.executeRequest(requestBuilder.build()).use { response ->
-                if (response.isSuccessful || response.code == 200) {
-                    EasResult.Success(true)
-                } else {
-                    EasResult.Error("Ошибка отправки MDN: HTTP ${response.code}")
-                }
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            EasResult.Error("Ошибка отправки MDN: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
-        }
-    }
-
-    /**
-     * Строит MDN сообщение (multipart/report)
-     */
-    private fun buildMdnMessage(to: String, originalSubject: String, originalMessageId: String?): ByteArray {
-        val fromEmail = deps.getFromEmail()
-        val deviceId = deps.getDeviceId()
-
-        // N-1: to и originalMessageId — из входящего письма (недоверенные); fromEmail — свой адрес.
-        // Вырезаем CR/LF из всех значений, попадающих в заголовки/поля MDN (header injection, RFC 5322 §2.2).
-        val safeFrom = fromEmail.stripHeaderCrlf()
-        val safeTo = to.stripHeaderCrlf()
-        val safeOriginalId = originalMessageId?.stripHeaderCrlf()
-
-        val messageId = "<mdn.${System.currentTimeMillis()}.${System.nanoTime()}@$deviceId>"
-        val dateFormat = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
-        val date = dateFormat.format(java.util.Date())
-        val boundary = "----=_MDN_${System.currentTimeMillis()}"
-
-        val sb = StringBuilder()
-        sb.append("Date: $date\r\n")
-        sb.append("From: $safeFrom\r\n")
-        sb.append("To: $safeTo\r\n")
-        sb.append("Message-ID: $messageId\r\n")
-        if (safeOriginalId != null) {
-            sb.append("In-Reply-To: $safeOriginalId\r\n")
-            sb.append("References: $safeOriginalId\r\n")
-        }
-        val encodedSubject = encodeMimeHeaderText("Read: $originalSubject")
-        sb.append("Subject: $encodedSubject\r\n")
-        sb.append("MIME-Version: 1.0\r\n")
-        sb.append("Content-Type: multipart/report; report-type=disposition-notification; boundary=\"$boundary\"\r\n")
-        sb.append("\r\n")
-
-        // Часть 1: Человекочитаемое сообщение
-        sb.append("--$boundary\r\n")
-        sb.append("Content-Type: text/plain; charset=UTF-8\r\n")
-        sb.append("Content-Transfer-Encoding: 8bit\r\n")
-        sb.append("\r\n")
-        sb.append("Ваше сообщение было прочитано.\r\n")
-        sb.append("Your message has been read.\r\n")
-        sb.append("\r\n")
-
-        // Часть 2: MDN (machine-readable)
-        sb.append("--$boundary\r\n")
-        sb.append("Content-Type: message/disposition-notification\r\n")
-        sb.append("\r\n")
-        sb.append("Reporting-UA: iwo Mail Client; Android\r\n")
-        sb.append("Final-Recipient: rfc822;$safeFrom\r\n")
-        if (safeOriginalId != null) {
-            sb.append("Original-Message-ID: $safeOriginalId\r\n")
-        }
-        sb.append("Disposition: manual-action/MDN-sent-manually; displayed\r\n")
-        sb.append("\r\n")
 
         sb.append("--$boundary--\r\n")
 

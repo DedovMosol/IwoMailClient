@@ -4,9 +4,13 @@ import android.content.Context
 import android.os.Build
 import androidx.work.*
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.domain.OutgoingMail
+import com.dedovmosol.iwomail.domain.isRetryableSendError
+import com.dedovmosol.iwomail.domain.refreshSentFolder
+import com.dedovmosol.iwomail.domain.saveUnsentAsDraft
+import com.dedovmosol.iwomail.domain.send
 import com.dedovmosol.iwomail.eas.EasResult
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,30 +35,29 @@ class OutboxWorker(
         // Защищает от гонки между enqueue() (UI) и doWork() (Worker thread)
         private val outboxLock = Any()
         
+        /** Попыток на письмо при временных ошибках сервера (5xx, 429); дальше — в Черновики с уведомлением. */
+        internal const val MAX_ATTEMPTS = 10
+
         /**
-         * Добавляет письмо в очередь отправки
+         * Добавляет письмо в очередь отправки — со всеми полями ([OutgoingMail]): раньше очередь теряла важность,
+         * отчёт о доставке и исходное письмо пересылки.
          */
-        fun enqueue(
-            context: Context,
-            accountId: Long,
-            to: String,
-            cc: String,
-            bcc: String,
-            subject: String,
-            body: String,
-            requestReadReceipt: Boolean = false
-        ) {
+        fun enqueue(context: Context, accountId: Long, mail: OutgoingMail) {
             synchronized(outboxLock) {
                 val outbox = loadOutboxInternal(context)
                 pruneStaleEntries(outbox)
                 val email = JSONObject().apply {
                     put("accountId", accountId)
-                    put("to", to)
-                    put("cc", cc)
-                    put("bcc", bcc)
-                    put("subject", subject)
-                    put("body", body)
-                    put("requestReadReceipt", requestReadReceipt)
+                    put("to", mail.to)
+                    put("cc", mail.cc)
+                    put("bcc", mail.bcc)
+                    put("subject", mail.subject)
+                    put("body", mail.body)
+                    put("importance", mail.importance)
+                    put("requestReadReceipt", mail.requestReadReceipt)
+                    put("requestDeliveryReceipt", mail.requestDeliveryReceipt)
+                    mail.forwardFolderId?.let { put("forwardFolderId", it) }
+                    mail.forwardItemId?.let { put("forwardItemId", it) }
                     put("timestamp", System.currentTimeMillis())
                     // N-11: стабильный ClientId/Message-ID на запись очереди. Переиспользуется при
                     // каждой (повторной) отправке → сервер (EAS 14+) отбрасывает дубликат по ClientId,
@@ -112,6 +115,20 @@ class OutboxWorker(
             saveOutboxInternal(context, outbox)
         }
         
+        /** Запись очереди → письмо (старые записи без новых полей — с прежними значениями по умолчанию). */
+        internal fun mailOf(entry: JSONObject) = OutgoingMail(
+            to = entry.optString("to"),
+            cc = entry.optString("cc"),
+            bcc = entry.optString("bcc"),
+            subject = entry.optString("subject"),
+            body = entry.optString("body"),
+            importance = entry.optInt("importance", 1),
+            requestReadReceipt = entry.optBoolean("requestReadReceipt", false),
+            requestDeliveryReceipt = entry.optBoolean("requestDeliveryReceipt", false),
+            forwardFolderId = entry.optString("forwardFolderId").takeIf { it.isNotBlank() },
+            forwardItemId = entry.optString("forwardItemId").takeIf { it.isNotBlank() }
+        )
+
         private fun pruneStaleEntries(outbox: JSONArray) {
             val now = System.currentTimeMillis()
             var i = outbox.length() - 1
@@ -183,27 +200,32 @@ class OutboxWorker(
                     accountRepo.createEasClient(accountId)
                 }
                 if (easClient == null) {
-                    failedEmails.put(email)
+                    // Аккаунта нет — письмо не отправить никогда; иначе (клиент временно не собрать) — позже
+                    if (accountRepo.getAccount(accountId) != null) failedEmails.put(email)
                     continue
                 }
-                
-                val result = easClient.sendMail(
-                    to = email.getString("to"),
-                    cc = email.optString("cc", ""),
-                    bcc = email.optString("bcc", ""),
-                    subject = email.getString("subject"),
-                    body = email.getString("body"),
-                    requestReadReceipt = email.optBoolean("requestReadReceipt", false),
-                    // N-11: стабильный id (null для старых записей без него → прежнее поведение).
-                    stableClientId = email.optString("clientId").takeIf { it.isNotBlank() }
-                )
-                
+                val mail = mailOf(email)
+                // N-11: стабильный id (null для старых записей без него → прежнее поведение).
+                val result = easClient.send(mail, stableClientId = email.optString("clientId").takeIf { it.isNotBlank() })
                 when (result) {
                     is EasResult.Success -> {
                         successCount++
                         successAccountIds.add(accountId)
                     }
-                    is EasResult.Error -> failedEmails.put(email)
+                    is EasResult.Error -> {
+                        val attempts = email.optInt("attempts", 0) + 1
+                        email.put("attempts", attempts)
+                        if (isRetryableSendError(result.message) && attempts < MAX_ATTEMPTS) {
+                            failedEmails.put(email)
+                        } else {
+                            // Повтор не поможет: письмо — в Черновики, пользователь узнаёт, почему оно не ушло
+                            val saved = saveUnsentAsDraft(applicationContext, accountId, mail)
+                            SendNotifications.notSent(
+                                applicationContext, com.dedovmosol.iwomail.MailApplication.CHANNEL_OUTBOX,
+                                SendNotifications.idFor(email.optString("clientId")), mail.subject, result.message, saved
+                            )
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -216,19 +238,19 @@ class OutboxWorker(
             val emailKey = { json: org.json.JSONObject ->
                 "${json.optLong("accountId")}_${json.optLong("timestamp")}"
             }
-            val failedKeys = (0 until failedEmails.length()).map {
-                emailKey(failedEmails.getJSONObject(it))
-            }.toSet()
+            val failedByKey = (0 until failedEmails.length())
+                .map { failedEmails.getJSONObject(it) }
+                .associateBy { emailKey(it) }
             val sentKeys = (0 until outbox.length())
                 .map { emailKey(outbox.getJSONObject(it)) }
-                .filter { it !in failedKeys }
+                .filter { it !in failedByKey }
                 .toSet()
             val merged = JSONArray()
             for (i in 0 until current.length()) {
                 val item = current.getJSONObject(i)
-                if (emailKey(item) !in sentKeys) {
-                    merged.put(item)
-                }
+                val key = emailKey(item)
+                // Неудачные — с обновлённым счётчиком попыток; отправленные и брошенные — из очереди вон
+                if (key !in sentKeys) merged.put(failedByKey[key] ?: item)
             }
             saveOutboxLocked(applicationContext, merged)
         }
@@ -242,22 +264,8 @@ class OutboxWorker(
             // из которого были успешно отправлены письма.
             // Без этого письма из очереди не появляются в Sent Items
             // до следующего цикла SyncWorker (15+ минут).
-            val mailRepo = RepositoryProvider.getMailRepository(applicationContext)
-            val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(applicationContext)
-            for (accountId in successAccountIds) {
-                try {
-                    val sentFolder = database.folderDao().getFoldersByAccountList(accountId)
-                        .find { it.type == 5 } // FolderType.SENT_ITEMS
-                    if (sentFolder != null) {
-                        delay(1000)
-                        mailRepo.syncEmails(accountId, sentFolder.id)
-                    }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                }
-            }
+            for (accountId in successAccountIds) refreshSentFolder(applicationContext, accountId)
         }
-        
         // Если остались неотправленные — повторим позже
         if (failedEmails.length() > 0) {
             Result.retry()
@@ -267,32 +275,15 @@ class OutboxWorker(
     }
     
     private fun showNotification(count: Int) {
-        try {
-            if (!NotificationHelper.canPostNotifications(applicationContext)) return
-            val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) 
-                as android.app.NotificationManager
-            
-            val isRu = java.util.Locale.getDefault().language == "ru"
-            val title = if (isRu) {
-                if (count == 1) "Письмо отправлено" else "Письма отправлены"
-            } else {
-                if (count == 1) "Email sent" else "Emails sent"
-            }
-            val text = if (isRu) "Отправлено из очереди: $count" else "Sent from queue: $count"
-            
-            val notification = androidx.core.app.NotificationCompat.Builder(
-                applicationContext, 
-                com.dedovmosol.iwomail.MailApplication.CHANNEL_OUTBOX
-            )
-                .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setAutoCancel(true)
-                .build()
-            
-            notificationManager.notify(9996, notification) // Уникальный ID (не 9999, который занят SyncWorker)
-        } catch (e: Exception) {
-            // Игнорируем ошибки уведомлений
+        val ru = SendNotifications.isRussian(applicationContext)
+        val title = when {
+            ru && count == 1 -> "Письмо отправлено"
+            ru -> "Письма отправлены"
+            count == 1 -> "Email sent"
+            else -> "Emails sent"
         }
+        val text = if (ru) "Отправлено из очереди: $count" else "Sent from queue: $count"
+        // 9996 — свой id (9999 занят SyncWorker)
+        SendNotifications.show(applicationContext, com.dedovmosol.iwomail.MailApplication.CHANNEL_OUTBOX, 9996, title, text)
     }
 }

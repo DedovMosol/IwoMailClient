@@ -1,210 +1,164 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import android.content.Context
-import androidx.work.*
-import com.dedovmosol.iwomail.data.repository.AccountRepository
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.work.CoroutineWorker
+import androidx.work.Data
+import androidx.work.ForegroundInfo
+import androidx.work.WorkerParameters
+import com.dedovmosol.iwomail.MailApplication
+import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.domain.OutgoingMail
+import com.dedovmosol.iwomail.domain.isRetryableSendError
+import com.dedovmosol.iwomail.domain.refreshSentFolder
+import com.dedovmosol.iwomail.domain.saveUnsentAsDraft
+import com.dedovmosol.iwomail.domain.send
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.sync.ScheduledSend
+import com.dedovmosol.iwomail.sync.SendNotifications
 import com.dedovmosol.iwomail.ui.NotificationStrings
+import kotlinx.coroutines.sync.withLock
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
- * Worker для отложенной отправки письма
+ * Отправка запланированного письма ([ScheduledSend]). Класс и пакет — прежние: задачи, поставленные до обновления,
+ * WorkManager находит по имени класса.
+ *
+ * - Временная ошибка (нет связи, сервер перегружен) — повтор с нарастающей паузой, не больше [MAX_ATTEMPTS] раз.
+ * - Ошибка, которую повтор не исправит (адрес, размер, политика), или попытки кончились — письмо в Черновики и
+ *   уведомление с причиной. Раньше повторы шли бесконечно, молча, раз в несколько часов.
  */
 class ScheduledEmailWorker(
     context: Context,
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
-    
+
     override suspend fun doWork(): Result {
-        val accountId = inputData.getLong("accountId", -1)
-        val to = inputData.getString("to") ?: return Result.failure()
-        val cc = inputData.getString("cc") ?: ""
-        val bcc = inputData.getString("bcc") ?: ""
-        val subject = inputData.getString("subject") ?: ""
-        val requestReadReceipt = inputData.getBoolean("requestReadReceipt", false)
-        val requestDeliveryReceipt = inputData.getBoolean("requestDeliveryReceipt", false)
-        val importance = inputData.getInt("importance", 1)
-        val attachmentDirPath = inputData.getString("attachmentDir") ?: ""
-        // SYNC-6: стабильный clientId из inputData (WorkManager сохраняет inputData неизменным
-        // при retry) → повтор после потерянного ACK не порождает новый Message-ID/ClientId.
-        val clientId = inputData.getString("clientId")
-        
-        val accountRepo = AccountRepository(applicationContext)
-        
-        val client = accountRepo.createEasClient(accountId) ?: return Result.failure()
-        
-        val attachmentDir = if (attachmentDirPath.isNotBlank()) File(attachmentDirPath) else null
-        // Тело — из файла (inputData WorkManager ограничен 10 КБ); "body" — задачи, поставленные до этого.
-        val body = attachmentDir?.let { File(it, BODY_FILE) }?.takeIf { it.exists() }?.readText()
-            ?: inputData.getString("body") ?: ""
-        val sendResult = if (attachmentDir != null) {
-            val attachments = readPersistedAttachments(attachmentDir)
-            if (attachments.isNotEmpty()) {
-                client.sendMailWithAttachments(
-                    to, subject, body, cc, bcc, attachments,
-                    requestReadReceipt, requestDeliveryReceipt, importance,
-                    stableClientId = clientId
-                )
-            } else {
-                client.sendMail(
-                    to, subject, body, cc, bcc,
-                    importance = importance,
-                    requestReadReceipt = requestReadReceipt,
-                    requestDeliveryReceipt = requestDeliveryReceipt,
-                    stableClientId = clientId
-                )
-            }
-        } else {
-            client.sendMail(
-                to, subject, body, cc, bcc,
-                importance = importance,
-                requestReadReceipt = requestReadReceipt,
-                requestDeliveryReceipt = requestDeliveryReceipt,
-                stableClientId = clientId
-            )
+        val dir = inputData.getString(ScheduledSend.KEY_PAYLOAD_DIR)?.takeIf { it.isNotBlank() }?.let(::File)
+        return ScheduledSend.lock(dir ?: File("")).withLock {
+            // Каталога нет — письмо уже отправлено (будильником или подстраховкой) или отменено
+            if (dir != null && !dir.exists()) return@withLock Result.success()
+            val job = dir?.let { ScheduledSend.read(it) } ?: legacyJob(inputData, dir) ?: return@withLock Result.failure()
+            sendScheduled(job, dir)
         }
-        
-        return when (sendResult) {
+    }
+
+    private suspend fun sendScheduled(job: ScheduledSend.Job, dir: File?): Result {
+        val accountRepo = RepositoryProvider.getAccountRepository(applicationContext)
+        if (accountRepo.getAccount(job.accountId) == null) {
+            // Аккаунт удалён — отправить не от кого, сохранить некуда
+            return giveUp(job, dir, "Account not found", saveAsDraft = false)
+        }
+        val client = accountRepo.createEasClient(job.accountId)
+            ?: return if (runAttemptCount + 1 < MAX_ATTEMPTS) Result.retry() else giveUp(job, dir, com.dedovmosol.iwomail.data.repository.RepositoryErrors.CLIENT_CREATE_FAILED, true)
+        return when (val result = client.send(job.mail, stableClientId = job.clientId)) {
             is EasResult.Success -> {
-                attachmentDir?.deleteRecursively()
-                deleteSentDraft()
-                val isRu = java.util.Locale.getDefault().language == "ru"
-                val title = NotificationStrings.getEmailSent(isRu)
-                val text = NotificationStrings.getScheduledEmailSent(to, isRu)
-                showNotification(title, text)
+                dir?.deleteRecursively()
+                deleteSentDraft(job)
+                val ru = SendNotifications.isRussian(applicationContext)
+                SendNotifications.show(
+                    applicationContext, MailApplication.CHANNEL_SCHEDULED, SendNotifications.idFor(job.clientId),
+                    NotificationStrings.getEmailSent(ru),
+                    NotificationStrings.getScheduledEmailSent(firstRecipient(job.mail), ru)
+                )
+                refreshSentFolder(applicationContext, job.accountId)
                 Result.success()
             }
-            is EasResult.Error -> Result.retry()
+            is EasResult.Error -> {
+                if (isRetryableSendError(result.message) && runAttemptCount + 1 < MAX_ATTEMPTS) {
+                    Result.retry()
+                } else {
+                    giveUp(job, dir, result.message, saveAsDraft = true)
+                }
+            }
         }
     }
 
     /**
-     * Отправлен черновик — он удаляется, как при обычной отправке (SendProgressBar). Только если после
-     * планирования его не меняли: правка, сделанная после, — уже другое письмо, его не трогаем.
+     * Не отправить: в Черновики (если черновика, из которого письмо запланировано, уже нет — иначе он и так там) и
+     * уведомление с причиной. Каталог письма удаляется — больше его никто не отправит.
      */
-    private suspend fun deleteSentDraft() {
-        val draftId = inputData.getString("draftId")?.takeIf { it.isNotBlank() } ?: return
+    private suspend fun giveUp(job: ScheduledSend.Job, dir: File?, reason: String, saveAsDraft: Boolean): Result {
+        val draftStillThere = job.draftId?.let { id ->
+            com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(applicationContext).emailDao().getEmail(id)
+        } != null
+        val saved = draftStillThere || (saveAsDraft && saveUnsentAsDraft(applicationContext, job.accountId, job.mail))
+        SendNotifications.notSent(
+            applicationContext, MailApplication.CHANNEL_SCHEDULED, SendNotifications.idFor(job.clientId),
+            job.mail.subject, reason, saved
+        )
+        dir?.deleteRecursively()
+        return Result.failure()
+    }
+
+    /**
+     * Отправлен черновик — он удаляется, как при обычной отправке. Только если после планирования его не меняли:
+     * правка, сделанная после, — уже другое письмо, его не трогаем.
+     */
+    private suspend fun deleteSentDraft(job: ScheduledSend.Job) {
+        val draftId = job.draftId ?: return
         try {
             val draft = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(applicationContext)
                 .emailDao().getEmail(draftId) ?: return
-            if (draft.dateReceived != inputData.getLong("draftStamp", -1L)) return
-            com.dedovmosol.iwomail.data.repository.RepositoryProvider.getMailRepository(applicationContext)
-                .deleteDraft(draft.accountId, draft.serverId)
+            if (draft.dateReceived != job.draftStamp) return
+            RepositoryProvider.getMailRepository(applicationContext).deleteDraft(draft.accountId, draft.serverId)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w("ScheduledEmailWorker", "Draft cleanup after send failed: ${e.message}")
         }
     }
-    
-    private fun readPersistedAttachments(dir: File): List<Triple<String, String, ByteArray>> {
-        val manifestFile = File(dir, "manifest.json")
-        if (!manifestFile.exists()) return emptyList()
-        return try {
-            val manifest = org.json.JSONArray(manifestFile.readText())
-            (0 until manifest.length()).mapNotNull { i ->
-                val entry = manifest.getJSONObject(i)
-                val file = File(dir, entry.getString("file"))
-                if (file.exists()) {
-                    Triple(entry.getString("name"), entry.getString("mimeType"), file.readBytes())
-                } else null
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-    
-    private fun showNotification(title: String, text: String) {
-        if (!com.dedovmosol.iwomail.sync.NotificationHelper.canPostNotifications(applicationContext)) return
-        val notification = androidx.core.app.NotificationCompat.Builder(
-            applicationContext, 
-            com.dedovmosol.iwomail.MailApplication.CHANNEL_SCHEDULED
-        )
+
+    /** Срочная задача на Android 11 и ниже работает как служба переднего плана — ей нужно уведомление. */
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val ru = SendNotifications.isRussian(applicationContext)
+        val notification = NotificationCompat.Builder(applicationContext, MailApplication.CHANNEL_SCHEDULED)
             .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true)
+            .setContentTitle(if (ru) "Отправка запланированного письма" else "Sending scheduled email")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setSilent(true)
             .build()
-        
-        applicationContext.getSystemService(android.app.NotificationManager::class.java)
-            .notify(System.currentTimeMillis().toInt(), notification)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(FOREGROUND_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(FOREGROUND_ID, notification)
+        }
     }
 
     internal companion object {
-        const val BODY_FILE = "body.html"
-    }
-}
+        /** Попыток при временных ошибках: с паузой 1, 2, 4… минут — около двух часов. */
+        const val MAX_ATTEMPTS = 8
+        private const val FOREGROUND_ID = 9_994
 
-/**
- * Сохраняет тело и вложения на диск для отложенной отправки: inputData WorkManager ограничен 10 КБ
- * (Data.MAX_DATA_BYTES) — тело длиннее (HTML с подписью, картинки в тексте) роняло планирование.
- */
-internal fun persistScheduledPayload(
-    dir: File,
-    body: String,
-    attachments: List<Triple<String, String, ByteArray>>
-) {
-    dir.mkdirs()
-    File(dir, ScheduledEmailWorker.BODY_FILE).writeText(body)
-    if (attachments.isEmpty()) return
-    val manifest = org.json.JSONArray()
-    for ((index, att) in attachments.withIndex()) {
-        val (name, mimeType, bytes) = att
-        val safeFileName = "${index}_${name.replace(Regex("[^a-zA-Z0-9._-]"), "_")}"
-        File(dir, safeFileName).writeBytes(bytes)
-        manifest.put(org.json.JSONObject().apply {
-            put("name", name)
-            put("mimeType", mimeType)
-            put("file", safeFileName)
-        })
-    }
-    File(dir, "manifest.json").writeText(manifest.toString())
-}
+        /** Кому — для уведомления «отправлено»: первый из Кому, Копии, Скрытой копии. */
+        internal fun firstRecipient(mail: OutgoingMail): String =
+            listOf(mail.to, mail.cc, mail.bcc).firstOrNull { it.isNotBlank() }
+                ?.split(',', ';')?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
 
-/**
- * Планирует отправку письма через WorkManager. [draftId]/[draftStamp] — отправляемый черновик и время
- * его последнего изменения: после отправки он удаляется, если с тех пор не менялся.
- */
-fun scheduleEmail(
-    context: Context,
-    accountId: Long,
-    to: String,
-    cc: String,
-    bcc: String,
-    subject: String,
-    body: String,
-    delayMillis: Long,
-    requestReadReceipt: Boolean = false,
-    requestDeliveryReceipt: Boolean = false,
-    importance: Int = 1,
-    attachments: List<Triple<String, String, ByteArray>> = emptyList(),
-    draftId: String? = null,
-    draftStamp: Long = -1L
-) {
-    val payloadDir = File(context.filesDir, "scheduled_attachments/${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}")
-    persistScheduledPayload(payloadDir, body, attachments)
-    
-    val data = workDataOf(
-        "accountId" to accountId,
-        "to" to to,
-        "cc" to cc,
-        "bcc" to bcc,
-        "subject" to subject,
-        "requestReadReceipt" to requestReadReceipt,
-        "requestDeliveryReceipt" to requestDeliveryReceipt,
-        "importance" to importance,
-        "attachmentDir" to payloadDir.absolutePath,
-        "draftId" to (draftId ?: ""),
-        "draftStamp" to draftStamp,
-        // SYNC-6: стабильный clientId на всю жизнь задачи (переживает retry) → без дубля отправки.
-        "clientId" to java.util.UUID.randomUUID().toString().replace("-", "")
-    )
-    
-    val request = OneTimeWorkRequestBuilder<ScheduledEmailWorker>()
-        .setInputData(data)
-        .setInitialDelay(delayMillis, TimeUnit.MILLISECONDS)
-        .build()
-    
-    WorkManager.getInstance(context).enqueue(request)
+        /** Задача, поставленная прежней версией: поля — в inputData, тело — в каталоге (или в inputData совсем старых). */
+        internal fun legacyJob(data: Data, dir: File?): ScheduledSend.Job? {
+            val to = data.getString("to") ?: return null
+            val body = dir?.let { File(it, ScheduledSend.BODY_FILE) }?.takeIf { it.exists() }?.readText()
+                ?: data.getString("body").orEmpty()
+            return ScheduledSend.Job(
+                accountId = data.getLong("accountId", -1),
+                mail = OutgoingMail(
+                    to = to,
+                    cc = data.getString("cc").orEmpty(),
+                    bcc = data.getString("bcc").orEmpty(),
+                    subject = data.getString("subject").orEmpty(),
+                    body = body,
+                    attachments = dir?.let { ScheduledSend.readAttachments(it) }.orEmpty(),
+                    importance = data.getInt("importance", 1),
+                    requestReadReceipt = data.getBoolean("requestReadReceipt", false),
+                    requestDeliveryReceipt = data.getBoolean("requestDeliveryReceipt", false)
+                ),
+                sendAt = 0L,
+                clientId = data.getString("clientId") ?: java.util.UUID.randomUUID().toString().replace("-", ""),
+                draftId = data.getString("draftId")?.takeIf { it.isNotBlank() },
+                draftStamp = data.getLong("draftStamp", -1L)
+            )
+        }
+    }
 }

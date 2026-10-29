@@ -492,7 +492,7 @@ data class EmailEntity(
     val hasAttachments: Boolean = false,
     val originalFolderId: String? = null, // Исходная папка до перемещения в корзину
     val mdnRequestedBy: String? = null, // Email для отправки отчёта о прочтении (MDN)
-    val mdnSent: Boolean = false, // Отчёт о прочтении уже отправлен
+    val mdnSent: Boolean = false, // Пользователь ответил на запрос отчёта о прочтении (см. domain.ReadReceipts)
     val messageClass: String = "", // MS-ASEMAIL MessageClass (e.g. IPM.Schedule.Meeting.Request)
     val internetMessageId: String? = null, // RFC 5322 Message-ID для корреляции MDN
     // Скрытые копии черновика. null — не известны: EAS до 16.0 не передаёт Bcc, черновик из Outlook

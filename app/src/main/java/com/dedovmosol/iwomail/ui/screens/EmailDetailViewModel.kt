@@ -10,6 +10,7 @@ import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.domain.ReadReceipts
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.screens.emaildetail.EmailDetailActions
@@ -73,7 +74,9 @@ data class EmailDetailUiState(
     val isMoving: Boolean = false,
     val isRestoring: Boolean = false,
     val isDeleting: Boolean = false,
-    val isSendingMdn: Boolean = false
+    // Запрос отчёта о прочтении, на который ждём ответа: адрес отчёта; письмо до ответа не помечается прочитанным
+    val readReceiptRequestedBy: String? = null,
+    val isAnsweringReadReceipt: Boolean = false
 )
 
 /**
@@ -88,6 +91,7 @@ sealed interface EmailDetailEvent {
     data object Restored : EmailDetailEvent
     data object Refreshed : EmailDetailEvent
     data object ReadReceiptSent : EmailDetailEvent
+    data object ReadReceiptNotDeclined : EmailDetailEvent
     data object DeletedOnServer : EmailDetailEvent
     data object NoBodyFromServer : EmailDetailEvent
     data class Error(val message: String) : EmailDetailEvent
@@ -232,9 +236,12 @@ class EmailDetailViewModel(
     }
 
     /**
-     * Один раз при открытии: помечает прочитанным (фоном) и подгружает тело, если локально пусто.
+     * Один раз при открытии: подгружает тело, если локально пусто, и помечает прочитанным.
      * Выполняется один раз на инстанс VM → при повороте повторной сетевой загрузки тела нет
      * (исходный экран полагался на guard `body.isEmpty()`; здесь корректнее — операция в VM).
+     *
+     * Пометка — после загрузки: запрос отчёта о прочтении известен из заголовков, пришедших с телом, а
+     * Exchange отправляет отчёт сам, как только письмо прочитано. Если отчёт просят — сначала спросить.
      */
     private fun openEmail() {
         viewModelScope.launch {
@@ -244,29 +251,37 @@ class EmailDetailViewModel(
                     _uiState.update { it.copy(bodyLoadError = BodyLoadError.NotFound) }
                     return@launch
                 }
-                if (!current.read) {
-                    launch {
-                        try {
-                            when (val result = actions.markAsRead(emailId, true)) {
-                                is EasResult.Success -> {}
-                                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            Log.e("EmailDetailViewModel", "markAsRead failed on open", e)
-                        }
-                    }
-                }
                 if (current.body.isEmpty() && !_uiState.value.isLoadingBody) {
                     loadBodyInitial(current)
                 }
+                if (!current.read) markReadOrAskReceipt()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e("EmailDetailViewModel", "openEmail failed for $emailId", e)
                 _uiState.update { it.copy(bodyLoadError = BodyLoadError.LoadFailed) }
             }
+        }
+    }
+
+    /** Помечает прочитанным; если просят отчёт о прочтении — сначала спрашивает ([answerReadReceipt]). */
+    private suspend fun markReadOrAskReceipt() {
+        try {
+            val email = withContext(ioDispatcher) { actions.getEmailSync(emailId) } ?: return
+            if (email.read) return
+            val requestedBy = withContext(ioDispatcher) { actions.pendingReadReceipt(emailId) }
+            if (requestedBy != null) {
+                _uiState.update { it.copy(readReceiptRequestedBy = requestedBy) }
+                return
+            }
+            when (val result = actions.markAsRead(emailId, true)) {
+                is EasResult.Success -> {}
+                is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e("EmailDetailViewModel", "markAsRead failed on open", e)
         }
     }
 
@@ -449,37 +464,37 @@ class EmailDetailViewModel(
         }
     }
 
-    fun sendMdn() {
-        if (_uiState.value.isSendingMdn) return
+    /**
+     * Ответ на запрос отчёта о прочтении: письмо помечается прочитанным, отчёт отправляет Exchange;
+     * при отказе сервер сначала подавляет отчёт. Не вышло отказаться — письмо остаётся непрочитанным.
+     */
+    fun answerReadReceipt(send: Boolean) {
+        val state = _uiState.value
+        if (state.readReceiptRequestedBy == null || state.isAnsweringReadReceipt) return
+        _uiState.update { it.copy(isAnsweringReadReceipt = true) }
         viewModelScope.launch {
-            _uiState.update { it.copy(isSendingMdn = true) }
             try {
-                val result = actions.sendMdn(emailId)
-                when (result) {
-                    is EasResult.Success -> sendEvent(EmailDetailEvent.ReadReceiptSent)
-                    is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+                when (val result = actions.answerReadReceipt(emailId, send)) {
+                    is EasResult.Success -> if (send) sendEvent(EmailDetailEvent.ReadReceiptSent)
+                    is EasResult.Error -> sendEvent(
+                        if (result.message == ReadReceipts.NOT_DECLINED) EmailDetailEvent.ReadReceiptNotDeclined
+                        else EmailDetailEvent.Error(result.message)
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
             } finally {
-                _uiState.update { it.copy(isSendingMdn = false) }
+                _uiState.update { it.copy(isAnsweringReadReceipt = false, readReceiptRequestedBy = null) }
             }
         }
     }
 
-    /** Пользователь отказался отправлять MDN — помечаем, чтобы не показывать диалог снова. */
-    fun dismissMdn() {
-        viewModelScope.launch {
-            try {
-                actions.markMdnSent(emailId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e("EmailDetailViewModel", "markMdnSent failed for $emailId", e)
-            }
-        }
+    /** Ответ отложен (закрыли диалог): письмо остаётся непрочитанным, спросим при следующем открытии. */
+    fun postponeReadReceipt() {
+        if (_uiState.value.isAnsweringReadReceipt) return
+        _uiState.update { it.copy(readReceiptRequestedBy = null) }
     }
 
     // === Окончательное удаление с прогресс-баром (вызывается из DeletionController в UI) ===

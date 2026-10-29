@@ -889,6 +889,9 @@ private fun HomeContent(
     val isBatterySaverActive by settingsRepo.batterySaverState.collectAsStateWithLifecycle(initialValue = settingsRepo.isBatterySaverActive())
     // Per-account: показываем предупреждение если активный аккаунт не игнорирует Battery Saver
     val showBatterySaverWarning = isBatterySaverActive && (activeAccount?.ignoreBatterySaver != true)
+    // Работа в фоне (исключение из оптимизации батареи): без неё Push и синхронизация откладываются системой
+    val backgroundWorkAllowed = com.dedovmosol.iwomail.ui.components.rememberBackgroundWorkAllowed()
+    val requestBackgroundWork = com.dedovmosol.iwomail.ui.components.LocalRequestBackgroundWork.current
 
     // Флаг для карточки-рекомендации по очистке
     var isRecommendationDismissed by rememberSaveable { mutableStateOf(false) }
@@ -1004,6 +1007,12 @@ private fun HomeContent(
             }
         }
 
+        // Работа в фоне не разрешена: новые письма приходят с опозданием. Нажатие — системный запрос разрешения.
+        if (requestBackgroundWork != null && !backgroundWorkAllowed) {
+            item(key = "background_work_banner") {
+                com.dedovmosol.iwomail.ui.components.BackgroundWorkBanner(onClick = requestBackgroundWork)
+            }
+        }
         // Предупреждение о Battery Saver
         if (showBatterySaverWarning) {
             item {

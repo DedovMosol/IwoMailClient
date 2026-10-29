@@ -38,8 +38,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.dedovmosol.iwomail.data.database.AccountType
 import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
@@ -1037,7 +1035,7 @@ private fun EmailListContent(
     val stableOnStarClick by rememberUpdatedState(onStarClick)
 
     // Миниатюры — только найденные: письма без картинки проверяются снова (её могли скачать при открытии письма)
-    var imagePreviewCache by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var imagePreviewCache by remember { mutableStateOf<Map<String, com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview>>(emptyMap()) }
     val emailById = remember(emails) { emails.associateBy { it.id } }
     val previewScope = rememberCoroutineScope()
     val imagePreviews = remember(mailRepo) {
@@ -1057,7 +1055,9 @@ private fun EmailListContent(
             }
         )
     }
-    fun withPreviews(added: Map<String, String>): Map<String, String> {
+    fun withPreviews(
+        added: Map<String, com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview>
+    ): Map<String, com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview> {
         val combined = imagePreviewCache + added
         return if (combined.size > 200) combined.entries.toList().takeLast(200).associate { it.toPair() } else combined
     }
@@ -1082,11 +1082,11 @@ private fun EmailListContent(
             // Черновикам недостающая картинка скачивается (свои, их немного); остальным — только скачанные.
             val found = imagePreviews.find(missingIds, download = isDrafts && imagePreviews.downloadAllowed())
             if (found.local.isNotEmpty()) imagePreviewCache = withPreviews(found.local)
-            for ((emailId, row) in found.toDownload) {
+            for ((emailId, pending) in found.toDownload) {
                 val accountId = emailById[emailId]?.accountId ?: continue
                 // Не в collect: загрузка не задерживает разбор следующей прокрутки
                 previewScope.launch {
-                    imagePreviews.download(accountId, row)?.let { path -> imagePreviewCache = withPreviews(mapOf(emailId to path)) }
+                    imagePreviews.download(accountId, pending)?.let { preview -> imagePreviewCache = withPreviews(mapOf(emailId to preview)) }
                 }
             }
         }
@@ -1128,13 +1128,12 @@ private fun EmailListContent(
             EmailListItem(
                 email = email,
                 mailRepo = mailRepo,
-                context = context,
                 isSelected = email.id in selectedIds,
                 isSelectionMode = isSelectionMode,
                 showStar = !isTrashOrSpam && !isDrafts,
                 isSent = isSent,
                 isDrafts = isDrafts,
-                imagePreviewPath = imagePreviewCache[email.id],
+                imagePreview = imagePreviewCache[email.id],
                 onClick = remember { { stableOnEmailClick(latestEmail) } },
                 onLongClick = remember { { stableOnLongClick(latestEmail) } },
                 onStarClick = remember { { stableOnStarClick(latestEmail) } }
@@ -1148,13 +1147,12 @@ private fun EmailListContent(
 private fun EmailListItem(
     email: EmailEntity,
     mailRepo: com.dedovmosol.iwomail.data.repository.MailRepository,
-    context: android.content.Context,
     isSelected: Boolean,
     isSelectionMode: Boolean,
     showStar: Boolean = true,
     isSent: Boolean = false,
     isDrafts: Boolean = false,
-    imagePreviewPath: String? = null,
+    imagePreview: com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onStarClick: () -> Unit
@@ -1337,24 +1335,10 @@ private fun EmailListItem(
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Миниатюра изображения (если есть скачанная картинка)
-                    if (imagePreviewPath != null) {
+                    // Миниатюра изображения (если есть скачанная картинка); картинок несколько — «+N»
+                    if (imagePreview != null) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        val imageModel = remember(imagePreviewPath) {
-                            ImageRequest.Builder(context)
-                                .data(java.io.File(imagePreviewPath))
-                                .crossfade(true)
-                                .size(48)
-                                .build()
-                        }
-                        AsyncImage(
-                            model = imageModel,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                        )
+                        com.dedovmosol.iwomail.ui.screens.emaillist.ListThumbnail(imagePreview)
                     }
                 }
 
