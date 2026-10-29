@@ -178,6 +178,12 @@
                 <action android:name="com.dedovmosol.iwomail.TASK_MARK_READ" />
             </intent-filter>
         </receiver>
+
+        <!-- Срок отложенной отправки (точный будильник; намерение явное, фильтр не нужен) -->
+        <receiver
+            android:name=".sync.ScheduledSendReceiver"
+            android:enabled="true"
+            android:exported="false" />
         
         <!-- Receiver для действий из уведомлений о новых письмах -->
         <receiver

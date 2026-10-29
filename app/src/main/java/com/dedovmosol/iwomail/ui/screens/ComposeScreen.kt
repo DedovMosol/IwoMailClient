@@ -69,6 +69,7 @@ import com.dedovmosol.iwomail.ui.screens.compose.replaceLastRecipient
 import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_DIV_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_P_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.WHITESPACE_COLLAPSE_REGEX
+import com.dedovmosol.iwomail.ui.screens.compose.cleanOutgoingBody
 import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
 import com.dedovmosol.iwomail.ui.screens.compose.extractEmailFromString
 import com.dedovmosol.iwomail.data.repository.DraftAttachmentRole
@@ -1336,6 +1337,7 @@ fun ComposeScreen(
     val accountNotFoundMsg = Strings.accountNotFound
     val attachmentLimitExceededMsg = Strings.attachmentLimitExceeded
     val sendScheduledMsg = Strings.sendScheduled
+    val attachmentUnreadableMsg = Strings.attachmentUnreadable
     val draftSavedMsg = Strings.draftSaved
     val draftSaveErrorMsg = Strings.draftSaveError
     val draftSavedOfflineMsg = Strings.draftSavedOffline
@@ -1479,69 +1481,63 @@ fun ComposeScreen(
                     return@launch
                 }
 
-                if (scheduledTime != null) {
-                    val delay = scheduledTime - System.currentTimeMillis()
-                    if (delay > 0) {
-                        val scheduledAttachments = withContext(Dispatchers.IO) {
-                            attachments.mapNotNull { att ->
-                                try {
-                                    context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
-                                        ?.let { Triple(att.name, att.mimeType, it) }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    null
-                                }
-                            }
-                        }
-                        // Отправляемый черновик удалится после отправки, если его с тех пор не меняли.
-                        val scheduledDraftId = editDraftId?.takeIf { it != "synced" }
-                        val draftStamp = scheduledDraftId
-                            ?.let { id -> withContext(Dispatchers.IO) { database.emailDao().getEmail(id)?.dateReceived } }
-                            ?: -1L
-                        // Тело и вложения пишутся в файлы — не на главном потоке.
-                        withContext(Dispatchers.IO) {
-                            scheduleEmail(
-                                context, account.id,
-                                expandGroupTokens(to, groupMappings),
-                                expandGroupTokens(cc, groupMappings),
-                                expandGroupTokens(bcc, groupMappings),
-                                subject, body, delay,
-                                requestReadReceipt, requestDeliveryReceipt,
-                                if (highPriority) 2 else 1,
-                                scheduledAttachments,
-                                draftId = scheduledDraftId,
-                                draftStamp = draftStamp
-                            )
-                        }
-                        SafeToast.short(context, sendScheduledMsg)
-                        onSent()
-                        return@launch
-                    }
-                }
-
-                val attachmentDataList = withContext(Dispatchers.IO) {
-                    attachments.mapNotNull { att ->
+                // Вложения — байты; не прочитать хоть одно (файл удалён, доступ отозван) — не отправляем: письмо ушло бы
+                // без него, а пользователь не узнал бы (раньше такое вложение молча пропадало).
+                val readAttachments = withContext(Dispatchers.IO) {
+                    attachments.map { att ->
                         try {
                             context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
-                                ?.let { bytes -> com.dedovmosol.iwomail.ui.components.AttachmentData(att.name, att.mimeType, bytes) }
+                                ?.let { bytes -> Triple(att.name, att.mimeType, bytes) }
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             null
                         }
                     }
                 }
-
-                val cleanBody = body
-                    .replace(TRAILING_EMPTY_DIV_REGEX, "")
-                    .replace(TRAILING_EMPTY_P_REGEX, "")
-                    .replace(TRAILING_BR_REGEX, "")
-                    .trimEnd()
-                    .replace(NON_HTML_TAG_REGEX, "")
-
+                val unreadable = attachments.zip(readAttachments).firstOrNull { it.second == null }?.first
+                if (unreadable != null) {
+                    isSending = false
+                    SafeToast.long(context, "$attachmentUnreadableMsg: ${unreadable.name}")
+                    return@launch
+                }
+                val outgoingAttachments = readAttachments.filterNotNull()
+                val cleanBody = cleanOutgoingBody(body)
                 val expandedTo = expandGroupTokens(to, groupMappings)
                 val expandedCc = expandGroupTokens(cc, groupMappings)
                 val expandedBcc = expandGroupTokens(bcc, groupMappings)
-
+                if (scheduledTime != null && scheduledTime > System.currentTimeMillis()) {
+                    // Отправляемый черновик удалится после отправки, если его с тех пор не меняли.
+                    val scheduledDraftId = editDraftId?.takeIf { it != "synced" }
+                    val draftStamp = scheduledDraftId
+                        ?.let { id -> withContext(Dispatchers.IO) { database.emailDao().getEmail(id)?.dateReceived } }
+                        ?: -1L
+                    val job = com.dedovmosol.iwomail.sync.ScheduledSend.Job(
+                        accountId = account.id,
+                        mail = com.dedovmosol.iwomail.domain.OutgoingMail(
+                            to = expandedTo, cc = expandedCc, bcc = expandedBcc,
+                            subject = subject, body = cleanBody,
+                            attachments = outgoingAttachments,
+                            importance = if (highPriority) 2 else 1,
+                            requestReadReceipt = requestReadReceipt,
+                            requestDeliveryReceipt = requestDeliveryReceipt,
+                            // Пересылка: сервер добавит исходное письмо с вложениями и при отложенной отправке
+                            forwardFolderId = forwardSourceFolderServerId,
+                            forwardItemId = forwardSourceEmailServerId
+                        ),
+                        sendAt = scheduledTime,
+                        clientId = java.util.UUID.randomUUID().toString().replace("-", ""),
+                        draftId = scheduledDraftId,
+                        draftStamp = draftStamp
+                    )
+                    // Тело и вложения пишутся в файлы — не на главном потоке.
+                    withContext(Dispatchers.IO) { com.dedovmosol.iwomail.sync.ScheduledSend.schedule(context, job) }
+                    SafeToast.short(context, sendScheduledMsg)
+                    onSent()
+                    return@launch
+                }
+                val attachmentDataList = outgoingAttachments.map { (name, mimeType, bytes) ->
+                    com.dedovmosol.iwomail.ui.components.AttachmentData(name, mimeType, bytes)
+                }
                 val pendingEmail = com.dedovmosol.iwomail.ui.components.PendingEmail(
                     account = account,
                     to = expandedTo,

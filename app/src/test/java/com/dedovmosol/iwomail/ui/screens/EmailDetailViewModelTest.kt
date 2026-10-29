@@ -11,6 +11,7 @@ import com.dedovmosol.iwomail.ui.screens.emaildetail.EmailDetailActions
 import com.google.common.truth.Truth.assertThat
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
@@ -60,6 +61,7 @@ class EmailDetailViewModelTest {
         // Открытие письма: по умолчанию письмо прочитано и тело уже загружено → без markAsRead/loadBody.
         coEvery { actions.getEmailSync(EMAIL_ID) } returns email()
         coEvery { actions.markAsRead(any(), any()) } returns EasResult.Success(Unit)
+        coEvery { actions.pendingReadReceipt(any()) } returns null
         coEvery { actions.loadInlineImages(any(), any(), any(), any(), any()) } returns emptyMap()
     }
 
@@ -301,42 +303,132 @@ class EmailDetailViewModelTest {
         coVerify { actions.toggleFlag(EMAIL_ID) }
     }
 
+    // ===================== read receipt =====================
+
     @Test
-    fun `sendMdn success emits ReadReceiptSent`() = runTest(dispatcher) {
-        coEvery { actions.sendMdn(EMAIL_ID) } returns EasResult.Success(Unit)
+    fun `unread email with receipt request asks first and is not marked read`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email(read = false)
+        coEvery { actions.pendingReadReceipt(EMAIL_ID) } returns RECEIPT_TO
         val vm = createViewModel()
         advanceUntilIdle()
+
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isEqualTo(RECEIPT_TO)
+        coVerify(exactly = 0) { actions.markAsRead(EMAIL_ID, true) }
+    }
+
+    @Test
+    fun `body with headers is loaded before the email is marked read`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email(read = false, body = "")
+        coEvery { actions.loadEmailBody(EMAIL_ID) } returns EasResult.Success("loaded")
+        createViewModel()
+        advanceUntilIdle()
+
+        coVerifyOrder {
+            actions.loadEmailBody(EMAIL_ID)
+            actions.pendingReadReceipt(EMAIL_ID)
+            actions.markAsRead(EMAIL_ID, true)
+        }
+    }
+
+    @Test
+    fun `read email is neither asked about nor marked again`() = runTest(dispatcher) {
+        coEvery { actions.pendingReadReceipt(EMAIL_ID) } returns RECEIPT_TO
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isNull()
+        coVerify(exactly = 0) { actions.pendingReadReceipt(any()) }
+        coVerify(exactly = 0) { actions.markAsRead(EMAIL_ID, true) }
+    }
+
+    @Test
+    fun `sending the receipt emits ReadReceiptSent and closes the prompt`() = runTest(dispatcher) {
+        val vm = askedViewModel()
+        coEvery { actions.answerReadReceipt(EMAIL_ID, true) } returns EasResult.Success(Unit)
         val events = collectEvents(vm)
 
-        vm.sendMdn()
+        vm.answerReadReceipt(send = true)
         advanceUntilIdle()
 
         assertThat(events).contains(EmailDetailEvent.ReadReceiptSent)
-        assertThat(vm.uiState.value.isSendingMdn).isFalse()
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isNull()
+        assertThat(vm.uiState.value.isAnsweringReadReceipt).isFalse()
     }
 
     @Test
-    fun `sendMdn error emits Error`() = runTest(dispatcher) {
-        coEvery { actions.sendMdn(EMAIL_ID) } returns EasResult.Error("mdn-fail")
-        val vm = createViewModel()
-        advanceUntilIdle()
+    fun `declining quietly closes the prompt`() = runTest(dispatcher) {
+        val vm = askedViewModel()
+        coEvery { actions.answerReadReceipt(EMAIL_ID, false) } returns EasResult.Success(Unit)
         val events = collectEvents(vm)
 
-        vm.sendMdn()
+        vm.answerReadReceipt(send = false)
         advanceUntilIdle()
 
-        assertThat(events).contains(EmailDetailEvent.Error("mdn-fail"))
+        assertThat(events).isEmpty()
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isNull()
     }
 
     @Test
-    fun `dismissMdn marks mdn as sent`() = runTest(dispatcher) {
+    fun `failed decline reports that the email stays unread`() = runTest(dispatcher) {
+        val vm = askedViewModel()
+        coEvery { actions.answerReadReceipt(EMAIL_ID, false) } returns
+            EasResult.Error(com.dedovmosol.iwomail.domain.ReadReceipts.NOT_DECLINED)
+        val events = collectEvents(vm)
+
+        vm.answerReadReceipt(send = false)
+        advanceUntilIdle()
+
+        assertThat(events).containsExactly(EmailDetailEvent.ReadReceiptNotDeclined)
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isNull()
+    }
+
+    @Test
+    fun `answer error emits Error`() = runTest(dispatcher) {
+        val vm = askedViewModel()
+        coEvery { actions.answerReadReceipt(EMAIL_ID, true) } returns EasResult.Error("mark-fail")
+        val events = collectEvents(vm)
+
+        vm.answerReadReceipt(send = true)
+        advanceUntilIdle()
+
+        assertThat(events).containsExactly(EmailDetailEvent.Error("mark-fail"))
+    }
+
+    @Test
+    fun `answer without a pending request does nothing`() = runTest(dispatcher) {
         val vm = createViewModel()
         advanceUntilIdle()
 
-        vm.dismissMdn()
+        vm.answerReadReceipt(send = true)
         advanceUntilIdle()
 
-        coVerify { actions.markMdnSent(EMAIL_ID) }
+        coVerify(exactly = 0) { actions.answerReadReceipt(any(), any()) }
+    }
+
+    @Test
+    fun `answer is sent once while in progress`() = runTest(dispatcher) {
+        val vm = askedViewModel()
+        coEvery { actions.answerReadReceipt(EMAIL_ID, true) } returns EasResult.Success(Unit)
+
+        vm.answerReadReceipt(send = true)
+        vm.answerReadReceipt(send = true)
+        vm.postponeReadReceipt()
+        assertThat(vm.uiState.value.isAnsweringReadReceipt).isTrue()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { actions.answerReadReceipt(EMAIL_ID, true) }
+    }
+
+    @Test
+    fun `postponing closes the prompt without answering`() = runTest(dispatcher) {
+        val vm = askedViewModel()
+
+        vm.postponeReadReceipt()
+        advanceUntilIdle()
+
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isNull()
+        coVerify(exactly = 0) { actions.answerReadReceipt(any(), any()) }
+        coVerify(exactly = 0) { actions.markAsRead(EMAIL_ID, true) }
     }
 
     // ===================== crash resistance (exception handling) =====================
@@ -401,17 +493,17 @@ class EmailDetailViewModelTest {
     }
 
     @Test
-    fun `sendMdn does not crash when actions throws exception`() = runTest(dispatcher) {
-        coEvery { actions.sendMdn(EMAIL_ID) } throws RuntimeException("MDN send failed")
-        val vm = createViewModel()
-        advanceUntilIdle()
+    fun `answerReadReceipt does not crash when actions throws exception`() = runTest(dispatcher) {
+        val vm = askedViewModel()
+        coEvery { actions.answerReadReceipt(EMAIL_ID, true) } throws RuntimeException("EWS failed")
         val events = collectEvents(vm)
 
-        vm.sendMdn()
+        vm.answerReadReceipt(send = true)
         advanceUntilIdle()
 
         assertThat(events.any { it is EmailDetailEvent.Error }).isTrue()
-        assertThat(vm.uiState.value.isSendingMdn).isFalse()
+        assertThat(vm.uiState.value.isAnsweringReadReceipt).isFalse()
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isNull()
     }
 
     @Test
@@ -443,6 +535,16 @@ class EmailDetailViewModelTest {
     }
 
     // ===================== helpers =====================
+
+    /** Открыто непрочитанное письмо с запросом отчёта: VM ждёт ответа. */
+    private fun TestScope.askedViewModel(): EmailDetailViewModel {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email(read = false)
+        coEvery { actions.pendingReadReceipt(EMAIL_ID) } returns RECEIPT_TO
+        val vm = createViewModel()
+        advanceUntilIdle()
+        assertThat(vm.uiState.value.readReceiptRequestedBy).isEqualTo(RECEIPT_TO)
+        return vm
+    }
 
     private fun TestScope.collectEvents(vm: EmailDetailViewModel): List<EmailDetailEvent> {
         val received = mutableListOf<EmailDetailEvent>()
@@ -491,5 +593,6 @@ class EmailDetailViewModelTest {
         const val ACCOUNT_ID = 1L
         const val EMAIL_ID = "acc_msg1"
         const val INBOX_ID = "inbox"
+        const val RECEIPT_TO = "boss@corp.example"
     }
 }

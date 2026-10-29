@@ -34,6 +34,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.LocalLanguage
@@ -196,10 +197,6 @@ class MainActivity : FragmentActivity() {
         const val ACTION_SHORTCUT_SYNC = "com.dedovmosol.iwomail.SHORTCUT_SYNC"
         const val ACTION_SHORTCUT_ADD_WIDGET = "com.dedovmosol.iwomail.SHORTCUT_ADD_WIDGET"
         
-        // Keys for savedInstanceState
-        private const val KEY_PERMISSIONS_CHECKED = "permissions_checked"
-        private const val KEY_PERMISSIONS_DIALOGS_SHOWN = "permissions_dialogs_shown"
-        
         private const val TAG = "MainActivity"
     }
     
@@ -213,11 +210,8 @@ class MainActivity : FragmentActivity() {
     private var switchToAccountId = mutableStateOf<Long?>(null)
     private var showBatteryDialog = mutableStateOf(false)
     private var showAlarmDialog = mutableStateOf(false)
-    
-    // КРИТИЧНО: Сохраняем состояние при rotation через savedInstanceState
-    // Иначе в альбомной ориентации после онбординга диалог не показывается
-    private var permissionsChecked = false
-    private var permissionsDialogsShown = false
+    // «Продолжить» в диалоге «Фоновая работа» открыл системный запрос: по возвращении — следующее разрешение
+    private var awaitingBatteryResult = false
     
     // Данные из mailto: или SEND intent
     private var composeEmail = mutableStateOf<String?>(null)
@@ -240,13 +234,6 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // КРИТИЧНО: Восстанавливаем состояние после rotation
-        // Иначе диалог battery не показывается в альбомной ориентации
-        if (savedInstanceState != null) {
-            permissionsChecked = savedInstanceState.getBoolean(KEY_PERMISSIONS_CHECKED, false)
-            permissionsDialogsShown = savedInstanceState.getBoolean(KEY_PERMISSIONS_DIALOGS_SHOWN, false)
-        }
-        
         // Sync shortcut — запускаем синхронизацию через broadcast и сразу выходим
         if (intent?.action == ACTION_SHORTCUT_SYNC) {
             com.dedovmosol.iwomail.util.AppShortcuts.reportUsed(this, ACTION_SHORTCUT_SYNC)
@@ -261,8 +248,9 @@ class MainActivity : FragmentActivity() {
         
         enableHighRefreshRate()
         requestNotificationPermission()
-        if (!permissionsChecked) {
-            permissionsChecked = true
+        // Сам запрос разрешений — только при обычном запуске (значок приложения): не поверх письма из «Поделиться»,
+        // ответа на mailto:, перехода из уведомления или виджета
+        if (savedInstanceState == null && (intent?.action == null || intent?.action == Intent.ACTION_MAIN)) {
             checkPermissionsForDialogs()
         }
         handleIntent(intent)
@@ -394,6 +382,7 @@ class MainActivity : FragmentActivity() {
             
             // Контроллер отложенной отправки
             val sendController = remember { com.dedovmosol.iwomail.ui.components.SendController() }
+            val requestBackgroundWork = remember { { showBackgroundWorkDialog() } }
             
             // Кастомный TextToolbar с правильным порядком кнопок
             val view = androidx.compose.ui.platform.LocalView.current
@@ -403,6 +392,7 @@ class MainActivity : FragmentActivity() {
                 LocalLanguage provides currentLanguage,
                 com.dedovmosol.iwomail.ui.components.LocalDeletionController provides deletionController,
                 com.dedovmosol.iwomail.ui.components.LocalSendController provides sendController,
+                com.dedovmosol.iwomail.ui.components.LocalRequestBackgroundWork provides requestBackgroundWork,
                 androidx.compose.ui.platform.LocalTextToolbar provides customTextToolbar
             ) {
                 ExchangeMailTheme(darkTheme = darkTheme, fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled, scrollbarColor = scrollbarColor) {
@@ -490,6 +480,7 @@ class MainActivity : FragmentActivity() {
                             onDismiss = { showBatteryDialog.value = false },
                             onConfirm = {
                                 showBatteryDialog.value = false
+                                awaitingBatteryResult = true
                                 openBatterySettings()
                             }
                         )
@@ -524,19 +515,11 @@ class MainActivity : FragmentActivity() {
     
     override fun onResume() {
         super.onResume()
-        // После возврата из настроек проверяем следующее разрешение
-        // НО только если мы в процессе первичной настройки (permissionsDialogsShown = true)
-        if (permissionsChecked && permissionsDialogsShown && !showBatteryDialog.value && !showAlarmDialog.value) {
-            checkNextPermission()
+        // Вернулись из системного запроса «Фоновая работа» — следующее разрешение (точные будильники), один раз
+        if (awaitingBatteryResult) {
+            awaitingBatteryResult = false
+            promptPermissionsOnce()
         }
-    }
-    
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        // КРИТИЧНО: Сохраняем состояние разрешений при rotation
-        // Иначе диалог battery не показывается в альбомной ориентации после онбординга
-        outState.putBoolean(KEY_PERMISSIONS_CHECKED, permissionsChecked)
-        outState.putBoolean(KEY_PERMISSIONS_DIALOGS_SHOWN, permissionsDialogsShown)
     }
     
     private fun handleIntent(intent: Intent?) {
@@ -789,63 +772,38 @@ class MainActivity : FragmentActivity() {
         }
     }
     
-    private fun checkPermissionsForDialogs() {
-        // Не показываем диалоги разрешений пока не пройден онбординг
-        val settingsRepo = SettingsRepository.getInstance(applicationContext)
-        if (!settingsRepo.getOnboardingShownSync()) {
-            return
-        }
-        
-        // ИСПРАВЛЕНО БАГ #2: Показываем диалог разрешения СРАЗУ после онбоардинга
-        // (даже если аккаунта ещё нет) - по требованию пользователя
+    /** После онбординга и при обычном запуске. */
+    private fun checkPermissionsForDialogs() = promptPermissionsOnce()
+
+    /** После добавления первого аккаунта (SetupScreen). */
+    fun checkPermissionsAfterSetup() = promptPermissionsOnce()
+
+    /**
+     * Приложение само спрашивает о фоновой работе и точных будильниках — по одному разу за установку (отметка в
+     * настройках, [SettingsRepository.claimBackgroundWorkPrompt]). Раньше отметка жила только в Activity: каждый новый
+     * запуск снова показывал диалог, в том числе поверх письма. Дальше — баннер на главной ([showBackgroundWorkDialog]).
+     * Точные будильники — только когда работа в фоне уже разрешена (по одному вопросу за раз).
+     */
+    private fun promptPermissionsOnce() {
         lifecycleScope.launch {
-            // minSdk 26 (>= M): оптимизация батареи доступна всегда.
-            val powerManager = getSystemService(android.os.PowerManager::class.java)
-            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                showBatteryDialog.value = true
+            val settingsRepo = SettingsRepository.getInstance(applicationContext)
+            if (!settingsRepo.onboardingShown.first()) return@launch
+            if (showBatteryDialog.value || showAlarmDialog.value) return@launch
+            if (!com.dedovmosol.iwomail.sync.BackgroundWork.isAllowed(this@MainActivity)) {
+                if (settingsRepo.claimBackgroundWorkPrompt()) showBatteryDialog.value = true
                 return@launch
             }
-            
-            checkNextPermission()
-        }
-    }
-    
-    /**
-     * Проверка разрешений для экрана авторизации (SetupScreen)
-     * Вызывается после успешного добавления аккаунта
-     */
-    fun checkPermissionsAfterSetup() {
-        permissionsChecked = true
-        permissionsDialogsShown = true // Отмечаем что начали показывать диалоги
-        
-        // minSdk 26 (>= M): оптимизация батареи доступна всегда.
-        val powerManager = getSystemService(android.os.PowerManager::class.java)
-        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-            showBatteryDialog.value = true
-            return
-        }
-        
-        checkNextPermission()
-    }
-    
-    private fun checkNextPermission() {
-        // Проверяем alarm только если батарея уже разрешена
-        // minSdk 26 (>= M): оптимизация батареи доступна всегда.
-        val powerManager = getSystemService(android.os.PowerManager::class.java)
-        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-            return // Батарея ещё не разрешена
-        }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val alarmManager = getSystemService(android.app.AlarmManager::class.java)
-            if (!alarmManager.canScheduleExactAlarms()) {
+            if (!com.dedovmosol.iwomail.sync.BackgroundWork.exactAlarmsAllowed(this@MainActivity) &&
+                settingsRepo.claimExactAlarmsPrompt()
+            ) {
                 showAlarmDialog.value = true
-                return
             }
         }
-        
-        // Все разрешения проверены - сбрасываем флаг
-        permissionsDialogsShown = false
+    }
+
+    /** Диалог «Фоновая работа» по запросу пользователя (баннер на главной) — сколько угодно раз. */
+    private fun showBackgroundWorkDialog() {
+        if (!showAlarmDialog.value) showBatteryDialog.value = true
     }
     
     private fun requestNotificationPermission() {

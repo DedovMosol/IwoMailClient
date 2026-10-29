@@ -3,10 +3,11 @@ package com.dedovmosol.iwomail.data.repository
 import android.content.Context
 import androidx.room.withTransaction
 import com.dedovmosol.iwomail.data.database.*
+import com.dedovmosol.iwomail.domain.ReadReceipts
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.eas.EwsMailFolder
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
-import com.dedovmosol.iwomail.eas.mapResult
 import com.dedovmosol.iwomail.util.stripHtml
 import com.dedovmosol.iwomail.widget.updateMailWidget
 import kotlinx.coroutines.async
@@ -14,7 +15,7 @@ import kotlinx.coroutines.awaitAll
 import java.util.Locale
 
 /**
- * Сервис для операций с письмами (move, delete, markAsRead, MDN)
+ * Сервис для операций с письмами (move, delete, markAsRead, отчёты о прочтении)
  * Single Responsibility: операции с письмами на сервере и локально
  */
 class EmailOperationsService(
@@ -72,7 +73,7 @@ class EmailOperationsService(
                 cancelNotificationForAccount(email.accountId)
             }
 
-            val result = client.markAsRead(folder.serverId, email.serverId, currentSyncKey, read, email.subject)
+            val result = client.markAsRead(folder.serverId, email.serverId, currentSyncKey, read, email.internetMessageId)
             android.util.Log.d("SYNC_DIAG", "markAsRead result=${if (result is EasResult.Success) "OK newKey=${result.data.take(10)}" else "FAIL: ${(result as EasResult.Error).message}"} syncKey=${currentSyncKey.take(10)}")
             return when (result) {
                 is EasResult.Success -> {
@@ -93,7 +94,7 @@ class EmailOperationsService(
 
                     if (freshSyncKey != null) {
                         folderDao.updateSyncKey(email.folderId, freshSyncKey)
-                        val retryResult = client.markAsRead(folder.serverId, email.serverId, freshSyncKey, read, email.subject)
+                        val retryResult = client.markAsRead(folder.serverId, email.serverId, freshSyncKey, read, email.internetMessageId)
                         when (retryResult) {
                             is EasResult.Success -> {
                                 folderDao.updateSyncKey(email.folderId, retryResult.data)
@@ -1149,43 +1150,29 @@ class EmailOperationsService(
         }
     }
 
-    /**
-     * Отправка отчёта о прочтении (MDN)
-     */
-    suspend fun sendMdn(emailId: String): EasResult<Boolean> {
-        val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
-
-        if (email.mdnSent) {
-            return EasResult.Success(true)
-        }
-
-        val mdnTo = email.mdnRequestedBy
-        if (mdnTo.isNullOrBlank()) {
-            return EasResult.Error("Нет адреса для отправки MDN")
-        }
-
-        val account = accountRepo.getAccount(email.accountId)
-            ?: return EasResult.Error("Аккаунт не найден")
-
-        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
-            return EasResult.Error("MDN поддерживается только для Exchange")
-        }
-
-        val client = accountRepo.createEasClient(email.accountId)
-            ?: return EasResult.Error("Не удалось создать клиент")
-
-        return client.sendMdn(mdnTo, email.subject, email.internetMessageId)
-            .onSuccessResult {
-                emailDao.updateMdnSent(emailId, true)
-            }
-            .mapResult { true }
+    /** Адрес запроса отчёта о прочтении, о котором надо спросить до пометки прочитанным ([ReadReceipts.pendingRequest]). */
+    suspend fun pendingReadReceipt(emailId: String): String? {
+        val email = emailDao.getEmail(emailId) ?: return null
+        return ReadReceipts.pendingRequest(email, folderDao.getFolder(email.folderId)?.type)
     }
 
     /**
-     * Помечает что MDN отправлен
+     * Ответ на запрос отчёта о прочтении; письмо помечается прочитанным, отчёт (если согласились)
+     * отправляет Exchange. Отказ — SuppressReadReceipt до пометки; не вышло — письмо остаётся
+     * непрочитанным и возвращается [ReadReceipts.NOT_DECLINED].
      */
-    suspend fun markMdnSent(emailId: String) {
+    suspend fun answerReadReceipt(emailId: String, send: Boolean): EasResult<Boolean> {
+        val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
+        if (!send && !suppressReadReceipt(email)) return EasResult.Error(ReadReceipts.NOT_DECLINED)
         emailDao.updateMdnSent(emailId, true)
+        return markAsRead(emailId, true)
+    }
+
+    private suspend fun suppressReadReceipt(email: EmailEntity): Boolean {
+        val messageId = email.internetMessageId?.takeIf { it.isNotBlank() } ?: return false
+        val folder = folderDao.getFolder(email.folderId) ?: return false
+        val client = accountRepo.createEasClient(email.accountId) ?: return false
+        return client.suppressReadReceipt(messageId, EwsMailFolder.of(folder.type, folder.displayName))
     }
 
     // === Вспомогательные методы ===

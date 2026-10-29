@@ -1,4 +1,4 @@
-﻿package com.dedovmosol.iwomail.ui.components
+package com.dedovmosol.iwomail.ui.components
 
 import android.content.Context
 import com.dedovmosol.iwomail.util.SafeToast
@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.data.database.AccountEntity
 import com.dedovmosol.iwomail.data.repository.MailRepository
+import com.dedovmosol.iwomail.domain.send
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.network.NetworkMonitor
 import com.dedovmosol.iwomail.sync.OutboxWorker
@@ -45,7 +46,17 @@ data class PendingEmail(
     val draftId: String? = null, // ID черновика для удаления после отправки
     val forwardSourceFolderId: String? = null, // ServerId папки оригинального письма (для SmartForward)
     val forwardSourceItemId: String? = null    // ServerId оригинального письма (для SmartForward)
-)
+) {
+    fun toOutgoingMail() = com.dedovmosol.iwomail.domain.OutgoingMail(
+        to = to, cc = cc, bcc = bcc, subject = subject, body = body,
+        attachments = attachments.map { Triple(it.name, it.mimeType, it.data) },
+        importance = importance,
+        requestReadReceipt = requestReadReceipt,
+        requestDeliveryReceipt = requestDeliveryReceipt,
+        forwardFolderId = forwardSourceFolderId,
+        forwardItemId = forwardSourceItemId
+    )
+}
 
 /**
  * Состояние отправки
@@ -139,90 +150,7 @@ class SendController {
                     return@launch
                 }
 
-                val attachmentDataList = email.attachments.map { Triple(it.name, it.mimeType, it.data) }
-                val fwdFolderId = email.forwardSourceFolderId
-                val fwdItemId = email.forwardSourceItemId
-                val isSmartForward = fwdFolderId != null && fwdItemId != null
-
-                val result = withContext(Dispatchers.IO) {
-                    if (isSmartForward) {
-                        // MS-ASCMD §2.2.1.19: SmartForward — сервер автоматически
-                        // включает оригинальные вложения и тело исходного письма.
-                        val sfResult = if (attachmentDataList.isEmpty()) {
-                            client.smartForward(
-                                to = email.to,
-                                subject = email.subject,
-                                body = email.body,
-                                cc = email.cc,
-                                bcc = email.bcc,
-                                collectionId = fwdFolderId!!,
-                                itemId = fwdItemId!!,
-                                importance = email.importance,
-                                requestReadReceipt = email.requestReadReceipt,
-                                requestDeliveryReceipt = email.requestDeliveryReceipt
-                            )
-                        } else {
-                            client.smartForwardWithAttachments(
-                                to = email.to,
-                                subject = email.subject,
-                                body = email.body,
-                                cc = email.cc,
-                                bcc = email.bcc,
-                                attachments = attachmentDataList,
-                                collectionId = fwdFolderId!!,
-                                itemId = fwdItemId!!,
-                                requestReadReceipt = email.requestReadReceipt,
-                                requestDeliveryReceipt = email.requestDeliveryReceipt,
-                                importance = email.importance
-                            )
-                        }
-                        // Fallback: если SmartForward не поддерживается сервером,
-                        // откатываемся на обычный SendMail (без оригинальных вложений).
-                        if (sfResult is EasResult.Error) {
-                            android.util.Log.w("SendController", "SmartForward failed: ${sfResult.message}, falling back to SendMail")
-                            if (attachmentDataList.isEmpty()) {
-                                client.sendMail(
-                                    to = email.to, subject = email.subject, body = email.body,
-                                    cc = email.cc, bcc = email.bcc, importance = email.importance,
-                                    requestReadReceipt = email.requestReadReceipt,
-                                    requestDeliveryReceipt = email.requestDeliveryReceipt
-                                )
-                            } else {
-                                client.sendMailWithAttachments(
-                                    to = email.to, subject = email.subject, body = email.body,
-                                    cc = email.cc, bcc = email.bcc, attachments = attachmentDataList,
-                                    requestReadReceipt = email.requestReadReceipt,
-                                    requestDeliveryReceipt = email.requestDeliveryReceipt,
-                                    importance = email.importance
-                                )
-                            }
-                        } else sfResult
-                    } else if (attachmentDataList.isEmpty()) {
-                        client.sendMail(
-                            to = email.to,
-                            subject = email.subject,
-                            body = email.body,
-                            cc = email.cc,
-                            bcc = email.bcc,
-                            importance = email.importance,
-                            requestReadReceipt = email.requestReadReceipt,
-                            requestDeliveryReceipt = email.requestDeliveryReceipt
-                        )
-                    } else {
-                        client.sendMailWithAttachments(
-                            to = email.to,
-                            subject = email.subject,
-                            body = email.body,
-                            cc = email.cc,
-                            bcc = email.bcc,
-                            attachments = attachmentDataList,
-                            requestReadReceipt = email.requestReadReceipt,
-                            requestDeliveryReceipt = email.requestDeliveryReceipt,
-                            importance = email.importance
-                        )
-                    }
-                }
-
+                val result = withContext(Dispatchers.IO) { client.send(email.toOutgoingMail()) }
                 when (result) {
                     is EasResult.Success -> {
                         // #1: полное удаление черновика после отправки — серверное (EWS HardDelete
@@ -304,26 +232,13 @@ class SendController {
                         onSuccess()
                     }
                     is EasResult.Error -> {
-                        // Проверяем, связана ли ошибка с сетью
-                        val isNetworkError = result.message.contains("UnknownHost", ignoreCase = true) ||
-                            result.message.contains("SocketTimeout", ignoreCase = true) ||
-                            result.message.contains("ConnectException", ignoreCase = true) ||
-                            result.message.contains("NoRouteToHost", ignoreCase = true) ||
-                            result.message.contains("Network", ignoreCase = true) ||
-                            !NetworkMonitor.isNetworkAvailable(context)
-
+                        // Сбой связи (метка транспорта [NET:…] или сети нет вовсе) — письмо в очередь; ошибка сервера — нет:
+                        // повтор её не исправит. Раньше — поиск слов в тексте ошибки.
+                        val isNetworkError = com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(result.message)
+                            ?.connectionLevel == true || !NetworkMonitor.isNetworkAvailable(context)
                         if (isNetworkError && email.attachments.isEmpty()) {
-                            // Добавляем в очередь отправки (только без вложений)
-                            OutboxWorker.enqueue(
-                                context = context,
-                                accountId = email.account.id,
-                                to = email.to,
-                                cc = email.cc,
-                                bcc = email.bcc,
-                                subject = email.subject,
-                                body = email.body,
-                                requestReadReceipt = email.requestReadReceipt
-                            )
+                            // Добавляем в очередь отправки (только без вложений) — со всеми полями письма
+                            OutboxWorker.enqueue(context, email.account.id, email.toOutgoingMail())
                             withContext(Dispatchers.Main) {
                                 val isRu = java.util.Locale.getDefault().language == "ru"
                                 val msg = if (isRu) "Нет сети. Письмо добавлено в очередь отправки"

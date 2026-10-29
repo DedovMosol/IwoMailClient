@@ -47,7 +47,7 @@ class ListImagePreviewsTest {
 
         val found = previews.find(listOf("1_5:1"), download = true)
 
-        assertThat(found.local).containsExactly("1_5:1", "/files/image002.png")
+        assertThat(found.local).containsExactly("1_5:1", ListPreview("/files/image002.png", imageCount = 2))
         assertThat(found.toDownload).isEmpty()
     }
 
@@ -59,11 +59,11 @@ class ListImagePreviewsTest {
         val picture = row(4, "image001.png")
 
         val found = previews.find(listOf("1_5:1"), download = true)
-        assertThat(found.toDownload).containsExactly("1_5:1", picture)
+        val pending = found.toDownload.getValue("1_5:1")
 
-        assertThat(previews.download(1L, picture)).isEqualTo("/files/draft_attachments/image001.png")
+        assertThat(previews.download(1L, pending)).isEqualTo(ListPreview("/files/draft_attachments/image001.png", 4))
         // Повторно — не качаем (ни при прокрутке, ни после ошибки)
-        assertThat(previews.download(1L, picture)).isNull()
+        assertThat(previews.download(1L, pending)).isNull()
         assertThat(previews.find(listOf("1_5:1"), download = true).toDownload).isEmpty()
         assertThat(downloads).containsExactly(1L to 4L)
     }
@@ -91,7 +91,7 @@ class ListImagePreviewsTest {
             },
             fileExists = { false }
         )
-        val jobs = (1L..5L).map { id -> async { limited.download(1L, row(id, "p$id.png", emailId = "1_5:$id")) } }
+        val jobs = (1L..5L).map { id -> async { limited.download(1L, ListImagePreviews.Pending(row(id, "p$id.png", emailId = "1_5:$id"), 1))?.path } }
         repeat(10) { yield() }
         assertThat(maxRunning).isEqualTo(2)
 

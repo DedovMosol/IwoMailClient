@@ -57,6 +57,8 @@ class BootReceiver : BroadcastReceiver() {
                     }
                     
                     RescheduleRemindersWorker.enqueue(context)
+                    // Будильники отложенной отправки стёрты перезагрузкой (и обновлением) — заново
+                    ScheduledSend.rearm(context)
                     
                     // Обновляем виджет — на ряде устройств ACTION_APPWIDGET_UPDATE
                     // не отправляется после MY_PACKAGE_REPLACED

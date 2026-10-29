@@ -60,19 +60,7 @@ class EasEmailService internal constructor(
         private const val BODY_TRUNCATION_SIZE = 1_048_576
         private const val MIME_HEADER_TRUNCATION_SIZE = 65_536
 
-        private val EMAIL_PATTERN = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
-
-        private fun isValidEmailAddress(addresses: String): Boolean =
-            addresses.split(";", ",").all { addr ->
-                val trimmed = addr.trim()
-                trimmed.isEmpty() || EMAIL_PATTERN.matches(trimmed)
-            }
-
-        private val MDN_DISPOSITION_REGEX get() = EasPatterns.MDN_DISPOSITION
-        private val MDN_RETURN_RECEIPT_REGEX get() = EasPatterns.MDN_RETURN_RECEIPT
-        private val MDN_CONFIRM_READING_REGEX get() = EasPatterns.MDN_CONFIRM_READING
         private val MIME_MESSAGE_ID_REGEX get() = EasPatterns.MIME_MESSAGE_ID
-        private val EMAIL_BRACKET_REGEX get() = EasPatterns.EMAIL_BRACKET
         private val AIRSYNC_DATA_REGEX = "<(?:airsyncbase:)?Data>(.*?)</(?:airsyncbase:)?Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
         private val HEADER_FOLDING_REGEX = "\r?\n[ \t]+".toRegex()
 
@@ -176,107 +164,86 @@ class EasEmailService internal constructor(
         requestDeliveryReceipt: Boolean = false,
         stableClientId: String? = null
     ): EasResult<Boolean> {
-        if (to.isBlank() || !isValidEmailAddress(to)) {
-            return EasResult.Error("Неверный адрес получателя: $to")
+        recipientsError(to, cc, bcc)?.let { return EasResult.Error(it) }
+        // N-11: единый стабильный идентификатор для дедупликации при retry — WBXML ClientId (EAS 14+: повтор с тем же
+        // ClientId сервер не отправляет второй раз) и основа MIME Message-ID. Не задан (обычная отправка) — уникальный.
+        val clientId = stableClientId ?: freshSendToken()
+        val mimeBytes = withContext(Dispatchers.IO) {
+            buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
         }
-
-        if (!deps.isVersionDetected()) {
-            deps.detectEasVersion()
-        }
-
-        return withContext(Dispatchers.IO) {
-            try {
-                // N-11: единый стабильный идентификатор для дедупликации при retry — используется
-                // и как WBXML ClientId (EAS 14+: сервер отбрасывает дубликат по ClientId), и как
-                // основа MIME Message-ID. Если не задан (обычная отправка) — уникальный millis.nano.
-                val clientId = stableClientId ?: freshSendToken()
-                val mimeBytes = buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
-
-                val easVersion = deps.getEasVersion()
-                val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
-                val url = deps.buildUrl("SendMail") +
-                    if (majorVersion < 14) "&SaveInSent=T" else ""
-
-                val (requestBody, contentType) = if (majorVersion >= 14) {
-                    val wbxml = deps.wbxmlParser.generateSendMail(clientId, mimeBytes)
-                    Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
-                } else {
-                    Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
-                }
-
-                val requestBuilder = Request.Builder()
-                    .url(url)
-                    .post(requestBody)
-                    .header("Authorization", deps.getAuthHeader())
-                    .header("MS-ASProtocolVersion", easVersion)
-                    .header("Content-Type", contentType)
-                    .header("User-Agent", "Android/12-EAS-2.0")
-
-                deps.getPolicyKey()?.let { key ->
-                    requestBuilder.header("X-MS-PolicyKey", key)
-                }
-
-                val request = requestBuilder.build()
-                deps.executeRequest(request).use { response ->
-                    if (response.isSuccessful || response.code == 200) {
-                        val responseBody = response.body?.bytes()
-                        if (responseBody != null && responseBody.isNotEmpty()) {
-                            if (responseBody[0] == 0x03.toByte()) {
-                                val xml = deps.wbxmlParser.parse(responseBody)
-                                val status = deps.extractValue(xml, "Status")
-                                if (status != null && status != "1") {
-                                    val statusDesc = getStatusDescription(status)
-                                    return@withContext EasResult.Error("Ошибка отправки: $statusDesc (Status: $status, EAS: $easVersion)")
-                                }
-                            }
-                        }
-                        EasResult.Success(true)
-                    } else {
-                        if (response.code == 449) {
-                            when (val provResult = deps.provision()) {
-                                is EasResult.Success -> {
-                                    val retryRequest = Request.Builder()
-                                        .url(url)
-                                        .post(requestBody)
-                                        .header("Authorization", deps.getAuthHeader())
-                                        .header("MS-ASProtocolVersion", easVersion)
-                                        .header("Content-Type", contentType)
-                                        .header("User-Agent", "Android/12-EAS-2.0")
-                                        .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
-                                        .build()
-
-                                    deps.executeRequest(retryRequest).use { retryResponse ->
-                                        if (retryResponse.isSuccessful) {
-                                            return@withContext EasResult.Success(true)
-                                        }
-                                    }
-                                }
-                                is EasResult.Error -> {
-                                    android.util.Log.w("EasEmailService", "Provision retry failed: ${provResult.message}")
-                                }
-                            }
-                        }
-                        EasResult.Error("Ошибка отправки письма (HTTP ${response.code})")
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("Ошибка отправки письма: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
-            }
+        return postComposeMail("SendMail", "&SaveInSent=T", mimeBytes) { mime ->
+            deps.wbxmlParser.generateSendMail(clientId, mime)
         }
     }
 
     /**
+     * Команда ComposeMail — SendMail или SmartForward (MS-ASCMD 2.2.1.17, 2.2.1.19) — один транспорт для писем с
+     * вложениями и без и пересылки (DRY).
+     * - EAS 12.x: тело — MIME (message/rfc822), параметры — в URL ([legacyQuery]: SaveInSent, CollectionId/ItemId).
+     * - EAS 14+: тело — WBXML от [wbxml] (ClientId, SaveInSentItems, Source).
+     * Успех — HTTP 200 без WBXML-ответа или Status 1; Status 118 (MessagePreviouslySent — письмо с этим ClientId уже
+     * отправлено: повтор после потерянного ответа) — тоже успех, иначе повтор отправки считался бы ошибкой. 449 —
+     * повторное согласование политики и один повтор с той же проверкой ответа.
+     */
+    internal suspend fun postComposeMail(
+        command: String,
+        legacyQuery: String,
+        mime: ByteArray,
+        wbxml: (ByteArray) -> ByteArray
+    ): EasResult<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            if (!deps.isVersionDetected()) deps.detectEasVersion()
+            val easVersion = deps.getEasVersion()
+            val modern = (easVersion.substringBefore(".").toIntOrNull() ?: 12) >= 14
+            val url = deps.buildUrl(command) + if (modern) "" else legacyQuery
+            val contentType = if (modern) CONTENT_TYPE_WBXML else "message/rfc822"
+            val payload = if (modern) wbxml(mime) else mime
+            fun request(): Request = Request.Builder()
+                .url(url)
+                .post(payload.toRequestBody(contentType.toMediaType()))
+                .header("Authorization", deps.getAuthHeader())
+                .header("MS-ASProtocolVersion", easVersion)
+                .header("Content-Type", contentType)
+                .header("User-Agent", "Android/12-EAS-2.0")
+                .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
+                .build()
+            postComposeOnce(request(), easVersion) ?: when (val provision = deps.provision()) {
+                is EasResult.Success -> postComposeOnce(request(), easVersion)
+                    ?: EasResult.Error(composeHttpError(449))
+                is EasResult.Error -> EasResult.Error("${composeHttpError(449)}: ${provision.message}")
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            EasResult.Error("Ошибка отправки письма: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
+        }
+    }
+
+    /** Один запрос ComposeMail; null — 449 (нужно согласовать политику). */
+    private suspend fun postComposeOnce(request: Request, easVersion: String): EasResult<Boolean>? =
+        deps.executeRequest(request).use { response ->
+            if (response.code == 449) return@use null
+            if (!response.isSuccessful) return@use EasResult.Error(composeHttpError(response.code))
+            val body = response.body?.bytes()
+            val status = if (body != null && body.isNotEmpty() && body[0] == 0x03.toByte()) {
+                deps.extractValue(deps.wbxmlParser.parse(body), "Status")
+            } else {
+                null
+            }
+            if (isComposeMailSuccess(status)) {
+                EasResult.Success(true)
+            } else {
+                EasResult.Error("Ошибка отправки: ${getStatusDescription(status!!)} (Status: $status, EAS: $easVersion)")
+            }
+        }
+
+    /**
      * Пересылка письма через SmartForward (MS-ASCMD §2.2.1.19)
      *
-     * Сервер автоматически включает тело и вложения оригинального письма.
-     * Клиент отправляет ТОЛЬКО новый текст (пользовательский ввод + подпись).
+     * Сервер сам добавляет тело и вложения исходного письма — клиент отправляет только новый текст.
+     * EAS 12.1: raw MIME, CollectionId/ItemId в параметрах URL; EAS 14.0+: WBXML с Source/FolderId/ItemId.
      *
-     * EAS 12.1: raw MIME, CollectionId/ItemId в query-параметрах URL
-     * EAS 14.0+: WBXML с Source/FolderId/ItemId элементами
-     *
-     * @param collectionId ServerId папки оригинального письма
-     * @param itemId ServerId оригинального письма
+     * @param collectionId ServerId папки исходного письма
+     * @param itemId ServerId исходного письма
      */
     suspend fun smartForward(
         to: String,
@@ -288,105 +255,18 @@ class EasEmailService internal constructor(
         itemId: String,
         importance: Int = 1,
         requestReadReceipt: Boolean = false,
-        requestDeliveryReceipt: Boolean = false
+        requestDeliveryReceipt: Boolean = false,
+        stableClientId: String? = null
     ): EasResult<Boolean> {
-        if (to.isBlank() || !isValidEmailAddress(to)) {
-            return EasResult.Error("Неверный адрес получателя: $to")
+        recipientsError(to, cc, bcc)?.let { return EasResult.Error(it) }
+        val clientId = stableClientId ?: freshSendToken()
+        val mimeBytes = withContext(Dispatchers.IO) {
+            buildMimeMessageBytes(to, subject, body, cc, bcc, requestReadReceipt, requestDeliveryReceipt, importance, clientId)
         }
-
-        if (!deps.isVersionDetected()) {
-            deps.detectEasVersion()
-        }
-
-        return withContext(Dispatchers.IO) {
-            try {
-                val mimeBytes = buildMimeMessageBytes(
-                    to, subject, body, cc, bcc,
-                    requestReadReceipt, requestDeliveryReceipt, importance
-                )
-
-                val easVersion = deps.getEasVersion()
-                val majorVersion = easVersion.substringBefore(".").toIntOrNull() ?: 12
-
-                // MS-ASCMD: EAS 12.1 → CollectionId/ItemId в URL query params + SaveInSent=T
-                // EAS 14.0+ → WBXML body с Source/FolderId/ItemId
-                val url = deps.buildUrl("SmartForward") +
-                    if (majorVersion < 14) {
-                        "&CollectionId=${java.net.URLEncoder.encode(collectionId, "UTF-8")}" +
-                        "&ItemId=${java.net.URLEncoder.encode(itemId, "UTF-8")}" +
-                        "&SaveInSent=T"
-                    } else ""
-
-                val (requestBody, contentType) = if (majorVersion >= 14) {
-                    val clientId = System.currentTimeMillis().toString()
-                    val wbxml = deps.wbxmlParser.generateSmartForward(clientId, collectionId, itemId, mimeBytes)
-                    Pair(wbxml.toRequestBody(CONTENT_TYPE_WBXML.toMediaType()), CONTENT_TYPE_WBXML)
-                } else {
-                    Pair(mimeBytes.toRequestBody("message/rfc822".toMediaType()), "message/rfc822")
-                }
-
-                val requestBuilder = Request.Builder()
-                    .url(url)
-                    .post(requestBody)
-                    .header("Authorization", deps.getAuthHeader())
-                    .header("MS-ASProtocolVersion", easVersion)
-                    .header("Content-Type", contentType)
-                    .header("User-Agent", "Android/12-EAS-2.0")
-
-                deps.getPolicyKey()?.let { key ->
-                    requestBuilder.header("X-MS-PolicyKey", key)
-                }
-
-                val request = requestBuilder.build()
-                deps.executeRequest(request).use { response ->
-                    if (response.isSuccessful || response.code == 200) {
-                        val responseBody = response.body?.bytes()
-                        if (responseBody != null && responseBody.isNotEmpty()) {
-                            if (responseBody[0] == 0x03.toByte()) {
-                                val xml = deps.wbxmlParser.parse(responseBody)
-                                val status = deps.extractValue(xml, "Status")
-                                if (status != null && status != "1") {
-                                    val statusDesc = getStatusDescription(status)
-                                    return@withContext EasResult.Error("SmartForward ошибка: $statusDesc (Status: $status)")
-                                }
-                            }
-                        }
-                        EasResult.Success(true)
-                    } else {
-                        if (response.code == 449) {
-                            when (val provResult = deps.provision()) {
-                                is EasResult.Success -> {
-                                    val retryRequest = Request.Builder()
-                                        .url(url)
-                                        .post(requestBody)
-                                        .header("Authorization", deps.getAuthHeader())
-                                        .header("MS-ASProtocolVersion", easVersion)
-                                        .header("Content-Type", contentType)
-                                        .header("User-Agent", "Android/12-EAS-2.0")
-                                        .apply { deps.getPolicyKey()?.let { header("X-MS-PolicyKey", it) } }
-                                        .build()
-
-                                    deps.executeRequest(retryRequest).use { retryResponse ->
-                                        if (retryResponse.isSuccessful) {
-                                            return@withContext EasResult.Success(true)
-                                        }
-                                    }
-                                }
-                                is EasResult.Error -> {
-                                    android.util.Log.w("EasEmailService", "SmartForward provision retry failed: ${provResult.message}")
-                                }
-                            }
-                        }
-                        EasResult.Error("SmartForward ошибка (HTTP ${response.code})")
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                EasResult.Error("SmartForward ошибка: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
-            }
+        return postComposeMail("SmartForward", smartForwardQuery(collectionId, itemId), mimeBytes) { mime ->
+            deps.wbxmlParser.generateSmartForward(clientId, collectionId, itemId, mime)
         }
     }
-
     /**
      * Загрузка тела письма с MDN информацией
      * Сначала пробует body-only HTML/plain text, затем маленький MIME-фрагмент для заголовков
@@ -622,27 +502,8 @@ class EasEmailService internal constructor(
         }
     }
 
-    /**
-     * Парсит заголовок Disposition-Notification-To из MIME данных
-     */
-    private fun parseMdnHeader(mimeHeaders: String): String? {
-        val patterns = listOf(
-            MDN_DISPOSITION_REGEX,
-            MDN_RETURN_RECEIPT_REGEX,
-            MDN_CONFIRM_READING_REGEX
-        )
-
-        for (pattern in patterns) {
-            val match = pattern.find(mimeHeaders)
-            if (match != null) {
-                val email = match.groupValues[1].trim()
-                val emailMatch = EMAIL_BRACKET_REGEX.find(email)
-                return emailMatch?.groupValues?.get(1) ?: email
-            }
-        }
-
-        return null
-    }
+    /** Адрес, на который просят отчёт о прочтении ([readReceiptRequestAddress]); null — не просят. */
+    private fun parseMdnHeader(mimeHeaders: String): String? = readReceiptRequestAddress(mimeHeaders)
 
     private fun parseOriginalMessageIdHeader(mimeHeaders: String): String? {
         val rawMessageId = MIME_MESSAGE_ID_REGEX.find(mimeHeaders)
@@ -745,7 +606,7 @@ class EasEmailService internal constructor(
         serverId: String,
         syncKey: String,
         read: Boolean = true,
-        subject: String? = null
+        internetMessageId: String? = null
     ): EasResult<String> {
         val readValue = if (read) "1" else "0"
         val xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -795,9 +656,11 @@ class EasEmailService internal constructor(
         // (пустой ответ, stale SyncKey, серверный баг).
         // EWS UpdateItem с SetItemField message:IsRead — надёжный способ.
         // Документация: https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/updateitem-operation
-        if (subject != null) {
+        // Только по Message-ID: по теме помечались бы и другие письма — и Exchange отправил бы за них
+        // отчёты о прочтении, о которых пользователя не спрашивали.
+        if (!internetMessageId.isNullOrBlank()) {
             try {
-                markAsReadViaEws(subject, read)
+                markAsReadViaEws(internetMessageId, read)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.w("EasEmailService", "markAsReadViaEws failed: ${e.message}")
@@ -868,14 +731,14 @@ $changesXml
 
     /**
      * Помечает письмо как прочитанное/непрочитанное через EWS UpdateItem.
-     * Находит письмо по Subject через FindItem, затем обновляет IsRead.
+     * Находит письмо по Message-ID (message:InternetMessageId) через FindItem, затем обновляет IsRead.
      * Работает на Exchange 2007 SP1+ (надёжнее чем EAS Sync Change для Read).
      */
-    private suspend fun markAsReadViaEws(subject: String, read: Boolean) {
-        val escapedSubject = deps.escapeXml(subject)
+    private suspend fun markAsReadViaEws(internetMessageId: String, read: Boolean) {
+        val escapedMessageId = deps.escapeXml(internetMessageId)
         val isReadValue = if (read) "true" else "false"
 
-        // 1. FindItem по Subject + IsRead (ищем во ВСЕХ папках через msgfolderroot)
+        // 1. FindItem по Message-ID + IsRead в стандартных почтовых папках
         val findBody = """<m:FindItem Traversal="Shallow">
     <m:ItemShape>
         <t:BaseShape>IdOnly</t:BaseShape>
@@ -883,9 +746,9 @@ $changesXml
     <m:Restriction>
         <t:And>
             <t:IsEqualTo>
-                <t:FieldURI FieldURI="item:Subject"/>
+                <t:FieldURI FieldURI="message:InternetMessageId"/>
                 <t:FieldURIOrConstant>
-                    <t:Constant Value="$escapedSubject"/>
+                    <t:Constant Value="$escapedMessageId"/>
                 </t:FieldURIOrConstant>
             </t:IsEqualTo>
             <t:IsEqualTo>

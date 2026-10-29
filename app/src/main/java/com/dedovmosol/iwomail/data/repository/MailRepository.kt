@@ -215,10 +215,11 @@ class MailRepository(private val context: Context) {
         onProgress: (deleted: Int, total: Int) -> Unit
     ): EasResult<Int> = emailOperationsService.deleteEmailsPermanentlyWithProgress(emailIds, onProgress)
     
-    suspend fun sendMdn(emailId: String): EasResult<Boolean> = 
-        emailOperationsService.sendMdn(emailId)
+    suspend fun pendingReadReceipt(emailId: String): String? =
+        emailOperationsService.pendingReadReceipt(emailId)
     
-    suspend fun markMdnSent(emailId: String) = emailOperationsService.markMdnSent(emailId)
+    suspend fun answerReadReceipt(emailId: String, send: Boolean): EasResult<Boolean> =
+        emailOperationsService.answerReadReceipt(emailId, send)
     
     // === Простые геттеры (остаются в MailRepository) ===
     

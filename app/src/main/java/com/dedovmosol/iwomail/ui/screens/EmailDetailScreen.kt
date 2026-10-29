@@ -129,7 +129,8 @@ fun EmailDetailScreen(
     val isMoving = uiState.isMoving
     val isRestoring = uiState.isRestoring
     val isDeleting = uiState.isDeleting
-    val isSendingMdn = uiState.isSendingMdn
+    val readReceiptRequestedBy = uiState.readReceiptRequestedBy
+    val isAnsweringReadReceipt = uiState.isAnsweringReadReceipt
 
     // VM хранит семантическую ошибку тела; локализуем её в UI (VM независима от языка/ресурсов).
     val bodyLoadErrorText: String? = uiState.bodyLoadError?.let { err ->
@@ -214,18 +215,9 @@ fun EmailDetailScreen(
     // activeAccount остаётся в UI: цвет аватара + UI-операции встреч/задач (accountRepo.getAccount).
     val activeAccount by accountRepo.activeAccount.collectAsStateWithLifecycle(initialValue = null)
 
-    // Диалог подтверждения удаления / MDN (isDeleting/isSendingMdn живут в VM).
+    // Диалог подтверждения удаления (isDeleting живёт в VM); запрос отчёта о прочтении — состояние VM.
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
-    var showMdnDialog by rememberSaveable { mutableStateOf(false) }
     val deletingSingleEmailMessage = Strings.deletingEmails(1)
-
-    // Показываем диалог MDN если есть запрос и ещё не отправлен.
-    LaunchedEffect(email?.mdnRequestedBy, email?.mdnSent) {
-        val e = email ?: return@LaunchedEffect
-        if (!e.mdnRequestedBy.isNullOrBlank() && !e.mdnSent && !showMdnDialog) {
-            showMdnDialog = true
-        }
-    }
 
     // Одноразовые события VM → локализованные тосты + навигация назад.
     // LaunchedEffect(Unit) живёт дольше рекомпозиции; язык может смениться в рантайме без
@@ -233,6 +225,7 @@ fun EmailDetailScreen(
     val currentIsRussian by rememberUpdatedState(isRussian)
     val onBackLatest by rememberUpdatedState(onBackClick)
     val readReceiptSentText by rememberUpdatedState(Strings.readReceiptSent)
+    val readReceiptNotDeclinedText by rememberUpdatedState(Strings.readReceiptNotDeclined)
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             val ru = currentIsRussian
@@ -244,6 +237,7 @@ fun EmailDetailScreen(
                 EmailDetailEvent.Restored -> SafeToast.short(context, NotificationStrings.getRestored(ru))
                 EmailDetailEvent.Refreshed -> SafeToast.short(context, if (ru) "Письмо обновлено" else "Email refreshed")
                 EmailDetailEvent.ReadReceiptSent -> SafeToast.short(context, readReceiptSentText)
+                EmailDetailEvent.ReadReceiptNotDeclined -> SafeToast.long(context, readReceiptNotDeclinedText)
                 EmailDetailEvent.DeletedOnServer -> SafeToast.short(context, if (ru) "Письмо удалено на сервере" else "Email deleted on server")
                 EmailDetailEvent.NoBodyFromServer -> SafeToast.long(context, if (ru) "Сервер не вернул текст письма. Откройте его через Outlook Web Access." else "Server returned no message body. Try opening this email in Outlook Web Access.")
                 is EmailDetailEvent.Error -> SafeToast.long(context, NotificationStrings.localizeError(event.message, ru))
@@ -251,29 +245,20 @@ fun EmailDetailScreen(
         }
     }
 
-    // Диалог MDN
-    // КРИТИЧНО: используем локальную переменную вместо !! чтобы избежать NPE при race condition в recomposition
-    val mdnEmail = email
-    if (showMdnDialog && mdnEmail != null && !mdnEmail.mdnRequestedBy.isNullOrBlank()) {
+    // Запрос отчёта о прочтении: до ответа письмо не помечается прочитанным (Exchange отправил бы отчёт сам).
+    // Закрытие без ответа откладывает вопрос до следующего открытия.
+    if (readReceiptRequestedBy != null) {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
-            onDismissRequest = {
-                showMdnDialog = false
-                // Помечаем что пользователь отказался (чтобы не показывать снова)
-                viewModel.dismissMdn()
-            },
+            onDismissRequest = viewModel::postponeReadReceipt,
             icon = { Icon(AppIcons.MarkEmailRead, null, tint = MaterialTheme.colorScheme.primary) },
             title = { Text(Strings.readReceiptRequest) },
-            text = { Text(Strings.readReceiptRequestText) },
+            text = { Text(Strings.readReceiptRequestText(readReceiptRequestedBy)) },
             confirmButton = {
                 TextButton(
-                    onClick = {
-                        // Тост об отправке отчёта приходит через событие ReadReceiptSent.
-                        viewModel.sendMdn()
-                        showMdnDialog = false
-                    },
-                    enabled = !isSendingMdn
+                    onClick = { viewModel.answerReadReceipt(send = true) },
+                    enabled = !isAnsweringReadReceipt
                 ) {
-                    if (isSendingMdn) {
+                    if (isAnsweringReadReceipt) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     } else {
                         Text(Strings.send)
@@ -282,12 +267,9 @@ fun EmailDetailScreen(
             },
             dismissButton = {
                 com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = {
-                        showMdnDialog = false
-                        viewModel.dismissMdn()
-                    },
+                    onClick = { viewModel.answerReadReceipt(send = false) },
                     text = Strings.no,
-                    enabled = !isSendingMdn
+                    enabled = !isAnsweringReadReceipt
                 )
             }
         )

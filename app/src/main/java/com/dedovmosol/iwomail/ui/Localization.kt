@@ -603,8 +603,14 @@ object Strings {
     val requestDeliveryReceipt: String @Composable get() = if (isRussian()) "Запросить отчёт о доставке" else "Request delivery receipt"
     val highPriority: String @Composable get() = if (isRussian()) "Высокий приоритет" else "High priority"
     val readReceiptRequest: String @Composable get() = if (isRussian()) "Запрос отчёта о прочтении" else "Read receipt request"
-    val readReceiptRequestText: String @Composable get() = if (isRussian()) "Отправитель запросил уведомление о прочтении этого письма. Отправить?" else "The sender requested a read receipt for this message. Send it?"
-    val readReceiptSent: String @Composable get() = if (isRussian()) "Отчёт о прочтении отправлен" else "Read receipt sent"
+    @Composable
+    fun readReceiptRequestText(address: String): String = if (isRussian())
+        "Отправитель просит отчёт о прочтении на адрес $address. Отправить?"
+    else "The sender requested a read receipt to $address. Send it?"
+    val readReceiptSent: String @Composable get() = if (isRussian()) "Exchange отправит отчёт о прочтении" else "Exchange will send the read receipt"
+    val readReceiptNotDeclined: String @Composable get() = if (isRussian())
+        "Не удалось отказаться от отчёта: письмо оставлено непрочитанным, иначе Exchange отправит отчёт"
+    else "Couldn't decline the receipt: the message stays unread, otherwise Exchange would send it"
 
     // Названия цветовых тем
     val themePurple: String @Composable get() = if (isRussian()) "Фиолетовая" else "Purple"
@@ -1208,6 +1214,13 @@ object Strings {
     val exactAlarmsText: String @Composable get() = if (isRussian())
         "Для своевременной синхронизации почты приложению нужно разрешение на точные будильники.\n\nВключите переключатель в следующем окне."
         else "For timely mail sync, the app needs permission for exact alarms.\n\nEnable the toggle in the next screen."
+    val attachmentUnreadable: String @Composable get() = if (isRussian())
+        "Не удалось прочитать вложение — письмо не отправлено" else "Could not read an attachment — the email was not sent"
+    val backgroundWorkBannerTitle: String @Composable get() = if (isRussian())
+        "Работа в фоне не разрешена" else "Background work is not allowed"
+    val backgroundWorkBannerText: String @Composable get() = if (isRussian())
+        "Новые письма могут приходить с опозданием. Нажмите, чтобы разрешить"
+        else "New emails may arrive late. Tap to allow"
     val later: String @Composable get() = if (isRussian()) "Позже" else "Later"
     val continueAction: String @Composable get() = if (isRussian()) "Продолжить" else "Continue"
 
@@ -1326,9 +1339,9 @@ object OnboardingStrings {
 
     fun mailTitle(isRussian: Boolean): String = if (isRussian) "Почта" else "Mail"
     fun mailDescription(isRussian: Boolean): String = if (isRussian)
-        "Exchange 2007 SP1, поиск, вложения"
+        "Exchange 2007 SP1 – 2013: поиск, вложения"
     else
-        "Exchange 2007 SP1, search, attachments"
+        "Exchange 2007 SP1 – 2013: search, attachments"
     fun notificationsTitle(isRussian: Boolean): String = if (isRussian) "Уведомления" else "Notifications"
     fun notificationsDescription(isRussian: Boolean): String = if (isRussian)
         "Push-уведомления о новых письмах"
@@ -1336,9 +1349,9 @@ object OnboardingStrings {
         "Push notifications for new emails"
     fun exchangeTitle(isRussian: Boolean): String = if (isRussian) "Exchange" else "Exchange"
     fun exchangeDescription(isRussian: Boolean): String = if (isRussian)
-        "Для стабильной работы на старых версиях требуется EWS"
+        "ActiveSync 12.1–14.1 и EWS: черновики, заметки и часть функций работают через EWS"
     else
-        "EWS required for stable work on older versions"
+        "ActiveSync 12.1–14.1 and EWS: drafts, notes and some features work over EWS"
 
     fun contactsTitle(isRussian: Boolean): String = if (isRussian) "Контакты" else "Contacts"
     fun contactsDescription(isRussian: Boolean): String = if (isRussian)
@@ -1689,7 +1702,6 @@ object NotificationStrings {
             errorCode == "Удаление папок поддерживается только для Exchange" -> if (isRussian) errorCode else "Folder deletion is supported only for Exchange"
             errorCode == "Создание папок поддерживается только для Exchange" -> if (isRussian) errorCode else "Folder creation is supported only for Exchange"
             errorCode == "Переименование папок поддерживается только для Exchange" -> if (isRussian) errorCode else "Folder renaming is supported only for Exchange"
-            errorCode == "MDN поддерживается только для Exchange" -> if (isRussian) errorCode else "MDN is supported only for Exchange"
             errorCode == "Загрузка тела не поддерживается для этого типа аккаунта" -> if (isRussian) errorCode else "Body loading is not supported for this account type"
             errorCode == "GetAttachment не поддерживается сервером (HTTP 501)" -> if (isRussian) errorCode else "GetAttachment is not supported by the server (HTTP 501)"
             errorCode.contains("Папка черновиков не найдена") -> if (isRussian) errorCode else "Drafts folder not found"
@@ -1755,6 +1767,18 @@ object NotificationStrings {
 
     fun getScheduledEmailSent(to: String, isRussian: Boolean): String {
         return if (isRussian) "Запланированное письмо для $to отправлено" else "Scheduled email to $to sent"
+    }
+    fun getEmailNotSent(isRussian: Boolean): String =
+        if (isRussian) "Письмо не отправлено" else "Email not sent"
+    /** «Тема»: причина. Сохранено в Черновики — можно исправить и отправить снова. */
+    fun getEmailNotSentText(subject: String, reason: String, savedAsDraft: Boolean, isRussian: Boolean): String {
+        val title = subject.ifBlank { if (isRussian) "(без темы)" else "(no subject)" }
+        val tail = when {
+            !savedAsDraft -> ""
+            isRussian -> " Письмо сохранено в Черновиках."
+            else -> " The email is saved to Drafts."
+        }
+        return "«$title»: ${localizeError(reason, isRussian)}.$tail"
     }
 
     fun getAttachmentsTooLarge(sizeMB: Int, limitMB: Int, isRussian: Boolean): String {

@@ -221,6 +221,9 @@ class SettingsRepository private constructor(
         val THEME_SATURDAY = stringPreferencesKey("theme_saturday")
         val THEME_SUNDAY = stringPreferencesKey("theme_sunday")
         val ONBOARDING_SHOWN = booleanPreferencesKey("onboarding_shown")
+        // Системные разрешения, о которых приложение уже спросило само (один раз; дальше — баннер на главной)
+        val BACKGROUND_WORK_PROMPTED = booleanPreferencesKey("background_work_prompted")
+        val EXACT_ALARMS_PROMPTED = booleanPreferencesKey("exact_alarms_prompted")
         val UPDATE_CHECK_INTERVAL = stringPreferencesKey("update_check_interval")
         val LAST_UPDATE_CHECK_TIME = longPreferencesKey("last_update_check_time")
         val UPDATE_DISMISSED_VERSION = intPreferencesKey("update_dismissed_version")
@@ -926,6 +929,27 @@ class SettingsRepository private constructor(
     
     fun getOnboardingShownSync(): Boolean {
         return cachedOnboardingShown.get() ?: false
+    }
+
+    /**
+     * Сразу после установки приложение само спрашивает о фоновой работе и точных будильниках — по одному разу. Ответ
+     * «Позже» не повторяется при каждом запуске (вновь — только по нажатию баннера на главной).
+     * true — спросить сейчас (и отметить, что спросили); false — уже спрашивали.
+     */
+    suspend fun claimBackgroundWorkPrompt(): Boolean = claimOnce(Keys.BACKGROUND_WORK_PROMPTED)
+
+    suspend fun claimExactAlarmsPrompt(): Boolean = claimOnce(Keys.EXACT_ALARMS_PROMPTED)
+
+    private suspend fun claimOnce(key: Preferences.Key<Boolean>): Boolean {
+        var claimed = false
+        // Чтение и запись — одной транзакцией DataStore: два одновременных вызова не покажут диалог дважды
+        dataStore.edit { prefs ->
+            if (prefs[key] != true) {
+                prefs[key] = true
+                claimed = true
+            }
+        }
+        return claimed
     }
     
     // Режим черновиков по умолчанию (для новых аккаунтов)

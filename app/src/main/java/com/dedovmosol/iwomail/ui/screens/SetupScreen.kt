@@ -1602,7 +1602,7 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                     benefits = listOf(
                         "✓ Автоматическое переключение при недоступности основного",
                         "✓ Credentials не передаются при проверке (TCP-проба)",
-                        "✓ Совместимо с Exchange 2007 SP1+",
+                        "✓ Совместимо с Exchange 2007 SP1 – 2013",
                         "⚠️ Не расходует заряд аккумулятора — проверка только при ошибке соединения"
                     )
                 )
@@ -1692,7 +1692,7 @@ private fun SetupHelpScreen(onClose: () -> Unit) {
                     benefits = listOf(
                         "✓ Automatic fallback when primary is unreachable",
                         "✓ Credentials are not sent during probe (TCP only)",
-                        "✓ Compatible with Exchange 2007 SP1+",
+                        "✓ Compatible with Exchange 2007 SP1 – 2013",
                         "⚠️ Battery-friendly — probe only on connection failure"
                     )
                 )
