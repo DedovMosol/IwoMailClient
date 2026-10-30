@@ -1,24 +1,21 @@
 package com.dedovmosol.iwomail.ui.components
 
-import android.content.Context
-import com.dedovmosol.iwomail.util.SafeToast
+import android.os.SystemClock
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.data.database.AccountEntity
-import com.dedovmosol.iwomail.data.repository.MailRepository
-import com.dedovmosol.iwomail.domain.send
-import com.dedovmosol.iwomail.eas.EasResult
-import com.dedovmosol.iwomail.network.NetworkMonitor
-import com.dedovmosol.iwomail.sync.OutboxWorker
-import kotlinx.coroutines.*
+import com.dedovmosol.iwomail.domain.OutgoingMail
+import com.dedovmosol.iwomail.ui.Strings
+import com.dedovmosol.iwomail.ui.theme.AppIcons
 
 /**
  * Данные вложения для отправки
@@ -47,7 +44,7 @@ data class PendingEmail(
     val forwardSourceFolderId: String? = null, // ServerId папки оригинального письма (для SmartForward)
     val forwardSourceItemId: String? = null    // ServerId оригинального письма (для SmartForward)
 ) {
-    fun toOutgoingMail() = com.dedovmosol.iwomail.domain.OutgoingMail(
+    fun toOutgoingMail() = OutgoingMail(
         to = to, cc = cc, bcc = bcc, subject = subject, body = body,
         attachments = attachments.map { Triple(it.name, it.mimeType, it.data) },
         importance = importance,
@@ -59,231 +56,26 @@ data class PendingEmail(
 }
 
 /**
- * Состояние отправки
+ * Состояние отправки. В фазе [SendPhase.COUNTDOWN] письмо ждёт [countdownMs] с момента [countdownStartedAt]
+ * (SystemClock.elapsedRealtime) — по ним плашка рисует прогресс и после поворота экрана.
  */
 data class SendState(
     val isActive: Boolean = false,
-    val progress: Float = 0f,
     val message: String = "",
-    val phase: SendPhase = SendPhase.COUNTDOWN
+    val phase: SendPhase = SendPhase.SENDING,
+    val countdownStartedAt: Long = 0L,
+    val countdownMs: Long = 0L
 )
 
 enum class SendPhase {
-    COUNTDOWN,  // Обратный отсчёт (можно отменить)
-    SENDING     // Реальная отправка (нельзя отменить)
-}
-
-/**
- * Контроллер отправки с обратным отсчётом
- */
-class SendController {
-    var state by mutableStateOf(SendState())
-        private set
-
-    private var sendJob: Job? = null
-    private var isCancelled = false
-    private var pendingEmail: PendingEmail? = null
-    private var onCancelCallback: (() -> Unit)? = null
-
-    // Собственный scope для отправки (не зависит от UI)
-    private val sendScope = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main)
-
-    /**
-     * Запускает отправку с обратным отсчётом
-     *
-     * @param onError вызывается при сбое отправки (ошибка создания клиента или ошибка сервера,
-     *   НЕ сетевая очередь outbox). Позволяет вызывающему (Этап 3: ComposeViewModel) сбросить
-     *   isSending — без него UI зависал в заблокированном состоянии после ошибки.
-     *   Путь сетевой очереди (OutboxWorker) вызывает onSuccess — письмо поставлено в очередь.
-     */
-    fun startSend(
-        email: PendingEmail,
-        message: String,
-        context: Context,
-        mailRepo: MailRepository,
-        onSuccess: () -> Unit,
-        onCancel: () -> Unit,
-        onError: () -> Unit = {}
-    ) {
-        // Отменяем предыдущую отправку если была
-        cancel()
-        isCancelled = false
-        pendingEmail = email
-        onCancelCallback = onCancel
-
-        state = SendState(
-            isActive = true,
-            progress = 0f,
-            message = message,
-            phase = SendPhase.COUNTDOWN
-        )
-
-        // Обратный отсчёт: 3 секунды
-        val countdownMs = 3000L
-        val stepMs = 50L
-        val steps = (countdownMs / stepMs).toInt()
-
-        sendJob = sendScope.launch {
-            try {
-                // Фаза 1: Обратный отсчёт
-                for (i in 1..steps) {
-                    if (isCancelled) return@launch
-                    delay(stepMs)
-                    state = state.copy(progress = i.toFloat() / steps)
-                }
-
-                if (isCancelled) return@launch
-
-                // Фаза 2: Реальная отправка
-                state = state.copy(
-                    phase = SendPhase.SENDING,
-                    progress = 0f
-                )
-
-                val accountRepo = com.dedovmosol.iwomail.data.repository.RepositoryProvider.getAccountRepository(context)
-                val client = accountRepo.createEasClient(email.account.id)
-                if (client == null) {
-                    withContext(Dispatchers.Main) {
-                        SafeToast.long(context, "Failed to create client")
-                    }
-                    onError()
-                    return@launch
-                }
-
-                val result = withContext(Dispatchers.IO) { client.send(email.toOutgoingMail()) }
-                when (result) {
-                    is EasResult.Success -> {
-                        // #1: полное удаление черновика после отправки — серверное (EWS HardDelete
-                        // на Exchange 2007) + локальное + защита от «воскрешения» (registerDeletedEmail
-                        // внутри deleteDraft). Раньше удаляли ТОЛЬКО локально: серверный черновик
-                        // оставался сиротой (виден в Outlook/OWA) и возвращался при следующей
-                        // синхронизации папки Drafts. Путь Exchange-only (client создаётся через
-                        // createEasClient). В фоне — чтобы не задерживать звук/навигацию успеха
-                        // сетевым EWS-запросом; deleteDraft на 2007 всегда очищает локально даже
-                        // при ошибке сервера. updateDraftsFolderCount выполняется внутри deleteDraft.
-                        email.draftId?.let { draftId ->
-                            launch(Dispatchers.IO) {
-                                try {
-                                    val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
-                                    val emailEntity = database.emailDao().getEmail(draftId)
-                                    if (emailEntity != null) {
-                                        mailRepo.deleteDraft(emailEntity.accountId, emailEntity.serverId)
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    android.util.Log.w("SendController", "Draft cleanup after send failed: ${e.message}")
-                                }
-                            }
-                        }
-
-                        // Воспроизводим звук отправки
-                        com.dedovmosol.iwomail.util.SoundPlayer.playSendSound(context)
-                        // Синхронизируем папку "Отправленные" в фоне с retry.
-                        // Exchange может не сразу поместить письмо в Sent Items
-                        // (обработка на CAS/MBX занимает время).
-                        // Стратегия: 3 попытки с возрастающей задержкой (3с, 6с, 10с).
-                        val accountId = email.account.id
-                        launch(Dispatchers.IO) {
-                            try {
-                                val database = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
-                                val sentFolder = database.folderDao().getFoldersByAccountList(accountId)
-                                    .find { it.type == 5 }
-
-                                sentFolder?.let { folder ->
-                                    val delays = longArrayOf(3000L, 6000L, 10000L)
-                                    for (attempt in delays.indices) {
-                                        delay(delays[attempt])
-                                        try {
-                                            if (email.account.accountType == "EXCHANGE") {
-                                                // Инкрементальная синхронизация: быстрее и безопаснее.
-                                                // syncSentFull (syncKey="0") перезагружает ВСЮ папку — медленно,
-                                                // плюс при конфликте с SyncWorker может give up.
-                                                // Инкрементальный sync подхватывает новое письмо за 1 batch.
-                                                val syncResult = mailRepo.syncEmails(accountId, folder.id)
-                                                if (syncResult is EasResult.Success && syncResult.data > 0) {
-                                                    // Инкрементальный sync нашёл новое письмо → готово
-                                                    break
-                                                }
-                                                if (syncResult is EasResult.Error) {
-                                                    // Fallback: полная ресинхронизация при ошибке.
-                                                    // syncSentFull возвращает TOTAL count (не new),
-                                                    // поэтому не проверяем result.data > 0 для неё.
-                                                    mailRepo.syncSentFull(accountId, folder.id)
-                                                    break // syncSentFull сделала всё что могла
-                                                }
-                                                // syncResult is Success с data=0 → письмо ещё не на сервере
-                                                // Продолжаем retry с увеличенной задержкой
-                                            } else {
-                                                val syncResult = mailRepo.syncEmails(accountId, folder.id)
-                                                if (syncResult is EasResult.Success && syncResult.data > 0) {
-                                                    break
-                                                }
-                                            }
-                                        } catch (_: Exception) {
-                                            // Следующая попытка
-                                        }
-                                    }
-                                }
-                            } catch (_: Exception) {
-                                // Ошибки sync не должны крашить UI
-                            }
-                        }
-
-                        onSuccess()
-                    }
-                    is EasResult.Error -> {
-                        // Сбой связи (метка транспорта [NET:…] или сети нет вовсе) — письмо в очередь; ошибка сервера — нет:
-                        // повтор её не исправит. Раньше — поиск слов в тексте ошибки.
-                        val isNetworkError = com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(result.message)
-                            ?.connectionLevel == true || !NetworkMonitor.isNetworkAvailable(context)
-                        if (isNetworkError && email.attachments.isEmpty()) {
-                            // Добавляем в очередь отправки (только без вложений) — со всеми полями письма
-                            OutboxWorker.enqueue(context, email.account.id, email.toOutgoingMail())
-                            withContext(Dispatchers.Main) {
-                                val isRu = java.util.Locale.getDefault().language == "ru"
-                                val msg = if (isRu) "Нет сети. Письмо добавлено в очередь отправки"
-                                    else "No network. Email added to outbox queue"
-                                SafeToast.long(context, msg)
-                            }
-                            onSuccess() // Закрываем экран — письмо в очереди
-                        } else {
-                            withContext(Dispatchers.Main) {
-                                SafeToast.long(context, result.message)
-                            }
-                            onError()
-                        }
-                    }
-                }
-
-                delay(300)
-            } finally {
-                state = SendState()
-                pendingEmail = null
-                onCancelCallback = null
-            }
-        }
-    }
-
-    /**
-     * Отменяет отправку (только в фазе обратного отсчёта)
-     */
-    fun cancel() {
-        if (state.isActive && state.phase == SendPhase.COUNTDOWN) {
-            isCancelled = true
-            sendJob?.cancel()
-            sendJob = null
-            state = SendState()
-            onCancelCallback?.invoke()
-            pendingEmail = null
-            onCancelCallback = null
-        }
-    }
+    COUNTDOWN,  // Ожидание (можно отменить)
+    SENDING     // Подготовка и отправка (нельзя отменить)
 }
 
 /**
  * CompositionLocal для доступа к контроллеру отправки
  */
-val LocalSendController = compositionLocalOf { SendController() }
+val LocalSendController = staticCompositionLocalOf { SendController.shared }
 
 // Зелёные цвета для прогресс-бара отправки
 private val SendContainerColor = Color(0xFFE8F5E9) // Light green background
@@ -291,7 +83,8 @@ private val SendContentColor = Color(0xFF2E7D32) // Dark green text
 private val SendProgressColor = Color(0xFF4CAF50) // Green progress
 
 /**
- * Плашка прогресса отправки (зелёная)
+ * Плашка отправки (зелёная): ожидание с отсчётом секунд и кнопкой «Отменить», затем отправка.
+ * Прогресс ожидания — анимацией (читается при отрисовке, без перекомпоновки на каждый кадр).
  */
 @Composable
 fun SendProgressBar(
@@ -299,80 +92,82 @@ fun SendProgressBar(
     modifier: Modifier = Modifier
 ) {
     val state = controller.state
+    if (!state.isActive) return
 
-    if (state.isActive) {
-        Surface(
-            modifier = modifier
+    val countdown = state.phase == SendPhase.COUNTDOWN
+    val progress = remember(state.countdownStartedAt) { Animatable(0f) }
+    LaunchedEffect(state.countdownStartedAt, countdown) {
+        if (!countdown || state.countdownMs <= 0) return@LaunchedEffect
+        // С учётом уже прошедшего (поворот экрана): плашка не начинает отсчёт заново
+        val elapsed = (SystemClock.elapsedRealtime() - state.countdownStartedAt).coerceIn(0L, state.countdownMs)
+        progress.snapTo(elapsed.toFloat() / state.countdownMs)
+        progress.animateTo(1f, tween((state.countdownMs - elapsed).toInt(), easing = LinearEasing))
+    }
+    val secondsLeft by remember(state.countdownStartedAt) {
+        derivedStateOf { kotlin.math.ceil((1f - progress.value) * state.countdownMs / 1000f).toInt().coerceAtLeast(1) }
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(bottom = 80.dp),
+        color = SendContainerColor,
+        shadowElevation = 8.dp,
+        tonalElevation = 4.dp
+    ) {
+        Column(
+            modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 80.dp),
-            color = SendContainerColor,
-            shadowElevation = 8.dp,
-            tonalElevation = 4.dp
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = state.message,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = SendContentColor
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = when (state.phase) {
-                                SendPhase.COUNTDOWN -> "${(state.progress * 100).toInt()}%"
-                                SendPhase.SENDING -> Strings.sending
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SendContentColor.copy(alpha = 0.7f)
-                        )
-                    }
-
-                    // Кнопка отмены только в фазе обратного отсчёта
-                    if (state.phase == SendPhase.COUNTDOWN) {
-                        TextButton(
-                            onClick = { controller.cancel() },
-                            colors = ButtonDefaults.textButtonColors(
-                                contentColor = SendContentColor
-                            )
-                        ) {
-                            Icon(
-                                AppIcons.Close,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(Strings.cancel)
-                        }
-                    } else {
-                        // Индикатор отправки
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = SendProgressColor,
-                            strokeWidth = 2.dp
-                        )
-                    }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = state.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = SendContentColor
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (countdown) Strings.sendingIn(secondsLeft) else Strings.sending,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SendContentColor.copy(alpha = 0.7f)
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                LinearProgressIndicator(
-                    progress = { if (state.phase == SendPhase.SENDING) 1f else state.progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp),
-                    color = SendProgressColor,
-                    trackColor = SendContentColor.copy(alpha = 0.2f)
-                )
+                // Кнопка отмены только во время ожидания
+                if (countdown) {
+                    TextButton(
+                        onClick = { controller.cancel() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = SendContentColor)
+                    ) {
+                        Icon(AppIcons.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(Strings.undo)
+                    }
+                } else {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = SendProgressColor,
+                        strokeWidth = 2.dp
+                    )
+                }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            LinearProgressIndicator(
+                progress = { if (countdown) progress.value else 1f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp),
+                color = SendProgressColor,
+                trackColor = SendContentColor.copy(alpha = 0.2f)
+            )
         }
     }
 }

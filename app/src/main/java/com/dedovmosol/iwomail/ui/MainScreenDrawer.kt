@@ -59,7 +59,9 @@ fun DrawerContent(
     onTasksClick: () -> Unit = {},
     onCreateFolder: () -> Unit = {},
     onFolderLongClick: (FolderEntity) -> Unit = {},
-    onAboutClick: () -> Unit = {}
+    onAboutClick: () -> Unit = {},
+    scheduledCount: Int = 0,
+    onScheduledClick: () -> Unit = {}
 ) {
     LazyColumn {
         // Шапка с аккаунтом
@@ -138,6 +140,38 @@ fun DrawerContent(
             }
         }
         
+        // Запланированные письма (отложенная отправка)
+        item(key = "scheduled_mail") {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clickable(onClick = onScheduledClick),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(AppIcons.Schedule, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = Strings.scheduledMail,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (scheduledCount > 0) {
+                        Text(
+                            text = scheduledCount.toString(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
         // Остальные папки (скрываем Contacts, Calendar, Notes, Tasks - они показаны отдельно)
         val hiddenFolderTypes = listOf(7, 8, 9, 10) // Tasks, Calendar, Contacts, Notes
         val otherFolders = folders.filter { folder ->

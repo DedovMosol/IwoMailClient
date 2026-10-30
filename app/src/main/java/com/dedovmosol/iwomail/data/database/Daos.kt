@@ -220,7 +220,8 @@ interface EmailDao {
         SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
-               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
+               flagStartDate, flagDueDate, flagReminder, flagCompleted
         FROM emails
         WHERE folderId = :folderId
         ORDER BY dateReceived DESC
@@ -259,8 +260,24 @@ interface EmailDao {
     @Query("UPDATE emails SET read = :read WHERE id = :id")
     suspend fun updateReadStatus(id: String, read: Boolean)
 
-    @Query("UPDATE emails SET flagged = :flagged WHERE id = :id")
-    suspend fun updateFlagStatus(id: String, flagged: Boolean)
+    /** Флаг целиком ([com.dedovmosol.iwomail.eas.MailFlag]): активен, выполнен, срок, напоминание. */
+    @Query("""
+        UPDATE emails SET flagged = :flagged, flagCompleted = :completed, flagStartDate = :startDate,
+            flagDueDate = :dueDate, flagReminder = :reminder
+        WHERE id = :id
+    """)
+    suspend fun updateFlag(id: String, flagged: Boolean, completed: Boolean, startDate: Long?, dueDate: Long?, reminder: Long?)
+
+    /** Ближайшие напоминания по флагам писем (для будильников): только активные флаги. */
+    @Query("""
+        SELECT id, subject, `from`, fromName, flagReminder FROM emails
+        WHERE flagged = 1 AND flagReminder > :now
+        ORDER BY flagReminder LIMIT :limit
+    """)
+    suspend fun getFlagReminders(now: Long, limit: Int): List<FlagReminderRow>
+
+    @Query("SELECT id, subject, `from`, fromName, flagReminder FROM emails WHERE id = :id AND flagged = 1")
+    suspend fun getFlagReminder(id: String): FlagReminderRow?
 
     @Query("UPDATE emails SET body = :body WHERE id = :id")
     suspend fun updateBody(id: String, body: String)
@@ -434,7 +451,8 @@ interface EmailDao {
         SELECT id, accountId, folderId, serverId, `from`, fromName, `to`, cc,
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
-               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId
+               mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
+               flagStartDate, flagDueDate, flagReminder, flagCompleted
         FROM emails
         WHERE accountId = :accountId AND flagged = 1
         ORDER BY dateReceived DESC
@@ -621,7 +639,8 @@ interface EmailDao {
                e.`to`, e.cc, e.subject, e.preview, '' AS body, e.bodyType,
                e.dateReceived, e.read, e.flagged, e.importance, e.hasAttachments,
                e.originalFolderId, e.mdnRequestedBy, e.mdnSent, e.messageClass,
-               e.internetMessageId, e.bcc, e.replacesServerId
+               e.internetMessageId, e.bcc, e.replacesServerId,
+               e.flagStartDate, e.flagDueDate, e.flagReminder, e.flagCompleted
         FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
         WHERE e.accountId = :accountId
@@ -903,3 +922,12 @@ abstract class SyncDao {
     }
 }
 
+
+/** Напоминание по флагу письма — без тела письма (оно для будильника не нужно). */
+data class FlagReminderRow(
+    val id: String,
+    val subject: String,
+    val from: String,
+    val fromName: String,
+    val flagReminder: Long?
+)

@@ -1300,15 +1300,15 @@ $foldersXml
     ): EasResult<String> = emailService.markAsReadBatch(collectionId, serverIds, syncKey, read)
 
     /**
-     * Переключить флаг письма (избранное)
-     * @see EasEmailService.toggleFlag
+     * Флаг письма: отметка, срок, напоминание, «выполнено» или снять
+     * @see EasEmailService.setFlag
      */
-    suspend fun toggleFlag(
+    suspend fun setFlag(
         collectionId: String,
         serverId: String,
         syncKey: String,
-        flagged: Boolean
-    ): EasResult<String> = emailService.toggleFlag(collectionId, serverId, syncKey, flagged)
+        flag: MailFlag
+    ): EasResult<String> = emailService.setFlag(collectionId, serverId, syncKey, flag)
 
     /**
      * Удалить письмо (перемещает в корзину)
@@ -1405,8 +1405,7 @@ $foldersXml
             decodedBody
         }
 
-        val flagXml = XmlUtils.extractTagValue(xml, "Flag")
-        val flagged = flagXml?.let { extractValue(it, "FlagStatus") == "2" } ?: false
+        val flag = MailFlags.parse(XmlUtils.extractTagValue(xml, "Flag"))
 
         // MS-ASEMAIL 2.2.2.58: Read — optional. "1" = read, "0" = unread.
         // Exchange 2007 SP1 may omit <Read> for some emails (old system entries).
@@ -1430,7 +1429,7 @@ $foldersXml
             body = body,
             bodyType = bodyType,
             attachments = attachments,
-            flagged = flagged
+            flag = flag
         )
     }
 
@@ -2515,7 +2514,8 @@ data class SyncResponse(
 data class EasEmailChange(
     val serverId: String,
     val read: Boolean? = null,
-    val flagged: Boolean? = null,
+    /** Флаг целиком ([MS-ASEMAIL]: отсутствующие элементы удалены); null — элемента Flag в изменении нет. */
+    val flag: MailFlag? = null,
     val body: String? = null,
     val bodyType: Int? = null,
     val attachments: List<EasAttachment> = emptyList(),
@@ -2535,11 +2535,15 @@ data class EasEmail(
     val body: String,
     val bodyType: Int = 1, // 1=text, 2=html
     val attachments: List<EasAttachment> = emptyList(),
-    val flagged: Boolean = false, // Флаг избранного (FlagStatus=2 на сервере)
+    /** Флаг ([MS-ASEMAIL] Flag): отметка (избранное), срок, напоминание, «выполнено». */
+    val flag: MailFlag = MailFlag.NONE,
     val messageClass: String = "", // MS-ASEMAIL MessageClass (IPM.Note, IPM.Schedule.Meeting.Request, etc.)
     /** [MS-ASAIRS] Truncated: тело в ответе обрезано — для черновика это не полное тело. */
     val bodyTruncated: Boolean = false
-)
+) {
+    /** Флаг избранного (Status=2 на сервере). */
+    val flagged: Boolean get() = flag.active
+}
 
 data class EasAttachment(
     val fileReference: String,

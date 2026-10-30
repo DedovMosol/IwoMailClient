@@ -265,6 +265,15 @@ fun SettingsScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }
             
+            // === СЕКЦИЯ: ПОЧТА (картинки из интернета, отмена отправки, свайпы) ===
+            item {
+                MailSettingsSection(settingsRepo)
+            }
+
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            }
+
             // === СЕКЦИЯ: БЕЗОПАСНОСТЬ (блокировка паролем + отпечаток пальца) ===
             item {
                 Text(

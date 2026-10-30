@@ -1561,7 +1561,6 @@ fun ComposeScreen(
                     // на время отсчёта + отправки + досинка Sent (~20с). Передаём applicationContext,
                     // чтобы не удерживать Activity после закрытия экрана (окно утечки).
                     context = context.applicationContext,
-                    mailRepo = mailRepo,
                     onSuccess = { },
                     onCancel = { }
                 )

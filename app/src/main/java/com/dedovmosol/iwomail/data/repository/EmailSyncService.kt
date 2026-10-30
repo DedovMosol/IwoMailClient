@@ -542,10 +542,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 bodyType = email.bodyType,
                                 dateReceived = effectiveDate,
                                 read = email.read,
-                                flagged = email.flagged,
                                 importance = email.importance,
                                 hasAttachments = email.attachments.isNotEmpty()
-                            )
+                            ).withFlag(email.flag)
+                        }
+                        if (emailEntities.any { it.flagReminder != null }) {
+                            com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context)
                         }
 
                         val emailIdsToInsert = emailEntities.map { it.id }
@@ -1177,11 +1179,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             bodyType = email.bodyType,
             dateReceived = effectiveDate,
             read = email.read,
-            flagged = email.flagged,
             importance = email.importance,
             hasAttachments = email.attachments.isNotEmpty(),
             messageClass = email.messageClass
-        )
+        ).withFlag(email.flag)
     }
 
     private suspend fun updateExistingDraftBodies(
@@ -1681,7 +1682,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         syncData.changedEmails.forEach { change ->
             val emailId = "${accountId}_${change.serverId}"
             change.read?.let { emailDao.updateReadStatus(emailId, it) }
-            change.flagged?.let { emailDao.updateFlagStatus(emailId, it) }
+            change.flag?.let { emailDao.saveFlag(emailId, it) }
 
             if (folder.type == FolderType.DRAFTS) {
                 if (change.bodyTruncated || (change.body?.length ?: 0) > DraftUpload.MAX_LOCAL_BODY_CHARS) {
@@ -1722,6 +1723,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
 
         if (draftEmailIdsToRefreshAtts.isNotEmpty()) {
             syncDraftAttachmentsFromServer(accountId, folderId, draftEmailIdsToRefreshAtts)
+        }
+        // Флаг поменяли в Outlook/OWA — напоминания на устройстве по новым срокам
+        if (syncData.changedEmails.any { it.flag != null }) {
+            com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context)
         }
     }
 

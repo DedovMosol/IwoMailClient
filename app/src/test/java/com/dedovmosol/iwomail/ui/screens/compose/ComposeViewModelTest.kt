@@ -500,7 +500,7 @@ class ComposeViewModelTest {
         assertThat(event).isInstanceOf(ComposeEvent.AttachmentLimitExceeded::class.java)
         assertThat(vm.uiState.value.isSending).isFalse()
         coVerify(exactly = 0) {
-            sendController.startSend(any(), any(), any(), any(), any(), any(), any())
+            sendController.startSend(any(), any(), any(), any(), any(), any())
         }
     }
 
@@ -530,7 +530,6 @@ class ComposeViewModelTest {
                 email = capture(pendingEmailSlot),
                 message = any(),
                 context = any(),
-                mailRepo = mailRepo,
                 onSuccess = any(),
                 onCancel = any(),
                 onError = any()
@@ -580,7 +579,7 @@ class ComposeViewModelTest {
         assertThat((event as ComposeEvent.ValidationError).field).isEqualTo(ValidationField.To)
         assertThat(vm.uiState.value.isSending).isFalse()
         coVerify(exactly = 0) {
-            sendController.startSend(any(), any(), any(), any(), any(), any(), any())
+            sendController.startSend(any(), any(), any(), any(), any(), any())
         }
     }
 
@@ -595,7 +594,7 @@ class ComposeViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) {
-            sendController.startSend(any(), any(), any(), any(), any(), any(), any())
+            sendController.startSend(any(), any(), any(), any(), any(), any())
         }
     }
 
@@ -1230,7 +1229,7 @@ class ComposeViewModelTest {
         coVerify(exactly = 1) {
             sendController.startSend(
                 email = capture(pendingEmailSlot),
-                message = any(), context = any(), mailRepo = any(),
+                message = any(), context = any(),
                 onSuccess = any(), onCancel = any(), onError = any()
             )
         }
@@ -1253,7 +1252,7 @@ class ComposeViewModelTest {
         assertThat(event).isInstanceOf(ComposeEvent.ValidationError::class.java)
         assertThat((event as ComposeEvent.ValidationError).field).isEqualTo(ValidationField.NoRecipients)
         coVerify(exactly = 0) {
-            sendController.startSend(any(), any(), any(), any(), any(), any(), any())
+            sendController.startSend(any(), any(), any(), any(), any(), any())
         }
     }
 

@@ -40,6 +40,8 @@ fun HtmlBodyView(
     html: String,
     contentKey: Any,
     onMailto: (String) -> Unit,
+    /** Загружать картинки и шрифты из интернета ([com.dedovmosol.iwomail.util.RemoteImages]). */
+    remoteContentAllowed: Boolean,
 ) {
     val context = LocalContext.current
     val isRussian = isRussian()
@@ -47,6 +49,7 @@ fun HtmlBodyView(
     var webViewRef by remember(contentKey) { mutableStateOf<WebView?>(null) }
     // PERF: Отслеживаем последний загруженный HTML чтобы не перезагружать WebView при каждой рекомпозиции
     var lastLoadedHtml by remember(contentKey) { mutableStateOf("") }
+    var lastRemoteAllowed by remember(contentKey) { mutableStateOf(false) }
     DisposableEffect(contentKey) {
         onDispose {
             webViewRef?.let { webView ->
@@ -86,10 +89,8 @@ fun HtmlBodyView(
                             builtInZoomControls = true
                             displayZoomControls = false
                             setSupportZoom(true)
-                            // Включаем загрузку изображений
+                            // Встроенные картинки (data:) — всегда; сеть — только с разрешения (см. update)
                             loadsImagesAutomatically = true
-                            blockNetworkImage = false
-                            blockNetworkLoads = false
                             // Разрешаем смешанный контент (http изображения на https странице)
                             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                             // Дополнительные настройки для загрузки контента
@@ -190,8 +191,12 @@ fun HtmlBodyView(
                 },
                 update = { webView ->
                     webViewRef = webView
-                    if (html == lastLoadedHtml) return@AndroidView
+                    if (html == lastLoadedHtml && remoteContentAllowed == lastRemoteAllowed) return@AndroidView
                     lastLoadedHtml = html
+                    lastRemoteAllowed = remoteContentAllowed
+                    // Сеть закрыта дважды: CSP страницы и запрет загрузок самого WebView
+                    webView.settings.blockNetworkImage = !remoteContentAllowed
+                    webView.settings.blockNetworkLoads = !remoteContentAllowed
 
                     val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
 
@@ -202,7 +207,7 @@ fun HtmlBodyView(
                         <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
                         <html>
                         <head>
-                            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src https: data:;">
+                            <meta http-equiv="Content-Security-Policy" content="${com.dedovmosol.iwomail.util.RemoteImages.contentSecurityPolicy(nonce, remoteContentAllowed)}">
                             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
                             <style>
                                 html { margin: 0 !important; padding: 0 !important; }

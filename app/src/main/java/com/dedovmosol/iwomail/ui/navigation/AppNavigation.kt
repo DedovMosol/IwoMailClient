@@ -326,6 +326,7 @@ sealed class Screen(val route: String) {
         }
     }
     object UserFolders : Screen("user_folders")
+    object ScheduledMail : Screen("scheduled_mail")
 }
 
 private suspend fun navigateWithRetry(tag: String, action: () -> Unit) {
@@ -439,6 +440,14 @@ fun AppNavigation(
         }
     }
     
+    // Отменили отправку — письмо вернулось в Черновики: открываем его в редакторе
+    val sendController = com.dedovmosol.iwomail.ui.components.LocalSendController.current
+    LaunchedEffect(sendController) {
+        sendController.undone.collect { draftId ->
+            navController.navigate(Screen.Compose.createRoute(draftId = draftId)) { launchSingleTop = true }
+        }
+    }
+
     // Обработка mailto: и SEND intent'ов — открываем экран создания письма
     // composeIntentId меняется при каждом новом intent, гарантируя повторную обработку
     var lastHandledComposeId by rememberSaveable { mutableLongStateOf(0L) }
@@ -730,6 +739,9 @@ fun AppNavigation(
                 },
                 onNavigateToUserFolders = {
                     navController.navigate(Screen.UserFolders.route)
+                },
+                onNavigateToScheduled = {
+                    navController.navigate(Screen.ScheduledMail.route)
                 },
                 // Навигация из карточки "Сегодня" с фильтрами
                 onNavigateToEmailListWithDateFilter = { folderId, dateFilter ->
@@ -1170,6 +1182,12 @@ fun AppNavigation(
         
         composable(Screen.Notes.route) {
             NotesScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.ScheduledMail.route) {
+            com.dedovmosol.iwomail.ui.screens.ScheduledMailScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }

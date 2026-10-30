@@ -452,6 +452,22 @@ class EmailDetailViewModel(
         }
     }
 
+    /** Флаг целиком из меню звёздочки: срок, напоминание, «выполнено», снять. */
+    fun setFlag(flag: com.dedovmosol.iwomail.eas.MailFlag) {
+        viewModelScope.launch {
+            try {
+                when (val result = actions.setFlag(emailId, flag)) {
+                    is EasResult.Success -> {}
+                    is EasResult.Error -> sendEvent(EmailDetailEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
+            }
+        }
+    }
+
     fun toggleFlag() {
         viewModelScope.launch {
             try {

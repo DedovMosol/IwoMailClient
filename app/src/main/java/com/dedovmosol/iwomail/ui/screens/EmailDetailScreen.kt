@@ -42,6 +42,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.data.database.AttachmentEntity
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.data.database.flag
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.ui.Strings
@@ -131,6 +132,11 @@ fun EmailDetailScreen(
     val isDeleting = uiState.isDeleting
     val readReceiptRequestedBy = uiState.readReceiptRequestedBy
     val isAnsweringReadReceipt = uiState.isAnsweringReadReceipt
+
+    // Картинки из интернета: до первого значения настроек тело не показываем (иначе страница грузилась бы дважды)
+    val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
+    val remoteImagesPrefs by settingsRepo.remoteImagesPrefs.collectAsStateWithLifecycle(initialValue = null)
+    var remoteImagesShown by rememberSaveable(emailId) { mutableStateOf(false) }
 
     // VM хранит семантическую ошибку тела; локализуем её в UI (VM независима от языка/ресурсов).
     val bodyLoadErrorText: String? = uiState.bodyLoadError?.let { err ->
@@ -582,15 +588,56 @@ fun EmailDetailScreen(
 
                     // Звёздочка избранного только если НЕ в корзине и НЕ черновик
                     if (!isInTrash && !isInDrafts) {
-                        IconButton(onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            viewModel.toggleFlag()
-                        }) {
+                        // Нажатие — отметить/снять; долгое нажатие — срок, напоминание, «выполнено»
+                        val flag = currentEmail.flag
+                        var flagMenuOpen by remember { mutableStateOf(false) }
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .combinedClickable(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        viewModel.toggleFlag()
+                                    },
+                                    onLongClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        flagMenuOpen = true
+                                    },
+                                    onLongClickLabel = Strings.flagRemind
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(
-                                imageVector = if (currentEmail.flagged) AppIcons.Star else AppIcons.StarOutline,
+                                imageVector = com.dedovmosol.iwomail.ui.components.flagIcon(flag),
                                 contentDescription = if (currentEmail.flagged) Strings.removeFromFavorites else Strings.addToFavorites,
-                                tint = if (currentEmail.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                                tint = com.dedovmosol.iwomail.ui.components.flagTint(flag)
+                            )
+                            com.dedovmosol.iwomail.ui.components.FlagMenu(
+                                expanded = flagMenuOpen,
+                                flag = flag,
+                                onDismiss = { flagMenuOpen = false },
+                                onChoose = viewModel::setFlag
+                            )
+                        }
+                    }
+                }
+
+                // Срок и напоминание флага
+                if (currentEmail.flagged && (currentEmail.flagDueDate != null || currentEmail.flagReminder != null)) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        com.dedovmosol.iwomail.ui.components.FlagDueText(currentEmail.flag)
+                        currentEmail.flagReminder?.let { reminder ->
+                            val reminderText = remember(reminder) {
+                                java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                                    .format(java.util.Date(reminder))
+                            }
+                            Text(
+                                Strings.flagReminderAt(reminderText),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -1450,11 +1497,28 @@ fun EmailDetailScreen(
                         val sanitizedBody = remember(bodyText, inlineImages) {
                             sanitizeEmailHtml(replaceInlineCids(bodyText, inlineImages))
                         }
-                        HtmlBodyView(
-                            html = sanitizedBody,
-                            contentKey = emailId,
-                            onMailto = onComposeToEmail
-                        )
+                        val imagesPrefs = remoteImagesPrefs
+                        if (imagesPrefs != null) {
+                            // Свои письма (Отправленные, Черновики) — с картинками: отслеживать здесь некого
+                            val remoteAllowed = isInSent || isInDrafts || com.dedovmosol.iwomail.util.RemoteImages.allowed(
+                                imagesPrefs.alwaysLoad, imagesPrefs.trustedSenders, currentEmail.from, remoteImagesShown
+                            )
+                            val hasRemote = remember(sanitizedBody) { com.dedovmosol.iwomail.util.RemoteImages.present(sanitizedBody) }
+                            if (hasRemote && !remoteAllowed) {
+                                val senderKey = remember(currentEmail.from) { com.dedovmosol.iwomail.util.RemoteImages.senderKey(currentEmail.from) }
+                                com.dedovmosol.iwomail.ui.components.RemoteImagesBanner(
+                                    canTrustSender = senderKey.isNotEmpty(),
+                                    onShow = { remoteImagesShown = true },
+                                    onAlwaysFromSender = { scope.launch { settingsRepo.trustImagesFrom(senderKey) } }
+                                )
+                            }
+                            HtmlBodyView(
+                                html = sanitizedBody,
+                                contentKey = emailId,
+                                onMailto = onComposeToEmail,
+                                remoteContentAllowed = remoteAllowed
+                            )
+                        }
                     } else {
                         // Plain text — с кликабельными ссылками и email-адресами
                         val linkColor = MaterialTheme.colorScheme.primary

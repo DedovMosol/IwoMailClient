@@ -224,6 +224,11 @@ class SettingsRepository private constructor(
         // Системные разрешения, о которых приложение уже спросило само (один раз; дальше — баннер на главной)
         val BACKGROUND_WORK_PROMPTED = booleanPreferencesKey("background_work_prompted")
         val EXACT_ALARMS_PROMPTED = booleanPreferencesKey("exact_alarms_prompted")
+        val REMOTE_IMAGES_ALWAYS = booleanPreferencesKey("remote_images_always")
+        val REMOTE_IMAGES_TRUSTED = stringSetPreferencesKey("remote_images_trusted_senders")
+        val UNDO_SEND_SECONDS = intPreferencesKey("undo_send_seconds")
+        val SWIPE_START_ACTION = stringPreferencesKey("swipe_start_action")
+        val SWIPE_END_ACTION = stringPreferencesKey("swipe_end_action")
         val UPDATE_CHECK_INTERVAL = stringPreferencesKey("update_check_interval")
         val LAST_UPDATE_CHECK_TIME = longPreferencesKey("last_update_check_time")
         val UPDATE_DISMISSED_VERSION = intPreferencesKey("update_dismissed_version")
@@ -950,6 +955,49 @@ class SettingsRepository private constructor(
             }
         }
         return claimed
+    }
+
+    // === Почта: картинки из интернета, отмена отправки, свайпы ===
+
+    /** Картинки из интернета в письме и доверенные отправители — одним значением: экран ждёт его до показа письма. */
+    data class RemoteImagesPrefs(val alwaysLoad: Boolean, val trustedSenders: Set<String>)
+
+    val remoteImagesPrefs: Flow<RemoteImagesPrefs> = dataStore.data.map { prefs ->
+        RemoteImagesPrefs(prefs[Keys.REMOTE_IMAGES_ALWAYS] ?: false, prefs[Keys.REMOTE_IMAGES_TRUSTED].orEmpty())
+    }
+
+    suspend fun setRemoteImagesAlways(always: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.REMOTE_IMAGES_ALWAYS] = always }
+    }
+
+    /** Картинки от [senderKey] (адрес без имени, в нижнем регистре) загружать всегда. */
+    suspend fun trustImagesFrom(senderKey: String) {
+        if (senderKey.isBlank()) return
+        dataStore.edit { prefs -> prefs[Keys.REMOTE_IMAGES_TRUSTED] = prefs[Keys.REMOTE_IMAGES_TRUSTED].orEmpty() + senderKey }
+    }
+
+    suspend fun clearTrustedImageSenders() {
+        dataStore.edit { prefs -> prefs.remove(Keys.REMOTE_IMAGES_TRUSTED) }
+    }
+
+    val undoSendSeconds: Flow<Int> = dataStore.data.map { prefs ->
+        com.dedovmosol.iwomail.domain.UndoSend.sanitize(prefs[Keys.UNDO_SEND_SECONDS])
+    }
+
+    suspend fun setUndoSendSeconds(seconds: Int) {
+        dataStore.edit { prefs -> prefs[Keys.UNDO_SEND_SECONDS] = com.dedovmosol.iwomail.domain.UndoSend.sanitize(seconds) }
+    }
+
+    /** Действия свайпа: слева направо (start) и справа налево (end). */
+    val swipeActions: Flow<Pair<com.dedovmosol.iwomail.domain.SwipeAction, com.dedovmosol.iwomail.domain.SwipeAction>> =
+        dataStore.data.map { prefs ->
+            val swipe = com.dedovmosol.iwomail.domain.SwipeAction
+            swipe.fromName(prefs[Keys.SWIPE_START_ACTION], swipe.DEFAULT_START) to
+                swipe.fromName(prefs[Keys.SWIPE_END_ACTION], swipe.DEFAULT_END)
+        }
+
+    suspend fun setSwipeAction(start: Boolean, action: com.dedovmosol.iwomail.domain.SwipeAction) {
+        dataStore.edit { prefs -> prefs[if (start) Keys.SWIPE_START_ACTION else Keys.SWIPE_END_ACTION] = action.name }
     }
     
     // Режим черновиков по умолчанию (для новых аккаунтов)

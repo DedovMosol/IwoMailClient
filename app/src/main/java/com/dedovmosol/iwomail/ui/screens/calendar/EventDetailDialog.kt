@@ -442,7 +442,9 @@ internal fun EventDetailDialog(
                             com.dedovmosol.iwomail.ui.components.HtmlBodyView(
                                 html = html,
                                 contentKey = event.id,
-                                onMailto = onComposeClick
+                                onMailto = onComposeClick,
+                                // Событие своего календаря — как раньше, с картинками
+                                remoteContentAllowed = true
                             )
                         } else {
                             SelectionContainer {

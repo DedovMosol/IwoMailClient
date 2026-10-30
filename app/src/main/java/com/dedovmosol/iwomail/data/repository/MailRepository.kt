@@ -172,6 +172,9 @@ class MailRepository(private val context: Context) {
         emailOperationsService.prefetchEmailBodies(accountId, count)
     
     suspend fun toggleFlag(emailId: String): EasResult<Boolean> = emailOperationsService.toggleFlag(emailId)
+
+    suspend fun setFlag(emailId: String, flag: com.dedovmosol.iwomail.eas.MailFlag): EasResult<Boolean> =
+        emailOperationsService.setFlag(emailId, flag)
     
     suspend fun deleteEmail(emailId: String) = emailOperationsService.deleteEmail(emailId)
     
