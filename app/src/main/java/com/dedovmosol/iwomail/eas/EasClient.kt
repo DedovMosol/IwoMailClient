@@ -1067,15 +1067,15 @@ class EasClient(
         internetMessageId: String?
     ): EasResult<ByteArray> {
         if (DraftIds.isEwsItemId(serverId)) return mimeBytesEws(serverId)
-        val eas = emailService.fetchMime(collectionId, serverId)
-        if (eas is EasResult.Success && eas.data.isNotBlank()) return EasResult.Success(eas.data.toByteArray(Charsets.UTF_8))
-        val ewsItemId = try {
-            ewsFolderType?.let { (findEwsMailItemId(subject, it, dateReceived, internetMessageId) as? EasResult.Success)?.data }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            null
+        return MessageMime.choose(emailService.fetchMime(collectionId, serverId)) {
+            val ewsItemId = try {
+                ewsFolderType?.let { (findEwsMailItemId(subject, it, dateReceived, internetMessageId) as? EasResult.Success)?.data }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            }
+            ewsItemId?.let { mimeBytesEws(it) }
         }
-        return if (ewsItemId != null) mimeBytesEws(ewsItemId) else (eas as? EasResult.Error) ?: EasResult.Success(ByteArray(0))
     }
 
     private suspend fun mimeBytesEws(itemId: String): EasResult<ByteArray> =

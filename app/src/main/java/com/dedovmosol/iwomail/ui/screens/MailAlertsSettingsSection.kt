@@ -47,6 +47,7 @@ internal fun MailAlertsSettingsSection(settingsRepo: SettingsRepository, account
         }.time
     )
     val ru = isRussian()
+    val sameTimeText = Strings.quietHoursSameTime
 
     Column {
         Text(
@@ -126,8 +127,12 @@ internal fun MailAlertsSettingsSection(settingsRepo: SettingsRepository, account
             onConfirm = { hour, minute ->
                 picking = null
                 val value = hour * 60 + minute
-                scope.launch {
-                    settingsRepo.setQuietHours(if (start) current.copy(startMinutes = value) else current.copy(endMinutes = value))
+                val updated = if (start) current.copy(startMinutes = value) else current.copy(endMinutes = value)
+                if (updated.startMinutes == updated.endMinutes) {
+                    // Пустое окно молча ничего бы не глушило — не сохраняем и говорим почему
+                    com.dedovmosol.iwomail.util.SafeToast.short(context, sameTimeText)
+                } else {
+                    scope.launch { settingsRepo.setQuietHours(updated) }
                 }
             },
             onDismiss = { picking = null }

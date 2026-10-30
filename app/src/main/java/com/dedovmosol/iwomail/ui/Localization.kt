@@ -709,6 +709,8 @@ object Strings {
     fun quietHoursDesc(range: String): String =
         if (isRussian()) "$range — без звука и вибрации; важные отправители — как обычно"
         else "$range — no sound or vibration; important senders still alert"
+    val quietHoursSameTime: String @Composable get() =
+        if (isRussian()) "Начало и конец тихих часов совпадают — выберите другое время" else "Quiet hours can't start and end at the same time"
     @Composable
     fun quietFrom(time: String): String = if (isRussian()) "С $time" else "From $time"
     @Composable

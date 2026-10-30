@@ -14,8 +14,10 @@ import io.mockk.coVerify
 import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -645,53 +647,83 @@ class EmailDetailViewModelTest {
 
     // ===================== .eml =====================
 
-    private fun emlVm(mime: EasResult<ByteArray>, written: MutableList<ByteArray>, writeOk: Boolean = true): EmailDetailViewModel {
+    /** Файл SAF в памяти: что записано и что убрано. */
+    private class FakeDocuments(private val writeOk: Boolean = true) : EmailDetailViewModel.DocumentSink {
+        val written = mutableListOf<ByteArray>()
+        var discarded = 0
+        override suspend fun write(uri: android.net.Uri, bytes: ByteArray): Boolean {
+            written += bytes
+            return writeOk
+        }
+        override suspend fun discard(uri: android.net.Uri) {
+            discarded++
+        }
+    }
+
+    private fun emlVm(
+        mime: EasResult<ByteArray>,
+        documents: FakeDocuments,
+        detached: kotlinx.coroutines.CoroutineScope? = null
+    ): EmailDetailViewModel {
         coEvery { mailRepo.fetchMessageMime(EMAIL_ID) } returns mime
-        return EmailDetailViewModel(
-            EMAIL_ID, actions, mailRepo, accountRepo, dispatcher,
-            writeFile = { _, bytes -> written += bytes; writeOk }
-        )
+        return EmailDetailViewModel(EMAIL_ID, actions, mailRepo, accountRepo, dispatcher, documents = documents, detachedScope = detached)
     }
 
     @Test
     fun `eml is written to the chosen file`() = runTest(dispatcher) {
-        val written = mutableListOf<ByteArray>()
-        val vm = emlVm(EasResult.Success("From: a@b.c\r\n\r\nhi".toByteArray()), written)
+        val documents = FakeDocuments()
+        val vm = emlVm(EasResult.Success("From: a@b.c\r\n\r\nhi".toByteArray()), documents)
         val events = collectEvents(vm)
         advanceUntilIdle()
 
         vm.saveEml(mockk(relaxed = true))
         advanceUntilIdle()
 
-        assertThat(written.single().decodeToString()).isEqualTo("From: a@b.c\r\n\r\nhi")
+        assertThat(documents.written.single().decodeToString()).isEqualTo("From: a@b.c\r\n\r\nhi")
+        assertThat(documents.discarded).isEqualTo(0)
         assertThat(events).containsExactly(EmailDetailEvent.EmlSaved)
         assertThat(vm.uiState.value.isSavingEml).isFalse()
     }
 
     @Test
-    fun `server error, empty MIME or failed write are reported and nothing is half-saved`() = runTest(dispatcher) {
-        val written = mutableListOf<ByteArray>()
-        val failing = emlVm(EasResult.Error("HTTP 503"), written)
-        val failingEvents = collectEvents(failing)
-        advanceUntilIdle()
-        failing.saveEml(mockk(relaxed = true))
-        advanceUntilIdle()
-        assertThat(failingEvents).containsExactly(EmailDetailEvent.EmlFailed("HTTP 503"))
+    fun `server error, empty MIME or failed write remove the created file`() = runTest(dispatcher) {
+        val cases = listOf(
+            Triple(EasResult.Error("HTTP 503") as EasResult<ByteArray>, FakeDocuments(), EmailDetailEvent.EmlFailed("HTTP 503")),
+            Triple(EasResult.Success(ByteArray(0)), FakeDocuments(), EmailDetailEvent.EmlFailed(null)),
+            Triple(EasResult.Success(byteArrayOf(1)), FakeDocuments(writeOk = false), EmailDetailEvent.EmlFailed(null))
+        )
+        for ((mime, documents, expected) in cases) {
+            val vm = emlVm(mime, documents)
+            val events = collectEvents(vm)
+            advanceUntilIdle()
 
-        val empty = emlVm(EasResult.Success(ByteArray(0)), written)
-        val emptyEvents = collectEvents(empty)
-        advanceUntilIdle()
-        empty.saveEml(mockk(relaxed = true))
-        advanceUntilIdle()
-        assertThat(emptyEvents).containsExactly(EmailDetailEvent.EmlFailed(null))
-        assertThat(written).isEmpty()
+            vm.saveEml(mockk(relaxed = true))
+            advanceUntilIdle()
 
-        val notWritten = emlVm(EasResult.Success(byteArrayOf(1)), written, writeOk = false)
-        val notWrittenEvents = collectEvents(notWritten)
+            assertThat(events).containsExactly(expected)
+            // Файл, созданный выбором места, не остаётся пустым или недописанным
+            assertThat(documents.discarded).isEqualTo(1)
+        }
+    }
+
+    @Test
+    fun `eml export finishes after the screen is closed`() = runTest(dispatcher) {
+        val documents = FakeDocuments()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { mailRepo.fetchMessageMime(EMAIL_ID) } coAnswers { gate.await(); EasResult.Success(byteArrayOf(7)) }
+        // Отдельная область, как процессная в приложении: закрытие экрана её не отменяет
+        val detached = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + dispatcher)
+        val vm = EmailDetailViewModel(EMAIL_ID, actions, mailRepo, accountRepo, dispatcher, documents = documents, detachedScope = detached)
         advanceUntilIdle()
-        notWritten.saveEml(mockk(relaxed = true))
+
+        vm.saveEml(mockk(relaxed = true))
         advanceUntilIdle()
-        assertThat(notWrittenEvents).containsExactly(EmailDetailEvent.EmlFailed(null))
+        vm.viewModelScope.cancel() // экран закрыт, пока письмо ещё грузится
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertThat(documents.written.single().toList()).containsExactly(7.toByte())
+        detached.cancel()
     }
 
     private fun TestScope.collectEvents(vm: EmailDetailViewModel): List<EmailDetailEvent> {

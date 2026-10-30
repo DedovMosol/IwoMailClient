@@ -18,6 +18,13 @@ class EmlFilesTest {
     }
 
     @Test
+    fun `an emoji on the cut is not split in half`() {
+        val name = EmlFiles.fileName("a".repeat(99) + "\uD83D\uDE00" + "tail")
+
+        assertThat(name).isEqualTo("a".repeat(99) + ".eml")
+    }
+
+    @Test
     fun `long subject is cut`() {
         val name = EmlFiles.fileName("a".repeat(500))
 
