@@ -208,7 +208,9 @@ object ScheduledSend {
         val queued = lock(dir).withLock {
             withContext(Dispatchers.IO) {
                 val job = read(dir) ?: return@withContext false
-                writeMeta(dir, job.copy(sendAt = System.currentTimeMillis(), undo = false))
+                // undo остаётся: срок прошёл — письмо уже в списке ([Entry.listed]), а уведомление о фоновой
+                // отправке — «письмо отправлено», не «запланированное»
+                writeMeta(dir, job.copy(sendAt = System.currentTimeMillis()))
                 context.getSystemService(AlarmManager::class.java)?.cancel(alarmIntent(context, dir))
                 changed()
                 true

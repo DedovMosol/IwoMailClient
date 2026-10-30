@@ -143,6 +143,29 @@ class ScheduledSendBehaviourTest {
     }
 
     @Test
+    fun `undo mail handed to the worker is listed at once and stays an undo mail`() = runBlocking<Unit> {
+        val dir = ScheduledSend.schedule(context, job("S", System.currentTimeMillis() + 65_000, undo = true))
+        assertThat(ScheduledSend.pending(context).single().listed(System.currentTimeMillis())).isFalse()
+
+        assertThat(ScheduledSend.queueNow(context, dir)).isTrue()
+
+        val entry = ScheduledSend.pending(context).single()
+        // Видно в «Запланированных» (можно отменить), уведомление воркера — «письмо отправлено», не «запланированное»
+        assertThat(entry.listed(System.currentTimeMillis())).isTrue()
+        assertThat(entry.undo).isTrue()
+        assertThat(work(dir).map { it.state }).contains(WorkInfo.State.ENQUEUED)
+    }
+
+    @Test
+    fun `queueNow of a mail that is gone does nothing`() = runBlocking<Unit> {
+        val dir = ScheduledSend.schedule(context, job("S", inAnHour))
+        ScheduledSend.take(context, dir)
+
+        assertThat(ScheduledSend.queueNow(context, dir)).isFalse()
+        assertThat(dir.exists()).isFalse()
+    }
+
+    @Test
     fun `finish removes the files and reports the change`() = runBlocking<Unit> {
         val dir = ScheduledSend.schedule(context, job("S", inAnHour))
         val before = ScheduledSend.changes.value
