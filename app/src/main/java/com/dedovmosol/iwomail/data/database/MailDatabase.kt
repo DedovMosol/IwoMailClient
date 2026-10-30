@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
-    version = 48,
+    version = 49,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -268,6 +268,12 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `emails` ADD COLUMN `requestDeliveryReceipt` INTEGER")
             }
         }
+        /** Идентификатор переписки (email2:ConversationId, EAS 14.0+) для цепочек писем. SQL — из schemas/49.json. */
+        private val MIGRATION_48_49 = object : Migration(48, 49) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `conversationId` TEXT")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -293,7 +299,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_44_45,
             MIGRATION_45_46,
             MIGRATION_46_47,
-            MIGRATION_47_48
+            MIGRATION_47_48,
+            MIGRATION_48_49
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -534,7 +541,10 @@ data class EmailEntity(
     val listUnsubscribeOneClick: Boolean = false,
     // Флажки «запросить отчёт» черновика. null — не известны (черновик пришёл синхронизацией: EAS их не передаёт).
     val requestReadReceipt: Boolean? = null,
-    val requestDeliveryReceipt: Boolean? = null
+    val requestDeliveryReceipt: Boolean? = null,
+    // Переписка ([MS-ASEMAIL] email2:ConversationId, base64): её присылает Exchange 2010 и новее (EAS 14.0+);
+    // на Exchange 2007 нет — цепочки тогда по теме. null — не известна (письмо пришло до поддержки или с 2007)
+    val conversationId: String? = null
 )
 
 data class EmailDedupInfo(

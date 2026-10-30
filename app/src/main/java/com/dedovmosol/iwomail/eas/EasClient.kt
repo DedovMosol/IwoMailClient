@@ -315,6 +315,25 @@ class EasClient(
 
     fun getServerInfo(): Map<String, Any> = versionDetector.getServerInfo()
 
+    /**
+     * Фото контактов глобальной адресной книги по адресам (до [ContactPictures.BATCH_SIZE]). Протокол ниже 14.1
+     * (Exchange 2007, 2010 без SP1) — [ContactPictures.Lookup.Unsupported] без запроса к серверу.
+     */
+    suspend fun lookupContactPictures(addresses: List<String>): ContactPictures.Lookup = ContactPictures.lookup(
+        addresses,
+        version = {
+            if (versionDetected) {
+                EasResult.Success(easVersion)
+            } else {
+                when (val detected = detectEasVersion()) {
+                    is EasResult.Success -> EasResult.Success(easVersion)
+                    is EasResult.Error -> detected
+                }
+            }
+        },
+        execute = { request -> transport.executeEasCommand("ResolveRecipients", request) { ContactPictures.parse(it) } }
+    )
+
     init {
         // Валидация клиентского сертификата
         if (clientCertificatePath != null && clientCertificatePassword.isNullOrBlank()) {
@@ -2603,7 +2622,8 @@ data class EasEmail(
     val flag: MailFlag = MailFlag.NONE,
     val messageClass: String = "", // MS-ASEMAIL MessageClass (IPM.Note, IPM.Schedule.Meeting.Request, etc.)
     /** [MS-ASAIRS] Truncated: тело в ответе обрезано — для черновика это не полное тело. */
-    val bodyTruncated: Boolean = false
+    val bodyTruncated: Boolean = false,
+    val conversationId: String? = null
 ) {
     /** Флаг избранного (Status=2 на сервере). */
     val flagged: Boolean get() = flag.active

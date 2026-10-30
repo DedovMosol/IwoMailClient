@@ -104,6 +104,7 @@ class SettingsRepository private constructor(
     private val cachedSoundEnabled = AtomicReference<Boolean?>(null)
     private val cachedScrollbarColor = AtomicReference<String?>(null)
     private val cachedDefaultDraftMode = AtomicReference<String?>(null)
+    private val cachedConversationView = AtomicReference<Boolean?>(null)
     
     // Кэшированные флаги блокировки приложения (синк-чтение для гейта в окне/сервисах)
     private val cachedAppLockEnabled = AtomicReference<Boolean?>(null)
@@ -164,6 +165,7 @@ class SettingsRepository private constructor(
                     cachedUpdateDismissedVersion.set(prefs[Keys.UPDATE_DISMISSED_VERSION] ?: 0)
                     cachedSoundEnabled.set(prefs[Keys.SOUND_ENABLED] ?: true)
                     cachedScrollbarColor.set(prefs[Keys.SCROLLBAR_COLOR] ?: "blue")
+                    cachedConversationView.set(prefs[Keys.CONVERSATION_VIEW] ?: false)
                     // Флаги блокировки: гвард «сеттер → устаревшая эмиссия» (паттерн
                     // themeMode) — после записи сеттера коллектор не откатывает кэш
                     // асинхронным эхом с промежуточным значением.
@@ -229,6 +231,8 @@ class SettingsRepository private constructor(
         val REMOTE_IMAGES_TRUSTED = stringSetPreferencesKey("remote_images_trusted_senders")
         val UNDO_SEND_SECONDS = intPreferencesKey("undo_send_seconds")
         val QUIET_HOURS_ENABLED = booleanPreferencesKey("quiet_hours_enabled")
+        val GAL_PHOTOS_ENABLED = booleanPreferencesKey("gal_photos_enabled")
+        val CONVERSATION_VIEW = booleanPreferencesKey("conversation_view")
         val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start_minutes")
         val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end_minutes")
         val VIP_SENDERS = stringSetPreferencesKey("vip_senders")
@@ -1004,6 +1008,25 @@ class SettingsRepository private constructor(
     suspend fun setSwipeAction(start: Boolean, action: com.dedovmosol.iwomail.domain.SwipeAction) {
         dataStore.edit { prefs -> prefs[if (start) Keys.SWIPE_START_ACTION else Keys.SWIPE_END_ACTION] = action.name }
     }
+
+    // === Фото из адресной книги и цепочки писем — по отдельности, выключены по умолчанию ===
+
+    /** Фото отправителей из глобальной адресной книги (Exchange 2010 SP1 и новее). */
+    val galPhotosEnabled: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.GAL_PHOTOS_ENABLED] ?: false }.distinctUntilChanged()
+
+    suspend fun setGalPhotosEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.GAL_PHOTOS_ENABLED] = enabled }
+    }
+
+    /** Письма одной переписки — одной строкой списка. */
+    val conversationView: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.CONVERSATION_VIEW] ?: false }.distinctUntilChanged()
+
+    suspend fun setConversationView(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.CONVERSATION_VIEW] = enabled }
+    }
+
+    /** Начальное значение для списка писем — без перестройки списка в первом кадре. */
+    fun getConversationViewSync(): Boolean = cachedConversationView.get() ?: false
 
     // === Уведомления о почте: тихие часы и важные отправители ===
 

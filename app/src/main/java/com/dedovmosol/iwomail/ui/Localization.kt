@@ -627,6 +627,18 @@ object Strings {
     fun trustedImageSenders(count: Int): String = if (isRussian()) "Доверенные отправители: $count" else "Trusted senders: $count"
     val reset: String @Composable get() = if (isRussian()) "Сбросить" else "Reset"
 
+    // Фото из адресной книги и цепочки писем (включаются отдельно)
+    val galPhotosSetting: String @Composable get() = if (isRussian()) "Фото из адресной книги" else "Address book photos"
+    val galPhotosSettingDesc: String @Composable get() = if (isRussian())
+        "Фото коллег из глобальной адресной книги в списке и в письме. Exchange 2010 SP1 и новее; на Exchange 2007 недоступно"
+    else "Colleagues' photos from the global address list in the list and in messages. Exchange 2010 SP1 and later; not available on Exchange 2007"
+    val conversationViewSetting: String @Composable get() = if (isRussian()) "Цепочки писем" else "Conversations"
+    val conversationViewSettingDesc: String @Composable get() = if (isRussian())
+        "Письма одной переписки — одной строкой, кроме черновиков. На Exchange 2007 — по теме письма с ответами (Re:, Fwd:)"
+    else "Messages of one conversation in one row, except Drafts. On Exchange 2007 by subject of replies (Re:, Fwd:)"
+    val expandThread: String @Composable get() = if (isRussian()) "Развернуть цепочку" else "Expand conversation"
+    val collapseThread: String @Composable get() = if (isRussian()) "Свернуть цепочку" else "Collapse conversation"
+
     // Отмена отправки
     val undoSendSetting: String @Composable get() = if (isRussian()) "Отмена отправки" else "Undo send"
     @Composable
