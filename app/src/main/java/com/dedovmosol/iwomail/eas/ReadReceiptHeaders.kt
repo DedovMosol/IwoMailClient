@@ -18,17 +18,27 @@ internal fun readReceiptRequestAddress(topLevelHeaders: String): String? {
 }
 
 /** Значение заголовка [name] с развёрнутыми продолжениями (RFC 5322 §2.2.3); null — заголовка нет. */
-internal fun mimeHeaderValue(headers: String, name: String): String? {
+internal fun mimeHeaderValue(headers: String, name: String): String? = mimeHeaderValues(headers, name).firstOrNull()
+
+/** Все значения заголовка [name] по порядку (DKIM-Signature, Received бывают по нескольку), с развёрнутыми продолжениями. */
+internal fun mimeHeaderValues(headers: String, name: String): List<String> {
     val lines = headers.replace("\r\n", "\n").split('\n')
-    val start = lines.indexOfFirst { it.startsWith("$name:", ignoreCase = true) }
-    if (start < 0) return null
-    val value = StringBuilder(lines[start].substringAfter(':'))
-    var i = start + 1
-    while (i < lines.size && lines[i].isNotEmpty() && lines[i][0].isWhitespace()) {
-        value.append(' ').append(lines[i].trim())
+    val values = mutableListOf<String>()
+    var i = 0
+    while (i < lines.size) {
+        if (!lines[i].startsWith("$name:", ignoreCase = true)) {
+            i++
+            continue
+        }
+        val value = StringBuilder(lines[i].substringAfter(':'))
         i++
+        while (i < lines.size && lines[i].isNotEmpty() && lines[i][0].isWhitespace()) {
+            value.append(' ').append(lines[i].trim())
+            i++
+        }
+        value.toString().trim().takeIf { it.isNotEmpty() }?.let(values::add)
     }
-    return value.toString().trim().takeIf { it.isNotEmpty() }
+    return values
 }
 
 /** Первый адрес списка: в угловых скобках, иначе первое слово с @. Запятые внутри кавычек имени — не разделитель. */

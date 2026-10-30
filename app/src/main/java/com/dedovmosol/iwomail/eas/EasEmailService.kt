@@ -320,22 +320,20 @@ class EasEmailService internal constructor(
             }
 
             if (fetchMimeHeaders) {
-                val mimeResult = fetchItemBody(
-                    collectionId, serverId,
-                    bodyType = 4, truncationSize = MIME_HEADER_TRUNCATION_SIZE,
-                    mimeSupport = 2, includeBodyFallback = false
-                )
+                val headers = fetchTopLevelHeaders(collectionId, serverId)
 
-                if (mimeResult is EasResult.Success && mimeResult.data.data == SENTINEL_NOT_FOUND && bodyContent.isEmpty()) {
+                if (headers is EasResult.Success && headers.data == SENTINEL_NOT_FOUND && bodyContent.isEmpty()) {
                     return@withTimeoutOrNull EasResult.Error(SENTINEL_NOT_FOUND)
                 }
 
-                if (mimeResult is EasResult.Success && mimeResult.data.data.isNotEmpty() && mimeResult.data.data != SENTINEL_NOT_FOUND) {
-                    val decodedMimeData = decodeMimeData(mimeResult.data.data)
-                    val mimeHeaders = extractTopLevelMimeHeaders(decodedMimeData)
-                    mdnRequestedBy = parseMdnHeader(mimeHeaders)
-                    originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
-                    listUnsubscribe = ListUnsubscribe.fromHeaders(mimeHeaders)
+                if (headers is EasResult.Success && headers.data != SENTINEL_NOT_FOUND) {
+                    val mimeHeaders = headers.data
+                    if (mimeHeaders.isNotEmpty()) {
+                        mdnRequestedBy = parseMdnHeader(mimeHeaders)
+                        originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
+                    }
+                    // Заголовки получены: без List-Unsubscribe — "" (проверено, повторно не спрашивать)
+                    listUnsubscribe = ListUnsubscribe.fromHeaders(mimeHeaders) ?: ("" to false)
                 }
             }
 
@@ -351,6 +349,31 @@ class EasEmailService internal constructor(
             )
         } ?: EasResult.Error("Timeout loading email body")
     }
+
+    /**
+     * Верхние заголовки MIME письма: ItemOperations Fetch, MIMESupport=2, MIME обрезан до
+     * [MIME_HEADER_TRUNCATION_SIZE] (заголовки — в самом начале). "" — сервер MIME не отдал (бывает на Exchange 2007),
+     * [SENTINEL_NOT_FOUND] — письма на сервере нет.
+     */
+    suspend fun fetchTopLevelHeaders(collectionId: String, serverId: String): EasResult<String> =
+        when (val mime = fetchItemBody(
+            collectionId, serverId,
+            bodyType = 4, truncationSize = MIME_HEADER_TRUNCATION_SIZE,
+            mimeSupport = 2, includeBodyFallback = false
+        )) {
+            is EasResult.Success -> when {
+                // Сбой на сервере (Status ≠ 1) — не «заголовков нет»: иначе отписка письма потерялась бы навсегда
+                mime.data.status != null && mime.data.status != 1 && mime.data.status != 8 ->
+                    EasResult.Error("ItemOperations Fetch status=${mime.data.status}")
+                else -> EasResult.Success(
+                    when (val data = mime.data.data) {
+                        SENTINEL_NOT_FOUND, "" -> data
+                        else -> extractTopLevelMimeHeaders(decodeMimeData(data))
+                    }
+                )
+            }
+            is EasResult.Error -> mime
+        }
 
     /**
      * Выполняет ItemOperations Fetch для получения тела письма заданного типа.
@@ -393,7 +416,7 @@ class EasEmailService internal constructor(
                 .find(responseXml)?.groupValues?.get(1)?.toIntOrNull()
                 ?: deps.extractValue(responseXml, "Status")?.toIntOrNull()
             if (status == 8) {
-                return@executeEasCommand FetchedBody(SENTINEL_NOT_FOUND, truncated = false)
+                return@executeEasCommand FetchedBody(SENTINEL_NOT_FOUND, truncated = false, status = status)
             }
 
             val data = XmlUtils.unescape(
@@ -403,12 +426,15 @@ class EasEmailService internal constructor(
                     ?: ""
             )
             val truncated = deps.extractValue(responseXml, "Truncated") == "1"
-            FetchedBody(if (truncated && data.isBlank()) "" else data, truncated)
+            FetchedBody(if (truncated && data.isBlank()) "" else data, truncated, status)
         }
     }
 
-    /** Тело из ItemOperations Fetch: [truncated] — сервер прислал не всё. */
-    private data class FetchedBody(val data: String, val truncated: Boolean)
+    /**
+     * Тело из ItemOperations Fetch: [truncated] — сервер прислал не всё; [status] — Status из ответа (null — его нет;
+     * не 1 — сервер не выполнил запрос, а пустое [data] — не ответ «пусто»).
+     */
+    private data class FetchedBody(val data: String, val truncated: Boolean, val status: Int? = null)
 
     /**
      * Тема элемента по его EAS ServerId (ItemOperations Fetch, без тела). Нужна, чтобы найти тот же элемент через EWS

@@ -39,14 +39,42 @@ data class ListUnsubscribe(val https: String?, val mailto: Mailto?, val oneClick
         private const val DEFAULT_SUBJECT = "unsubscribe"
         private val URI = Regex("<([^>]*)>")
 
-        /** Значение List-Unsubscribe и поддержка one-click из верхних заголовков MIME; null — отписки нет. */
+        /**
+         * Значение List-Unsubscribe и поддержка one-click из верхних заголовков MIME; null — отписки нет.
+         *
+         * One-click — только если подпись DKIM охватывает оба заголовка (RFC 8058 §4: без неё получателю не следует
+         * предлагать one-click). Проверить саму подпись на устройстве нечем (нужен DNS и ключ отправителя), поэтому
+         * проверяется её охват (тег h=): письмо, где заголовки отписки дописаны после подписи, one-click не получит —
+         * останется отписка письмом или на странице, с подтверждением.
+         */
         fun fromHeaders(topLevelHeaders: String): Pair<String, Boolean>? {
             val value = mimeHeaderValue(topLevelHeaders, "List-Unsubscribe")
                 ?.takeIf { it.length <= MAX_HEADER_LENGTH && parse(it, oneClick = false) != null }
                 ?: return null
             val post = mimeHeaderValue(topLevelHeaders, "List-Unsubscribe-Post")
-            return value to (post?.filterNot(Char::isWhitespace)?.equals(ONE_CLICK_BODY, ignoreCase = true) == true)
+            val oneClick = post?.filterNot(Char::isWhitespace)?.equals(ONE_CLICK_BODY, ignoreCase = true) == true &&
+                dkimCoversUnsubscribe(topLevelHeaders)
+            return value to oneClick
         }
+
+        /** Есть подпись DKIM, в тег h= которой входят List-Unsubscribe и List-Unsubscribe-Post (RFC 6376 §3.5). */
+        internal fun dkimCoversUnsubscribe(topLevelHeaders: String): Boolean =
+            mimeHeaderValues(topLevelHeaders, "DKIM-Signature").any { signature ->
+                val signed = DKIM_TAG_H.find(signature)?.groupValues?.get(1)
+                    ?.split(':')?.map { it.filterNot(Char::isWhitespace).lowercase() }?.toSet()
+                    .orEmpty()
+                "list-unsubscribe" in signed && "list-unsubscribe-post" in signed
+            }
+
+        private val DKIM_TAG_H = Regex("""(?:^|;)\s*h\s*=\s*([^;]*)""")
+
+        /**
+         * Предлагать отписку в папке [folderType]: не в своих письмах и не в «Нежелательной почте» — отписка от спама
+         * лишь подтверждает отправителю, что адрес живой.
+         */
+        fun offeredIn(folderType: Int?): Boolean = folderType !in NOT_OFFERED_FOLDERS
+
+        private val NOT_OFFERED_FOLDERS = setOf(FolderType.SENT_ITEMS, FolderType.DRAFTS, FolderType.OUTBOX, FolderType.JUNK_EMAIL)
 
         /** Сохранённое значение заголовка → способы отписки; null — ни https:, ни mailto:. */
         fun parse(value: String?, oneClick: Boolean): ListUnsubscribe? {

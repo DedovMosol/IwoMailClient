@@ -96,8 +96,14 @@ class DraftSaverTest {
         override suspend fun carryAttachments(rows: List<AttachmentEntity>, toEmailId: String) {
             carried += rows to toEmailId
         }
-        override suspend fun serverBcc(accountId: Long, serverId: String) =
-            if (serverId in serverBccById) serverBccById[serverId] else serverBccValue
+        /** Флажки «запросить отчёт» серверных версий по id (EWS); нет — не известны. */
+        val serverReceiptsById = mutableMapOf<String, com.dedovmosol.iwomail.eas.ReceiptRequests>()
+        val extrasRequests = mutableListOf<String>()
+        override suspend fun serverExtras(accountId: Long, serverId: String): DraftSaver.ServerExtras {
+            extrasRequests += serverId
+            val bcc = if (serverId in serverBccById) serverBccById[serverId] else serverBccValue
+            return DraftSaver.ServerExtras(bcc, serverReceiptsById[serverId])
+        }
         override suspend fun serverReachable(accountId: Long): Boolean {
             probes++
             return reachable
@@ -156,6 +162,43 @@ class DraftSaverTest {
         serverDraft()
         save("1_5:1", content(body = "<p>Новый</p>", receipts = receipts))
         assertThat(store.updateContents.single().receipts).isEqualTo(receipts)
+    }
+
+    @Test
+    fun `new version of an Outlook draft takes unknown receipt requests from the server version`() {
+        serverDraft()
+        store.serverReceiptsById["5:1"] = com.dedovmosol.iwomail.eas.ReceiptRequests(read = true, delivery = true)
+        val file = DraftAttachmentData(name = "a.txt", mimeType = "text/plain", data = byteArrayOf(1))
+
+        save("1_5:1", content(files = listOf(file), filesUnchanged = false, receipts = null))
+
+        // Без этого новая версия вышла бы без флажков, а прежняя (с ними) удалена
+        assertThat(store.created.single().first.receipts)
+            .isEqualTo(com.dedovmosol.iwomail.eas.ReceiptRequests(read = true, delivery = true))
+        assertThat(store.extrasRequests).containsExactly("5:1")
+    }
+
+    @Test
+    fun `known Bcc and receipts are not read from the server again`() {
+        serverDraft()
+        val file = DraftAttachmentData(name = "a.txt", mimeType = "text/plain", data = byteArrayOf(1))
+
+        save("1_5:1", content(files = listOf(file), filesUnchanged = false, receipts = com.dedovmosol.iwomail.eas.ReceiptRequests.NONE))
+
+        assertThat(store.extrasRequests).isEmpty()
+        assertThat(store.created.single().first.receipts).isEqualTo(com.dedovmosol.iwomail.eas.ReceiptRequests.NONE)
+    }
+
+    @Test
+    fun `offline new version keeps unknown receipts unknown for the upload to read`() {
+        serverDraft()
+        store.reachable = false
+        val file = DraftAttachmentData(name = "a.txt", mimeType = "text/plain", data = byteArrayOf(1))
+
+        save("1_5:1", content(files = listOf(file), filesUnchanged = false, receipts = null))
+
+        assertThat(store.extrasRequests).isEmpty()
+        assertThat(store.created.single().first.receipts).isNull()
     }
 
     @Test

@@ -69,8 +69,11 @@ class DraftSaver(
         /** Отметка «заменяет» ([DraftIds.replacedMarker]: id прежних версий; null — снять). */
         suspend fun markReplacing(emailId: String, marker: String?)
         suspend fun carryAttachments(rows: List<AttachmentEntity>, toEmailId: String)
-        /** Скрытые копии серверного черновика по его id (EAS до 16.0 их не передаёт). null — не узнать. */
-        suspend fun serverBcc(accountId: Long, serverId: String): String?
+        /**
+         * Скрытые копии и флажки «запросить отчёт» серверного черновика по его id — EWS, одним запросом (EAS их не
+         * передаёт). null — не узнать.
+         */
+        suspend fun serverExtras(accountId: Long, serverId: String): ServerExtras?
         /** Сервер аккаунта отвечает по TCP: нет — сохранение не удалось из-за связи. */
         suspend fun serverReachable(accountId: Long): Boolean
         suspend fun hasOtherDraftWithSubject(folderId: String, subject: String, exceptIds: Set<String>): Boolean
@@ -83,6 +86,9 @@ class DraftSaver(
         /** EWS-id единственного серверного черновика с темой [subject] (кроме [excludeServerId]); null — не однозначно. */
         suspend fun findServerDraftBySubject(accountId: Long, subject: String, excludeServerId: String?): String?
     }
+
+    /** Что известно о серверном черновике только по EWS. null в полях — не известно. */
+    data class ServerExtras(val bcc: String?, val receipts: ReceiptRequests?)
 
     /** Состояние редактора. */
     data class Content(
@@ -186,7 +192,7 @@ class DraftSaver(
                     if (content.bcc.isBlank()) {
                         bcc = null
                     } else {
-                        val serverBcc = store.serverBcc(account.id, existing.serverId)
+                        val serverBcc = store.serverExtras(account.id, existing.serverId)?.bcc
                         if (serverBcc != null) bcc = mergeRecipients(content.bcc, serverBcc) else appendBcc = true
                     }
                 }
@@ -240,18 +246,20 @@ class DraftSaver(
         // Прежние версии на сервере, которые заменяет новая: эта (если серверная) и не удалённые раньше.
         val replaced = (listOfNotNull(old.serverId.takeUnless { oldIsLocal }) + DraftIds.replacedIds(old.replacesServerId))
             .distinct()
-        val bcc = newVersionBcc(account, content, replaced, online)
+        val (bcc, receipts) = newVersionExtras(account, content, replaced, online)
+        // Флажки, не известные редактору, — с прежней версии: иначе новая версия вышла бы без них
+        val effective = content.copy(receipts = receipts)
 
         if (missing.isNotEmpty()) {
             // Со связью новая версия на сервере была бы без них, а прежняя — удалена.
             if (!serverMode || online) return Result.Failed(ATTACHMENTS_UNAVAILABLE)
-            return keepOnDevice(account, old, content, bcc, replaced, restored, missing)
+            return keepOnDevice(account, old, effective, bcc, replaced, restored, missing)
         }
 
         store.protect(old.id)
         val (serverBody, inline) = DraftUpload.inlineImages(content.body, clock())
         val attachments = content.files + inline + restored
-        val newId = store.create(account, newDraft(content, bcc, serverBody, attachments), deviceOnly = !online)
+        val newId = store.create(account, newDraft(effective, bcc, serverBody, attachments), deviceOnly = !online)
         if (newId == null) {
             store.unprotect(old.id)
             return Result.Failed(null)
@@ -313,23 +321,36 @@ class DraftSaver(
         if (store.draft(newEmailId) == null &&
             !store.hasOtherDraftWithSubject(old.folderId, content.subject, setOf(old.id))
         ) {
-            val record = recordOf(account, old.folderId, newId, content, bcc, attachments.isNotEmpty(), DraftIds.replacedMarker(pending))
+            val record = recordOf(account, old.folderId, newId, effective, bcc, attachments.isNotEmpty(), DraftIds.replacedMarker(pending))
             store.restore(record, attachments)
         }
         return Result.Saved
     }
 
     /**
-     * Скрытые копии новой версии. Черновик из Outlook (EAS их не передаёт): к введённым добавляются скрытые копии
-     * прежних версий, прочитанные по EWS. Не прочитать — прежняя версия всё равно заменяется: оставить её значило бы
-     * второй черновик на каждое сохранение. Без связи — неизвестны (null): их прочитает загрузка с устройства.
+     * Скрытые копии и флажки «запросить отчёт» новой версии. Черновик из Outlook (EAS их не передаёт): к введённым
+     * скрытым копиям добавляются скрытые копии прежних версий, флажки берутся с первой прочитанной (текущей) версии —
+     * по EWS, один запрос на версию. Не прочитать — прежняя версия всё равно заменяется: оставить её значило бы второй
+     * черновик на каждое сохранение. Без связи — неизвестны (null): их прочитает загрузка с устройства.
      */
-    private suspend fun newVersionBcc(account: AccountEntity, content: Content, replaced: List<String>, online: Boolean): String? {
-        if (content.bccKnown || replaced.isEmpty()) return content.bcc
-        if (!online) return content.bcc.ifBlank { null }
-        return replaced.fold(content.bcc) { bcc, serverId ->
-            store.serverBcc(account.id, serverId)?.let { mergeRecipients(bcc, it) } ?: bcc
+    private suspend fun newVersionExtras(
+        account: AccountEntity,
+        content: Content,
+        replaced: List<String>,
+        online: Boolean
+    ): Pair<String?, ReceiptRequests?> {
+        val needBcc = !content.bccKnown
+        if (replaced.isEmpty() || (!needBcc && content.receipts != null)) return content.bcc to content.receipts
+        if (!online) return (if (needBcc) content.bcc.ifBlank { null } else content.bcc) to content.receipts
+        var bcc = content.bcc
+        var receipts = content.receipts
+        for (serverId in replaced) {
+            if (!needBcc && receipts != null) break
+            val extras = store.serverExtras(account.id, serverId) ?: continue
+            if (needBcc) extras.bcc?.let { bcc = mergeRecipients(bcc, it) }
+            if (receipts == null) receipts = extras.receipts
         }
+        return bcc to receipts
     }
 
     /** Без связи и с вложениями, которые не скачать: правка — на устройстве, вложения — ссылками на сервер. */

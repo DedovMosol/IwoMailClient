@@ -600,6 +600,31 @@ class EmailDetailViewModelTest {
     }
 
     @Test
+    fun `unsubscribe started on the screen finishes after it is closed`() = runTest(dispatcher) {
+        every { mailRepo.getEmail(EMAIL_ID) } returns flowOf(newsletter)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var finished = false
+        val unsubscriber = mockk<com.dedovmosol.iwomail.domain.Unsubscriber>()
+        coEvery { unsubscriber.unsubscribe(any(), any()) } coAnswers {
+            gate.await()
+            finished = true
+            com.dedovmosol.iwomail.domain.UnsubscribeResult.Done
+        }
+        val detached = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + dispatcher)
+        val vm = EmailDetailViewModel(EMAIL_ID, actions, mailRepo, accountRepo, dispatcher, unsubscriber = unsubscriber, detachedScope = detached)
+        advanceUntilIdle()
+
+        vm.unsubscribe()
+        advanceUntilIdle()
+        vm.viewModelScope.cancel() // «Отписаться» и сразу «Назад»
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertThat(finished).isTrue()
+        detached.cancel()
+    }
+
+    @Test
     fun `failed one-click opens the page and says so`() = runTest(dispatcher) {
         val (vm, _) = unsubscribeVm(com.dedovmosol.iwomail.domain.UnsubscribeResult.OpenPage("https://list.example/u/1"))
         val events = collectEvents(vm)
@@ -637,12 +662,46 @@ class EmailDetailViewModelTest {
     }
 
     @Test
+    fun `email opened before unsubscribe support gets its headers checked once in the background`() = runTest(dispatcher) {
+        // Тело уже в базе (открывали раньше), отписка не проверялась (null)
+        createViewModel()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { actions.ensureListUnsubscribe(EMAIL_ID) }
+    }
+
+    @Test
+    fun `checked or freshly loaded emails do not ask for headers separately`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email().copy(listUnsubscribe = "")
+        createViewModel()
+        advanceUntilIdle()
+        coVerify(exactly = 0) { actions.ensureListUnsubscribe(any()) }
+
+        // Тело грузится сейчас — заголовки приходят с ним
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email(body = "")
+        coEvery { actions.loadEmailBody(EMAIL_ID) } returns EasResult.Success("<p>x</p>")
+        createViewModel()
+        advanceUntilIdle()
+        coVerify(exactly = 0) { actions.ensureListUnsubscribe(any()) }
+    }
+
+    @Test
+    fun `failed header check does not break opening the email`() = runTest(dispatcher) {
+        coEvery { actions.ensureListUnsubscribe(EMAIL_ID) } throws IllegalStateException("db closed")
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        assertThat(vm.uiState.value.email?.id).isEqualTo(EMAIL_ID)
+        assertThat(vm.uiState.value.bodyLoadError).isNull()
+    }
+
+    @Test
     fun `junk folder is reported so the link is hidden there`() = runTest(dispatcher) {
         every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folder(INBOX_ID, FolderType.JUNK_EMAIL)))
         val vm = createViewModel()
         advanceUntilIdle()
 
-        assertThat(vm.uiState.value.isInJunk).isTrue()
+        assertThat(vm.uiState.value.unsubscribeOffered).isFalse()
     }
 
     // ===================== .eml =====================

@@ -78,7 +78,8 @@ data class EmailDetailUiState(
     // Запрос отчёта о прочтении, на который ждём ответа: адрес отчёта; письмо до ответа не помечается прочитанным
     val readReceiptRequestedBy: String? = null,
     val isAnsweringReadReceipt: Boolean = false,
-    val isInJunk: Boolean = false,
+    // Ссылку «Отписаться» здесь показывать можно (не свои письма и не «Нежелательная почта»)
+    val unsubscribeOffered: Boolean = false,
     val isUnsubscribing: Boolean = false,
     // Отписка выполнена в этом открытии письма — ссылку «Отписаться» больше не показываем
     val unsubscribed: Boolean = false,
@@ -192,7 +193,7 @@ class EmailDetailViewModel(
                                 isInTrash = currentFolder?.type == FolderType.DELETED_ITEMS,
                                 isInSent = currentFolder?.type == FolderType.SENT_ITEMS,
                                 isInDrafts = currentFolder?.type == FolderType.DRAFTS,
-                                isInJunk = currentFolder?.type == FolderType.JUNK_EMAIL
+                                unsubscribeOffered = com.dedovmosol.iwomail.eas.ListUnsubscribe.offeredIn(currentFolder?.type)
                             )
                         }
                     }
@@ -284,6 +285,9 @@ class EmailDetailViewModel(
                 }
                 if (current.body.isEmpty() && !_uiState.value.isLoadingBody) {
                     loadBodyInitial(current)
+                } else if (current.listUnsubscribe == null) {
+                    // Тело загружено раньше, заголовки отписки не проверялись — проверить фоном, один раз
+                    checkListUnsubscribe()
                 }
                 if (!current.read) markReadOrAskReceipt()
             } catch (e: CancellationException) {
@@ -291,6 +295,19 @@ class EmailDetailViewModel(
             } catch (e: Exception) {
                 Log.e("EmailDetailViewModel", "openEmail failed for $emailId", e)
                 _uiState.update { it.copy(bodyLoadError = BodyLoadError.LoadFailed) }
+            }
+        }
+    }
+
+    /** Заголовки отписки письма — фоном: ссылка «Отписаться» появится, когда они придут (через Room). */
+    private fun checkListUnsubscribe() {
+        viewModelScope.launch {
+            try {
+                actions.ensureListUnsubscribe(emailId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("EmailDetailViewModel", "List-Unsubscribe check failed: ${e.message}")
             }
         }
     }

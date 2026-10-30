@@ -167,6 +167,9 @@ class MailRepository(private val context: Context) {
 
     /** Письмо целиком (.eml) с сервера. */
     suspend fun fetchMessageMime(emailId: String): EasResult<ByteArray> = emailOperationsService.fetchMessageMime(emailId)
+
+    /** Отписка у письма, загруженного раньше: заголовки MIME, если ещё не проверялись. */
+    suspend fun ensureListUnsubscribe(emailId: String) = emailOperationsService.ensureListUnsubscribe(emailId)
     
     suspend fun refreshAttachmentMetadata(emailId: String) = 
         emailOperationsService.refreshAttachmentMetadata(emailId)
@@ -651,14 +654,14 @@ if (result is EasResult.Success) {
         emailDao.hasEmailWithSubject(folderId, subject, exceptIds.toList())
 
     /**
-     * Скрытые копии серверного черновика по его id (EWS; EAS до 16.0 их не передаёт). Записи на устройстве может
-     * уже не быть (заменённая версия). null — не узнать.
+     * Скрытые копии и флажки «запросить отчёт» серверного черновика по его id (EWS; EAS их не передаёт). Записи на
+     * устройстве может уже не быть (заменённая версия). null — не узнать.
      */
-    suspend fun serverDraftBcc(accountId: Long, serverId: String): String? {
+    internal suspend fun serverDraftDetails(accountId: Long, serverId: String): com.dedovmosol.iwomail.eas.EwsDraftXml.DraftDetails? {
         if (serverId.isBlank() || com.dedovmosol.iwomail.eas.DraftIds.isLocal(serverId)) return null
         val collectionId = folderDao.getFolderByType(accountId, FolderType.DRAFTS)?.serverId ?: return null
         val client = accountRepo.createEasClient(accountId) ?: return null
-        return client.findDraftBcc(collectionId, serverId)
+        return client.findDraftDetails(collectionId, serverId)
     }
 
     /**

@@ -780,6 +780,16 @@ class EasClient(
         emailService.fetchEmailBodyWithMdn(collectionId, serverId, fetchMimeHeaders)
 
     /**
+     * Верхние заголовки MIME письма (без тела); "" — сервер MIME не отдал, ошибка "OBJECT_NOT_FOUND" — письма нет.
+     * @see EasEmailService.fetchTopLevelHeaders
+     */
+    suspend fun fetchTopLevelHeaders(collectionId: String, serverId: String): EasResult<String> =
+        when (val headers = emailService.fetchTopLevelHeaders(collectionId, serverId)) {
+            is EasResult.Success -> if (headers.data == "OBJECT_NOT_FOUND") EasResult.Error("OBJECT_NOT_FOUND") else headers
+            is EasResult.Error -> headers
+        }
+
+    /**
      * Получает свежие метаданные вложений конкретного письма через ItemOperations
      */
     suspend fun fetchAttachmentMetadata(collectionId: String, serverId: String): EasResult<List<EasAttachment>> =
@@ -2490,14 +2500,20 @@ $foldersXml
      * Скрытые копии черновика по id (EAS до 16.0 их не передаёт): EWS ItemId — GetItem; EAS ServerId — тема того же
      * элемента (ItemOperations), затем EWS по однозначной теме. null — не узнать.
      */
-    suspend fun findDraftBcc(collectionId: String, serverId: String): String? {
+
+
+    /**
+     * Серверный черновик по EWS: тело, скрытые копии, флажки «запросить отчёт» (EAS их не передаёт). EAS ServerId — через
+     * однозначную тему (иначе можно прочитать чужой черновик). null — не найти или не прочитать.
+     */
+    internal suspend fun findDraftDetails(collectionId: String, serverId: String): EwsDraftXml.DraftDetails? {
         val itemId = if (DraftIds.isEwsItemId(serverId)) {
             serverId
         } else {
             val subject = (emailService.fetchItemSubject(collectionId, serverId) as? EasResult.Success)?.data ?: return null
             findUniqueDraftItemIdBySubject(subject) ?: return null
         }
-        return (getDraftDetails(itemId) as? EasResult.Success)?.data?.bcc
+        return (getDraftDetails(itemId) as? EasResult.Success)?.data
     }
 
     /** Окончательное удаление черновика по EWS ItemId — см. EasDraftsService.hardDeleteDraft. */
@@ -2830,7 +2846,8 @@ data class EmailBodyResult(
     val originalMessageId: String? = null, // RFC 5322 Message-ID исходного письма
     // HTML целиком: не обрезан сервером ([MS-ASAIRS] Truncated) и не заменён текстовой версией
     val complete: Boolean = true,
-    // Отписка от рассылки: значение List-Unsubscribe и поддержка one-click ([ListUnsubscribe]); null — заголовка нет
+    // Отписка от рассылки: значение List-Unsubscribe и поддержка one-click ([ListUnsubscribe]). "" — заголовки
+    // получены, отписки нет; null — заголовки не запрашивались или не пришли (спросить позже)
     val listUnsubscribe: String? = null,
     val listUnsubscribeOneClick: Boolean = false
 )

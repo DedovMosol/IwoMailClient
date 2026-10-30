@@ -50,15 +50,17 @@ class UnsubscriberTest {
     private val oneClick = ListUnsubscribe("https://list.example/u/1", ListUnsubscribe.Mailto("leave@list.example", "unsubscribe", ""), oneClick = true)
 
     @Test
-    fun `one-click is a form POST with the RFC 8058 body and no credentials`() = runBlocking<Unit> {
+    fun `one-click is a multipart form POST with the RFC 8058 field and no credentials`() = runBlocking<Unit> {
         val result = unsubscriber(client { response(it, 200) }).unsubscribe(1L, oneClick)
 
         assertThat(result).isEqualTo(UnsubscribeResult.Done)
         val request = requests.single()
         assertThat(request.method).isEqualTo("POST")
         assertThat(request.url.toString()).isEqualTo("https://list.example/u/1")
-        assertThat(request.body?.contentType().toString()).startsWith("application/x-www-form-urlencoded")
-        assertThat(bodies.single()).isEqualTo("List-Unsubscribe=One-Click")
+        // RFC 8058 §3.2: SHOULD multipart/form-data — поле List-Unsubscribe со значением One-Click
+        assertThat(request.body?.contentType().toString()).startsWith("multipart/form-data")
+        assertThat(bodies.single()).contains("Content-Disposition: form-data; name=\"List-Unsubscribe\"")
+        assertThat(bodies.single()).contains("\r\n\r\nOne-Click\r\n")
         assertThat(request.header("Authorization")).isNull()
         assertThat(request.header("Cookie")).isNull()
         assertThat(sent).isEmpty()

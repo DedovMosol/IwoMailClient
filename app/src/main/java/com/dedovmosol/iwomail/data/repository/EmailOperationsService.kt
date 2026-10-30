@@ -436,6 +436,25 @@ class EmailOperationsService(
     }
 
     /**
+     * Отписка у письма, тело которого загружено раньше (до поддержки отписки или без заголовков): List-Unsubscribe ещё
+     * не проверялся (null) — один запрос верхних заголовков MIME, ответ сохраняется ("" — отписки нет) и больше не
+     * запрашивается. Ошибка связи — спросим при следующем открытии. Только там, где отписка предлагается.
+     */
+    suspend fun ensureListUnsubscribe(emailId: String) {
+        val email = emailDao.getEmail(emailId) ?: return
+        if (email.listUnsubscribe != null || email.serverId.isBlank()) return
+        if (com.dedovmosol.iwomail.eas.DraftIds.isLocal(email.serverId) || com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(email.serverId)) return
+        val folder = folderDao.getFolder(email.folderId) ?: return
+        if (!com.dedovmosol.iwomail.eas.ListUnsubscribe.offeredIn(folder.type)) return
+        val account = accountRepo.getAccount(email.accountId) ?: return
+        if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) return
+        val client = accountRepo.createEasClient(email.accountId) ?: return
+        val headers = client.fetchTopLevelHeaders(folder.serverId, email.serverId) as? EasResult.Success ?: return
+        val (value, oneClick) = com.dedovmosol.iwomail.eas.ListUnsubscribe.fromHeaders(headers.data) ?: ("" to false)
+        emailDao.updateListUnsubscribe(emailId, value, oneClick)
+    }
+
+    /**
      * Письмо целиком (RFC 5322, .eml) с сервера — для сохранения файлом. Черновик только на устройстве на сервере не
      * лежит — ошибка. Пустой массив — сервер письма не отдал.
      */

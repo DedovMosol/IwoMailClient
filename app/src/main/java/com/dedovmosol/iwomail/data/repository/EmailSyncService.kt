@@ -326,8 +326,12 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         for (draft in localDrafts) {
             val replaced = com.dedovmosol.iwomail.eas.DraftIds.replacedIds(draft.replacesServerId)
             val stored = withLocalFiles(easClient, attachmentDao.getAttachmentsList(draft.id), folderId, replaced.firstOrNull()) ?: continue
-            // Скрытые копии не известны (правка черновика из Outlook без связи) — с заменяемых версий, что прочитаются.
-            val bcc = draft.bcc ?: bccOfReplaced(easClient, collectionId, replaced)
+            // Скрытые копии и флажки отчётов не известны (правка черновика из Outlook без связи) — с заменяемых
+            // версий, что прочитаются; иначе новая версия на сервере вышла бы без них.
+            val knownReceipts = com.dedovmosol.iwomail.eas.ReceiptRequests.of(draft.requestReadReceipt, draft.requestDeliveryReceipt)
+            val extras = if (draft.bcc == null || knownReceipts == null) extrasOfReplaced(easClient, collectionId, replaced) else null
+            val bcc = draft.bcc ?: extras?.first.orEmpty()
+            val receipts = knownReceipts ?: extras?.second
             val (serverBody, uploadAttachments) = DraftUpload.prepare(
                 draft.body, stored, System.currentTimeMillis()
             ) { att -> att.localPath?.let { java.io.File(it) }?.takeIf { it.exists() }?.readBytes() }
@@ -339,14 +343,17 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 body = serverBody,
                 attachments = uploadAttachments,
                 importance = draft.importance,
-                receipts = com.dedovmosol.iwomail.eas.ReceiptRequests.of(draft.requestReadReceipt, draft.requestDeliveryReceipt)
+                receipts = receipts
             )
             val newId = (result as? EasResult.Success)?.data ?: continue
             // Снова только на устройстве (нет связи или сервер отказал) — в следующий раз.
             if (com.dedovmosol.iwomail.eas.DraftIds.isLocal(newId) &&
                 !com.dedovmosol.iwomail.eas.DraftIds.isUnconfirmed(newId)
             ) continue
-            val uploaded = draft.copy(id = "${accountId}_$newId", serverId = newId, bcc = bcc)
+            val uploaded = draft.copy(
+                id = "${accountId}_$newId", serverId = newId, bcc = bcc,
+                requestReadReceipt = receipts?.read, requestDeliveryReceipt = receipts?.delivery
+            )
             database.withTransaction {
                 // delete каскадом удаляет записи вложений — переносим их на новый id
                 emailDao.delete(draft.id)
@@ -438,10 +445,13 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (isLocal && serverMode) continue
             // Режим «на устройстве», скрытые копии записи не известны (правка черновика из Outlook без связи): сначала
             // они — с заменяемых версий, что прочитаются, потом версии удаляются.
-            if (isLocal && draft.bcc == null) {
+            val receiptsUnknown = com.dedovmosol.iwomail.eas.ReceiptRequests.of(draft.requestReadReceipt, draft.requestDeliveryReceipt) == null
+            if (isLocal && (draft.bcc == null || receiptsUnknown)) {
                 val client = accountRepo.createEasClient(accountId) ?: continue
                 val collectionId = folderDao.getFolder(folderId)?.serverId ?: folderId.substringAfter("_")
-                emailDao.updateBcc(draft.id, bccOfReplaced(client, collectionId, replaced))
+                val (bcc, receipts) = extrasOfReplaced(client, collectionId, replaced)
+                if (draft.bcc == null) emailDao.updateBcc(draft.id, bcc)
+                if (receiptsUnknown && receipts != null) emailDao.updateReceiptRequests(draft.id, receipts.read, receipts.delivery)
             }
             val failed = replaced.filterNot { deleteServerDraft(accountId, it, draft.serverId.takeUnless { isLocal }) }
             if (failed.size != replaced.size) {
@@ -456,12 +466,23 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
      * Скрытые копии заменяемых версий, которые удалось прочитать по EWS (EAS до 16.0 их не передаёт). Не прочитанные
      * не ждём: версия всё равно заменяется, иначе на сервере остался бы второй черновик.
      */
-    private suspend fun bccOfReplaced(
+    /**
+     * Скрытые копии всех заменяемых версий (объединённые) и флажки «запросить отчёт» первой прочитанной (текущей) —
+     * по EWS, один запрос на версию; EAS ни того, ни другого не передаёт.
+     */
+    private suspend fun extrasOfReplaced(
         client: com.dedovmosol.iwomail.eas.EasClient,
         collectionId: String,
         replaced: List<String>
-    ): String = replaced.fold("") { merged, id ->
-        client.findDraftBcc(collectionId, id)?.let { com.dedovmosol.iwomail.util.mergeRecipients(merged, it) } ?: merged
+    ): Pair<String, com.dedovmosol.iwomail.eas.ReceiptRequests?> {
+        var bcc = ""
+        var receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
+        for (id in replaced) {
+            val details = client.findDraftDetails(collectionId, id) ?: continue
+            details.bcc?.let { bcc = com.dedovmosol.iwomail.util.mergeRecipients(bcc, it) }
+            if (receipts == null) receipts = details.receipts
+        }
+        return bcc to receipts
     }
 
     /**
