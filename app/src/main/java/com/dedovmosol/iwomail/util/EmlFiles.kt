@@ -8,6 +8,25 @@ object EmlFiles {
     private val FORBIDDEN = Regex("""[\\/:*?"<>|\u0000-\u001F\u007F]""")
     private val WHITESPACE = Regex("\\s+")
 
+    /**
+     * Записать [bytes] в документ, выбранный пользователем (SAF). Режим "wt" (с обрезкой) поддерживают не все
+     * поставщики документов (облачные отказывают) — тогда "w": документ из ACTION_CREATE_DOCUMENT и так пуст.
+     * false — поставщик не открыл документ.
+     */
+    fun write(bytes: ByteArray, open: (mode: String) -> java.io.OutputStream?): Boolean {
+        val stream = try {
+            open("wt")
+        } catch (_: java.io.FileNotFoundException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        } catch (_: UnsupportedOperationException) {
+            null
+        } ?: open("w") ?: return false
+        stream.use { it.write(bytes) }
+        return true
+    }
+
     /** Имя файла по теме: без недопустимых в именах символов, не длиннее [MAX_NAME_CHARS]; темы нет — «email». */
     fun fileName(subject: String): String {
         // Сначала пробелы (табуляция, переносы строк темы — один пробел), потом запрещённые символы

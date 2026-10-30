@@ -42,7 +42,11 @@ class EmailPrinter internal constructor(private val activity: Activity) {
             override fun onPageFinished(view: WebView, url: String?) {
                 if (pending !== view) return
                 pending = null
-                if (activity.isFinishing || activity.isDestroyed) return
+                if (activity.isFinishing || activity.isDestroyed) {
+                    // Задания печати не будет — WebView больше никто не держит, освобождаем сразу
+                    view.destroy()
+                    return
+                }
                 manager.print(jobName, view.createPrintDocumentAdapter(jobName), PrintAttributes.Builder().build())
             }
         }

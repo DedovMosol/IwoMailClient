@@ -556,7 +556,11 @@ class EmailOperationsService(
                                 val emailId = email.id
                                 val emailServerId = email.serverId
 
-                                val result = client.fetchEmailBodyWithMdn(folderServerId, emailServerId)
+                                // Записи RSS-каналов (лента во «Входящих») — без запроса заголовков MIME
+                                val result = client.fetchEmailBodyWithMdn(
+                                    folderServerId, emailServerId,
+                                    fetchMimeHeaders = !com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)
+                                )
                                 result.onSuccessResult { response ->
                                     emailDao.updateBody(emailId, response.body)
                                     if (!response.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
