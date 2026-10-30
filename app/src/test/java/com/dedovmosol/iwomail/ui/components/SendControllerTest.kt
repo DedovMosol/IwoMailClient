@@ -116,7 +116,8 @@ class SendControllerTest {
         assertThat(pending()).isEmpty()
         assertThat(env.played).isEqualTo(1)
         withTimeout(5_000) { while (env.afterSent.isEmpty()) delay(10) }
-        assertThat(controller.state.isActive).isFalse()
+        // Плашка гаснет сразу после колбэка (finally контроллера) — ждём, а не проверяем мгновенно
+        withTimeout(5_000) { while (controller.state.isActive) delay(10) }
     }
 
     @Test
