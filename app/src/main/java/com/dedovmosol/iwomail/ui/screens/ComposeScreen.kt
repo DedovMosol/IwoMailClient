@@ -1118,6 +1118,10 @@ fun ComposeScreen(
                 requestDeliveryReceipt = draft.requestDeliveryReceipt == true
                 draftReceiptsKnown = draft.requestReadReceipt != null || draft.requestDeliveryReceipt != null
                 subject = draft.subject
+                // Ответ, сохранённый черновиком, несёт цитату с картинками из интернета (пиксели отслеживания):
+                // их — по правилам просмотра; отправитель цитаты не известен — «всегда от отправителя» не предлагаем.
+                // До присвоения тела: редактор получит его уже с запретом сети.
+                if (quotedRemoteFrom == null && com.dedovmosol.iwomail.util.RemoteImages.present(draft.body)) quotedRemoteFrom = ""
                 // Черновик может быть HTML или plain text
                 body = if (draft.body.looksLikeHtml()) {
                     draft.body
@@ -1140,6 +1144,7 @@ fun ComposeScreen(
                         }
                     }
                     refresh?.body?.takeIf { it.isNotBlank() }?.let { fresh ->
+                        if (quotedRemoteFrom == null && com.dedovmosol.iwomail.util.RemoteImages.present(fresh)) quotedRemoteFrom = ""
                         body = if (fresh.looksLikeHtml()) fresh else fresh.escapeHtml().replace("\n", "<br>")
                     }
                     // Скрытые копии черновика из Outlook (EAS их не передаёт) — узнаны по EWS

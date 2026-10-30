@@ -206,7 +206,7 @@ class SendController(
         val draftId = env.returnToDrafts(context, job)
         if (draftId == null) {
             // Не сохранить — не терять: письмо уходит, как и собирались
-            ScheduledSend.schedule(context, job.copy(sendAt = System.currentTimeMillis(), undo = false))
+            ScheduledSend.schedule(context, job.copy(sendAt = System.currentTimeMillis()))
             env.message(context, NotificationStrings.getUndoDraftFailed(ru), long = true)
             return Outcome.QUEUED
         }
