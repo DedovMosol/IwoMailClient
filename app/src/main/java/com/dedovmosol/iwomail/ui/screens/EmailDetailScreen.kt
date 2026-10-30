@@ -144,6 +144,15 @@ fun EmailDetailScreen(
     }.takeIf { uiState.unsubscribeOffered && !uiState.unsubscribed }
     var showUnsubscribeDialog by rememberSaveable { mutableStateOf(false) }
 
+    // Запись RSS-канала из Outlook: отправитель — название канала, ответить некому (вместо ответа — пересылка),
+    // ссылка на статью — из тела (Outlook дописывает её в конец, [MS-OXORSS])
+    val isRss = com.dedovmosol.iwomail.eas.RssItems.isRss(email?.messageClass)
+    val rssArticleLink = remember(isRss, email?.body, email?.bodyType) {
+        email?.takeIf { isRss && it.body.isNotEmpty() }?.let {
+            com.dedovmosol.iwomail.eas.RssItems.articleLink(processEmailBodyForDisplay(it.body, it.bodyType).text)
+        }
+    }
+
     // Важный отправитель: уведомления о его письмах звучат и в тихие часы
     val mailAlertPrefs by settingsRepo.mailAlertPrefs.collectAsStateWithLifecycle(initialValue = null)
     val senderMarkedVipText = Strings.senderMarkedVip
@@ -590,12 +599,21 @@ fun EmailDetailScreen(
         },
         floatingActionButton = {
             com.dedovmosol.iwomail.ui.theme.AnimatedFab(
-                onClick = onReplyClick,
+                // У записи RSS-канала нет адреса для ответа — пересылка
+                onClick = if (isRss) onForwardClick else onReplyClick,
                 containerColor = LocalColorTheme.current.gradientStart
             ) {
                 Icon(
-                    if (isInSent) AppIcons.Email else AppIcons.Reply,
-                    if (isInSent) Strings.writeMore else Strings.reply,
+                    when {
+                        isRss -> AppIcons.Forward
+                        isInSent -> AppIcons.Email
+                        else -> AppIcons.Reply
+                    },
+                    when {
+                        isRss -> Strings.forward
+                        isInSent -> Strings.writeMore
+                        else -> Strings.reply
+                    },
                     tint = Color.White
                 )
             }
@@ -696,6 +714,32 @@ fun EmailDetailScreen(
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.clickable { onComposeToEmail(displayEmail) }
                             )
+                        }
+                        if (isRss) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    AppIcons.RssFeed,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    Strings.rssFeed,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            rssArticleLink?.let { link ->
+                                TextButton(
+                                    onClick = { openInBrowser(context, link, isRussian) },
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp)
+                                ) {
+                                    Icon(AppIcons.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(Strings.openArticle, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
                         }
                         if (listUnsubscribe != null) {
                             TextButton(

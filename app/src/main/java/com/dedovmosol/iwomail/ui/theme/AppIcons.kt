@@ -99,6 +99,7 @@ object AppIcons {
     val Security: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_security)
     val Send: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_send)
     val Print: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_print)
+    val RssFeed: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_rss_feed)
     val Share: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_share)
     val Unsubscribe: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_unsubscribe)
     val Settings: ImageVector @Composable get() = ImageVector.vectorResource(R.drawable.ic_settings)

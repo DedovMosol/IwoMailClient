@@ -92,7 +92,7 @@ internal object EwsDraftXml {
         cc?.let { updates.append(recipientsUpdate("CcRecipients", it, escape)) }
         bcc?.let { value ->
             if (appendBcc) {
-                // обавить к неизвестным скрытым копиям; пустое — ничего не менять (не DeleteItemField)
+                // Добавить к неизвестным скрытым копиям; пустое — ничего не менять (не DeleteItemField)
                 recipientsElement("BccRecipients", value, escape)?.let { append ->
                     updates.append("<t:AppendToItemField><t:FieldURI FieldURI=\"message:BccRecipients\"/><t:Message>$append</t:Message></t:AppendToItemField>")
                 }

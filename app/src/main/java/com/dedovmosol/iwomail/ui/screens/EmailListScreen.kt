@@ -1332,6 +1332,16 @@ private fun EmailListItem(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    // Запись RSS-канала из Outlook (отправитель — название канала)
+                    if (com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)) {
+                        Icon(
+                            AppIcons.RssFeed,
+                            contentDescription = Strings.rssFeed,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     // Иконка высокого приоритета (важное)
                     if (email.importance == 2) {
                         Icon(
