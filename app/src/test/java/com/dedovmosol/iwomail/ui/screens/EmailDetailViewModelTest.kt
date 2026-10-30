@@ -561,6 +561,139 @@ class EmailDetailViewModelTest {
         return vm
     }
 
+    // ===================== отписка от рассылки =====================
+
+    private val newsletter = email().copy(
+        listUnsubscribe = "<mailto:leave@list.example>, <https://list.example/u/1>",
+        listUnsubscribeOneClick = true
+    )
+
+    private fun unsubscribeVm(
+        result: com.dedovmosol.iwomail.domain.UnsubscribeResult,
+        target: EmailEntity = newsletter
+    ): Pair<EmailDetailViewModel, com.dedovmosol.iwomail.domain.Unsubscriber> {
+        every { mailRepo.getEmail(EMAIL_ID) } returns flowOf(target)
+        val unsubscriber = mockk<com.dedovmosol.iwomail.domain.Unsubscriber>()
+        coEvery { unsubscriber.unsubscribe(any(), any()) } returns result
+        return EmailDetailViewModel(EMAIL_ID, actions, mailRepo, accountRepo, dispatcher, unsubscriber = unsubscriber) to unsubscriber
+    }
+
+    @Test
+    fun `unsubscribe one-click succeeds once and hides the link`() = runTest(dispatcher) {
+        val (vm, unsubscriber) = unsubscribeVm(com.dedovmosol.iwomail.domain.UnsubscribeResult.Done)
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        vm.unsubscribe()
+        advanceUntilIdle()
+        vm.unsubscribe() // повторное нажатие — запроса больше нет
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            unsubscriber.unsubscribe(ACCOUNT_ID, match { it.method is com.dedovmosol.iwomail.eas.ListUnsubscribe.Method.OneClick })
+        }
+        assertThat(vm.uiState.value.unsubscribed).isTrue()
+        assertThat(vm.uiState.value.isUnsubscribing).isFalse()
+        assertThat(events).containsExactly(EmailDetailEvent.Unsubscribed)
+    }
+
+    @Test
+    fun `failed one-click opens the page and says so`() = runTest(dispatcher) {
+        val (vm, _) = unsubscribeVm(com.dedovmosol.iwomail.domain.UnsubscribeResult.OpenPage("https://list.example/u/1"))
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        vm.unsubscribe()
+        advanceUntilIdle()
+
+        assertThat(events).containsExactly(EmailDetailEvent.OpenUnsubscribePage("https://list.example/u/1", afterFailure = true))
+        assertThat(vm.uiState.value.unsubscribed).isFalse()
+    }
+
+    @Test
+    fun `web-only unsubscribe opens the page without a failure note`() = runTest(dispatcher) {
+        val webOnly = email().copy(listUnsubscribe = "<https://list.example/u/1>")
+        val (vm, _) = unsubscribeVm(com.dedovmosol.iwomail.domain.UnsubscribeResult.OpenPage("https://list.example/u/1"), webOnly)
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        vm.unsubscribe()
+        advanceUntilIdle()
+
+        assertThat(events).containsExactly(EmailDetailEvent.OpenUnsubscribePage("https://list.example/u/1", afterFailure = false))
+    }
+
+    @Test
+    fun `email without List-Unsubscribe does nothing`() = runTest(dispatcher) {
+        val (vm, unsubscriber) = unsubscribeVm(com.dedovmosol.iwomail.domain.UnsubscribeResult.Done, email())
+        advanceUntilIdle()
+
+        vm.unsubscribe()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { unsubscriber.unsubscribe(any(), any()) }
+    }
+
+    @Test
+    fun `junk folder is reported so the link is hidden there`() = runTest(dispatcher) {
+        every { mailRepo.getFolders(ACCOUNT_ID) } returns flowOf(listOf(folder(INBOX_ID, FolderType.JUNK_EMAIL)))
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        assertThat(vm.uiState.value.isInJunk).isTrue()
+    }
+
+    // ===================== .eml =====================
+
+    private fun emlVm(mime: EasResult<ByteArray>, written: MutableList<ByteArray>, writeOk: Boolean = true): EmailDetailViewModel {
+        coEvery { mailRepo.fetchMessageMime(EMAIL_ID) } returns mime
+        return EmailDetailViewModel(
+            EMAIL_ID, actions, mailRepo, accountRepo, dispatcher,
+            writeFile = { _, bytes -> written += bytes; writeOk }
+        )
+    }
+
+    @Test
+    fun `eml is written to the chosen file`() = runTest(dispatcher) {
+        val written = mutableListOf<ByteArray>()
+        val vm = emlVm(EasResult.Success("From: a@b.c\r\n\r\nhi".toByteArray()), written)
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        vm.saveEml(mockk(relaxed = true))
+        advanceUntilIdle()
+
+        assertThat(written.single().decodeToString()).isEqualTo("From: a@b.c\r\n\r\nhi")
+        assertThat(events).containsExactly(EmailDetailEvent.EmlSaved)
+        assertThat(vm.uiState.value.isSavingEml).isFalse()
+    }
+
+    @Test
+    fun `server error, empty MIME or failed write are reported and nothing is half-saved`() = runTest(dispatcher) {
+        val written = mutableListOf<ByteArray>()
+        val failing = emlVm(EasResult.Error("HTTP 503"), written)
+        val failingEvents = collectEvents(failing)
+        advanceUntilIdle()
+        failing.saveEml(mockk(relaxed = true))
+        advanceUntilIdle()
+        assertThat(failingEvents).containsExactly(EmailDetailEvent.EmlFailed("HTTP 503"))
+
+        val empty = emlVm(EasResult.Success(ByteArray(0)), written)
+        val emptyEvents = collectEvents(empty)
+        advanceUntilIdle()
+        empty.saveEml(mockk(relaxed = true))
+        advanceUntilIdle()
+        assertThat(emptyEvents).containsExactly(EmailDetailEvent.EmlFailed(null))
+        assertThat(written).isEmpty()
+
+        val notWritten = emlVm(EasResult.Success(byteArrayOf(1)), written, writeOk = false)
+        val notWrittenEvents = collectEvents(notWritten)
+        advanceUntilIdle()
+        notWritten.saveEml(mockk(relaxed = true))
+        advanceUntilIdle()
+        assertThat(notWrittenEvents).containsExactly(EmailDetailEvent.EmlFailed(null))
+    }
+
     private fun TestScope.collectEvents(vm: EmailDetailViewModel): List<EmailDetailEvent> {
         val received = mutableListOf<EmailDetailEvent>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {

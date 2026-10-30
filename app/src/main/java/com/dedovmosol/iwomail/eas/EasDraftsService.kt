@@ -110,7 +110,8 @@ class EasDraftsService internal constructor(
         subject: String,
         body: String,
         attachments: List<DraftAttachmentData> = emptyList(),
-        importance: Int = 1
+        importance: Int = 1,
+        receipts: ReceiptRequests? = null
     ): EasResult<String> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -121,7 +122,7 @@ class EasDraftsService internal constructor(
             if (mimeResult is EasResult.Success) {
                 // Успех без id (DraftIds.newUnconfirmed) — черновик уже на сервере: второй CreateItem
                 // создал бы дубликат, а дописать Bcc/важность без id нельзя.
-                if (!DraftIds.isLocal(mimeResult.data)) applyDraftExtrasEws(mimeResult.data, bcc, importance)
+                if (!DraftIds.isLocal(mimeResult.data)) applyDraftExtrasEws(mimeResult.data, bcc, importance, receipts)
                 return mimeResult
             }
             // Ошибку MIME не «чиним» поиском по теме: самый свежий черновик с той же темой — обычно
@@ -129,7 +130,7 @@ class EasDraftsService internal constructor(
             // вызывающий затем удалил бы. Успешный ответ без ItemId (Exchange 2007) разобран в createDraftMime.
         }
 
-        val ewsResult = createDraftEws(to, cc, bcc, subject, body, attachments, importance)
+        val ewsResult = createDraftEws(to, cc, bcc, subject, body, attachments, importance, receipts)
         if (ewsResult is EasResult.Success) {
             return ewsResult
         }
@@ -168,7 +169,9 @@ class EasDraftsService internal constructor(
         subject: String,
         body: String,
         importance: Int = 1,
-        appendBcc: Boolean = false
+        appendBcc: Boolean = false,
+        // null — флажки отчётов не известны: на сервере не меняются
+        receipts: ReceiptRequests? = null
     ): EasResult<Boolean> {
         if (!deps.isVersionDetected()) {
             deps.detectEasVersion()
@@ -179,7 +182,7 @@ class EasDraftsService internal constructor(
             return EasResult.Success(true)
         }
 
-        return updateDraftEws(serverId, to, cc, bcc, subject, body, importance, appendBcc)
+        return updateDraftEws(serverId, to, cc, bcc, subject, body, importance, appendBcc, receipts)
     }
     /**
  * Загрузка Body черновика через EWS GetItem
@@ -289,7 +292,17 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
      * (EWS-based serverIds без формата "collectionId:itemId").
      * Работает на Exchange 2007 SP1+.
      */
-    suspend fun fetchMimeContentEws(itemId: String): EasResult<String> = withContext(Dispatchers.IO) {
+    suspend fun fetchMimeContentEws(itemId: String): EasResult<String> =
+        when (val mime = fetchMimeBytesEws(itemId)) {
+            is EasResult.Success -> EasResult.Success(mime.data?.toString(Charsets.UTF_8).orEmpty())
+            is EasResult.Error -> mime
+        }
+
+    /**
+     * MIME письма байтами — как его хранит Exchange (EWS GetItem, IncludeMimeContent): без перекодирования, годится
+     * для .eml. null — MIME пуст или больше лимита. Exchange 2007 SP1+.
+     */
+    suspend fun fetchMimeBytesEws(itemId: String): EasResult<ByteArray?> = withContext(Dispatchers.IO) {
         try {
             val ewsVersion = resolveEwsVersion()
             val escapedItemId = deps.escapeXml(itemId)
@@ -323,7 +336,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             // Без [^>]* regex не совпадёт → extractEws вернёт null → inline-картинки потеряны.
             val mimeBase64 = MIME_CONTENT_PATTERN.find(responseXml)?.groupValues?.get(1)?.trim() ?: ""
             if (mimeBase64.isBlank()) {
-                return@withContext EasResult.Success("")
+                return@withContext EasResult.Success(null)
             }
             
             // Защита от OOM: EWS GetItem возвращает полный MIME (без TruncationSize).
@@ -332,12 +345,11 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             // Лимит 25 МБ base64 (≈18 МБ MIME) — аналог TruncationSize=20MB в EAS fetchInlineImages.
             val MAX_MIME_BASE64_LENGTH = 25 * 1024 * 1024 // 25 MB
             if (mimeBase64.length > MAX_MIME_BASE64_LENGTH) {
-                android.util.Log.w("EasDraftsService", "fetchMimeContentEws: MIME too large (${mimeBase64.length} chars), skipping")
-                return@withContext EasResult.Success("")
+                android.util.Log.w("EasDraftsService", "fetchMimeBytesEws: MIME too large (${mimeBase64.length} chars), skipping")
+                return@withContext EasResult.Success(null)
             }
             
-            val mimeBytes = Base64.decode(mimeBase64, Base64.DEFAULT)
-            EasResult.Success(String(mimeBytes, Charsets.UTF_8))
+            EasResult.Success(Base64.decode(mimeBase64, Base64.DEFAULT))
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             EasResult.Error("Ошибка загрузки MIME: ${com.dedovmosol.iwomail.network.ConnectionFailure.describe(e)}")
@@ -705,11 +717,12 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         subject: String,
         body: String,
         attachments: List<DraftAttachmentData>,
-        importance: Int
+        importance: Int,
+        receipts: ReceiptRequests?
     ): EasResult<String> = withContext(Dispatchers.IO) {
         try {
             val ewsVersion = resolveEwsVersion()
-            val request = EwsDraftXml.createItem(ewsVersion, subject, body, to, cc, bcc, importance, deps.escapeXml)
+            val request = EwsDraftXml.createItem(ewsVersion, subject, body, to, cc, bcc, importance, deps.escapeXml, receipts)
             val response = executeEwsWithAuth(request, "CreateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")
             var itemId = EwsIds.parseItemId(response)
@@ -744,13 +757,14 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
      * перенесёт их из заголовков MIME при CreateItem, документацией не гарантировано. Сбой не
      * отменяет сохранение: локальная копия хранит оба поля, отправка из приложения их учтёт.
      */
-    private suspend fun applyDraftExtrasEws(itemId: String, bcc: String, importance: Int) {
-        if (bcc.isBlank() && importance == 1) return
+    private suspend fun applyDraftExtrasEws(itemId: String, bcc: String, importance: Int, receipts: ReceiptRequests?) {
+        val receiptsToSet = receipts?.takeIf { it.any }
+        if (bcc.isBlank() && importance == 1 && receiptsToSet == null) return
         try {
             val request = EwsDraftXml.updateItem(
                 resolveEwsVersion(), itemId, changeKey = null, subject = null, htmlBody = null,
                 to = null, cc = null, bcc = bcc.takeIf { it.isNotBlank() },
-                easImportance = importance.takeIf { it != 1 }, escape = deps.escapeXml
+                easImportance = importance.takeIf { it != 1 }, escape = deps.escapeXml, receipts = receiptsToSet
             )
             val response = executeEwsWithAuth(request, "UpdateItem")
             if (response == null || !EwsClient.isEwsSuccess(response)) {
@@ -800,7 +814,8 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
         subject: String,
         body: String,
         importance: Int,
-        appendBcc: Boolean
+        appendBcc: Boolean,
+        receipts: ReceiptRequests?
     ): EasResult<Boolean> = withContext(Dispatchers.IO) {
         try {
             val exchangeVersion = resolveEwsVersion()
@@ -833,7 +848,7 @@ suspend fun getDraftBody(serverId: String): EasResult<String> {
             val request = EwsDraftXml.updateItem(
                 exchangeVersion, serverId, EwsIds.parseChangeKey(getItemResponse),
                 subject = subject, htmlBody = body, to = to, cc = cc, bcc = bcc, easImportance = importance,
-                escape = deps.escapeXml, appendBcc = appendBcc
+                escape = deps.escapeXml, appendBcc = appendBcc, receipts = receipts
             )
             val responseXml = executeEwsWithAuth(request, "UpdateItem")
                 ?: return@withContext EasResult.Error("Не удалось выполнить запрос к EWS")

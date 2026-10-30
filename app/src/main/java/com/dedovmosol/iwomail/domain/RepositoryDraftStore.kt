@@ -42,7 +42,8 @@ class RepositoryDraftStore(
             hasAttachments = draft.attachments.isNotEmpty(),
             attachmentFiles = draft.attachments,
             importance = draft.importance,
-            forceLocal = deviceOnly
+            forceLocal = deviceOnly,
+            receipts = draft.receipts
         )
 
     override suspend fun update(
@@ -64,7 +65,8 @@ class RepositoryDraftStore(
         fromName = content.fromName,
         importance = content.importance,
         localBody = content.body,
-        appendBcc = appendBcc
+        appendBcc = appendBcc,
+        receipts = content.receipts
     )
 
     override suspend fun delete(accountId: Long, serverId: String, excludeServerId: String?): EasResult<Boolean> =

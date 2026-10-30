@@ -221,7 +221,8 @@ interface EmailDao {
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
                mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
-               flagStartDate, flagDueDate, flagReminder, flagCompleted
+               flagStartDate, flagDueDate, flagReminder, flagCompleted,
+               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt
         FROM emails
         WHERE folderId = :folderId
         ORDER BY dateReceived DESC
@@ -330,6 +331,14 @@ interface EmailDao {
 
     @Query("UPDATE emails SET mdnRequestedBy = :mdnRequestedBy WHERE id = :id")
     suspend fun updateMdnRequestedBy(id: String, mdnRequestedBy: String)
+
+    /** Заголовки отписки от рассылки ([com.dedovmosol.iwomail.eas.ListUnsubscribe]) — с загрузкой тела. */
+    @Query("UPDATE emails SET listUnsubscribe = :value, listUnsubscribeOneClick = :oneClick WHERE id = :id")
+    suspend fun updateListUnsubscribe(id: String, value: String?, oneClick: Boolean)
+
+    /** Флажки «запросить отчёт» черновика; null — не известны. */
+    @Query("UPDATE emails SET requestReadReceipt = :read, requestDeliveryReceipt = :delivery WHERE id = :id")
+    suspend fun updateReceiptRequests(id: String, read: Boolean?, delivery: Boolean?)
 
     @Query("UPDATE emails SET internetMessageId = :internetMessageId WHERE id = :id")
     suspend fun updateInternetMessageId(id: String, internetMessageId: String)
@@ -452,7 +461,8 @@ interface EmailDao {
                subject, preview, '' AS body, bodyType, dateReceived, read,
                flagged, importance, hasAttachments, originalFolderId,
                mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
-               flagStartDate, flagDueDate, flagReminder, flagCompleted
+               flagStartDate, flagDueDate, flagReminder, flagCompleted,
+               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt
         FROM emails
         WHERE accountId = :accountId AND flagged = 1
         ORDER BY dateReceived DESC
@@ -640,7 +650,8 @@ interface EmailDao {
                e.dateReceived, e.read, e.flagged, e.importance, e.hasAttachments,
                e.originalFolderId, e.mdnRequestedBy, e.mdnSent, e.messageClass,
                e.internetMessageId, e.bcc, e.replacesServerId,
-               e.flagStartDate, e.flagDueDate, e.flagReminder, e.flagCompleted
+               e.flagStartDate, e.flagDueDate, e.flagReminder, e.flagCompleted,
+               e.listUnsubscribe, e.listUnsubscribeOneClick, e.requestReadReceipt, e.requestDeliveryReceipt
         FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
         WHERE e.accountId = :accountId

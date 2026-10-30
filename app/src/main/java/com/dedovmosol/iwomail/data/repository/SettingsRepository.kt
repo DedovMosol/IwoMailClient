@@ -13,6 +13,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -227,6 +228,10 @@ class SettingsRepository private constructor(
         val REMOTE_IMAGES_ALWAYS = booleanPreferencesKey("remote_images_always")
         val REMOTE_IMAGES_TRUSTED = stringSetPreferencesKey("remote_images_trusted_senders")
         val UNDO_SEND_SECONDS = intPreferencesKey("undo_send_seconds")
+        val QUIET_HOURS_ENABLED = booleanPreferencesKey("quiet_hours_enabled")
+        val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start_minutes")
+        val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end_minutes")
+        val VIP_SENDERS = stringSetPreferencesKey("vip_senders")
         val SWIPE_START_ACTION = stringPreferencesKey("swipe_start_action")
         val SWIPE_END_ACTION = stringPreferencesKey("swipe_end_action")
         val UPDATE_CHECK_INTERVAL = stringPreferencesKey("update_check_interval")
@@ -998,6 +1003,40 @@ class SettingsRepository private constructor(
 
     suspend fun setSwipeAction(start: Boolean, action: com.dedovmosol.iwomail.domain.SwipeAction) {
         dataStore.edit { prefs -> prefs[if (start) Keys.SWIPE_START_ACTION else Keys.SWIPE_END_ACTION] = action.name }
+    }
+
+    // === Уведомления о почте: тихие часы и важные отправители ===
+
+    data class MailAlertPrefs(val quietHours: com.dedovmosol.iwomail.domain.QuietHours, val vipSenders: Set<String>)
+
+    val mailAlertPrefs: Flow<MailAlertPrefs> = dataStore.data.map { prefs ->
+        val quiet = com.dedovmosol.iwomail.domain.QuietHours
+        MailAlertPrefs(
+            quietHours = com.dedovmosol.iwomail.domain.QuietHours(
+                enabled = prefs[Keys.QUIET_HOURS_ENABLED] ?: false,
+                startMinutes = quiet.sanitize(prefs[Keys.QUIET_HOURS_START], quiet.DEFAULT_START),
+                endMinutes = quiet.sanitize(prefs[Keys.QUIET_HOURS_END], quiet.DEFAULT_END)
+            ),
+            vipSenders = prefs[Keys.VIP_SENDERS].orEmpty()
+        )
+    }.distinctUntilChanged()
+
+    suspend fun setQuietHours(hours: com.dedovmosol.iwomail.domain.QuietHours) {
+        val quiet = com.dedovmosol.iwomail.domain.QuietHours
+        dataStore.edit { prefs ->
+            prefs[Keys.QUIET_HOURS_ENABLED] = hours.enabled
+            prefs[Keys.QUIET_HOURS_START] = quiet.sanitize(hours.startMinutes, quiet.DEFAULT_START)
+            prefs[Keys.QUIET_HOURS_END] = quiet.sanitize(hours.endMinutes, quiet.DEFAULT_END)
+        }
+    }
+
+    /** Отправитель [senderKey] (адрес без имени, в нижнем регистре) — важный: уведомление громче и в тихие часы. */
+    suspend fun setVipSender(senderKey: String, vip: Boolean) {
+        if (senderKey.isBlank()) return
+        dataStore.edit { prefs ->
+            val current = prefs[Keys.VIP_SENDERS].orEmpty()
+            prefs[Keys.VIP_SENDERS] = if (vip) current + senderKey else current - senderKey
+        }
     }
     
     // Режим черновиков по умолчанию (для новых аккаунтов)

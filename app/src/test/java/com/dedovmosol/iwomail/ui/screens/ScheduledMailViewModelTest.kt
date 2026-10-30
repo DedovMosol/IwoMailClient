@@ -78,6 +78,16 @@ class ScheduledMailViewModelTest {
     }
 
     @Test
+    fun `undo email whose backstop is overdue is listed so it can be cancelled`() = runBlocking<Unit> {
+        // Приложение закрыли во время отсчёта, а связи нет: письмо ждёт воркера — пользователь должен его видеть
+        ScheduledSend.schedule(context, job("stuck", System.currentTimeMillis() - 1_000, undo = true))
+
+        val items = viewModel().awaitItems { it.isNotEmpty() }
+
+        assertThat(items.map { it.subject }).containsExactly("stuck")
+    }
+
+    @Test
     fun `cancel returns the email to Drafts and removes it from the list`() = runBlocking<Unit> {
         val dir = ScheduledSend.schedule(context, job("S", inAnHour))
         val vm = viewModel()

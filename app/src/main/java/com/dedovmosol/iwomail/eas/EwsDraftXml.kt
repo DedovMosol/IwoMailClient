@@ -34,7 +34,8 @@ internal object EwsDraftXml {
         cc: String,
         bcc: String,
         easImportance: Int,
-        escape: (String) -> String
+        escape: (String) -> String,
+        receipts: ReceiptRequests? = null
     ): String {
         val message = StringBuilder()
             .append("<t:Subject>").append(escape(subject)).append("</t:Subject>")
@@ -43,6 +44,9 @@ internal object EwsDraftXml {
         recipientsElement("ToRecipients", to, escape)?.let { message.append(it) }
         recipientsElement("CcRecipients", cc, escape)?.let { message.append(it) }
         recipientsElement("BccRecipients", bcc, escape)?.let { message.append(it) }
+        // По схеме — сразу после BccRecipients; по умолчанию у нового письма оба false — не пишем
+        if (receipts?.read == true) message.append("<t:IsReadReceiptRequested>true</t:IsReadReceiptRequested>")
+        if (receipts?.delivery == true) message.append("<t:IsDeliveryReceiptRequested>true</t:IsDeliveryReceiptRequested>")
         return envelope(
             version,
             "<m:CreateItem MessageDisposition=\"SaveOnly\"><m:SavedItemFolderId>" +
@@ -70,9 +74,17 @@ internal object EwsDraftXml {
         bcc: String?,
         easImportance: Int?,
         escape: (String) -> String,
-        appendBcc: Boolean = false
+        appendBcc: Boolean = false,
+        // null — флажки отчётов приложению не известны (черновик из Outlook): на сервере не меняются
+        receipts: ReceiptRequests? = null
     ): String {
         val updates = StringBuilder()
+        receipts?.let {
+            updates.append(setField("message:IsReadReceiptRequested", "<t:IsReadReceiptRequested>${it.read}</t:IsReadReceiptRequested>"))
+            updates.append(
+                setField("message:IsDeliveryReceiptRequested", "<t:IsDeliveryReceiptRequested>${it.delivery}</t:IsDeliveryReceiptRequested>")
+            )
+        }
         subject?.let { updates.append(setField("item:Subject", "<t:Subject>${escape(it)}</t:Subject>")) }
         htmlBody?.let { updates.append(setField("item:Body", "<t:Body BodyType=\"HTML\">${escape(it)}</t:Body>")) }
         easImportance?.let { updates.append(setField("item:Importance", "<t:Importance>${importance(it)}</t:Importance>")) }
@@ -122,6 +134,7 @@ internal object EwsDraftXml {
         version,
         "<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:BodyType>HTML</t:BodyType>" +
             "<t:AdditionalProperties><t:FieldURI FieldURI=\"item:Body\"/><t:FieldURI FieldURI=\"message:BccRecipients\"/>" +
+            "<t:FieldURI FieldURI=\"message:IsReadReceiptRequested\"/><t:FieldURI FieldURI=\"message:IsDeliveryReceiptRequested\"/>" +
             "<t:ExtendedFieldURI PropertyTag=\"0x3008\" PropertyType=\"SystemTime\"/></t:AdditionalProperties>" +
             "</m:ItemShape><m:ItemIds><t:ItemId Id=\"${escape(itemId)}\"/></m:ItemIds></m:GetItem>"
     )
@@ -131,8 +144,13 @@ internal object EwsDraftXml {
         val body: String,
         /** null — не известны: среди адресов есть не SMTP (X.500 из адресной книги) — их не трогаем. */
         val bcc: String?,
-        val lastModified: Long?
+        val lastModified: Long?,
+        /** Флажки «запросить отчёт»; null — сервер их не вернул. */
+        val receipts: ReceiptRequests? = null
     )
+
+    private val READ_RECEIPT = Regex("<(?:t:)?IsReadReceiptRequested>\\s*(true|false)\\s*<", RegexOption.IGNORE_CASE)
+    private val DELIVERY_RECEIPT = Regex("<(?:t:)?IsDeliveryReceiptRequested>\\s*(true|false)\\s*<", RegexOption.IGNORE_CASE)
 
     private val BODY = Regex("<(?:t:)?Body[^>]*>(.*?)</(?:t:)?Body>", RegexOption.DOT_MATCHES_ALL)
     private val BCC = Regex("<(?:t:)?BccRecipients>(.*?)</(?:t:)?BccRecipients>", RegexOption.DOT_MATCHES_ALL)
@@ -169,7 +187,11 @@ internal object EwsDraftXml {
                 null
             }
         }
-        return DraftDetails(body, bcc, lastModified)
+        val receipts = ReceiptRequests.of(
+            READ_RECEIPT.find(response)?.groupValues?.get(1)?.equals("true", ignoreCase = true),
+            DELIVERY_RECEIPT.find(response)?.groupValues?.get(1)?.equals("true", ignoreCase = true)
+        )
+        return DraftDetails(body, bcc, lastModified, receipts)
     }
 
     private fun envelope(version: String, body: String): String =

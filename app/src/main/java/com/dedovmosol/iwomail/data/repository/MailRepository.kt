@@ -164,6 +164,9 @@ class MailRepository(private val context: Context) {
     /** Серверный черновик перед редактированием: свежее тело и скрытые копии — [EmailOperationsService.refreshServerDraft]. */
     suspend fun refreshServerDraft(emailId: String): EmailOperationsService.DraftRefresh? =
         emailOperationsService.refreshServerDraft(emailId)
+
+    /** Письмо целиком (.eml) с сервера. */
+    suspend fun fetchMessageMime(emailId: String): EasResult<ByteArray> = emailOperationsService.fetchMessageMime(emailId)
     
     suspend fun refreshAttachmentMetadata(emailId: String) = 
         emailOperationsService.refreshAttachmentMetadata(emailId)
@@ -388,7 +391,9 @@ class MailRepository(private val context: Context) {
     attachmentFiles: List<com.dedovmosol.iwomail.eas.DraftAttachmentData> = emptyList(),
     importance: Int = 1,
     // Только на устройстве, без обращения к серверу (известно, что связи нет)
-    forceLocal: Boolean = false
+    forceLocal: Boolean = false,
+    // Флажки «запросить отчёт»; null — не известны
+    receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
 ): String? {
         val account = accountRepo.getAccount(accountId) ?: return null
         val draftsFolder = folderDao.getFolderByType(accountId, FolderType.DRAFTS)
@@ -423,7 +428,8 @@ class MailRepository(private val context: Context) {
                     subject = subject,
                     body = serverBody,
                     attachments = attachmentFiles,
-                    importance = importance
+                    importance = importance,
+                    receipts = receipts
                 )
             }
 if (result is EasResult.Success) {
@@ -448,7 +454,9 @@ if (result is EasResult.Success) {
             read = true,
             importance = importance,
             hasAttachments = hasAttachments,
-            bcc = bcc
+            bcc = bcc,
+            requestReadReceipt = receipts?.read,
+            requestDeliveryReceipt = receipts?.delivery
         )
         // АТОМАРНАЯ вставка: email + вложения в одной транзакции.
         // Защита от гонки: если PushService запустит sync между insert(email)
@@ -489,7 +497,9 @@ if (result is EasResult.Success) {
         read = true,
         importance = importance,
         hasAttachments = hasAttachments,
-        bcc = bcc
+        bcc = bcc,
+        requestReadReceipt = receipts?.read,
+        requestDeliveryReceipt = receipts?.delivery
     )
     // АТОМАРНАЯ вставка: email + вложения в одной транзакции.
     // См. комментарий выше про гонку PushService/sync.
@@ -689,7 +699,9 @@ if (result is EasResult.Success) {
         // Тело локальной копии: с data:-картинками ([body] — то, что уходит на сервер, с cid:)
         localBody: String = body,
         // Скрытые копии на сервере не известны: [bcc] добавляется к ним, локально они остаются неизвестными
-        appendBcc: Boolean = false
+        appendBcc: Boolean = false,
+        // Флажки «запросить отчёт»; null — не известны: не меняются ни на сервере, ни локально
+        receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
     ): EasResult<String> {
         val account = accountRepo.getAccount(accountId)
             ?: return EasResult.Error("Аккаунт не найден")
@@ -719,6 +731,7 @@ if (result is EasResult.Success) {
                 bcc = bcc.takeUnless { appendBcc },
                 importance = importance
             )
+            receipts?.let { emailDao.updateReceiptRequests(emailId, it.read, it.delivery) }
             updateDraftsFolderCount(draftsFolder.id)
         }
 
@@ -745,7 +758,7 @@ if (result is EasResult.Success) {
                 ?: return EasResult.Error(com.dedovmosol.iwomail.eas.DraftIds.NOT_RESOLVED)
         }
 
-        return when (val result = easClient.updateDraft(ewsItemId, to, cc, bcc, subject, body, importance, appendBcc)) {
+        return when (val result = easClient.updateDraft(ewsItemId, to, cc, bcc, subject, body, importance, appendBcc, receipts)) {
             is EasResult.Success -> {
                 // Без syncEmails: гонка SyncKey с фоновой синхронизацией (INVALID_SYNCKEY → полный resync).
                 // UpdateItem не меняет ItemId; изменения подтянет следующий фоновый sync.

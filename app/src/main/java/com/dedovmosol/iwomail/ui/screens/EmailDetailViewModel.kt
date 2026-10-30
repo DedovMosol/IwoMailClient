@@ -76,7 +76,12 @@ data class EmailDetailUiState(
     val isDeleting: Boolean = false,
     // Запрос отчёта о прочтении, на который ждём ответа: адрес отчёта; письмо до ответа не помечается прочитанным
     val readReceiptRequestedBy: String? = null,
-    val isAnsweringReadReceipt: Boolean = false
+    val isAnsweringReadReceipt: Boolean = false,
+    val isInJunk: Boolean = false,
+    val isUnsubscribing: Boolean = false,
+    // Отписка выполнена в этом открытии письма — ссылку «Отписаться» больше не показываем
+    val unsubscribed: Boolean = false,
+    val isSavingEml: Boolean = false
 )
 
 /**
@@ -95,6 +100,12 @@ sealed interface EmailDetailEvent {
     data object DeletedOnServer : EmailDetailEvent
     data object NoBodyFromServer : EmailDetailEvent
     data class Error(val message: String) : EmailDetailEvent
+    data object Unsubscribed : EmailDetailEvent
+    /** Отписка — на странице рассылки; [afterFailure] — отписка одним запросом не удалась. */
+    data class OpenUnsubscribePage(val url: String, val afterFailure: Boolean) : EmailDetailEvent
+    data object EmlSaved : EmailDetailEvent
+    /** Письмо не сохранилось файлом; [message] — причина с сервера (null — не записался файл). */
+    data class EmlFailed(val message: String?) : EmailDetailEvent
 }
 
 /**
@@ -116,7 +127,11 @@ class EmailDetailViewModel(
     private val actions: EmailDetailActions,
     private val mailRepo: MailRepository,
     private val accountRepo: AccountRepository,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /** Отписка от рассылки (null — недоступна, например в тестах без сети). */
+    private val unsubscriber: com.dedovmosol.iwomail.domain.Unsubscriber? = null,
+    /** Записать байты в выбранный пользователем файл (SAF); false — не записалось. */
+    private val writeFile: (suspend (android.net.Uri, ByteArray) -> Boolean)? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EmailDetailUiState())
@@ -161,7 +176,8 @@ class EmailDetailViewModel(
                                 folders = folders,
                                 isInTrash = currentFolder?.type == FolderType.DELETED_ITEMS,
                                 isInSent = currentFolder?.type == FolderType.SENT_ITEMS,
-                                isInDrafts = currentFolder?.type == FolderType.DRAFTS
+                                isInDrafts = currentFolder?.type == FolderType.DRAFTS,
+                                isInJunk = currentFolder?.type == FolderType.JUNK_EMAIL
                             )
                         }
                     }
@@ -516,6 +532,68 @@ class EmailDetailViewModel(
     // === Окончательное удаление с прогресс-баром (вызывается из DeletionController в UI) ===
     // Тонкая suspend-обёртка: выполняется на scope контроллера удаления (не в viewModelScope),
     // поэтому переживает выход с экрана — 1:1 с исходником и с EmailListViewModel.
+    /**
+     * Отписаться от рассылки этого письма — после подтверждения в UI. Страница отписки (или запасной вариант после
+     * неудачной отписки одним запросом) открывается в браузере событием.
+     */
+    fun unsubscribe() {
+        val unsubscriber = unsubscriber ?: return
+        val state = _uiState.value
+        val email = state.email ?: return
+        if (state.isUnsubscribing || state.unsubscribed) return
+        val target = com.dedovmosol.iwomail.eas.ListUnsubscribe.parse(email.listUnsubscribe, email.listUnsubscribeOneClick) ?: return
+        _uiState.update { it.copy(isUnsubscribing = true) }
+        viewModelScope.launch {
+            try {
+                when (val result = unsubscriber.unsubscribe(email.accountId, target)) {
+                    com.dedovmosol.iwomail.domain.UnsubscribeResult.Done -> {
+                        _uiState.update { it.copy(unsubscribed = true) }
+                        sendEvent(EmailDetailEvent.Unsubscribed)
+                    }
+                    is com.dedovmosol.iwomail.domain.UnsubscribeResult.OpenPage -> sendEvent(
+                        EmailDetailEvent.OpenUnsubscribePage(
+                            result.url,
+                            afterFailure = target.method is com.dedovmosol.iwomail.eas.ListUnsubscribe.Method.OneClick
+                        )
+                    )
+                    is com.dedovmosol.iwomail.domain.UnsubscribeResult.Failed ->
+                        sendEvent(EmailDetailEvent.Error(result.reason ?: "Unknown error"))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.Error(e.message ?: "Unknown error"))
+            } finally {
+                _uiState.update { it.copy(isUnsubscribing = false) }
+            }
+        }
+    }
+
+    /** Сохранить письмо целиком (.eml, с вложениями — как на сервере) в файл [uri], выбранный пользователем. */
+    fun saveEml(uri: android.net.Uri) {
+        val writeFile = writeFile ?: return
+        if (_uiState.value.isSavingEml) return
+        _uiState.update { it.copy(isSavingEml = true) }
+        viewModelScope.launch {
+            try {
+                when (val mime = withContext(ioDispatcher) { mailRepo.fetchMessageMime(emailId) }) {
+                    is EasResult.Success -> when {
+                        mime.data.isEmpty() -> sendEvent(EmailDetailEvent.EmlFailed(null))
+                        withContext(ioDispatcher) { writeFile(uri, mime.data) } -> sendEvent(EmailDetailEvent.EmlSaved)
+                        else -> sendEvent(EmailDetailEvent.EmlFailed(null))
+                    }
+                    is EasResult.Error -> sendEvent(EmailDetailEvent.EmlFailed(mime.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailDetailEvent.EmlFailed(e.message))
+            } finally {
+                _uiState.update { it.copy(isSavingEml = false) }
+            }
+        }
+    }
+
     suspend fun deleteEmailPermanently(
         emailIds: List<String>,
         onProgress: (deleted: Int, total: Int) -> Unit
@@ -539,7 +617,15 @@ class EmailDetailViewModel(
                     val calendarRepo = RepositoryProvider.getCalendarRepository(application)
                     val taskRepo = RepositoryProvider.getTaskRepository(application)
                     val actions = EmailDetailActions(mailRepo, accountRepo, calendarRepo, taskRepo)
-                    return EmailDetailViewModel(emailId, actions, mailRepo, accountRepo) as T
+                    val resolver = application.contentResolver
+                    return EmailDetailViewModel(
+                        emailId, actions, mailRepo, accountRepo,
+                        unsubscriber = com.dedovmosol.iwomail.domain.Unsubscriber.forApp(application),
+                        writeFile = { uri, bytes ->
+                            // "wt": файл перезаписывается целиком, а не дописывается к прежнему содержимому
+                            resolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } != null
+                        }
+                    ) as T
                 }
             }
     }

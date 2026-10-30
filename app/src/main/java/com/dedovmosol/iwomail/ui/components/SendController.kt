@@ -206,7 +206,7 @@ class SendController(
         val draftId = env.returnToDrafts(context, job)
         if (draftId == null) {
             // Не сохранить — не терять: письмо уходит, как и собирались
-            ScheduledSend.schedule(context, job.copy(sendAt = System.currentTimeMillis()))
+            ScheduledSend.schedule(context, job.copy(sendAt = System.currentTimeMillis(), undo = false))
             env.message(context, NotificationStrings.getUndoDraftFailed(ru), long = true)
             return Outcome.QUEUED
         }
@@ -231,8 +231,9 @@ class SendController(
                 sendScope.launch { env.afterSent(context, job) }
             }
             Outcome.QUEUED -> {
-                // Отправит воркер, как только будет связь (с вложениями и повторами)
-                dir?.let { ScheduledSend.runNow(context, it) }
+                // Отправит воркер, как только будет связь (с вложениями и повторами); до тех пор письмо в списке
+                // запланированных — его видно и можно отменить
+                dir?.let { ScheduledSend.queueNow(context, it) }
                 val offline = ConnectionFailure.fromMessage(delivery.error)?.connectionLevel == true
                 env.message(
                     context,

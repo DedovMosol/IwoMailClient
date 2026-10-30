@@ -683,6 +683,58 @@ object Strings {
     else "The message will not be sent and goes back to Drafts"
     @Composable
     fun scheduledFor(time: String): String = if (isRussian()) "Отправка: $time" else "Sending: $time"
+    // Отписка от рассылки (List-Unsubscribe)
+    val unsubscribe: String @Composable get() = if (isRussian()) "Отписаться" else "Unsubscribe"
+    val unsubscribeTitle: String @Composable get() =
+        if (isRussian()) "Отписаться от рассылки?" else "Unsubscribe from this mailing list?"
+    @Composable
+    fun unsubscribeOneClickText(host: String): String =
+        if (isRussian()) "Запрос на отписку уйдёт на $host — письма этой рассылки перестанут приходить."
+        else "An unsubscribe request will be sent to $host, and this list will stop emailing you."
+    @Composable
+    fun unsubscribeMailText(address: String): String =
+        if (isRussian()) "От вашего имени уйдёт письмо об отписке на адрес $address."
+        else "An unsubscribe email will be sent from your account to $address."
+    @Composable
+    fun unsubscribeWebText(host: String): String =
+        if (isRussian()) "Откроется страница отписки на сайте $host." else "The unsubscribe page on $host will open."
+    val unsubscribed: String @Composable get() = if (isRussian()) "Вы отписались от рассылки" else "You've unsubscribed"
+    val unsubscribeOpeningPage: String @Composable get() =
+        if (isRussian()) "Отписаться сразу не вышло — открываем страницу отписки" else "Couldn't unsubscribe directly — opening the unsubscribe page"
+
+    // Уведомления о почте: тихие часы, важные отправители, каналы аккаунтов
+    val mailAlertsSection: String @Composable get() = if (isRussian()) "Уведомления о почте" else "Mail notifications"
+    val quietHours: String @Composable get() = if (isRussian()) "Тихие часы" else "Quiet hours"
+    @Composable
+    fun quietHoursDesc(range: String): String =
+        if (isRussian()) "$range — без звука и вибрации; важные отправители — как обычно"
+        else "$range — no sound or vibration; important senders still alert"
+    @Composable
+    fun quietFrom(time: String): String = if (isRussian()) "С $time" else "From $time"
+    @Composable
+    fun quietUntil(time: String): String = if (isRussian()) "До $time" else "Until $time"
+    val vipSenders: String @Composable get() = if (isRussian()) "Важные отправители" else "Important senders"
+    val vipSendersHint: String @Composable get() =
+        if (isRussian()) "Отметьте отправителя в меню письма: его письма звучат и в тихие часы"
+        else "Mark a sender from the email menu: their emails alert even during quiet hours"
+    val removeVipSender: String @Composable get() = if (isRussian()) "Убрать из важных" else "Remove from important"
+    val makeSenderVip: String @Composable get() = if (isRussian()) "Важный отправитель" else "Important sender"
+    val senderMarkedVip: String @Composable get() =
+        if (isRussian()) "Письма этого отправителя будут звучать и в тихие часы" else "This sender's emails will alert even during quiet hours"
+    val senderUnmarkedVip: String @Composable get() = if (isRussian()) "Отправитель больше не важный" else "Sender is no longer important"
+    val accountNotificationSettings: String @Composable get() =
+        if (isRussian()) "Звук и вибрация уведомлений" else "Notification sound and vibration"
+
+    // Печать, PDF, .eml
+    val printOrPdf: String @Composable get() = if (isRussian()) "Печать или PDF" else "Print or PDF"
+    val saveAsEml: String @Composable get() = if (isRussian()) "Сохранить как .eml" else "Save as .eml"
+    val emlSaved: String @Composable get() = if (isRussian()) "Письмо сохранено" else "Email saved"
+    val emlSaveFailed: String @Composable get() = if (isRussian()) "Не удалось сохранить письмо" else "Couldn't save the email"
+    val printUnavailable: String @Composable get() = if (isRussian()) "Печать на этом устройстве недоступна" else "Printing isn't available on this device"
+
+    /** Срок прошёл, а письмо ещё ждёт: нет связи или сервер занят — уйдёт само. */
+    val scheduledWaiting: String @Composable get() =
+        if (isRussian()) "Ожидает отправки — уйдёт автоматически" else "Waiting to be sent — will go out automatically"
     val scheduledAlreadySent: String @Composable get() = if (isRussian()) "Письмо уже отправляется" else "The message is already being sent"
     val scheduledSendingNow: String @Composable get() = if (isRussian()) "Письмо отправляется" else "Sending the message"
     val scheduledRescheduled: String @Composable get() = if (isRussian()) "Время отправки изменено" else "Send time changed"
@@ -1847,6 +1899,10 @@ object NotificationStrings {
     fun getScheduledEmailSent(to: String, isRussian: Boolean): String {
         return if (isRussian) "Запланированное письмо для $to отправлено" else "Scheduled email to $to sent"
     }
+
+    /** Письмо с отменой отправки, отправленное в фоне (приложение закрыли во время отсчёта или не было связи). */
+    fun getEmailSentTo(to: String, isRussian: Boolean): String =
+        if (isRussian) "Письмо для $to отправлено" else "Email to $to sent"
     fun getEmailNotSent(isRussian: Boolean): String =
         if (isRussian) "Письмо не отправлено" else "Email not sent"
     /** «Тема»: причина. Сохранено в Черновики — можно исправить и отправить снова. */

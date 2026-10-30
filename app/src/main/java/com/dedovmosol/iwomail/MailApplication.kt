@@ -71,6 +71,17 @@ class MailApplication : Application() {
             // Очередь прежних версий — дослать
             com.dedovmosol.iwomail.sync.OutboxWorker.drainLegacyQueue(this@MailApplication)
         }
+        applicationScope.launch(Dispatchers.IO) {
+            try {
+                val accounts = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(this@MailApplication)
+                    .accountDao().getAllAccountsList().map { it.id to it.email }
+                val ru = settingsRepository.language.first() == "ru"
+                com.dedovmosol.iwomail.sync.MailNotificationChannels.sync(this@MailApplication, accounts, ru)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.w(TAG, "Mail notification channels sync failed", e)
+            }
+        }
         scheduleSync()
         startPushService()
         observeServerConnectionHealth()
@@ -148,23 +159,8 @@ class MailApplication : Application() {
         
         val isRussian = java.util.Locale.getDefault().language == "ru"
         
-        // Канал для новых писем - ВЫСОКИЙ приоритет для показа на заблокированном экране
-        if (CHANNEL_NEW_MAIL !in existingChannels) {
-            val newMailChannel = NotificationChannel(
-                CHANNEL_NEW_MAIL,
-                if (isRussian) "Новые письма" else "New emails",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = if (isRussian) "Уведомления о новых письмах" else "New email notifications"
-                enableLights(true)
-                enableVibration(true)
-                setShowBadge(true)
-                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
-                setBypassDnd(false)
-            }
-            notificationManager.createNotificationChannel(newMailChannel)
-        }
-        
+        // Новые письма — свои каналы у каждого аккаунта (MailNotificationChannels): создаются при запуске и первом
+        // уведомлении, прежний общий канал CHANNEL_NEW_MAIL переносится в них и удаляется.
         // Канал для синхронизации - минимальный приоритет (только иконка в статус-баре)
         if (CHANNEL_SYNC !in existingChannels) {
             val syncChannel = NotificationChannel(

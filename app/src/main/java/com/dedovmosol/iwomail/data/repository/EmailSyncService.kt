@@ -37,7 +37,8 @@ class EmailSyncService(
         val from: String, val fromName: String,
         val attachments: List<AttachmentEntity>,
         val bcc: String? = null,
-        val replacesServerId: String? = null
+        val replacesServerId: String? = null,
+        val receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
     )
 
     // Результат обработки новых писем из одного батча Sync
@@ -133,7 +134,8 @@ class EmailSyncService(
             val attachments: List<AttachmentEntity>,
             val timestamp: Long = System.currentTimeMillis(),
             val bcc: String? = null,
-            val replacesServerId: String? = null
+            val replacesServerId: String? = null,
+            val receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
         )
         // Key = "${accountId}_${subject}" для матча по subject (serverId меняется).
         private val pendingDraftRestores = java.util.concurrent.ConcurrentHashMap<String, PendingDraftRestore>()
@@ -336,7 +338,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 subject = draft.subject,
                 body = serverBody,
                 attachments = uploadAttachments,
-                importance = draft.importance
+                importance = draft.importance,
+                receipts = com.dedovmosol.iwomail.eas.ReceiptRequests.of(draft.requestReadReceipt, draft.requestDeliveryReceipt)
             )
             val newId = (result as? EasResult.Success)?.data ?: continue
             // Снова только на устройстве (нет связи или сервер отказал) — в следующий раз.
@@ -724,9 +727,14 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         sourceFrom: String,
         sourceFromName: String,
         sourceBcc: String? = null,
-        sourceReplaces: String? = null
+        sourceReplaces: String? = null,
+        sourceReceipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
     ) {
         val current = emailDao.getEmail(targetEmailId) ?: return
+        // EAS не передаёт флажки «запросить отчёт»: у записи из Sync они не известны — берём прежние.
+        if (sourceReceipts != null && current.requestReadReceipt == null && current.requestDeliveryReceipt == null) {
+            emailDao.updateReceiptRequests(targetEmailId, sourceReceipts.read, sourceReceipts.delivery)
+        }
         // Отметка «заменяет серверный черновик» живёт на актуальной записи — иначе прежняя версия не удалится.
         if (sourceReplaces != null) {
             val merged = com.dedovmosol.iwomail.eas.DraftIds.mergeReplaced(current.replacesServerId, sourceReplaces, except = current.serverId)
@@ -829,7 +837,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             fromName = draft.fromName,
                             attachments = atts.filter { !it.localPath.isNullOrBlank() },
                             bcc = draft.bcc,
-                            replacesServerId = draft.replacesServerId
+                            replacesServerId = draft.replacesServerId,
+                            receipts = com.dedovmosol.iwomail.eas.ReceiptRequests.of(draft.requestReadReceipt, draft.requestDeliveryReceipt)
                         ))
                     }
                 }
@@ -1473,7 +1482,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 val saved = savedDraftBodies[idx]
                 usedSaved.add(idx)
                 migrateDraftBodyToTarget(email.id, saved.body, saved.bodyType, saved.attachments)
-                migrateDraftFieldsToTarget(email.id, saved.to, saved.cc, saved.from, saved.fromName, saved.bcc, saved.replacesServerId)
+                migrateDraftFieldsToTarget(email.id, saved.to, saved.cc, saved.from, saved.fromName, saved.bcc, saved.replacesServerId, saved.receipts)
                 if (saved.attachments.isNotEmpty()) {
                     mergeAttachmentsToTarget(email.id, saved.attachments)
                 }
@@ -1502,7 +1511,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             pendingDraftRestores.remove(key)
 
             migrateDraftBodyToTarget(newDraft.id, pending.body, pending.bodyType, pending.attachments)
-            migrateDraftFieldsToTarget(newDraft.id, pending.to, pending.cc, pending.from, pending.fromName, pending.bcc, pending.replacesServerId)
+            migrateDraftFieldsToTarget(newDraft.id, pending.to, pending.cc, pending.from, pending.fromName, pending.bcc, pending.replacesServerId, pending.receipts)
             if (pending.attachments.isNotEmpty()) {
                 mergeAttachmentsToTarget(newDraft.id, pending.attachments)
             }
@@ -1559,7 +1568,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                 usedMigrationIds.add(matchingNew.id)
                 val oldAtts = attachmentDao.getAttachmentsList(oldEmailId)
                 migrateDraftBodyToTarget(matchingNew.id, oldDraft.body, oldDraft.bodyType, oldAtts)
-                migrateDraftFieldsToTarget(matchingNew.id, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc, oldDraft.replacesServerId)
+                migrateDraftFieldsToTarget(
+                    matchingNew.id, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc, oldDraft.replacesServerId,
+                    com.dedovmosol.iwomail.eas.ReceiptRequests.of(oldDraft.requestReadReceipt, oldDraft.requestDeliveryReceipt)
+                )
                 mergeAttachmentsToTarget(matchingNew.id, oldAtts)
             }
         }
@@ -1582,7 +1594,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             if (oldDraft.body.isNotBlank()) {
                 migrateDraftBodyToTarget(newEmailId, oldDraft.body, oldDraft.bodyType, oldAtts)
             }
-            migrateDraftFieldsToTarget(newEmailId, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc, oldDraft.replacesServerId)
+            migrateDraftFieldsToTarget(
+                newEmailId, oldDraft.to, oldDraft.cc, oldDraft.from, oldDraft.fromName, oldDraft.bcc, oldDraft.replacesServerId,
+                com.dedovmosol.iwomail.eas.ReceiptRequests.of(oldDraft.requestReadReceipt, oldDraft.requestDeliveryReceipt)
+            )
             mergeAttachmentsToTarget(newEmailId, oldAtts)
 
             registerDeletedEmail(oldEmailId, context)
@@ -1627,7 +1642,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         fromName = existingEmail.fromName,
                         attachments = localAtts,
                         bcc = existingEmail.bcc,
-                        replacesServerId = existingEmail.replacesServerId
+                        replacesServerId = existingEmail.replacesServerId,
+                        receipts = com.dedovmosol.iwomail.eas.ReceiptRequests.of(existingEmail.requestReadReceipt, existingEmail.requestDeliveryReceipt)
                     )
 
                     // ЗАЩИТА: если черновик был отредактирован пользователем в приложении
@@ -1871,7 +1887,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                         val merged = mergeDraftBody(newBody, mergeAtts, orphan.body)
                         emailDao.updateBody(matchingNew.id, merged)
                     }
-                    migrateDraftFieldsToTarget(matchingNew.id, orphan.to, orphan.cc, orphan.from, orphan.fromName, orphan.bcc, orphan.replacesServerId)
+                    migrateDraftFieldsToTarget(
+                        matchingNew.id, orphan.to, orphan.cc, orphan.from, orphan.fromName, orphan.bcc, orphan.replacesServerId,
+                        com.dedovmosol.iwomail.eas.ReceiptRequests.of(orphan.requestReadReceipt, orphan.requestDeliveryReceipt)
+                    )
                     val orphanAtts = attachmentDao.getAttachmentsList(orphan.id)
                     mergeAttachmentsToTarget(matchingNew.id, orphanAtts)
                 }

@@ -281,6 +281,7 @@ class EasEmailService internal constructor(
         return withTimeoutOrNull(45_000L) {
             var mdnRequestedBy: String? = null
             var originalMessageId: String? = null
+            var listUnsubscribe: Pair<String, Boolean>? = null
             var bodyContent = ""
             // HTML целиком: не обрезано сервером (TruncationSize запроса или политика) и не текстовая замена
             var complete = false
@@ -334,6 +335,7 @@ class EasEmailService internal constructor(
                     val mimeHeaders = extractTopLevelMimeHeaders(decodedMimeData)
                     mdnRequestedBy = parseMdnHeader(mimeHeaders)
                     originalMessageId = parseOriginalMessageIdHeader(mimeHeaders)
+                    listUnsubscribe = ListUnsubscribe.fromHeaders(mimeHeaders)
                 }
             }
 
@@ -342,7 +344,9 @@ class EasEmailService internal constructor(
                     body = bodyContent,
                     mdnRequestedBy = mdnRequestedBy,
                     originalMessageId = originalMessageId,
-                    complete = complete
+                    complete = complete,
+                    listUnsubscribe = listUnsubscribe?.first,
+                    listUnsubscribeOneClick = listUnsubscribe?.second == true
                 )
             )
         } ?: EasResult.Error("Timeout loading email body")
@@ -543,7 +547,20 @@ class EasEmailService internal constructor(
     /**
      * Загружает полный MIME письма и извлекает inline изображения
      */
-    suspend fun fetchInlineImages(collectionId: String, serverId: String): EasResult<Map<String, String>> {
+    suspend fun fetchInlineImages(collectionId: String, serverId: String): EasResult<Map<String, String>> =
+        when (val mime = fetchMime(collectionId, serverId)) {
+            is EasResult.Success -> EasResult.Success(
+                if (mime.data.isBlank()) emptyMap()
+                else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { extractInlineImagesFromMime(mime.data) }
+            )
+            is EasResult.Error -> mime
+        }
+
+    /**
+     * Полный MIME письма: ItemOperations Fetch с MIMESupport=2 и BodyPreference Type 4 ([MS-ASCMD], [MS-ASAIRS]),
+     * до 20 МБ. Пусто — письма нет (Status 8) или MIME обрезан (Truncated): неполный MIME хуже никакого. EAS 12.1+.
+     */
+    suspend fun fetchMime(collectionId: String, serverId: String): EasResult<String> {
 
         // КРИТИЧНО: Увеличен TruncationSize с 10 МБ до 20 МБ для надёжности.
         // Также добавлена проверка Truncated флага — если MIME обрезан, inline-картинки
@@ -570,15 +587,15 @@ class EasEmailService internal constructor(
             val status = deps.extractValue(responseXml, "Status")?.toIntOrNull()
 
             if (status == 8) {
-                return@executeEasCommand emptyMap() // Object not found
+                return@executeEasCommand "" // Object not found
             }
 
             // КРИТИЧНО: Проверяем Truncated флаг.
             // Если MIME обрезан, inline-картинки могут быть неполными — не парсим.
             val truncated = deps.extractValue(responseXml, "Truncated")
             if (truncated == "1") {
-                android.util.Log.w("EasEmailService", "fetchInlineImages: MIME truncated even at 20MB, skipping parse")
-                return@executeEasCommand emptyMap()
+                android.util.Log.w("EasEmailService", "fetchMime: MIME truncated even at 20MB, skipping")
+                return@executeEasCommand ""
             }
 
             val mimeData = XmlUtils.unescape(deps.extractValue(responseXml, "Data")
@@ -587,11 +604,7 @@ class EasEmailService internal constructor(
                 }
                 ?: "")
 
-            if (mimeData.isBlank()) {
-                return@executeEasCommand emptyMap()
-            }
-
-            extractInlineImagesFromMime(mimeData)
+            mimeData
         }
     }
 

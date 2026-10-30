@@ -153,6 +153,14 @@ object NotificationHelper {
                     appInForeground = AppForegroundTracker.isInForeground()
                 )
                 if (showNotification) {
+                    // Важные отправители и тихие часы — по всем новым письмам, а не только показанным в уведомлении
+                    val alertPrefs = settingsRepo.mailAlertPrefs.first()
+                    val alert = com.dedovmosol.iwomail.domain.MailAlert.of(
+                        senders = filtered.map { it.from },
+                        vipSenders = alertPrefs.vipSenders,
+                        quiet = alertPrefs.quietHours,
+                        minuteOfDay = com.dedovmosol.iwomail.domain.QuietHours.minuteOfDay(System.currentTimeMillis())
+                    )
                     val totalCount = filtered.size
                     val displayEmails = filtered
                         .take(MAX_DISPLAY_EMAILS)
@@ -166,7 +174,8 @@ object NotificationHelper {
                         markReadEmailIds = markReadEmailIds,
                         accountId = accountId,
                         accountEmail = accountEmail,
-                        settingsRepo = settingsRepo
+                        settingsRepo = settingsRepo,
+                        alert = alert
                     )
                 }
                 markNotificationsAsShown(
@@ -188,7 +197,8 @@ object NotificationHelper {
         markReadEmailIds: List<String>,
         accountId: Long,
         accountEmail: String,
-        settingsRepo: SettingsRepository
+        settingsRepo: SettingsRepository,
+        alert: com.dedovmosol.iwomail.domain.MailAlert = com.dedovmosol.iwomail.domain.MailAlert(vip = false, silent = false)
     ) {
         val count = totalCount
         if (displayEmails.isEmpty()) return
@@ -228,7 +238,9 @@ object NotificationHelper {
 
         val notificationManager = context.getSystemService(NotificationManager::class.java)
 
-        val builder = NotificationCompat.Builder(context, MailApplication.CHANNEL_NEW_MAIL)
+        // Свой канал на аккаунт (звук и важность — в настройках системы); важные отправители — отдельный канал
+        val channelId = MailNotificationChannels.channelFor(context, accountId, accountEmail, alert.vip, isRussian)
+        val builder = NotificationCompat.Builder(context, channelId)
             // Монохромный vector — корректный status-bar/lock-screen small icon (best practice).
             // Android 5.0+ рендерит small icon по alpha-каналу: цветная framework-иконка
             // (android.R.drawable.ic_dialog_email) выглядит как белый силуэт/квадрат. Это UX-дефект,
@@ -244,6 +256,8 @@ object NotificationHelper {
             .setSubText(accountEmail)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_EMAIL)
+            // Тихие часы: уведомление в шторке, но без звука и вибрации канала
+            .setSilent(alert.silent)
 
         if (count > 1) {
             val senders = displayEmails.mapNotNull { email ->
@@ -282,6 +296,6 @@ object NotificationHelper {
         }
 
         notificationManager.notify(notificationId, builder.build())
-        com.dedovmosol.iwomail.util.SoundPlayer.playReceiveSound(context)
+        if (!alert.silent) com.dedovmosol.iwomail.util.SoundPlayer.playReceiveSound(context)
     }
 }

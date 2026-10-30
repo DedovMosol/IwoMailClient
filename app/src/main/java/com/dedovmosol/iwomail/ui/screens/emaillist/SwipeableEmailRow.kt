@@ -8,6 +8,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -28,11 +30,11 @@ import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppColors
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 
-/** Действие свайпа с учётом папки: удалять из «Удалённых» и Черновиков свайпом нельзя, флаг — там, где есть звёздочка. */
-internal fun SwipeAction.availableIn(deleteAllowed: Boolean, flagAllowed: Boolean): SwipeAction = when (this) {
-    SwipeAction.DELETE -> if (deleteAllowed) this else SwipeAction.NONE
-    SwipeAction.FLAG -> if (flagAllowed) this else SwipeAction.NONE
-    else -> this
+/** Ширина строки и состояние свайпа для проверки расстояния в момент отпускания; без рекомпозиций. */
+@OptIn(ExperimentalMaterial3Api::class)
+private class SwipeGeometry {
+    var width = 0
+    var state: SwipeToDismissBoxState? = null
 }
 
 /**
@@ -58,29 +60,35 @@ internal fun SwipeableEmailRow(
     val currentStart by rememberUpdatedState(startAction)
     val currentEnd by rememberUpdatedState(endAction)
     val currentOnSwipe by rememberUpdatedState(onSwipe)
+    val geometry = remember { SwipeGeometry() }
     val state = rememberSwipeToDismissBoxState(
+        positionalThreshold = { distance -> distance * SWIPE_COMMIT_FRACTION },
         confirmValueChange = { value ->
             val action = when (value) {
                 SwipeToDismissBoxValue.StartToEnd -> currentStart
                 SwipeToDismissBoxValue.EndToStart -> currentEnd
                 SwipeToDismissBoxValue.Settled -> SwipeAction.NONE
             }
-            if (action != SwipeAction.NONE) {
+            val offset = geometry.state?.let { runCatching { it.requireOffset() }.getOrNull() } ?: Float.NaN
+            if (action != SwipeAction.NONE && isSwipeCommitted(offset, geometry.width)) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 currentOnSwipe(action)
             }
             false
         }
     )
+    geometry.state = state
     val labels = listOf(startAction, endAction).distinct().filter { it != SwipeAction.NONE }
         .map { it to label(it, read, flagged) }
     SwipeToDismissBox(
         state = state,
         enableDismissFromStartToEnd = startAction != SwipeAction.NONE,
         enableDismissFromEndToStart = endAction != SwipeAction.NONE,
-        modifier = Modifier.semantics {
-            customActions = labels.map { (action, text) -> CustomAccessibilityAction(text) { currentOnSwipe(action); true } }
-        },
+        modifier = Modifier
+            .onSizeChanged { geometry.width = it.width }
+            .semantics {
+                customActions = labels.map { (action, text) -> CustomAccessibilityAction(text) { currentOnSwipe(action); true } }
+            },
         backgroundContent = {
             val direction = state.dismissDirection
             val action = when (direction) {

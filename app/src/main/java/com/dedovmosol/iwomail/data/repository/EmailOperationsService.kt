@@ -304,6 +304,7 @@ class EmailOperationsService(
                     if (!result.data.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
                         emailDao.updateMdnRequestedBy(emailId, result.data.mdnRequestedBy)
                     }
+                    result.data.listUnsubscribe?.let { emailDao.updateListUnsubscribe(emailId, it, result.data.listUnsubscribeOneClick) }
 
                     resolvedMessageId
                         ?.takeIf { it.isNotBlank() && email.internetMessageId != it }
@@ -371,7 +372,12 @@ class EmailOperationsService(
     }
 
     /** Что узнали о серверном черновике при открытии: тело для редактора и скрытые копии (null — нет новых данных). */
-    data class DraftRefresh(val body: String?, val bcc: String?)
+    data class DraftRefresh(
+        val body: String?,
+        val bcc: String?,
+        /** Флажки «запросить отчёт» с сервера (EWS); null — без изменений. */
+        val receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
+    )
 
     /**
      * Серверный черновик перед редактированием: свежее тело и скрытые копии, по точному идентификатору.
@@ -420,7 +426,35 @@ class EmailOperationsService(
             it != email.bcc && (email.bcc == null || DraftBodies.serverIsNewer(email.dateReceived, details.lastModified))
         }
         if (bcc != null) emailDao.updateBcc(emailId, bcc)
-        return DraftRefresh(body, bcc)
+        // Флажки отчётов — по тому же правилу: свои не известны или на сервере их изменили позже (Outlook)
+        val stored = com.dedovmosol.iwomail.eas.ReceiptRequests.of(email.requestReadReceipt, email.requestDeliveryReceipt)
+        val receipts = details?.receipts?.takeIf {
+            it != stored && (stored == null || DraftBodies.serverIsNewer(email.dateReceived, details.lastModified))
+        }
+        if (receipts != null) emailDao.updateReceiptRequests(emailId, receipts.read, receipts.delivery)
+        return DraftRefresh(body, bcc, receipts)
+    }
+
+    /**
+     * Письмо целиком (RFC 5322, .eml) с сервера — для сохранения файлом. Черновик только на устройстве на сервере не
+     * лежит — ошибка. Пустой массив — сервер письма не отдал.
+     */
+    suspend fun fetchMessageMime(emailId: String): EasResult<ByteArray> {
+        val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
+        if (email.serverId.isBlank() || com.dedovmosol.iwomail.eas.DraftIds.isLocal(email.serverId)) {
+            return EasResult.Error("Письмо ещё не сохранено на сервере")
+        }
+        val client = accountRepo.createEasClient(email.accountId)
+            ?: return EasResult.Error(RepositoryErrors.CLIENT_CREATE_FAILED)
+        val folder = folderDao.getFolder(email.folderId)
+        return client.fetchMessageMime(
+            collectionId = folder?.serverId ?: email.folderId.substringAfter("_"),
+            serverId = email.serverId,
+            subject = email.subject,
+            ewsFolderType = toEwsFolderType(folder?.type),
+            dateReceived = email.dateReceived,
+            internetMessageId = email.internetMessageId
+        )
     }
 
     private fun cachedBodyMatchesPreview(preview: String, body: String): Boolean {
@@ -507,6 +541,9 @@ class EmailOperationsService(
                                     emailDao.updateBody(emailId, response.body)
                                     if (!response.mdnRequestedBy.isNullOrBlank() && !email.mdnSent) {
                                         emailDao.updateMdnRequestedBy(emailId, response.mdnRequestedBy)
+                                    }
+                                    response.listUnsubscribe?.let {
+                                        emailDao.updateListUnsubscribe(emailId, it, response.listUnsubscribeOneClick)
                                     }
                                     response.originalMessageId
                                         ?.takeIf { it.isNotBlank() }

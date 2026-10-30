@@ -10,6 +10,7 @@ import com.dedovmosol.iwomail.data.repository.draftAttachmentRole
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
 import com.dedovmosol.iwomail.eas.DraftIds
 import com.dedovmosol.iwomail.eas.EasResult
+import com.dedovmosol.iwomail.eas.ReceiptRequests
 import com.dedovmosol.iwomail.util.EmbeddedImages
 import com.dedovmosol.iwomail.util.containsContentId
 import com.dedovmosol.iwomail.util.extractDataUrlImages
@@ -103,7 +104,9 @@ class DraftSaver(
         /** data URL → Content-ID картинок тела, уже существующих на сервере (загружены при открытии). */
         val knownImageCids: Map<String, String> = emptyMap(),
         /** Вложения черновика, которые редактор не загрузил (id записей), — переносятся в новую версию. */
-        val unloadedAttachmentIds: Set<Long> = emptySet()
+        val unloadedAttachmentIds: Set<Long> = emptySet(),
+        /** Флажки «запросить отчёт»; null — не известны (черновик из Outlook, не прочитаны): на сервере не меняются. */
+        val receipts: ReceiptRequests? = null
     )
 
     /** Черновик для создания. */
@@ -120,7 +123,8 @@ class DraftSaver(
         val importance: Int,
         val fromEmail: String,
         val fromName: String,
-        val attachments: List<DraftAttachmentData>
+        val attachments: List<DraftAttachmentData>,
+        val receipts: ReceiptRequests? = null
     )
 
     sealed interface Result {
@@ -365,7 +369,8 @@ class DraftSaver(
         importance = content.importance,
         fromEmail = content.fromEmail,
         fromName = content.fromName,
-        attachments = attachments
+        attachments = attachments,
+        receipts = content.receipts
     )
 
     private fun recordOf(
@@ -394,7 +399,9 @@ class DraftSaver(
         importance = content.importance,
         hasAttachments = hasAttachments,
         bcc = bcc,
-        replacesServerId = replaces
+        replacesServerId = replaces,
+        requestReadReceipt = content.receipts?.read,
+        requestDeliveryReceipt = content.receipts?.delivery
     )
 
     companion object {

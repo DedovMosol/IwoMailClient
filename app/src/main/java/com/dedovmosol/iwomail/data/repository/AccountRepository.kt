@@ -339,6 +339,8 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         val settingsRepo = SettingsRepository.getInstance(context)
         settingsRepo.resetInitialSyncFlag(accountId)
         settingsRepo.resetLastNotificationCheckTime(accountId)
+        // Каналы уведомлений аккаунта в настройках системы больше не нужны
+        com.dedovmosol.iwomail.sync.MailNotificationChannels.deleteForAccount(context, accountId)
         val beforeAccounts = accountDao.getAllAccountsList()
         
         // Собираем пути файлов ДО удаления из БД (каскад уничтожит записи)

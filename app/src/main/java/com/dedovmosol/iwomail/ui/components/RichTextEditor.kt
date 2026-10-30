@@ -297,7 +297,9 @@ fun RichTextEditor(
     modifier: Modifier = Modifier,
     placeholder: String = "",
     minHeight: Int = 200,
-    isDarkTheme: Boolean = false
+    isDarkTheme: Boolean = false,
+    // Картинки из интернета в цитате чужого письма — по тем же правилам, что и при просмотре (пиксели отслеживания)
+    remoteImagesAllowed: Boolean = true
 ) {
     var isLoaded by remember { mutableStateOf(false) }
 
@@ -322,7 +324,7 @@ fun RichTextEditor(
         <html>
         <head>
             <meta charset="UTF-8">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src data: https:; connect-src 'none';">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data: cid: https: http: blob:; font-src data:; connect-src 'none';">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 * { box-sizing: border-box; }
@@ -1109,6 +1111,7 @@ fun RichTextEditor(
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
+                settings.blockNetworkImage = !remoteImagesAllowed
                 setBackgroundColor(Color.TRANSPARENT)
                 // Скрываем WebView до загрузки чтобы не мерцал белый прямоугольник
                 alpha = 0f
@@ -1182,6 +1185,10 @@ fun RichTextEditor(
         },
         update = { webView ->
             controller.webView = webView
+            // true → false: WebView сам догружает картинки уже открытой страницы, без перезагрузки редактора
+            if (webView.settings.blockNetworkImage == remoteImagesAllowed) {
+                webView.settings.blockNetworkImage = !remoteImagesAllowed
+            }
         }
     )
 }

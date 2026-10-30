@@ -138,6 +138,49 @@ fun EmailDetailScreen(
     val remoteImagesPrefs by settingsRepo.remoteImagesPrefs.collectAsStateWithLifecycle(initialValue = null)
     var remoteImagesShown by rememberSaveable(emailId) { mutableStateOf(false) }
 
+    // Отписка от рассылки — не для своих писем и не для спама: отписка от спама лишь подтверждает, что адрес живой
+    val listUnsubscribe = remember(email?.listUnsubscribe, email?.listUnsubscribeOneClick) {
+        com.dedovmosol.iwomail.eas.ListUnsubscribe.parse(email?.listUnsubscribe, email?.listUnsubscribeOneClick == true)
+    }.takeUnless { isInSent || isInDrafts || uiState.isInJunk || uiState.unsubscribed }
+    var showUnsubscribeDialog by rememberSaveable { mutableStateOf(false) }
+
+    // Важный отправитель: уведомления о его письмах звучат и в тихие часы
+    val mailAlertPrefs by settingsRepo.mailAlertPrefs.collectAsStateWithLifecycle(initialValue = null)
+    val senderMarkedVipText = Strings.senderMarkedVip
+    val senderUnmarkedVipText = Strings.senderUnmarkedVip
+
+    // Печать / PDF — системный диалог печати; .eml — файл в выбранном пользователем месте (SAF)
+    val printer = com.dedovmosol.iwomail.ui.components.rememberEmailPrinter()
+    val printLabels = com.dedovmosol.iwomail.util.EmailPrintDocument.Labels(Strings.quoteFrom, Strings.quoteTo, Strings.cc, Strings.quoteDate)
+    val printUnavailableText = Strings.printUnavailable
+    fun printEmail(target: com.dedovmosol.iwomail.data.database.EmailEntity) {
+        val prefs = remoteImagesPrefs
+        // Те же правила картинок из интернета, что и на экране (пиксели отслеживания)
+        val remoteAllowed = isInSent || isInDrafts || (prefs != null && com.dedovmosol.iwomail.util.RemoteImages.allowed(
+            prefs.alwaysLoad, prefs.trustedSenders, target.from, remoteImagesShown
+        ))
+        val images = inlineImages
+        scope.launch {
+            val html = withContext(Dispatchers.Default) {
+                val display = processEmailBodyForDisplay(target.body, target.bodyType)
+                val body = if (display.isHtml) sanitizeEmailHtml(replaceInlineCids(display.text, images)) else display.text
+                val from = if (target.fromName.isNotBlank()) "${target.fromName} <${extractEmailAddress(target.from)}>" else target.from
+                com.dedovmosol.iwomail.util.EmailPrintDocument.html(
+                    com.dedovmosol.iwomail.util.EmailPrintDocument.Header(
+                        target.subject, from, target.to, target.cc, formatFullDate(target.dateReceived)
+                    ),
+                    printLabels, body, display.isHtml, remoteAllowed
+                )
+            }
+            if (printer?.print(target.subject.ifBlank { "Email" }, html, remoteAllowed) != true) {
+                SafeToast.short(context, printUnavailableText)
+            }
+        }
+    }
+    val emlLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument(com.dedovmosol.iwomail.util.EmlFiles.MIME_TYPE)
+    ) { uri -> uri?.let(viewModel::saveEml) }
+
     // VM хранит семантическую ошибку тела; локализуем её в UI (VM независима от языка/ресурсов).
     val bodyLoadErrorText: String? = uiState.bodyLoadError?.let { err ->
         when (err) {
@@ -232,6 +275,10 @@ fun EmailDetailScreen(
     val onBackLatest by rememberUpdatedState(onBackClick)
     val readReceiptSentText by rememberUpdatedState(Strings.readReceiptSent)
     val readReceiptNotDeclinedText by rememberUpdatedState(Strings.readReceiptNotDeclined)
+    val unsubscribedText by rememberUpdatedState(Strings.unsubscribed)
+    val unsubscribeOpeningPageText by rememberUpdatedState(Strings.unsubscribeOpeningPage)
+    val emlSavedText by rememberUpdatedState(Strings.emlSaved)
+    val emlSaveFailedText by rememberUpdatedState(Strings.emlSaveFailed)
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             val ru = currentIsRussian
@@ -247,6 +294,16 @@ fun EmailDetailScreen(
                 EmailDetailEvent.DeletedOnServer -> SafeToast.short(context, if (ru) "Письмо удалено на сервере" else "Email deleted on server")
                 EmailDetailEvent.NoBodyFromServer -> SafeToast.long(context, if (ru) "Сервер не вернул текст письма. Откройте его через Outlook Web Access." else "Server returned no message body. Try opening this email in Outlook Web Access.")
                 is EmailDetailEvent.Error -> SafeToast.long(context, NotificationStrings.localizeError(event.message, ru))
+                EmailDetailEvent.Unsubscribed -> SafeToast.short(context, unsubscribedText)
+                is EmailDetailEvent.OpenUnsubscribePage -> {
+                    if (event.afterFailure) SafeToast.long(context, unsubscribeOpeningPageText)
+                    openInBrowser(context, event.url, ru)
+                }
+                EmailDetailEvent.EmlSaved -> SafeToast.short(context, emlSavedText)
+                is EmailDetailEvent.EmlFailed -> SafeToast.long(
+                    context,
+                    event.message?.let { "$emlSaveFailedText: ${NotificationStrings.localizeError(it, ru)}" } ?: emlSaveFailedText
+                )
             }
         }
     }
@@ -277,6 +334,31 @@ fun EmailDetailScreen(
                     text = Strings.no,
                     enabled = !isAnsweringReadReceipt
                 )
+            }
+        )
+    }
+
+    // Подтверждение отписки: что именно произойдёт — запрос, письмо от имени пользователя или страница
+    if (showUnsubscribeDialog && listUnsubscribe != null) {
+        val method = listUnsubscribe.method
+        com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
+            onDismissRequest = { showUnsubscribeDialog = false },
+            icon = { Icon(AppIcons.Unsubscribe, null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text(Strings.unsubscribeTitle) },
+            text = {
+                Text(
+                    when (method) {
+                        is com.dedovmosol.iwomail.eas.ListUnsubscribe.Method.OneClick -> Strings.unsubscribeOneClickText(hostOf(method.url))
+                        is com.dedovmosol.iwomail.eas.ListUnsubscribe.Method.Mail -> Strings.unsubscribeMailText(method.mailto.to)
+                        is com.dedovmosol.iwomail.eas.ListUnsubscribe.Method.Web -> Strings.unsubscribeWebText(hostOf(method.url))
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showUnsubscribeDialog = false; viewModel.unsubscribe() }) { Text(Strings.unsubscribe) }
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(onClick = { showUnsubscribeDialog = false }, text = Strings.cancel)
             }
         )
     }
@@ -420,6 +502,43 @@ fun EmailDetailScreen(
                                 onClick = { showOverflowMenu = false; onForwardClick() },
                                 leadingIcon = { Icon(AppIcons.Forward, null) }
                             )
+                            email?.let { target ->
+                                DropdownMenuItem(
+                                    text = { Text(Strings.printOrPdf) },
+                                    onClick = { showOverflowMenu = false; printEmail(target) },
+                                    leadingIcon = { Icon(AppIcons.Print, null) },
+                                    enabled = !isLoadingBody && printer != null
+                                )
+                                // Черновик только на устройстве на сервере не лежит — MIME взять неоткуда
+                                if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(target.serverId)) {
+                                    DropdownMenuItem(
+                                        text = { Text(Strings.saveAsEml) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            emlLauncher.launch(com.dedovmosol.iwomail.util.EmlFiles.fileName(target.subject))
+                                        },
+                                        leadingIcon = { Icon(AppIcons.Download, null) },
+                                        enabled = !uiState.isSavingEml
+                                    )
+                                }
+                                val senderKey = com.dedovmosol.iwomail.util.RemoteImages.senderKey(target.from)
+                                val alertPrefs = mailAlertPrefs
+                                if (!isInSent && !isInDrafts && senderKey.isNotEmpty() && alertPrefs != null) {
+                                    val isVip = senderKey in alertPrefs.vipSenders
+                                    DropdownMenuItem(
+                                        text = { Text(Strings.makeSenderVip) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            scope.launch {
+                                                settingsRepo.setVipSender(senderKey, vip = !isVip)
+                                                SafeToast.short(context, if (isVip) senderUnmarkedVipText else senderMarkedVipText)
+                                            }
+                                        },
+                                        leadingIcon = { Icon(if (isVip) AppIcons.Star else AppIcons.StarOutline, null) },
+                                        trailingIcon = { androidx.compose.material3.Checkbox(checked = isVip, onCheckedChange = null) }
+                                    )
+                                }
+                            }
                             // Переместить / Восстановить
                             if (isInTrash) {
                                 DropdownMenuItem(
@@ -577,6 +696,15 @@ fun EmailDetailScreen(
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.clickable { onComposeToEmail(displayEmail) }
                             )
+                        }
+                        if (listUnsubscribe != null) {
+                            TextButton(
+                                onClick = { showUnsubscribeDialog = true },
+                                enabled = !uiState.isUnsubscribing,
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp)
+                            ) {
+                                Text(Strings.unsubscribe, style = MaterialTheme.typography.labelLarge)
+                            }
                         }
                     }
 
@@ -1601,3 +1729,24 @@ fun EmailDetailScreen(
 
 
 
+
+/** Хост адреса для текста подтверждения: пользователь видит, куда уйдёт запрос. */
+private fun hostOf(url: String): String =
+    try {
+        java.net.URI(url).host?.removePrefix("www.")
+    } catch (_: java.net.URISyntaxException) {
+        null
+    } ?: url
+
+/** Ссылка — во внешнем браузере; браузера нет — в буфер обмена (как ссылки в теле письма). */
+private fun openInBrowser(context: android.content.Context, url: String, ru: Boolean) {
+    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+        .addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+    try {
+        context.startActivity(intent)
+    } catch (_: android.content.ActivityNotFoundException) {
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Link", url))
+        SafeToast.short(context, if (ru) "Ссылка скопирована" else "Link copied")
+    }
+}
