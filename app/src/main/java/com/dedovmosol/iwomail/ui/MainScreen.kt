@@ -148,7 +148,7 @@ fun MainScreen(
     val scheduledCount by androidx.compose.runtime.produceState(0) {
         com.dedovmosol.iwomail.sync.ScheduledSend.changes.collect {
             value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                com.dedovmosol.iwomail.sync.ScheduledSend.pending(context).count { !it.undo }
+                com.dedovmosol.iwomail.sync.ScheduledSend.pending(context).count { it.listed(System.currentTimeMillis()) }
             }
         }
     }

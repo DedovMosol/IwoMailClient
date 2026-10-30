@@ -270,6 +270,11 @@ fun SettingsScreen(
                 MailSettingsSection(settingsRepo)
             }
 
+            // === СЕКЦИЯ: УВЕДОМЛЕНИЯ О ПОЧТЕ (тихие часы, важные отправители, звук аккаунтов) ===
+            item {
+                MailAlertsSettingsSection(settingsRepo, accounts)
+            }
+
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             }

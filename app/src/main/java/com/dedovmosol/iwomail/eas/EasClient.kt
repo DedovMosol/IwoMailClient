@@ -808,156 +808,10 @@ class EasClient(
     ): EasResult<EmailBodyResult> {
         return withContext(Dispatchers.IO) {
             try {
-                // Определяем EWS DistinguishedFolderId на основе типа папки
-                val distinguishedFolderId = when (folderType.lowercase()) {
-                    "inbox", "1" -> "inbox"
-                    "sent", "sentitems", "5" -> "sentitems"
-                    "drafts", "3" -> "drafts"
-                    "deleted", "deleteditems", "4" -> "deleteditems"
-                    "outbox", "6" -> "outbox"
-                    else -> null
+                val ewsItemId = when (val found = findEwsMailItemId(subject, folderType, dateReceived, internetMessageId)) {
+                    is EasResult.Error -> return@withContext found
+                    is EasResult.Success -> found.data ?: return@withContext EasResult.Success(EmailBodyResult(""))
                 }
-                if (distinguishedFolderId == null) {
-                    android.util.Log.w("EasClient", "fetchEmailBodyViaEws: unsupported folderType='$folderType', skipping fallback")
-                    return@withContext EasResult.Success(EmailBodyResult(""))
-                }
-
-                // Экранируем subject для XML
-                val escapedSubject = escapeXml(subject)
-
-                // Для Sent Items семантически корректное поле — DateTimeSent.
-                // DateTimeReceived на отправленных письмах тоже выставляется Exchange,
-                // но на некоторых инсталляциях Exchange 2007 SP1 оно может отличаться от
-                // значения, которое вернул EAS Sync (DateReceived), что ломает узкое окно.
-                val isSentFolder = distinguishedFolderId == "sentitems"
-                val dateFieldsToTry: List<String> = if (isSentFolder) {
-                    listOf("item:DateTimeSent", "item:DateTimeReceived")
-                } else {
-                    listOf("item:DateTimeReceived")
-                }
-
-                fun buildDateRestriction(windowMs: Long, dateField: String): String {
-                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-                    sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                    val dateFrom = sdf.format(java.util.Date(dateReceived - windowMs))
-                    val dateTo = sdf.format(java.util.Date(dateReceived + windowMs))
-                    return """<t:And>
-                    <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
-                        <t:FieldURI FieldURI="item:Subject"/>
-                        <t:Constant Value="$escapedSubject"/>
-                    </t:Contains>
-                    <t:IsGreaterThanOrEqualTo>
-                        <t:FieldURI FieldURI="$dateField"/>
-                        <t:FieldURIOrConstant><t:Constant Value="$dateFrom"/></t:FieldURIOrConstant>
-                    </t:IsGreaterThanOrEqualTo>
-                    <t:IsLessThanOrEqualTo>
-                        <t:FieldURI FieldURI="$dateField"/>
-                        <t:FieldURIOrConstant><t:Constant Value="$dateTo"/></t:FieldURIOrConstant>
-                    </t:IsLessThanOrEqualTo>
-                </t:And>"""
-                }
-
-                val subjectOnlyRestriction = """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
-                    <t:FieldURI FieldURI="item:Subject"/>
-                    <t:Constant Value="$escapedSubject"/>
-                </t:Contains>"""
-
-                val restrictions = buildList {
-                    if (!internetMessageId.isNullOrBlank()) {
-                        add(
-                            """<t:IsEqualTo>
-                    <t:FieldURI FieldURI="message:InternetMessageId"/>
-                    <t:FieldURIOrConstant>
-                        <t:Constant Value="${escapeXml(internetMessageId)}"/>
-                    </t:FieldURIOrConstant>
-                </t:IsEqualTo>"""
-                        )
-                    }
-                    if (dateReceived > 0L) {
-                        // Порядок: от самого узкого к более широкому окну; для Sent пробуем
-                        // дополнительно DateTimeSent, а затем DateTimeReceived. На каждое окно
-                        // требуется РОВНО один кандидат — иначе fallback отменяется.
-                        for (field in dateFieldsToTry) {
-                            add(buildDateRestriction(15_000L, field))
-                            add(buildDateRestriction(120_000L, field))
-                            add(buildDateRestriction(600_000L, field))
-                            if (isSentFolder) {
-                                add(buildDateRestriction(3_600_000L, field))
-                            }
-                        }
-                        if (isSentFolder && internetMessageId.isNullOrBlank()) {
-                            add(subjectOnlyRestriction)
-                        }
-                    } else if (internetMessageId.isNullOrBlank()) {
-                        add(subjectOnlyRestriction)
-                    }
-                }
-
-                val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
-                val sortDateField = if (isSentFolder) "item:DateTimeSent" else "item:DateTimeReceived"
-
-                suspend fun findCandidateIds(restriction: String): EasResult<List<String>> {
-                    val findRequest = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
-               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
-    <soap:Header>
-        <t:RequestServerVersion Version="Exchange2007_SP1"/>
-    </soap:Header>
-    <soap:Body>
-        <m:FindItem Traversal="Shallow">
-            <m:ItemShape>
-                <t:BaseShape>IdOnly</t:BaseShape>
-            </m:ItemShape>
-            <m:IndexedPageItemView MaxEntriesReturned="2" Offset="0" BasePoint="Beginning"/>
-            <m:Restriction>
-                $restriction
-            </m:Restriction>
-            <m:SortOrder>
-                <t:FieldOrder Order="Descending">
-                    <t:FieldURI FieldURI="$sortDateField"/>
-                </t:FieldOrder>
-            </m:SortOrder>
-            <m:ParentFolderIds>
-                <t:DistinguishedFolderId Id="$distinguishedFolderId"/>
-            </m:ParentFolderIds>
-        </m:FindItem>
-    </soap:Body>
-</soap:Envelope>""".trimIndent()
-                    val findResponse = transport.executeEwsWithAuth(findRequest, "FindItem")
-                        ?: return EasResult.Error("FindItem request failed")
-                    val ids = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
-                    return EasResult.Success(ids)
-                }
-
-                var candidateIds = emptyList<String>()
-                for (restriction in restrictions) {
-                    when (val findResult = findCandidateIds(restriction)) {
-                        is EasResult.Error -> return@withContext findResult
-                        is EasResult.Success -> {
-                            when (findResult.data.size) {
-                                1 -> {
-                                    candidateIds = findResult.data
-                                    break
-                                }
-                                0 -> Unit
-                                else -> {
-                                    // Ambiguous — следующее restriction может быть более
-                                    // специфичным (другое date-поле / иное окно) и дать 1.
-                                    // Если все restrictions вернут 0 или 2+, fallback завершится
-                                    // пустым телом ниже — оригинальный кэш не перезаписывается.
-                                    android.util.Log.w(
-                                        "EasClient",
-                                        "fetchEmailBodyViaEws: ambiguous EWS match for subject='$subject', folder='$distinguishedFolderId', candidates=${findResult.data.size}, trying next restriction"
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                val ewsItemId = candidateIds.singleOrNull()
-                    ?: return@withContext EasResult.Success(EmailBodyResult(""))
 
                 // Шаг 2: GetItem для получения тела
                 val getItemRequest = """<?xml version="1.0" encoding="utf-8"?>
@@ -1025,6 +879,167 @@ class EasClient(
     }
 
     /**
+     * EWS ItemId РїРёСЃСЊРјР° РїРѕ InternetMessageId, С‚РµРјРµ Рё РґР°С‚Рµ (EAS ServerId РІ EWS РЅРµ РїРµСЂРµРІРѕРґРёС‚СЃСЏ). РЎРѕРІРїР°РґРµРЅРёРµ РґРѕР»Р¶РЅРѕ
+     * Р±С‹С‚СЊ СЂРѕРІРЅРѕ РѕРґРЅРѕ, РёРЅР°С‡Рµ null: РѕС‚РєСЂС‹С‚СЊ С‡СѓР¶РѕРµ РїРёСЃСЊРјРѕ С…СѓР¶Рµ, С‡РµРј РЅРµ РѕС‚РєСЂС‹С‚СЊ РЅРёРєР°РєРѕРіРѕ. Exchange 2007 SP1+.
+     */
+    private suspend fun findEwsMailItemId(
+        subject: String,
+        folderType: String,
+        dateReceived: Long,
+        internetMessageId: String?
+    ): EasResult<String?> = withContext(Dispatchers.IO) {
+            // Определяем EWS DistinguishedFolderId на основе типа папки
+            val distinguishedFolderId = when (folderType.lowercase()) {
+                "inbox", "1" -> "inbox"
+                "sent", "sentitems", "5" -> "sentitems"
+                "drafts", "3" -> "drafts"
+                "deleted", "deleteditems", "4" -> "deleteditems"
+                "outbox", "6" -> "outbox"
+                else -> null
+            }
+            if (distinguishedFolderId == null) {
+                android.util.Log.w("EasClient", "fetchEmailBodyViaEws: unsupported folderType='$folderType', skipping fallback")
+                return@withContext EasResult.Success(null)
+            }
+
+            // Экранируем subject для XML
+            val escapedSubject = escapeXml(subject)
+
+            // Для Sent Items семантически корректное поле — DateTimeSent.
+            // DateTimeReceived на отправленных письмах тоже выставляется Exchange,
+            // но на некоторых инсталляциях Exchange 2007 SP1 оно может отличаться от
+            // значения, которое вернул EAS Sync (DateReceived), что ломает узкое окно.
+            val isSentFolder = distinguishedFolderId == "sentitems"
+            val dateFieldsToTry: List<String> = if (isSentFolder) {
+                listOf("item:DateTimeSent", "item:DateTimeReceived")
+            } else {
+                listOf("item:DateTimeReceived")
+            }
+
+            fun buildDateRestriction(windowMs: Long, dateField: String): String {
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+                sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                val dateFrom = sdf.format(java.util.Date(dateReceived - windowMs))
+                val dateTo = sdf.format(java.util.Date(dateReceived + windowMs))
+                return """<t:And>
+                <t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
+                    <t:FieldURI FieldURI="item:Subject"/>
+                    <t:Constant Value="$escapedSubject"/>
+                </t:Contains>
+                <t:IsGreaterThanOrEqualTo>
+                    <t:FieldURI FieldURI="$dateField"/>
+                    <t:FieldURIOrConstant><t:Constant Value="$dateFrom"/></t:FieldURIOrConstant>
+                </t:IsGreaterThanOrEqualTo>
+                <t:IsLessThanOrEqualTo>
+                    <t:FieldURI FieldURI="$dateField"/>
+                    <t:FieldURIOrConstant><t:Constant Value="$dateTo"/></t:FieldURIOrConstant>
+                </t:IsLessThanOrEqualTo>
+            </t:And>"""
+            }
+
+            val subjectOnlyRestriction = """<t:Contains ContainmentMode="FullString" ContainmentComparison="IgnoreCaseAndNonSpacingCharacters">
+                <t:FieldURI FieldURI="item:Subject"/>
+                <t:Constant Value="$escapedSubject"/>
+            </t:Contains>"""
+
+            val restrictions = buildList {
+                if (!internetMessageId.isNullOrBlank()) {
+                    add(
+                        """<t:IsEqualTo>
+                <t:FieldURI FieldURI="message:InternetMessageId"/>
+                <t:FieldURIOrConstant>
+                    <t:Constant Value="${escapeXml(internetMessageId)}"/>
+                </t:FieldURIOrConstant>
+            </t:IsEqualTo>"""
+                    )
+                }
+                if (dateReceived > 0L) {
+                    // Порядок: от самого узкого к более широкому окну; для Sent пробуем
+                    // дополнительно DateTimeSent, а затем DateTimeReceived. На каждое окно
+                    // требуется РОВНО один кандидат — иначе fallback отменяется.
+                    for (field in dateFieldsToTry) {
+                        add(buildDateRestriction(15_000L, field))
+                        add(buildDateRestriction(120_000L, field))
+                        add(buildDateRestriction(600_000L, field))
+                        if (isSentFolder) {
+                            add(buildDateRestriction(3_600_000L, field))
+                        }
+                    }
+                    if (isSentFolder && internetMessageId.isNullOrBlank()) {
+                        add(subjectOnlyRestriction)
+                    }
+                } else if (internetMessageId.isNullOrBlank()) {
+                    add(subjectOnlyRestriction)
+                }
+            }
+
+            val itemIdPattern = "<t:ItemId Id=\"([^\"]+)\"".toRegex()
+            val sortDateField = if (isSentFolder) "item:DateTimeSent" else "item:DateTimeReceived"
+
+            suspend fun findCandidateIds(restriction: String): EasResult<List<String>> {
+                val findRequest = """<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+               xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+    <soap:Header>
+        <t:RequestServerVersion Version="Exchange2007_SP1"/>
+    </soap:Header>
+    <soap:Body>
+        <m:FindItem Traversal="Shallow">
+            <m:ItemShape>
+            <t:BaseShape>IdOnly</t:BaseShape>
+            </m:ItemShape>
+            <m:IndexedPageItemView MaxEntriesReturned="2" Offset="0" BasePoint="Beginning"/>
+            <m:Restriction>
+            $restriction
+            </m:Restriction>
+            <m:SortOrder>
+            <t:FieldOrder Order="Descending">
+                <t:FieldURI FieldURI="$sortDateField"/>
+            </t:FieldOrder>
+            </m:SortOrder>
+            <m:ParentFolderIds>
+            <t:DistinguishedFolderId Id="$distinguishedFolderId"/>
+            </m:ParentFolderIds>
+        </m:FindItem>
+    </soap:Body>
+</soap:Envelope>""".trimIndent()
+                val findResponse = transport.executeEwsWithAuth(findRequest, "FindItem")
+                    ?: return EasResult.Error("FindItem request failed")
+                val ids = itemIdPattern.findAll(findResponse).map { it.groupValues[1] }.toList()
+                return EasResult.Success(ids)
+            }
+
+            var candidateIds = emptyList<String>()
+            for (restriction in restrictions) {
+                when (val findResult = findCandidateIds(restriction)) {
+                    is EasResult.Error -> return@withContext findResult
+                    is EasResult.Success -> {
+                        when (findResult.data.size) {
+                            1 -> {
+                                candidateIds = findResult.data
+                                break
+                            }
+                            0 -> Unit
+                            else -> {
+                                // Ambiguous — следующее restriction может быть более
+                                // специфичным (другое date-поле / иное окно) и дать 1.
+                                // Если все restrictions вернут 0 или 2+, fallback завершится
+                                // пустым телом ниже — оригинальный кэш не перезаписывается.
+                                android.util.Log.w(
+                                    "EasClient",
+                                    "fetchEmailBodyViaEws: ambiguous EWS match for subject='$subject', folder='$distinguishedFolderId', candidates=${findResult.data.size}, trying next restriction"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            EasResult.Success(candidateIds.singleOrNull())
+    }
+
+    /**
      * Извлекает inline изображения из MIME данных
      * @see EasEmailService.extractInlineImagesFromMime
      */
@@ -1037,6 +1052,37 @@ class EasClient(
      */
     suspend fun fetchInlineImages(collectionId: String, serverId: String): EasResult<Map<String, String>> =
         emailService.fetchInlineImages(collectionId, serverId)
+
+    /**
+     * Письмо целиком в формате RFC 5322 (для .eml): EAS ItemOperations (MIME). EWS ItemId (черновик) или EAS не отдал
+     * MIME (бывает на Exchange 2007) — EWS GetItem по однозначному совпадению ([findEwsMailItemId]). Пустой массив —
+     * письма с таким MIME не нашлось.
+     */
+    suspend fun fetchMessageMime(
+        collectionId: String,
+        serverId: String,
+        subject: String,
+        ewsFolderType: String?,
+        dateReceived: Long,
+        internetMessageId: String?
+    ): EasResult<ByteArray> {
+        if (DraftIds.isEwsItemId(serverId)) return mimeBytesEws(serverId)
+        val eas = emailService.fetchMime(collectionId, serverId)
+        if (eas is EasResult.Success && eas.data.isNotBlank()) return EasResult.Success(eas.data.toByteArray(Charsets.UTF_8))
+        val ewsItemId = try {
+            ewsFolderType?.let { (findEwsMailItemId(subject, it, dateReceived, internetMessageId) as? EasResult.Success)?.data }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            null
+        }
+        return if (ewsItemId != null) mimeBytesEws(ewsItemId) else (eas as? EasResult.Error) ?: EasResult.Success(ByteArray(0))
+    }
+
+    private suspend fun mimeBytesEws(itemId: String): EasResult<ByteArray> =
+        when (val mime = draftsService.fetchMimeBytesEws(itemId)) {
+            is EasResult.Success -> EasResult.Success(mime.data ?: ByteArray(0))
+            is EasResult.Error -> mime
+        }
 
     /**
      * Извлекает inline-картинки из EWS-based черновика (длинный ItemId, не EAS формат).
@@ -2393,8 +2439,9 @@ $foldersXml
         subject: String,
         body: String,
         attachments: List<DraftAttachmentData> = emptyList(),
-        importance: Int = 1
-    ): EasResult<String> = draftsService.createDraft(to, cc, bcc, subject, body, attachments, importance)
+        importance: Int = 1,
+        receipts: ReceiptRequests? = null
+    ): EasResult<String> = draftsService.createDraft(to, cc, bcc, subject, body, attachments, importance, receipts)
 
     /**
      * Обновление черновика на сервере Exchange
@@ -2408,8 +2455,9 @@ $foldersXml
         subject: String,
         body: String,
         importance: Int = 1,
-        appendBcc: Boolean = false
-    ): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body, importance, appendBcc)
+        appendBcc: Boolean = false,
+        receipts: ReceiptRequests? = null
+    ): EasResult<Boolean> = draftsService.updateDraft(serverId, to, cc, bcc, subject, body, importance, appendBcc, receipts)
 
     /**
      * Полный EWS ItemId черновика по теме — только если черновик с такой темой ОДИН (не считая
@@ -2781,6 +2829,9 @@ data class EmailBodyResult(
     val mdnRequestedBy: String? = null, // Email для отправки MDN
     val originalMessageId: String? = null, // RFC 5322 Message-ID исходного письма
     // HTML целиком: не обрезан сервером ([MS-ASAIRS] Truncated) и не заменён текстовой версией
-    val complete: Boolean = true
+    val complete: Boolean = true,
+    // Отписка от рассылки: значение List-Unsubscribe и поддержка one-click ([ListUnsubscribe]); null — заголовка нет
+    val listUnsubscribe: String? = null,
+    val listUnsubscribeOneClick: Boolean = false
 )
 

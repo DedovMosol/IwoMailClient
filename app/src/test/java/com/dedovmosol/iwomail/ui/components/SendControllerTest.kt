@@ -165,8 +165,8 @@ class SendControllerTest {
         controller.cancel()
 
         assertThat(withTimeout(5_000) { outcome.await() }).isEqualTo("success")
-        // Письмо не потеряно: снова ждёт отправки воркером
-        assertThat(pending()).hasSize(1)
+        // Письмо не потеряно: снова ждёт отправки воркером — и видно в списке запланированных
+        assertThat(pending().single().undo).isFalse()
         assertThat(env.messages).contains(NotificationStrings.getUndoDraftFailed(true))
     }
 
@@ -199,6 +199,9 @@ class SendControllerTest {
         val entry = pending().single()
         val work = WorkManager.getInstance(context).getWorkInfosForUniqueWork(ScheduledSend.workName(entry.dir)).get()
         assertThat(work.map { it.state }).contains(WorkInfo.State.ENQUEUED)
+        // Ждёт связи уже как обычное ожидающее письмо: видно в списке запланированных, его можно отменить
+        assertThat(entry.undo).isFalse()
+        assertThat(entry.listed(System.currentTimeMillis())).isTrue()
         assertThat(env.returned).isEmpty()
         assertThat(env.messages).contains(NotificationStrings.getSendQueuedOffline(true))
     }

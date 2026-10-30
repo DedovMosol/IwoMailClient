@@ -49,7 +49,7 @@ import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.MailFlag
 import com.dedovmosol.iwomail.ui.screens.emaillist.SwipeableEmailRow
-import com.dedovmosol.iwomail.ui.screens.emaillist.availableIn
+import com.dedovmosol.iwomail.ui.screens.emaillist.SwipeRules
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
@@ -146,14 +146,12 @@ fun EmailListScreen(
 
     val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
 
-    // Свайпы: из «Удалённых» и Черновиков свайпом не удаляем (там удаление окончательное, с подтверждением),
-    // флаг — там, где есть звёздочка; в режиме выбора свайпов нет
+    // Свайпы по папке каждого письма (в «Избранном» и «Сегодня» папки разные); в режиме выбора свайпов нет
     val swipeSettings by remember { RepositoryProvider.getSettingsRepository(context).swipeActions }
         .collectAsStateWithLifecycle(initialValue = SwipeAction.DEFAULT_START to SwipeAction.DEFAULT_END)
-    val deleteBySwipe = !isTrashFolder && !isDraftsFolder
-    val flagBySwipe = !isTrashFolder && !isSpamFolder && !isDraftsFolder
-    val swipeStart = if (isSelectionMode) SwipeAction.NONE else swipeSettings.first.availableIn(deleteBySwipe, flagBySwipe)
-    val swipeEnd = if (isSelectionMode) SwipeAction.NONE else swipeSettings.second.availableIn(deleteBySwipe, flagBySwipe)
+    val swipeRules = remember(swipeSettings, folders, isSelectionMode) {
+        if (isSelectionMode) SwipeRules.NONE else SwipeRules.of(swipeSettings.first, swipeSettings.second, folders)
+    }
 
     // UI-состояние диалогов/меню (не относится к данным) — переживает поворот.
     var showMoveDialog by rememberSaveable { mutableStateOf(false) }
@@ -617,8 +615,7 @@ fun EmailListScreen(
                 },
                 onStarClick = { email -> viewModel.toggleFlag(email.id) },
                 onFlagChosen = { email, flag -> viewModel.setFlag(email.id, flag) },
-                swipeStart = swipeStart,
-                swipeEnd = swipeEnd,
+                swipeRules = swipeRules,
                 onSwipe = { email, action ->
                     if (action == SwipeAction.DELETE) com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
                     viewModel.swipe(email, action)
@@ -841,8 +838,7 @@ private fun EmailList(
     onLongClick: (EmailEntity) -> Unit,
     onStarClick: (EmailEntity) -> Unit,
     onFlagChosen: (EmailEntity, MailFlag) -> Unit,
-    swipeStart: SwipeAction,
-    swipeEnd: SwipeAction,
+    swipeRules: SwipeRules,
     onSwipe: (EmailEntity, SwipeAction) -> Unit,
     onSelectAll: () -> Unit,
     onRetry: () -> Unit,
@@ -915,8 +911,7 @@ private fun EmailList(
                         onLongClick = onLongClick,
                         onStarClick = onStarClick,
                         onFlagChosen = onFlagChosen,
-                        swipeStart = swipeStart,
-                        swipeEnd = swipeEnd,
+                        swipeRules = swipeRules,
                         onSwipe = onSwipe,
                         onSelectAll = onSelectAll,
                         onDismissError = onDismissError,
@@ -1052,8 +1047,7 @@ private fun EmailListContent(
     onLongClick: (EmailEntity) -> Unit,
     onStarClick: (EmailEntity) -> Unit,
     onFlagChosen: (EmailEntity, MailFlag) -> Unit,
-    swipeStart: SwipeAction,
-    swipeEnd: SwipeAction,
+    swipeRules: SwipeRules,
     onSwipe: (EmailEntity, SwipeAction) -> Unit,
     onSelectAll: () -> Unit,
     onDismissError: () -> Unit,
@@ -1161,8 +1155,8 @@ private fun EmailListContent(
         items(emails, key = { it.id }) { email ->
             val latestEmail by rememberUpdatedState(email)
             SwipeableEmailRow(
-                startAction = swipeStart,
-                endAction = swipeEnd,
+                startAction = swipeRules.start(email.folderId),
+                endAction = swipeRules.end(email.folderId),
                 read = email.read,
                 flagged = email.flagged,
                 onSwipe = remember { { action: SwipeAction -> stableOnSwipe(latestEmail, action) } }
@@ -1408,8 +1402,11 @@ private fun EmailListItem(
                 var flagMenuOpen by remember { mutableStateOf(false) }
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        // 48 dp — минимальная зона нажатия (Material, доступность); круглая волна, как у IconButton
+                        .size(48.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
                         .combinedClickable(
+                            role = androidx.compose.ui.semantics.Role.Button,
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onStarClick()

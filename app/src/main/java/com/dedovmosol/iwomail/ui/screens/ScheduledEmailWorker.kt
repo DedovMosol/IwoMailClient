@@ -60,7 +60,8 @@ class ScheduledEmailWorker(
                 SendNotifications.show(
                     applicationContext, MailApplication.CHANNEL_SCHEDULED, SendNotifications.idFor(job.clientId),
                     NotificationStrings.getEmailSent(ru),
-                    NotificationStrings.getScheduledEmailSent(firstRecipient(job.mail), ru)
+                    if (job.undo) NotificationStrings.getEmailSentTo(firstRecipient(job.mail), ru)
+                    else NotificationStrings.getScheduledEmailSent(firstRecipient(job.mail), ru)
                 )
                 refreshSentFolder(applicationContext, job.accountId)
                 Result.success()
@@ -106,7 +107,8 @@ class ScheduledEmailWorker(
         val ru = SendNotifications.isRussian(applicationContext)
         val notification = NotificationCompat.Builder(applicationContext, MailApplication.CHANNEL_SCHEDULED)
             .setSmallIcon(com.dedovmosol.iwomail.R.drawable.ic_email)
-            .setContentTitle(if (ru) "Отправка запланированного письма" else "Sending scheduled email")
+            // Этот же воркер досылает и письма с отменой отправки — общее название
+            .setContentTitle(if (ru) "Отправка письма" else "Sending email")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setSilent(true)

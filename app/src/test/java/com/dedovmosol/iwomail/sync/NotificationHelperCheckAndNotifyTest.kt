@@ -5,6 +5,8 @@ import com.dedovmosol.iwomail.data.database.EmailDao
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.database.NotificationEmailSummary
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
+import com.dedovmosol.iwomail.domain.MailAlert
+import com.dedovmosol.iwomail.domain.QuietHours
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -50,13 +52,14 @@ class NotificationHelperCheckAndNotifyTest {
         every { database.emailDao() } returns emailDao
         // По умолчанию Inbox пуст (клэмп не срабатывает); тесты переопределяют при необходимости.
         coEvery { emailDao.getMaxInboxDateReceived(accountId) } returns 0L
+        every { settingsRepo.mailAlertPrefs } returns flowOf(SettingsRepository.MailAlertPrefs(QuietHours(enabled = false, startMinutes = 0, endMinutes = 0), emptySet()))
 
         // Изолируем побочные эффекты Android/SharedPreferences.
         mockkObject(NotificationHelper)
         every { NotificationHelper.getShownNotifications(any()) } returns emptySet()
         every { NotificationHelper.markNotificationsAsShown(any(), any()) } just Runs
         coEvery {
-            NotificationHelper.showNewMailNotification(any(), any(), any(), any(), any(), any(), any())
+            NotificationHelper.showNewMailNotification(any(), any(), any(), any(), any(), any(), any(), any())
         } just Runs
 
         // Явно фиксируем состояние видимости приложения: по умолчанию тесты исполняют
@@ -71,8 +74,48 @@ class NotificationHelperCheckAndNotifyTest {
         unmockkObject(AppForegroundTracker)
     }
 
-    private fun summary(id: String, date: Long) =
-        NotificationEmailSummary(id = id, from = "s@x.com", fromName = "S", subject = "hi", dateReceived = date)
+    private fun summary(id: String, date: Long, from: String = "s@x.com") =
+        NotificationEmailSummary(id = id, from = from, fromName = "S", subject = "hi", dateReceived = date)
+
+    /** Тихие часы вокруг текущего времени: ±2 часа (тест не зависит от того, когда запущен). */
+    private fun quietNow(): QuietHours {
+        val now = QuietHours.minuteOfDay(System.currentTimeMillis())
+        return QuietHours(enabled = true, startMinutes = (now + 1440 - 120) % 1440, endMinutes = (now + 120) % 1440)
+    }
+
+    @Test
+    fun `quiet hours post the notification silently`() = runTest {
+        coEvery { settingsRepo.getLastNotificationCheckTime(accountId) } returns 1_000L
+        coEvery { emailDao.getNewEmailsForNotification(accountId, 1_000L) } returns listOf(summary("1_a", 3_000L))
+        every { settingsRepo.notificationsEnabled } returns flowOf(true)
+        every { settingsRepo.mailAlertPrefs } returns flowOf(SettingsRepository.MailAlertPrefs(quietNow(), emptySet()))
+
+        NotificationHelper.checkAndNotifyNewMail(context, database, settingsRepo, accountId, accountEmail)
+
+        coVerify(exactly = 1) {
+            NotificationHelper.showNewMailNotification(
+                context, any(), 1, any(), accountId, accountEmail, settingsRepo, MailAlert(vip = false, silent = true)
+            )
+        }
+    }
+
+    @Test
+    fun `important sender alerts even in quiet hours, found among all new emails`() = runTest {
+        coEvery { settingsRepo.getLastNotificationCheckTime(accountId) } returns 1_000L
+        val many = (1..30).map { summary("1_$it", 2_000L + it) } + summary("1_boss", 1_500L, from = "Boss <BOSS@corp.example>")
+        coEvery { emailDao.getNewEmailsForNotification(accountId, 1_000L) } returns many
+        every { settingsRepo.notificationsEnabled } returns flowOf(true)
+        every { settingsRepo.mailAlertPrefs } returns
+            flowOf(SettingsRepository.MailAlertPrefs(quietNow(), setOf("boss@corp.example")))
+
+        NotificationHelper.checkAndNotifyNewMail(context, database, settingsRepo, accountId, accountEmail)
+
+        coVerify(exactly = 1) {
+            NotificationHelper.showNewMailNotification(
+                context, any(), 31, any(), accountId, accountEmail, settingsRepo, MailAlert(vip = true, silent = false)
+            )
+        }
+    }
 
     @Test
     fun `first run with existing inbox baselines to max dateReceived and does not query candidates`() = runTest {

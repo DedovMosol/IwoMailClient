@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
-    version = 47,
+    version = 48,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -259,6 +259,15 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `emails` ADD COLUMN `flagCompleted` INTEGER NOT NULL DEFAULT 0")
             }
         }
+        /** Отписка от рассылки (List-Unsubscribe) и флажки «запросить отчёт» черновика. SQL — из schemas/48.json. */
+        private val MIGRATION_47_48 = object : Migration(47, 48) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `listUnsubscribe` TEXT")
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `listUnsubscribeOneClick` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `requestReadReceipt` INTEGER")
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `requestDeliveryReceipt` INTEGER")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -283,7 +292,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_43_44,
             MIGRATION_44_45,
             MIGRATION_45_46,
-            MIGRATION_46_47
+            MIGRATION_46_47,
+            MIGRATION_47_48
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -517,7 +527,14 @@ data class EmailEntity(
     val flagStartDate: Long? = null,
     val flagDueDate: Long? = null,
     val flagReminder: Long? = null,
-    val flagCompleted: Boolean = false
+    val flagCompleted: Boolean = false,
+    // Отписка от рассылки: значение List-Unsubscribe (RFC 2369) и поддержка отписки одним запросом (RFC 8058).
+    // Из заголовков MIME, загружаемых с телом письма; null — заголовка нет или тело ещё не загружалось.
+    val listUnsubscribe: String? = null,
+    val listUnsubscribeOneClick: Boolean = false,
+    // Флажки «запросить отчёт» черновика. null — не известны (черновик пришёл синхронизацией: EAS их не передаёт).
+    val requestReadReceipt: Boolean? = null,
+    val requestDeliveryReceipt: Boolean? = null
 )
 
 data class EmailDedupInfo(

@@ -18,6 +18,7 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -680,6 +681,18 @@ fun ComposeScreen(
     // Без него LaunchedEffect(replyToEmailId) повторно срабатывает при повороте и
     // перезаписывает body (подпись + цитата), уничтожая введённый пользователем текст.
     var replyLoaded by rememberSaveable { mutableStateOf(false) }
+    // Отправитель цитируемого чужого письма с картинками из интернета: их грузим по тем же правилам, что и
+    // при просмотре, иначе ответ «открывает» пиксель отслеживания. Свои письма (из Отправленных) не в счёт.
+    var quotedRemoteFrom by rememberSaveable { mutableStateOf<String?>(null) }
+    var quotedImagesShown by rememberSaveable { mutableStateOf(false) }
+    val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
+    val remoteImagesPrefs by remember { settingsRepo.remoteImagesPrefs }.collectAsStateWithLifecycle(initialValue = null)
+    // Пока настройки не прочитаны — не грузим (закрыто по умолчанию)
+    val quotedImagesAllowed = quotedRemoteFrom.let { from ->
+        from == null || remoteImagesPrefs?.let {
+            com.dedovmosol.iwomail.util.RemoteImages.allowed(it.alwaysLoad, it.trustedSenders, from, quotedImagesShown)
+        } == true
+    }
     // Загружаем данные для ответа
     LaunchedEffect(replyToEmailId) {
         if (replyLoaded) return@LaunchedEffect
@@ -711,6 +724,7 @@ fun ComposeScreen(
                 } else {
                     email.body.escapeHtml().replace("\n", "<br>")
                 }
+                if (!isSentFolder && com.dedovmosol.iwomail.util.RemoteImages.present(originalBody)) quotedRemoteFrom = email.from
                 // Структура: [место для ввода] + подпись + цитата
                 body = "<br>" + signatureHtml + formatHtmlQuote(
                     header = originalMessageStr,
@@ -893,6 +907,9 @@ fun ComposeScreen(
                 } else {
                     email.body.escapeHtml().replace("\n", "<br>")
                 }
+                if (fwdFolderForSource?.type != FolderType.SENT_ITEMS && com.dedovmosol.iwomail.util.RemoteImages.present(originalBody)) {
+                    quotedRemoteFrom = email.from
+                }
                 // Структура: [место для ввода] + подпись + цитата
                 body = "<br>" + signatureHtml + formatHtmlQuote(
                     header = forwardedMessageStr,
@@ -1056,6 +1073,11 @@ fun ComposeScreen(
     // Скрытые копии черновика известны (их сохранило приложение). Черновик из Outlook приходит без них
     // (EAS до 16.0 не передаёт Bcc): тогда пустое поле при сохранении не стирает их на сервере.
     var draftBccKnown by rememberSaveable { mutableStateOf(true) }
+    // Флажки «запросить отчёт» черновика известны (сохранены приложением или прочитаны по EWS). Черновик из Outlook
+    // приходит без них (EAS их не передаёт): пока их не трогали, сохранение не меняет их на сервере.
+    var draftReceiptsKnown by rememberSaveable { mutableStateOf(true) }
+    var initialDraftReadReceipt by rememberSaveable { mutableStateOf(false) }
+    var initialDraftDeliveryReceipt by rememberSaveable { mutableStateOf(false) }
     // Вложения черновика, которые не удалось загрузить при открытии (id записей): при сохранении переносятся
     var draftUnloadedAttachmentIds by rememberSaveable { mutableStateOf(listOf<Long>()) }
     // Картинки тела, уже существующие на сервере: ключ data URL (dataUrlKey) → Content-ID. Правка только
@@ -1092,6 +1114,9 @@ fun ComposeScreen(
                 bcc = normalizeRecipients(draft.bcc.orEmpty())
                 draftBccKnown = draft.bcc != null
                 highPriority = draft.importance == 2
+                requestReadReceipt = draft.requestReadReceipt == true
+                requestDeliveryReceipt = draft.requestDeliveryReceipt == true
+                draftReceiptsKnown = draft.requestReadReceipt != null || draft.requestDeliveryReceipt != null
                 subject = draft.subject
                 // Черновик может быть HTML или plain text
                 body = if (draft.body.looksLikeHtml()) {
@@ -1122,6 +1147,12 @@ fun ComposeScreen(
                         bcc = normalizeRecipients(serverBcc)
                         draftBccKnown = true
                         if (bcc.isNotBlank()) showCcBcc = true
+                    }
+                    // Флажки «запросить отчёт» с сервера (EWS): поставлены в Outlook или изменены там позже
+                    refresh?.receipts?.let { server ->
+                        requestReadReceipt = server.read
+                        requestDeliveryReceipt = server.delivery
+                        draftReceiptsKnown = true
                     }
                 }
                 // Обновляем метаданные вложений с сервера перед чтением из БД.
@@ -1326,6 +1357,8 @@ fun ComposeScreen(
                 initialDraftCc = cc
                 initialDraftBcc = bcc
                 initialDraftHighPriority = highPriority
+                initialDraftReadReceipt = requestReadReceipt
+                initialDraftDeliveryReceipt = requestDeliveryReceipt
                 initialDraftSubject = subject
                 initialDraftBody = body
                 initialDraftAttachments = attachmentStrings
@@ -1412,7 +1445,10 @@ fun ComposeScreen(
                     files = fileDraftAttachments,
                     filesUnchanged = attachmentStrings == initialDraftAttachments,
                     knownImageCids = knownImageCids,
-                    unloadedAttachmentIds = draftUnloadedAttachmentIds.toSet()
+                    unloadedAttachmentIds = draftUnloadedAttachmentIds.toSet(),
+                    receipts = if (draftReceiptsKnown) {
+                        com.dedovmosol.iwomail.eas.ReceiptRequests(requestReadReceipt, requestDeliveryReceipt)
+                    } else null
                 )
                 val existingId = editDraftId?.takeIf { it != "synced" }
                 val result = withContext(Dispatchers.IO) { draftSaver.save(account, existingId, content) }
@@ -1993,6 +2029,7 @@ fun ComposeScreen(
             if (editDraftId != null) {
                 val hasDraftChanges = to != initialDraftTo || cc != initialDraftCc || bcc != initialDraftBcc ||
                     highPriority != initialDraftHighPriority || subject != initialDraftSubject ||
+                    requestReadReceipt != initialDraftReadReceipt || requestDeliveryReceipt != initialDraftDeliveryReceipt ||
                     body != initialDraftBody || attachmentStrings != initialDraftAttachments
                 if (hasDraftChanges) showDiscardDialog = true else handleBackNavigation()
             } else {
@@ -2050,7 +2087,7 @@ fun ComposeScreen(
                         ) {
                             DropdownMenuItem(
                                 text = { Text(Strings.requestReadReceipt) },
-                                onClick = { requestReadReceipt = !requestReadReceipt },
+                                onClick = { requestReadReceipt = !requestReadReceipt; draftReceiptsKnown = true },
                                 leadingIcon = {
                                     Checkbox(
                                         checked = requestReadReceipt,
@@ -2061,7 +2098,7 @@ fun ComposeScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text(Strings.requestDeliveryReceipt) },
-                                onClick = { requestDeliveryReceipt = !requestDeliveryReceipt },
+                                onClick = { requestDeliveryReceipt = !requestDeliveryReceipt; draftReceiptsKnown = true },
                                 leadingIcon = {
                                     Checkbox(
                                         checked = requestDeliveryReceipt,
@@ -2478,6 +2515,15 @@ fun ComposeScreen(
                 }
                 val editorMinHeightPx = with(density) { editorMinHeightDp.roundToPx() }
                 val isDarkTheme = !MaterialTheme.colorScheme.background.luminance().let { it > 0.5f }
+                val quotedFrom = quotedRemoteFrom
+                if (quotedFrom != null && remoteImagesPrefs != null && !quotedImagesAllowed) {
+                    val senderKey = remember(quotedFrom) { com.dedovmosol.iwomail.util.RemoteImages.senderKey(quotedFrom) }
+                    com.dedovmosol.iwomail.ui.components.RemoteImagesBanner(
+                        canTrustSender = senderKey.isNotEmpty(),
+                        onShow = { quotedImagesShown = true },
+                        onAlwaysFromSender = { scope.launch { settingsRepo.trustImagesFrom(senderKey) } }
+                    )
+                }
                 RichTextEditor(
                     initialHtml = body,
                     onHtmlChanged = { body = it },
@@ -2487,7 +2533,8 @@ fun ComposeScreen(
                         .heightIn(min = editorMinHeightDp),
                     placeholder = Strings.messageText,
                     minHeight = editorMinHeightPx,
-                    isDarkTheme = isDarkTheme
+                    isDarkTheme = isDarkTheme,
+                    remoteImagesAllowed = quotedImagesAllowed
                 )
             }
 

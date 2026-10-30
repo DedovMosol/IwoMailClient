@@ -169,7 +169,7 @@ private fun ScheduledMailRow(
             Column {
                 Text(recipients, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    Strings.scheduledFor(time),
+                    if (entry.sendAt <= System.currentTimeMillis()) Strings.scheduledWaiting else Strings.scheduledFor(time),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )

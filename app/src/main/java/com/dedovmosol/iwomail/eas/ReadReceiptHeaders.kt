@@ -11,14 +11,14 @@ package com.dedovmosol.iwomail.eas
  * первый адрес. null — отчёт не запрошен.
  */
 internal fun readReceiptRequestAddress(topLevelHeaders: String): String? {
-    val value = headerValue(topLevelHeaders, "Disposition-Notification-To")
-        ?: headerValue(topLevelHeaders, "X-Confirm-Reading-To")
+    val value = mimeHeaderValue(topLevelHeaders, "Disposition-Notification-To")
+        ?: mimeHeaderValue(topLevelHeaders, "X-Confirm-Reading-To")
         ?: return null
     return firstAddress(value)
 }
 
 /** Значение заголовка [name] с развёрнутыми продолжениями (RFC 5322 §2.2.3); null — заголовка нет. */
-private fun headerValue(headers: String, name: String): String? {
+internal fun mimeHeaderValue(headers: String, name: String): String? {
     val lines = headers.replace("\r\n", "\n").split('\n')
     val start = lines.indexOfFirst { it.startsWith("$name:", ignoreCase = true) }
     if (start < 0) return null

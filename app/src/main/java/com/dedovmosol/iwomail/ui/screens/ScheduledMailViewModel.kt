@@ -45,7 +45,7 @@ class ScheduledMailViewModel(
 ) : ViewModel() {
 
     val items: StateFlow<List<ScheduledSend.Entry>?> = changes
-        .map { withContext(ioDispatcher) { ScheduledSend.pending(context).filterNot { it.undo } } }
+        .map { withContext(ioDispatcher) { ScheduledSend.pending(context).filter { it.listed(System.currentTimeMillis()) } } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val _events = Channel<ScheduledMailEvent>(Channel.BUFFERED)

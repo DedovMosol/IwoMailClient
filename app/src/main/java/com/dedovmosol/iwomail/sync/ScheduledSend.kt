@@ -82,7 +82,13 @@ object ScheduledSend {
         val draftId: String?,
         val attachmentCount: Int,
         val undo: Boolean
-    )
+    ) {
+        /**
+         * Показывать в списке запланированных. Письмо с отменой отправки скрыто, пока идёт отсчёт; срок его подстраховки
+         * прошёл (приложение закрыли во время отсчёта, а связи нет) — оно обычное ожидающее, его видно и можно отменить.
+         */
+        fun listed(now: Long): Boolean = !undo || sendAt <= now
+    }
 
     private val locks = ConcurrentHashMap<String, Mutex>()
 
@@ -192,6 +198,24 @@ object ScheduledSend {
             name, ExistingWorkPolicy.REPLACE,
             request(dir) { setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST) }
         )
+    }
+
+    /**
+     * Письмо с отменой отправки не ушло сразу (нет связи, сервер занят): дальше оно обычное ожидающее — видно в списке
+     * запланированных (там его можно отменить), а отправит воркер, как только будет связь. false — письма уже нет.
+     */
+    suspend fun queueNow(context: Context, dir: File): Boolean {
+        val queued = lock(dir).withLock {
+            withContext(Dispatchers.IO) {
+                val job = read(dir) ?: return@withContext false
+                writeMeta(dir, job.copy(sendAt = System.currentTimeMillis(), undo = false))
+                context.getSystemService(AlarmManager::class.java)?.cancel(alarmIntent(context, dir))
+                changed()
+                true
+            }
+        }
+        if (queued) runNow(context, dir)
+        return queued
     }
 
     /** После перезагрузки будильники стёрты — заново для всех ожидающих писем (задачи WorkManager живы). */

@@ -41,7 +41,9 @@ suspend fun saveUnsentAsDraft(context: Context, accountId: Long, mail: OutgoingM
         fromName = account.displayName,
         hasAttachments = attachments.isNotEmpty(),
         attachmentFiles = attachments,
-        importance = mail.importance
+        importance = mail.importance,
+        // Отменили отправку или не ушло — флажки «запросить отчёт» остаются, как их поставили
+        receipts = com.dedovmosol.iwomail.eas.ReceiptRequests(mail.requestReadReceipt, mail.requestDeliveryReceipt)
     ) ?: return null
     return "${accountId}_$serverId"
 }

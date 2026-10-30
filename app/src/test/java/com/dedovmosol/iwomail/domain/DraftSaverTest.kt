@@ -44,6 +44,7 @@ class DraftSaverTest {
         val created = mutableListOf<Pair<DraftSaver.NewDraft, Boolean>>()
         val updates = mutableListOf<Triple<String, String?, Boolean>>()
         val updateBodies = mutableListOf<String>()
+        val updateContents = mutableListOf<DraftSaver.Content>()
         val deleted = mutableListOf<Pair<String, String?>>()
         val removed = mutableListOf<String>()
         val replacing = mutableMapOf<String, String?>()
@@ -76,6 +77,7 @@ class DraftSaverTest {
         ): EasResult<String> {
             updates += Triple(serverId, bcc, appendBcc)
             updateBodies += serverBody
+            updateContents += content
             return updateResult
         }
         override suspend fun delete(accountId: Long, serverId: String, excludeServerId: String?): EasResult<Boolean> {
@@ -127,11 +129,13 @@ class DraftSaverTest {
         bcc: String = "",
         bccKnown: Boolean = true,
         knownImageCids: Map<String, String> = emptyMap(),
-        unloaded: Set<Long> = emptySet()
+        unloaded: Set<Long> = emptySet(),
+        receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null
     ) = DraftSaver.Content(
         to = "a@corp.example", cc = "", bcc = bcc, bccKnown = bccKnown, subject = "Отчёт", body = body,
         importance = 1, fromEmail = "me@corp.example", fromName = "Me", files = files,
-        filesUnchanged = filesUnchanged, knownImageCids = knownImageCids, unloadedAttachmentIds = unloaded
+        filesUnchanged = filesUnchanged, knownImageCids = knownImageCids, unloadedAttachmentIds = unloaded,
+        receipts = receipts
     )
 
     private fun serverDraft(serverId: String = "5:1", replaces: String? = null) = EmailEntity(
@@ -141,6 +145,29 @@ class DraftSaverTest {
 
     private fun save(existingId: String?, content: DraftSaver.Content, acc: AccountEntity = account) =
         runBlocking { saver.save(acc, existingId, content) }
+
+    @Test
+    fun `receipt requests travel with a new draft and with a text edit`() {
+        val receipts = com.dedovmosol.iwomail.eas.ReceiptRequests(read = true, delivery = false)
+
+        save(null, content(receipts = receipts))
+        assertThat(store.created.single().first.receipts).isEqualTo(receipts)
+
+        serverDraft()
+        save("1_5:1", content(body = "<p>Новый</p>", receipts = receipts))
+        assertThat(store.updateContents.single().receipts).isEqualTo(receipts)
+    }
+
+    @Test
+    fun `new version of a server draft keeps the receipt requests`() {
+        serverDraft()
+        val receipts = com.dedovmosol.iwomail.eas.ReceiptRequests(read = false, delivery = true)
+        val file = DraftAttachmentData(name = "a.txt", mimeType = "text/plain", data = byteArrayOf(1))
+
+        save("1_5:1", content(files = listOf(file), filesUnchanged = false, receipts = receipts))
+
+        assertThat(store.created.single().first.receipts).isEqualTo(receipts)
+    }
 
     @Test
     fun `new draft goes to the server when it answers`() {
