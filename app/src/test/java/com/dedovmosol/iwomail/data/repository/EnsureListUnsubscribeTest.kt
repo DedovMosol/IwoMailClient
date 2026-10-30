@@ -140,11 +140,14 @@ class EnsureListUnsubscribeTest {
     @Test
     fun `RSS items delivered to the Inbox do not raise new-mail notifications`() = runBlocking<Unit> {
         email(serverId = "2:10", messageClass = "IPM.Post.RSS", dateReceived = 5_000L)
+        email(serverId = "2:12", messageClass = "ipm.post.rss.custom", dateReceived = 5_500L)
         email(serverId = "2:11", messageClass = "IPM.Note", dateReceived = 6_000L)
+        // Не RSS — то же правило, что RssItems.isRss
+        email(serverId = "2:13", messageClass = "IPM.Post.RSSX", dateReceived = 7_000L)
 
         val ids = db.emailDao().getNewEmailsForNotification(accountId, 2_000L).map { it.id }
 
-        assertThat(ids).containsExactly("${accountId}_2:11")
+        assertThat(ids).containsExactly("${accountId}_2:13", "${accountId}_2:11").inOrder()
     }
 
     @Test

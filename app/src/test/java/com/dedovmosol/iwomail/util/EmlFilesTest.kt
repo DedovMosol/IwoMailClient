@@ -18,6 +18,41 @@ class EmlFilesTest {
     }
 
     @Test
+    fun `document is written with truncation when the provider supports it`() {
+        val modes = mutableListOf<String>()
+        val out = java.io.ByteArrayOutputStream()
+
+        val ok = EmlFiles.write(byteArrayOf(1, 2)) { mode -> modes += mode; out }
+
+        assertThat(ok).isTrue()
+        assertThat(modes).containsExactly("wt")
+        assertThat(out.toByteArray().toList()).containsExactly(1.toByte(), 2.toByte()).inOrder()
+    }
+
+    @Test
+    fun `provider without truncate mode gets plain write`() {
+        // Облачные поставщики SAF отвечают на "wt" FileNotFoundException или IllegalArgumentException
+        for (failure in listOf(java.io.FileNotFoundException("wt"), IllegalArgumentException("Bad mode"))) {
+            val modes = mutableListOf<String>()
+            val out = java.io.ByteArrayOutputStream()
+
+            val ok = EmlFiles.write(byteArrayOf(7)) { mode ->
+                modes += mode
+                if (mode == "wt") throw failure else out
+            }
+
+            assertThat(ok).isTrue()
+            assertThat(modes).containsExactly("wt", "w").inOrder()
+            assertThat(out.toByteArray().toList()).containsExactly(7.toByte())
+        }
+    }
+
+    @Test
+    fun `provider that opens nothing reports failure`() {
+        assertThat(EmlFiles.write(byteArrayOf(1)) { null }).isFalse()
+    }
+
+    @Test
     fun `an emoji on the cut is not split in half`() {
         val name = EmlFiles.fileName("a".repeat(99) + "\uD83D\uDE00" + "tail")
 

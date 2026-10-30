@@ -678,9 +678,8 @@ class EmailDetailViewModel(
     }
 
     private class ContentResolverSink(private val resolver: android.content.ContentResolver) : DocumentSink {
-        // "wt": файл перезаписывается целиком, а не дописывается к прежнему содержимому
         override suspend fun write(uri: android.net.Uri, bytes: ByteArray): Boolean =
-            resolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } != null
+            com.dedovmosol.iwomail.util.EmlFiles.write(bytes) { mode -> resolver.openOutputStream(uri, mode) }
 
         override suspend fun discard(uri: android.net.Uri) {
             try {

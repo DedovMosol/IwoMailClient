@@ -506,6 +506,7 @@ interface EmailDao {
      *
      * @param accountId ID аккаунта
      * @param afterTime Время в миллисекундах - показывать письма полученные ПОСЛЕ этого времени
+     * Записи RSS-каналов Outlook — не почта: о них не уведомляем (условие — как [com.dedovmosol.iwomail.eas.RssItems.isRss]).
      */
     @Query("""
         SELECT e.id, e.`from`, e.fromName, e.subject, e.dateReceived FROM emails e
@@ -513,7 +514,7 @@ interface EmailDao {
         WHERE e.accountId = :accountId
         AND f.type = 2
         AND e.dateReceived > :afterTime
-        AND e.messageClass NOT LIKE 'IPM.Post.RSS%'
+        AND NOT (e.messageClass = 'IPM.Post.RSS' COLLATE NOCASE OR e.messageClass LIKE 'IPM.Post.RSS.%')
         ORDER BY e.dateReceived DESC
     """)
     suspend fun getNewEmailsForNotification(accountId: Long, afterTime: Long): List<NotificationEmailSummary>
