@@ -68,6 +68,8 @@ class MailApplication : Application() {
         cleanupDuplicateEmails()
         applicationScope.launch(Dispatchers.IO) {
             com.dedovmosol.iwomail.eas.AttachmentManager.cleanupOldAttachments(this@MailApplication)
+            // Очередь прежних версий — дослать
+            com.dedovmosol.iwomail.sync.OutboxWorker.drainLegacyQueue(this@MailApplication)
         }
         scheduleSync()
         startPushService()

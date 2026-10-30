@@ -834,7 +834,6 @@ class ComposeViewModel(
                     email = pendingEmail,
                     message = sendingProgressMessage(),
                     context = context,
-                    mailRepo = mailRepository,
                     onSuccess = { /* звук/досинк/удаление черновика — внутри SendController */ },
                     onCancel = { _uiState.update { it.copy(isSending = false) } },
                     // Фикс зависшего isSending: без onError UI оставался заблокирован после ошибки

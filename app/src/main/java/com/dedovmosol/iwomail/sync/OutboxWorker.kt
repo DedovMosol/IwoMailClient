@@ -28,82 +28,27 @@ class OutboxWorker(
         private const val OUTBOX_FILE = "outbox.json"
         private const val OUTBOX_TEMP_FILE = "outbox.json.tmp"
         private const val WORK_NAME = "outbox_send"
-        private const val MAX_QUEUE_SIZE = 100
-        private const val MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
         
         // Общий lock для всех операций с файлом очереди
-        // Защищает от гонки между enqueue() (UI) и doWork() (Worker thread)
         private val outboxLock = Any()
         
         /** Попыток на письмо при временных ошибках сервера (5xx, 429); дальше — в Черновики с уведомлением. */
         internal const val MAX_ATTEMPTS = 10
 
         /**
-         * Добавляет письмо в очередь отправки — со всеми полями ([OutgoingMail]): раньше очередь теряла важность,
-         * отчёт о доставке и исходное письмо пересылки.
+         * Письма, поставленные в очередь прежними версиями (теперь отправка без связи идёт через [ScheduledSend]):
+         * если очередь не пуста — отправить их, когда будет связь. Вызывать не с главного потока.
          */
-        fun enqueue(context: Context, accountId: Long, mail: OutgoingMail) {
-            synchronized(outboxLock) {
-                val outbox = loadOutboxInternal(context)
-                pruneStaleEntries(outbox)
-                val email = JSONObject().apply {
-                    put("accountId", accountId)
-                    put("to", mail.to)
-                    put("cc", mail.cc)
-                    put("bcc", mail.bcc)
-                    put("subject", mail.subject)
-                    put("body", mail.body)
-                    put("importance", mail.importance)
-                    put("requestReadReceipt", mail.requestReadReceipt)
-                    put("requestDeliveryReceipt", mail.requestDeliveryReceipt)
-                    mail.forwardFolderId?.let { put("forwardFolderId", it) }
-                    mail.forwardItemId?.let { put("forwardItemId", it) }
-                    put("timestamp", System.currentTimeMillis())
-                    // N-11: стабильный ClientId/Message-ID на запись очереди. Переиспользуется при
-                    // каждой (повторной) отправке → сервер (EAS 14+) отбрасывает дубликат по ClientId,
-                    // а retry после потери ответа не порождает второй Message-ID.
-                    put("clientId", java.util.UUID.randomUUID().toString().replace("-", ""))
-                }
-                outbox.put(email)
-                while (outbox.length() > MAX_QUEUE_SIZE) outbox.remove(0)
-                saveOutboxInternal(context, outbox)
-            }
-            
-            // Запускаем Worker с требованием сети
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-            
+        fun drainLegacyQueue(context: Context) {
+            val pending = synchronized(outboxLock) { loadOutboxInternal(context).length() > 0 }
+            if (!pending) return
             val request = OneTimeWorkRequestBuilder<OutboxWorker>()
-                .setConstraints(constraints)
-                .setBackoffCriteria(
-                    BackoffPolicy.EXPONENTIAL,
-                    1, java.util.concurrent.TimeUnit.MINUTES // 1 мин → 2 мин → 4 мин ...
-                )
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, java.util.concurrent.TimeUnit.MINUTES)
                 .build()
-            
-            WorkManager.getInstance(context)
-                .enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, request)
+            WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, request)
         }
-        
-        /**
-         * Возвращает количество писем в очереди
-         */
-        fun getQueueSize(context: Context): Int {
-            synchronized(outboxLock) {
-                return loadOutboxInternal(context).length()
-            }
-        }
-        
-        /**
-         * Очищает очередь
-         */
-        fun clearQueue(context: Context) {
-            synchronized(outboxLock) {
-                saveOutboxInternal(context, JSONArray())
-            }
-        }
-        
+
         /**
          * Загрузка + сохранение под общим lock (вызывать из synchronized(outboxLock))
          */
@@ -128,16 +73,6 @@ class OutboxWorker(
             forwardFolderId = entry.optString("forwardFolderId").takeIf { it.isNotBlank() },
             forwardItemId = entry.optString("forwardItemId").takeIf { it.isNotBlank() }
         )
-
-        private fun pruneStaleEntries(outbox: JSONArray) {
-            val now = System.currentTimeMillis()
-            var i = outbox.length() - 1
-            while (i >= 0) {
-                val ts = outbox.optJSONObject(i)?.optLong("timestamp", 0L) ?: 0L
-                if (now - ts > MAX_AGE_MS) outbox.remove(i)
-                i--
-            }
-        }
 
         private fun loadOutboxInternal(context: Context): JSONArray {
             val file = File(context.filesDir, OUTBOX_FILE)
@@ -219,7 +154,7 @@ class OutboxWorker(
                             failedEmails.put(email)
                         } else {
                             // Повтор не поможет: письмо — в Черновики, пользователь узнаёт, почему оно не ушло
-                            val saved = saveUnsentAsDraft(applicationContext, accountId, mail)
+                            val saved = saveUnsentAsDraft(applicationContext, accountId, mail) != null
                             SendNotifications.notSent(
                                 applicationContext, com.dedovmosol.iwomail.MailApplication.CHANNEL_OUTBOX,
                                 SendNotifications.idFor(email.optString("clientId")), mail.subject, result.message, saved

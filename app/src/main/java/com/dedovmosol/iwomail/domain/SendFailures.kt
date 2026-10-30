@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.domain
 
 import android.content.Context
+import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.DraftUpload
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.eas.DraftAttachmentData
@@ -20,15 +21,15 @@ fun isRetryableSendError(message: String): Boolean {
 private val HTTP_CODE = Regex("""HTTP (\d{3})""")
 
 /**
- * Письмо, которое не удалось отправить, — в Черновики (с вложениями и картинками в тексте), чтобы его можно было
- * исправить и отправить заново. true — сохранено.
+ * Письмо, которое не удалось или передумали отправлять, — в Черновики (с вложениями и картинками в тексте), чтобы его
+ * можно было исправить и отправить заново. id черновика (EmailEntity.id) или null — не сохранено.
  */
-suspend fun saveUnsentAsDraft(context: Context, accountId: Long, mail: OutgoingMail): Boolean {
-    val account = RepositoryProvider.getAccountRepository(context).getAccount(accountId) ?: return false
+suspend fun saveUnsentAsDraft(context: Context, accountId: Long, mail: OutgoingMail): String? {
+    val account = RepositoryProvider.getAccountRepository(context).getAccount(accountId) ?: return null
     val (serverBody, inline) = DraftUpload.inlineImages(mail.body, System.currentTimeMillis())
     val files = mail.attachments.map { (name, mimeType, bytes) -> DraftAttachmentData(name = name, mimeType = mimeType, data = bytes) }
     val attachments = files + inline
-    return RepositoryProvider.getMailRepository(context).saveDraft(
+    val serverId = RepositoryProvider.getMailRepository(context).saveDraft(
         accountId = accountId,
         to = mail.to,
         cc = mail.cc,
@@ -41,5 +42,44 @@ suspend fun saveUnsentAsDraft(context: Context, accountId: Long, mail: OutgoingM
         hasAttachments = attachments.isNotEmpty(),
         attachmentFiles = attachments,
         importance = mail.importance
-    ) != null
+    ) ?: return null
+    return "${accountId}_$serverId"
+}
+
+/**
+ * Письмо — в Черновики вместо черновика [replacesDraftId], из которого его отправляли: прежняя версия (до последней
+ * правки) удаляется, если новая сохранена — черновик один, а не два. id нового черновика или null.
+ */
+suspend fun returnToDrafts(context: Context, accountId: Long, mail: OutgoingMail, replacesDraftId: String?): String? {
+    val draftId = saveUnsentAsDraft(context, accountId, mail) ?: return null
+    replacesDraftId?.takeIf { it != draftId }?.let { deleteDraftQuietly(context, it) }
+    return draftId
+}
+
+/**
+ * Запланированное письмо, которое не уйдёт (отменили или не отправилось), — в Черновики. Черновик, из которого его
+ * запланировали, на месте и с тех пор не менялся ([draftStamp]) — он и есть это письмо, копия не нужна. true — письмо
+ * в Черновиках.
+ */
+suspend fun keepScheduledAsDraft(
+    context: Context,
+    accountId: Long,
+    mail: OutgoingMail,
+    draftId: String?,
+    draftStamp: Long
+): Boolean {
+    val draft = draftId?.let { MailDatabase.getInstance(context).emailDao().getEmail(it) }
+    if (draft != null && draft.dateReceived == draftStamp) return true
+    return saveUnsentAsDraft(context, accountId, mail) != null
+}
+
+/** Удалить черновик [draftId] на сервере и в приложении; ошибки — в журнал (письмо уже отправлено или сохранено). */
+suspend fun deleteDraftQuietly(context: Context, draftId: String) {
+    try {
+        val draft = MailDatabase.getInstance(context).emailDao().getEmail(draftId) ?: return
+        RepositoryProvider.getMailRepository(context).deleteDraft(draft.accountId, draft.serverId)
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        android.util.Log.w("SendFailures", "Draft cleanup failed: ${e.message}")
+    }
 }

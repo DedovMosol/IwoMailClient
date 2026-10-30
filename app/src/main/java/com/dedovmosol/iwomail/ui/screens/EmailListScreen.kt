@@ -43,8 +43,13 @@ import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.data.database.MailDatabase
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.data.database.flag
+import com.dedovmosol.iwomail.domain.SwipeAction
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
+import com.dedovmosol.iwomail.eas.MailFlag
+import com.dedovmosol.iwomail.ui.screens.emaillist.SwipeableEmailRow
+import com.dedovmosol.iwomail.ui.screens.emaillist.availableIn
 import com.dedovmosol.iwomail.ui.LocalLanguage
 import com.dedovmosol.iwomail.ui.AppLanguage
 import com.dedovmosol.iwomail.ui.NotificationStrings
@@ -140,6 +145,15 @@ fun EmailListScreen(
     val isSentFolder = folder?.type == FolderType.SENT_ITEMS
 
     val nothingDeletedMsg = if (isRussian) "Ничего не удалено" else "Nothing deleted"
+
+    // Свайпы: из «Удалённых» и Черновиков свайпом не удаляем (там удаление окончательное, с подтверждением),
+    // флаг — там, где есть звёздочка; в режиме выбора свайпов нет
+    val swipeSettings by remember { RepositoryProvider.getSettingsRepository(context).swipeActions }
+        .collectAsStateWithLifecycle(initialValue = SwipeAction.DEFAULT_START to SwipeAction.DEFAULT_END)
+    val deleteBySwipe = !isTrashFolder && !isDraftsFolder
+    val flagBySwipe = !isTrashFolder && !isSpamFolder && !isDraftsFolder
+    val swipeStart = if (isSelectionMode) SwipeAction.NONE else swipeSettings.first.availableIn(deleteBySwipe, flagBySwipe)
+    val swipeEnd = if (isSelectionMode) SwipeAction.NONE else swipeSettings.second.availableIn(deleteBySwipe, flagBySwipe)
 
     // UI-состояние диалогов/меню (не относится к данным) — переживает поворот.
     var showMoveDialog by rememberSaveable { mutableStateOf(false) }
@@ -602,6 +616,13 @@ fun EmailListScreen(
                     viewModel.addToSelection(email.id)
                 },
                 onStarClick = { email -> viewModel.toggleFlag(email.id) },
+                onFlagChosen = { email, flag -> viewModel.setFlag(email.id, flag) },
+                swipeStart = swipeStart,
+                swipeEnd = swipeEnd,
+                onSwipe = { email, action ->
+                    if (action == SwipeAction.DELETE) com.dedovmosol.iwomail.util.SoundPlayer.playDeleteSound(context)
+                    viewModel.swipe(email, action)
+                },
                 onSelectAll = { viewModel.selectAll(filteredEmails.map { it.id }) },
                 onRetry = { refresh() },
                 onDismissError = { viewModel.dismissError() },
@@ -819,6 +840,10 @@ private fun EmailList(
     onEmailClick: (EmailEntity) -> Unit,
     onLongClick: (EmailEntity) -> Unit,
     onStarClick: (EmailEntity) -> Unit,
+    onFlagChosen: (EmailEntity, MailFlag) -> Unit,
+    swipeStart: SwipeAction,
+    swipeEnd: SwipeAction,
+    onSwipe: (EmailEntity, SwipeAction) -> Unit,
     onSelectAll: () -> Unit,
     onRetry: () -> Unit,
     onDismissError: () -> Unit,
@@ -889,6 +914,10 @@ private fun EmailList(
                         onEmailClick = onEmailClick,
                         onLongClick = onLongClick,
                         onStarClick = onStarClick,
+                        onFlagChosen = onFlagChosen,
+                        swipeStart = swipeStart,
+                        swipeEnd = swipeEnd,
+                        onSwipe = onSwipe,
                         onSelectAll = onSelectAll,
                         onDismissError = onDismissError,
                         onDragSelect = onDragSelect
@@ -1022,12 +1051,18 @@ private fun EmailListContent(
     onEmailClick: (EmailEntity) -> Unit,
     onLongClick: (EmailEntity) -> Unit,
     onStarClick: (EmailEntity) -> Unit,
+    onFlagChosen: (EmailEntity, MailFlag) -> Unit,
+    swipeStart: SwipeAction,
+    swipeEnd: SwipeAction,
+    onSwipe: (EmailEntity, SwipeAction) -> Unit,
     onSelectAll: () -> Unit,
     onDismissError: () -> Unit,
     onDragSelect: (Set<String>) -> Unit = {}
 ) {
     val context = LocalContext.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
+    val stableOnFlagChosen by rememberUpdatedState(onFlagChosen)
+    val stableOnSwipe by rememberUpdatedState(onSwipe)
     val database = remember { MailDatabase.getInstance(context) }
 
     val stableOnEmailClick by rememberUpdatedState(onEmailClick)
@@ -1125,19 +1160,28 @@ private fun EmailListContent(
 
         items(emails, key = { it.id }) { email ->
             val latestEmail by rememberUpdatedState(email)
-            EmailListItem(
-                email = email,
-                mailRepo = mailRepo,
-                isSelected = email.id in selectedIds,
-                isSelectionMode = isSelectionMode,
-                showStar = !isTrashOrSpam && !isDrafts,
-                isSent = isSent,
-                isDrafts = isDrafts,
-                imagePreview = imagePreviewCache[email.id],
-                onClick = remember { { stableOnEmailClick(latestEmail) } },
-                onLongClick = remember { { stableOnLongClick(latestEmail) } },
-                onStarClick = remember { { stableOnStarClick(latestEmail) } }
-            )
+            SwipeableEmailRow(
+                startAction = swipeStart,
+                endAction = swipeEnd,
+                read = email.read,
+                flagged = email.flagged,
+                onSwipe = remember { { action: SwipeAction -> stableOnSwipe(latestEmail, action) } }
+            ) {
+                EmailListItem(
+                    email = email,
+                    mailRepo = mailRepo,
+                    isSelected = email.id in selectedIds,
+                    isSelectionMode = isSelectionMode,
+                    showStar = !isTrashOrSpam && !isDrafts,
+                    isSent = isSent,
+                    isDrafts = isDrafts,
+                    imagePreview = imagePreviewCache[email.id],
+                    onClick = remember { { stableOnEmailClick(latestEmail) } },
+                    onLongClick = remember { { stableOnLongClick(latestEmail) } },
+                    onStarClick = remember { { stableOnStarClick(latestEmail) } },
+                    onFlagChosen = remember { { flag: MailFlag -> stableOnFlagChosen(latestEmail, flag) } }
+                )
+            }
         }
     }
 }
@@ -1155,7 +1199,8 @@ private fun EmailListItem(
     imagePreview: com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
-    onStarClick: () -> Unit
+    onStarClick: () -> Unit,
+    onFlagChosen: (MailFlag) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     val longClickHandler = remember(onLongClick) {
@@ -1350,23 +1395,44 @@ private fun EmailListItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (email.flagged && email.flagDueDate != null) {
+                    com.dedovmosol.iwomail.ui.components.FlagDueText(email.flag)
+                }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
             if (showStar) {
-                IconButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onStarClick()
-                    },
-                    modifier = Modifier.size(40.dp)
+                // Нажатие — отметить/снять; долгое нажатие — срок, напоминание, «выполнено»
+                val flag = email.flag
+                var flagMenuOpen by remember { mutableStateOf(false) }
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .combinedClickable(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onStarClick()
+                            },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                flagMenuOpen = true
+                            },
+                            onLongClickLabel = Strings.flagRemind
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = if (email.flagged) AppIcons.Star else AppIcons.StarOutline,
+                        imageVector = com.dedovmosol.iwomail.ui.components.flagIcon(flag),
                         contentDescription = if (email.flagged) Strings.removeFromFavorites else Strings.addToFavorites,
-                        tint = if (email.flagged) com.dedovmosol.iwomail.ui.theme.AppColors.favorites else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = com.dedovmosol.iwomail.ui.components.flagTint(flag),
                         modifier = Modifier.size(24.dp)
+                    )
+                    com.dedovmosol.iwomail.ui.components.FlagMenu(
+                        expanded = flagMenuOpen,
+                        flag = flag,
+                        onDismiss = { flagMenuOpen = false },
+                        onChoose = onFlagChosen
                     )
                 }
             }

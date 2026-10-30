@@ -293,6 +293,21 @@ class EmailDetailViewModelTest {
     }
 
     @Test
+    fun `flag from the menu is saved, rejection is reported`() = runTest(dispatcher) {
+        val flag = com.dedovmosol.iwomail.eas.MailFlag(com.dedovmosol.iwomail.eas.MailFlag.STATUS_COMPLETE)
+        coEvery { actions.setFlag(EMAIL_ID, flag) } returns EasResult.Error("Change Status=6")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.setFlag(flag)
+        advanceUntilIdle()
+
+        coVerify { actions.setFlag(EMAIL_ID, flag) }
+        assertThat(events).contains(EmailDetailEvent.Error("Change Status=6"))
+    }
+
+    @Test
     fun `toggleFlag delegates to actions`() = runTest(dispatcher) {
         val vm = createViewModel()
         advanceUntilIdle()

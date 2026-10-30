@@ -184,6 +184,9 @@ class EmailDetailActions(
     suspend fun toggleFlag(emailId: String) =
         mailRepo.toggleFlag(emailId)
 
+    suspend fun setFlag(emailId: String, flag: com.dedovmosol.iwomail.eas.MailFlag): EasResult<Unit> =
+        mailRepo.setFlag(emailId, flag).toUnit()
+
     /**
      * Loads inline images for an email.
      * Handles MIME extraction (bodyType=4) and CID-referenced attachment download.

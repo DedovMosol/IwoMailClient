@@ -192,6 +192,10 @@ dependencies {
     // "robolectric-nativeruntime.dll not found", robolectric#8312).
     testImplementation("org.robolectric:robolectric:4.12.2")
     testImplementation("androidx.test:core:1.5.0")
+    // WorkManagerTestInitHelper — отложенная отправка (ScheduledSend) в Robolectric-тестах.
+    // Версия — как у work-runtime-ktx: тестовая обвязка должна совпадать с рабочей библиотекой.
+    //noinspection GradleDependency
+    testImplementation("androidx.work:work-testing:2.9.0")
     // Compose UI-тесты под Robolectric (best practice: createComposeRule + RobolectricTestRunner):
     // платформа тестов юнит-тестов на JVM запускает реальный Compose-рантайм без эмулятора.
     // ui-test-manifest декларрует ComponentActivity, которую создаёт createComposeRule —

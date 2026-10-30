@@ -15,12 +15,16 @@ import com.dedovmosol.iwomail.ui.theme.AppIcons
 import java.util.*
 
 /**
- * Диалог выбора времени отложенной отправки письма
+ * Диалог выбора момента в будущем: отложенная отправка письма (по умолчанию) или напоминание по флагу —
+ * [title], [timeLabel] (подпись выбранного времени) и [confirmLabel] задают текст.
  */
 @Composable
 fun ScheduleSendDialog(
     onDismiss: () -> Unit,
-    onSchedule: (Long) -> Unit
+    onSchedule: (Long) -> Unit,
+    title: String = Strings.scheduleSend,
+    timeLabel: String = Strings.send,
+    confirmLabel: String = Strings.schedule
 ) {
     var showCustomPicker by rememberSaveable { mutableStateOf(false) }
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
@@ -135,7 +139,7 @@ fun ScheduleSendDialog(
                     Spacer(modifier = Modifier.height(8.dp))
                     
                     Text(
-                        "${Strings.send}: ${fullDateFormat.format(customDate.time)}",
+                        "$timeLabel: ${fullDateFormat.format(customDate.time)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -146,7 +150,7 @@ fun ScheduleSendDialog(
                     onClick = { 
                         onSchedule(customDate.timeInMillis)
                     },
-                    text = Strings.schedule,
+                    text = confirmLabel,
                     enabled = customDate.timeInMillis > System.currentTimeMillis()
                 )
             },
@@ -189,7 +193,7 @@ fun ScheduleSendDialog(
     } else {
         com.dedovmosol.iwomail.ui.theme.ScaledAlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text(Strings.scheduleSend) },
+            title = { Text(title) },
             text = {
                 Column {
                     // Завтра утром

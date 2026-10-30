@@ -19,6 +19,7 @@ class RescheduleRemindersWorker(
 
             val tasks = database.taskDao().getTasksWithReminders(now)
             TaskReminderReceiver.rescheduleAllReminders(applicationContext, tasks)
+            FlagReminderReceiver.rescheduleAll(applicationContext)
 
             Result.success()
         } catch (e: SecurityException) {

@@ -12,7 +12,7 @@ import com.dedovmosol.iwomail.data.repository.RepositoryProvider
 import com.dedovmosol.iwomail.domain.OutgoingMail
 import com.dedovmosol.iwomail.domain.isRetryableSendError
 import com.dedovmosol.iwomail.domain.refreshSentFolder
-import com.dedovmosol.iwomail.domain.saveUnsentAsDraft
+import com.dedovmosol.iwomail.domain.keepScheduledAsDraft
 import com.dedovmosol.iwomail.domain.send
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.sync.ScheduledSend
@@ -54,7 +54,7 @@ class ScheduledEmailWorker(
             ?: return if (runAttemptCount + 1 < MAX_ATTEMPTS) Result.retry() else giveUp(job, dir, com.dedovmosol.iwomail.data.repository.RepositoryErrors.CLIENT_CREATE_FAILED, true)
         return when (val result = client.send(job.mail, stableClientId = job.clientId)) {
             is EasResult.Success -> {
-                dir?.deleteRecursively()
+                dir?.let { ScheduledSend.finish(applicationContext, it) }
                 deleteSentDraft(job)
                 val ru = SendNotifications.isRussian(applicationContext)
                 SendNotifications.show(
@@ -76,19 +76,17 @@ class ScheduledEmailWorker(
     }
 
     /**
-     * Не отправить: в Черновики (если черновика, из которого письмо запланировано, уже нет — иначе он и так там) и
-     * уведомление с причиной. Каталог письма удаляется — больше его никто не отправит.
+     * Не отправить: в Черновики ([keepScheduledAsDraft]) и уведомление с причиной. Каталог письма удаляется —
+     * больше его никто не отправит.
      */
     private suspend fun giveUp(job: ScheduledSend.Job, dir: File?, reason: String, saveAsDraft: Boolean): Result {
-        val draftStillThere = job.draftId?.let { id ->
-            com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(applicationContext).emailDao().getEmail(id)
-        } != null
-        val saved = draftStillThere || (saveAsDraft && saveUnsentAsDraft(applicationContext, job.accountId, job.mail))
+        val saved = saveAsDraft &&
+            keepScheduledAsDraft(applicationContext, job.accountId, job.mail, job.draftId, job.draftStamp)
         SendNotifications.notSent(
             applicationContext, MailApplication.CHANNEL_SCHEDULED, SendNotifications.idFor(job.clientId),
             job.mail.subject, reason, saved
         )
-        dir?.deleteRecursively()
+        dir?.let { ScheduledSend.finish(applicationContext, it) }
         return Result.failure()
     }
 
@@ -98,15 +96,9 @@ class ScheduledEmailWorker(
      */
     private suspend fun deleteSentDraft(job: ScheduledSend.Job) {
         val draftId = job.draftId ?: return
-        try {
-            val draft = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(applicationContext)
-                .emailDao().getEmail(draftId) ?: return
-            if (draft.dateReceived != job.draftStamp) return
-            RepositoryProvider.getMailRepository(applicationContext).deleteDraft(draft.accountId, draft.serverId)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            android.util.Log.w("ScheduledEmailWorker", "Draft cleanup after send failed: ${e.message}")
-        }
+        val draft = com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(applicationContext)
+            .emailDao().getEmail(draftId) ?: return
+        if (draft.dateReceived == job.draftStamp) com.dedovmosol.iwomail.domain.deleteDraftQuietly(applicationContext, draftId)
     }
 
     /** Срочная задача на Android 11 и ниже работает как служба переднего плана — ей нужно уведомление. */

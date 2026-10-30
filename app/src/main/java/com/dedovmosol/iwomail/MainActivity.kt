@@ -381,7 +381,8 @@ class MainActivity : FragmentActivity() {
             val deletionController = remember { com.dedovmosol.iwomail.ui.components.DeletionController() }
             
             // Контроллер отложенной отправки
-            val sendController = remember { com.dedovmosol.iwomail.ui.components.SendController() }
+            // Один на процесс: отправка и кнопка отмены переживают поворот экрана
+            val sendController = com.dedovmosol.iwomail.ui.components.SendController.shared
             val requestBackgroundWork = remember { { showBackgroundWorkDialog() } }
             
             // Кастомный TextToolbar с правильным порядком кнопок

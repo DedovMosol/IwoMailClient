@@ -65,6 +65,8 @@ class EasEmailService internal constructor(
         private val HEADER_FOLDING_REGEX = "\r?\n[ \t]+".toRegex()
 
         private val DATA_PATTERN = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        /** Элемент Flag в изменении — в том числе пустой (<Flag/>: флаг снят). */
+        private val FLAG_ELEMENT = Regex("<(?:email:)?Flag(?:\\s[^>]*)?/?>")
         private val DATA_IMAGE_SRC_REGEX = Regex("""src="data:image/[^;]+;base64,[^"]+"""")
     }
 
@@ -802,17 +804,17 @@ $itemChanges
     }
 
     /**
-     * Переключение флага письма (избранное)
+     * Флаг письма ([MS-ASEMAIL] Flag): отметка, срок, напоминание или «выполнено» — Sync Change с флагом целиком
+     * ([MailFlags.toXml]). Ответ проверяется: Status коллекции и изменения ≠ 1 (например 6 — неверный флаг) — ошибка.
      */
-    suspend fun toggleFlag(
+    suspend fun setFlag(
         collectionId: String,
         serverId: String,
         syncKey: String,
-        flagged: Boolean
+        flag: MailFlag
     ): EasResult<String> {
-        val flagValue = if (flagged) "2" else "0"
         val xml = """<?xml version="1.0" encoding="UTF-8"?>
-<Sync xmlns="AirSync">
+<Sync xmlns="AirSync" xmlns:tasks="Tasks">
     <Collections>
         <Collection>
             <SyncKey>${deps.escapeXml(syncKey)}</SyncKey>
@@ -821,11 +823,7 @@ $itemChanges
             <Commands>
                 <Change>
                     <ServerId>${deps.escapeXml(serverId)}</ServerId>
-                    <ApplicationData>
-                        <Flag xmlns="Email">
-                            <FlagStatus>$flagValue</FlagStatus>
-                        </Flag>
-                    </ApplicationData>
+                    <ApplicationData>${MailFlags.toXml(flag)}</ApplicationData>
                 </Change>
             </Commands>
         </Collection>
@@ -833,6 +831,14 @@ $itemChanges
 </Sync>""".trimIndent()
 
         return deps.executeEasCommand("Sync", xml) { responseXml ->
+            val collectionStatus = deps.extractValue(responseXml, "Status")
+            if (collectionStatus != null && collectionStatus != "1") {
+                throw Exception("setFlag failed: Collection Status=$collectionStatus")
+            }
+            XmlUtils.extractTopLevelBlocks(responseXml, "Change")
+                .firstNotNullOfOrNull { deps.extractValue(it, "Status") }
+                ?.takeIf { it != "1" }
+                ?.let { throw Exception("setFlag failed: Change Status=$it") }
             deps.extractValue(responseXml, "SyncKey") ?: syncKey
         }
     }
@@ -1242,9 +1248,12 @@ $deleteCommands
                 val readValue = deps.extractValue(changeXml, "Read")
                 val read = readValue?.let { it == "1" }
 
-                val flagXml = XmlUtils.extractTagValue(changeXml, "Flag")
-                val flagStatus = flagXml?.let { deps.extractValue(it, "FlagStatus") }
-                val flagged = flagStatus?.let { it == "2" }
+                // Элемент Flag есть (в т.ч. пустой <Flag/> — флаг снят) — флаг целиком; нет — флаг не менялся
+                val flag = if (FLAG_ELEMENT.containsMatchIn(changeXml)) {
+                    MailFlags.parse(XmlUtils.extractTagValue(changeXml, "Flag"))
+                } else {
+                    null
+                }
 
                 val bodySection = XmlUtils.extractTagValue(changeXml, "Body")
                 val body = if (bodySection != null) extractBody(changeXml) else ""
@@ -1257,7 +1266,7 @@ $deleteCommands
                 val attachments = parseAttachmentsFromXml(changeXml)
 
                 changedEmails.add(EasEmailChange(
-                    serverId, read, flagged,
+                    serverId, read, flag,
                     body = body.takeIf { it.isNotBlank() },
                     bodyType = bodyType,
                     attachments = attachments,
@@ -1312,9 +1321,8 @@ $deleteCommands
         val readValue = deps.extractValue(xml, "Read")
         val isRead = if (readValue != null) readValue == "1" else true
 
-        // MS-ASEMAIL: FlagStatus inside <Flag>. "2" = flagged.
-        val flagSection = XmlUtils.extractTagValue(xml, "Flag")
-        val isFlagged = flagSection?.let { deps.extractValue(it, "FlagStatus") == "2" } ?: false
+        // MS-ASEMAIL Flag: Status (2 — активен, 1 — выполнен), срок и напоминание
+        val flag = MailFlags.parse(XmlUtils.extractTagValue(xml, "Flag"))
 
         // MS-ASEMAIL 2.2.2.49: MessageClass — IPM.Note, IPM.Schedule.Meeting.Request, etc.
         val messageClass = deps.extractValue(xml, "MessageClass") ?: ""
@@ -1331,7 +1339,7 @@ $deleteCommands
             body = body,
             bodyType = bodyType,
             attachments = attachments,
-            flagged = isFlagged,
+            flag = flag,
             messageClass = messageClass,
             bodyTruncated = bodySectionAdd?.let { deps.extractValue(it, "Truncated") == "1" } ?: false
         )

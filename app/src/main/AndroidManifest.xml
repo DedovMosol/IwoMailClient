@@ -184,6 +184,12 @@
             android:name=".sync.ScheduledSendReceiver"
             android:enabled="true"
             android:exported="false" />
+
+        <!-- Напоминания по флагам писем -->
+        <receiver
+            android:name=".sync.FlagReminderReceiver"
+            android:enabled="true"
+            android:exported="false" />
         
         <!-- Receiver для действий из уведомлений о новых письмах -->
         <receiver

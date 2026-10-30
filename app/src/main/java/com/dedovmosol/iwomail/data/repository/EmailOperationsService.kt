@@ -6,6 +6,7 @@ import com.dedovmosol.iwomail.data.database.*
 import com.dedovmosol.iwomail.domain.ReadReceipts
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.EwsMailFolder
+import com.dedovmosol.iwomail.eas.MailFlag
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.onSuccessResult
 import com.dedovmosol.iwomail.util.stripHtml
@@ -527,12 +528,22 @@ class EmailOperationsService(
      */
     suspend fun toggleFlag(emailId: String): EasResult<Boolean> {
         val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
+        return setFlag(emailId, com.dedovmosol.iwomail.domain.FlagPresets.toggled(email.flag))
+    }
+
+    /**
+     * Флаг письма: отметка, срок, напоминание, «выполнено» или снять ([MailFlag]). Локально — сразу, на сервер — Sync
+     * Change; напоминания на устройстве перепланируются.
+     */
+    suspend fun setFlag(emailId: String, flag: MailFlag): EasResult<Boolean> {
+        val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
         val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error("Аккаунт не найден")
 
-        val newFlagStatus = !email.flagged
-
         // ОПТИМИСТИЧНОЕ ОБНОВЛЕНИЕ: сначала обновляем локально для мгновенного отклика UI
-        emailDao.updateFlagStatus(emailId, newFlagStatus)
+        emailDao.saveFlag(emailId, flag)
+        if (flag.reminderTime != null || email.flagReminder != null) {
+            com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context)
+        }
 
         if (AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
             val client = accountRepo.createEasClient(email.accountId)
@@ -548,15 +559,17 @@ class EmailOperationsService(
             val currentSyncKey = ensureValidSyncKey(client, email.folderId, folder.serverId, folder.syncKey)
                 ?: return EasResult.Success(true)
 
-            val result = client.toggleFlag(folder.serverId, email.serverId, currentSyncKey, newFlagStatus)
+            val result = client.setFlag(folder.serverId, email.serverId, currentSyncKey, flag)
             when (result) {
                 is EasResult.Success -> {
                     folderDao.updateSyncKey(email.folderId, result.data)
                 }
                 is EasResult.Error -> {
-                    // Серверная синхронизация не удалась, но локально флаг уже установлен.
-                    // При следующей полной синхронизации состояние будет скорректировано.
-                    android.util.Log.w("ToggleFlag", "Server sync failed: ${result.message}, local update preserved")
+                    // Сервер не принял (например Status 6) или ответа нет — локально как было: иначе на устройстве и
+                    // в Outlook флаги разошлись бы навсегда (изменения флага сервер сам не пришлёт).
+                    android.util.Log.w("SetFlag", "Server rejected flag: ${result.message}, rolling back")
+                    emailDao.saveFlag(emailId, email.flag)
+                    return EasResult.Error(result.message)
                 }
             }
         }

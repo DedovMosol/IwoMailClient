@@ -464,6 +464,80 @@ class EmailListViewModelTest {
         assertThat(events.any { it is EmailListEvent.Error }).isTrue()
     }
 
+    // ===================== свайпы и флаг со сроком =====================
+
+    @Test
+    fun `swipe delete moves the email to Deleted Items`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToTrash(listOf("a")) } returns EasResult.Success(1)
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.swipe(email("a"), com.dedovmosol.iwomail.domain.SwipeAction.DELETE)
+        advanceUntilIdle()
+
+        assertThat(events).contains(EmailListEvent.MovedToTrash(1))
+    }
+
+    @Test
+    fun `swipe read toggles the read state of that email`() = runTest(dispatcher) {
+        coEvery { mailRepo.markAsRead(any(), any()) } returns EasResult.Success(true)
+        val unread = email("a").also { every { it.read } returns false }
+        val read = email("b").also { every { it.read } returns true }
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.swipe(unread, com.dedovmosol.iwomail.domain.SwipeAction.READ)
+        vm.swipe(read, com.dedovmosol.iwomail.domain.SwipeAction.READ)
+        advanceUntilIdle()
+
+        coVerify { mailRepo.markAsRead("a", true) }
+        coVerify { mailRepo.markAsRead("b", false) }
+    }
+
+    @Test
+    fun `swipe flag toggles the flag, none does nothing`() = runTest(dispatcher) {
+        coEvery { mailRepo.toggleFlag("a") } returns EasResult.Success(true)
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.swipe(email("a"), com.dedovmosol.iwomail.domain.SwipeAction.FLAG)
+        vm.swipe(email("b"), com.dedovmosol.iwomail.domain.SwipeAction.NONE)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { mailRepo.toggleFlag("a") }
+        coVerify(exactly = 0) { mailRepo.toggleFlag("b") }
+        coVerify(exactly = 0) { mailRepo.moveToTrash(any()) }
+    }
+
+    @Test
+    fun `swipe error is reported`() = runTest(dispatcher) {
+        coEvery { mailRepo.moveToTrash(any()) } returns EasResult.Error("trash-fail")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.swipe(email("a"), com.dedovmosol.iwomail.domain.SwipeAction.DELETE)
+        advanceUntilIdle()
+
+        assertThat(events).contains(EmailListEvent.Error("trash-fail"))
+    }
+
+    @Test
+    fun `flag from the menu is saved, rejection is reported`() = runTest(dispatcher) {
+        val flag = com.dedovmosol.iwomail.eas.MailFlag.due(1L, 2L, 3L)
+        coEvery { mailRepo.setFlag("a", flag) } returns EasResult.Error("Change Status=6")
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val events = collectEvents(vm)
+
+        vm.setFlag("a", flag)
+        advanceUntilIdle()
+
+        coVerify { mailRepo.setFlag("a", flag) }
+        assertThat(events).contains(EmailListEvent.Error("Change Status=6"))
+    }
+
     // ===================== progress-bar wrapper (вызывается из DeletionController) =====================
 
     @Test

@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
-    version = 46,
+    version = 47,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -250,6 +250,15 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `emails` ADD COLUMN `replacesServerId` TEXT")
             }
         }
+        /** Флаг письма со сроком и напоминанием. SQL — из schemas/47.json. */
+        private val MIGRATION_46_47 = object : Migration(46, 47) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `flagStartDate` INTEGER")
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `flagDueDate` INTEGER")
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `flagReminder` INTEGER")
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `flagCompleted` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -273,7 +282,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_42_43,
             MIGRATION_43_44,
             MIGRATION_44_45,
-            MIGRATION_45_46
+            MIGRATION_45_46,
+            MIGRATION_46_47
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -501,7 +511,13 @@ data class EmailEntity(
     // Черновик заменяет серверный черновик с этим ServerId/ItemId (правка сохранена без связи или прежний
     // не удалось удалить): после загрузки этого черновика прежний удаляется на сервере, до того —
     // не показывается, даже если синхронизация пришлёт его снова. null — ничего не заменяет.
-    val replacesServerId: String? = null
+    val replacesServerId: String? = null,
+    // Флаг к исполнению ([MS-ASEMAIL] Flag): срок — локальные дни (полночь, epoch ms), напоминание — момент (epoch ms).
+    // flagged — флаг активен (Status 2), flagCompleted — выполнен (Status 1).
+    val flagStartDate: Long? = null,
+    val flagDueDate: Long? = null,
+    val flagReminder: Long? = null,
+    val flagCompleted: Boolean = false
 )
 
 data class EmailDedupInfo(

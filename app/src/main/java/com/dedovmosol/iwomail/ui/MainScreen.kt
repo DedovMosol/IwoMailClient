@@ -105,6 +105,7 @@ fun MainScreen(
     onNavigateToCalendar: () -> Unit = {},
     onNavigateToTasks: () -> Unit = {},
     onNavigateToUserFolders: () -> Unit = {},
+    onNavigateToScheduled: () -> Unit = {},
     onNavigateToAbout: () -> Unit = {},
     // Навигация из карточки "Сегодня" с фильтрами
     onNavigateToEmailListWithDateFilter: (String, String) -> Unit = { _, _ -> },
@@ -143,6 +144,14 @@ fun MainScreen(
     // Состояния для отображения папок и счетчиков
     var folders by remember { mutableStateOf(FoldersCache.get(activeAccount?.id ?: 0L)) }
     var flaggedCount by remember { mutableIntStateOf(0) }
+    // Запланированные письма (без ожидающих отмены отправки) — пересчёт при каждом изменении их набора
+    val scheduledCount by androidx.compose.runtime.produceState(0) {
+        com.dedovmosol.iwomail.sync.ScheduledSend.changes.collect {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.dedovmosol.iwomail.sync.ScheduledSend.pending(context).count { !it.undo }
+            }
+        }
+    }
     var isLoading by remember { mutableStateOf(false) }
     var showAccountPicker by rememberSaveable { mutableStateOf(false) }
     var accountsLoaded by remember { mutableStateOf(false) }
@@ -746,6 +755,11 @@ fun MainScreen(
                     onTasksClick = {
                         scope.launch { drawerState.close() }
                         onNavigateToTasks()
+                    },
+                    scheduledCount = scheduledCount,
+                    onScheduledClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToScheduled()
                     },
                     onCreateFolder = {
                         scope.launch { drawerState.close() }

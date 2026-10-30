@@ -612,6 +612,85 @@ object Strings {
         "Не удалось отказаться от отчёта: письмо оставлено непрочитанным, иначе Exchange отправит отчёт"
     else "Couldn't decline the receipt: the message stays unread, otherwise Exchange would send it"
 
+    // Картинки из интернета
+    val remoteImagesBlocked: String @Composable get() = if (isRussian())
+        "Картинки из интернета не загружены: по ним отправитель узнаёт, что письмо открыли"
+    else "Images from the internet are blocked: they tell the sender that you opened the message"
+    val remoteImagesShow: String @Composable get() = if (isRussian()) "Показать" else "Show"
+    val remoteImagesAlwaysFromSender: String @Composable get() = if (isRussian()) "Всегда от отправителя" else "Always from sender"
+    val mailSection: String @Composable get() = if (isRussian()) "Почта" else "Mail"
+    val remoteImagesSetting: String @Composable get() = if (isRussian()) "Картинки из интернета сразу" else "Load internet images"
+    val remoteImagesSettingDesc: String @Composable get() = if (isRussian())
+        "Иначе — по кнопке в письме. По таким картинкам отправитель узнаёт, что письмо открыли"
+    else "Otherwise on request in the message. Such images tell the sender that you opened it"
+    @Composable
+    fun trustedImageSenders(count: Int): String = if (isRussian()) "Доверенные отправители: $count" else "Trusted senders: $count"
+    val reset: String @Composable get() = if (isRussian()) "Сбросить" else "Reset"
+
+    // Отмена отправки
+    val undoSendSetting: String @Composable get() = if (isRussian()) "Отмена отправки" else "Undo send"
+    @Composable
+    fun undoSendDesc(seconds: Int): String = when {
+        seconds == 0 && isRussian() -> "Выключена: письмо уходит сразу"
+        seconds == 0 -> "Off: the message is sent at once"
+        isRussian() -> "Письмо ждёт $seconds с — его можно вернуть"
+        else -> "The message waits $seconds s so you can take it back"
+    }
+    @Composable
+    fun secondsOption(seconds: Int): String = when {
+        seconds == 0 -> if (isRussian()) "Выключена" else "Off"
+        isRussian() -> "$seconds секунд"
+        else -> "$seconds seconds"
+    }
+    @Composable
+    fun sendingIn(seconds: Int): String = if (isRussian()) "Отправка через $seconds с" else "Sending in $seconds s"
+
+    // Свайпы
+    val swipeSetting: String @Composable get() = if (isRussian()) "Свайпы в списке писем" else "Swipes in the message list"
+    val swipeStart: String @Composable get() = if (isRussian()) "Слева направо" else "Left to right"
+    val swipeEnd: String @Composable get() = if (isRussian()) "Справа налево" else "Right to left"
+    @Composable
+    fun swipeActionName(action: com.dedovmosol.iwomail.domain.SwipeAction): String = when (action) {
+        com.dedovmosol.iwomail.domain.SwipeAction.NONE -> if (isRussian()) "Нет" else "None"
+        com.dedovmosol.iwomail.domain.SwipeAction.DELETE -> if (isRussian()) "Удалить" else "Delete"
+        com.dedovmosol.iwomail.domain.SwipeAction.READ -> if (isRussian()) "Прочитано / непрочитано" else "Read / unread"
+        com.dedovmosol.iwomail.domain.SwipeAction.FLAG -> if (isRussian()) "Избранное" else "Favorite"
+    }
+
+    // Флаг со сроком
+    val flagToday: String @Composable get() = if (isRussian()) "Сегодня" else "Today"
+    val flagTomorrow: String @Composable get() = if (isRussian()) "Завтра" else "Tomorrow"
+    val flagThisWeek: String @Composable get() = if (isRussian()) "На этой неделе" else "This week"
+    val flagNextWeek: String @Composable get() = if (isRussian()) "На следующей неделе" else "Next week"
+    val flagNoDate: String @Composable get() = if (isRussian()) "Без срока" else "No date"
+    val flagRemind: String @Composable get() = if (isRussian()) "Напомнить…" else "Remind me…"
+    val flagComplete: String @Composable get() = if (isRussian()) "Выполнено" else "Mark complete"
+    val flagClear: String @Composable get() = if (isRussian()) "Снять отметку" else "Clear flag"
+    val flagOverdue: String @Composable get() = if (isRussian()) "Просрочено" else "Overdue"
+    @Composable
+    fun flagDue(date: String): String = if (isRussian()) "Срок: $date" else "Due $date"
+    @Composable
+    fun flagReminderAt(time: String): String = if (isRussian()) "Напомнить: $time" else "Reminder: $time"
+
+    // Запланированные письма
+    val scheduledMail: String @Composable get() = if (isRussian()) "Запланированные" else "Scheduled"
+    val scheduledEmpty: String @Composable get() = if (isRussian()) "Нет запланированных писем" else "No scheduled messages"
+    val sendNow: String @Composable get() = if (isRussian()) "Отправить сейчас" else "Send now"
+    val changeTime: String @Composable get() = if (isRussian()) "Изменить время" else "Change time"
+    val cancelSending: String @Composable get() = if (isRussian()) "Отменить отправку" else "Cancel sending"
+    val cancelSendingText: String @Composable get() = if (isRussian())
+        "Письмо не будет отправлено и вернётся в Черновики"
+    else "The message will not be sent and goes back to Drafts"
+    @Composable
+    fun scheduledFor(time: String): String = if (isRussian()) "Отправка: $time" else "Sending: $time"
+    val scheduledAlreadySent: String @Composable get() = if (isRussian()) "Письмо уже отправляется" else "The message is already being sent"
+    val scheduledSendingNow: String @Composable get() = if (isRussian()) "Письмо отправляется" else "Sending the message"
+    val scheduledRescheduled: String @Composable get() = if (isRussian()) "Время отправки изменено" else "Send time changed"
+    val scheduledReturnedToDrafts: String @Composable get() = if (isRussian())
+        "Отправка отменена — письмо в Черновиках" else "Sending cancelled — the message is in Drafts"
+    val scheduledDraftSaveFailed: String @Composable get() = if (isRussian())
+        "Не удалось сохранить в Черновики — отправка не отменена" else "Couldn't save to Drafts — sending is not cancelled"
+
     // Названия цветовых тем
     val themePurple: String @Composable get() = if (isRussian()) "Фиолетовая" else "Purple"
     val themeBlue: String @Composable get() = if (isRussian()) "Синяя" else "Blue"
@@ -1780,6 +1859,23 @@ object NotificationStrings {
         }
         return "«$title»: ${localizeError(reason, isRussian)}.$tail"
     }
+
+    // Отмена отправки
+    fun getSendUndone(isRussian: Boolean): String =
+        if (isRussian) "Отправка отменена — письмо в Черновиках" else "Sending cancelled — the email is in Drafts"
+    fun getSendUndoTooLate(isRussian: Boolean): String =
+        if (isRussian) "Письмо уже отправлено" else "The email has already been sent"
+    fun getUndoDraftFailed(isRussian: Boolean): String =
+        if (isRussian) "Не удалось вернуть письмо в Черновики — оно будет отправлено"
+        else "Couldn't return the email to Drafts — it will be sent"
+    fun getSendQueuedOffline(isRussian: Boolean): String =
+        if (isRussian) "Нет связи — письмо уйдёт, когда она появится" else "No connection — the email will be sent when it's back"
+    fun getSendQueuedServerBusy(isRussian: Boolean): String =
+        if (isRussian) "Сервер занят — письмо отправится чуть позже" else "The server is busy — the email will be sent a bit later"
+
+    // Напоминание по флагу
+    fun getFlagReminderTitle(isRussian: Boolean): String =
+        if (isRussian) "Напоминание о письме" else "Email reminder"
 
     fun getAttachmentsTooLarge(sizeMB: Int, limitMB: Int, isRussian: Boolean): String {
         return if (isRussian) {

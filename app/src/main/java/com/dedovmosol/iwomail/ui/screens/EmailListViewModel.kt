@@ -356,6 +356,53 @@ class EmailListViewModel(
         }
     }
 
+    /** Флаг письма целиком (срок, напоминание, «выполнено», снять) — из меню звёздочки. */
+    fun setFlag(emailId: String, flag: com.dedovmosol.iwomail.eas.MailFlag) {
+        viewModelScope.launch {
+            try {
+                when (val result = withContext(ioDispatcher) { mailRepo.setFlag(emailId, flag) }) {
+                    is EasResult.Success -> {}
+                    is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
+            }
+        }
+    }
+
+    /** Свайп по письму: в «Удалённые», прочитано/непрочитано или флаг. */
+    fun swipe(email: com.dedovmosol.iwomail.data.database.EmailEntity, action: com.dedovmosol.iwomail.domain.SwipeAction) {
+        val id = email.id
+        viewModelScope.launch {
+            try {
+                when (action) {
+                    com.dedovmosol.iwomail.domain.SwipeAction.NONE -> Unit
+                    com.dedovmosol.iwomail.domain.SwipeAction.DELETE ->
+                        when (val result = withContext(ioDispatcher) { mailRepo.moveToTrash(listOf(id)) }) {
+                            is EasResult.Success -> sendEvent(EmailListEvent.MovedToTrash(result.data))
+                            is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                        }
+                    com.dedovmosol.iwomail.domain.SwipeAction.READ ->
+                        when (val result = withContext(ioDispatcher) { mailRepo.markAsRead(id, !email.read) }) {
+                            is EasResult.Success -> {}
+                            is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                        }
+                    com.dedovmosol.iwomail.domain.SwipeAction.FLAG ->
+                        when (val result = withContext(ioDispatcher) { mailRepo.toggleFlag(id) }) {
+                            is EasResult.Success -> {}
+                            is EasResult.Error -> sendEvent(EmailListEvent.Error(result.message))
+                        }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sendEvent(EmailListEvent.Error(e.message ?: "Unknown error"))
+            }
+        }
+    }
+
     fun moveSelectedTo(targetFolderId: String) {
         val ids = _uiState.value.selectedIds.toList()
         if (ids.isEmpty()) return
