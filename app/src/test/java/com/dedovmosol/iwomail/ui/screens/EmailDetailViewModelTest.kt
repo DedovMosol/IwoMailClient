@@ -686,6 +686,15 @@ class EmailDetailViewModelTest {
     }
 
     @Test
+    fun `RSS feed item does not ask for unsubscribe headers`() = runTest(dispatcher) {
+        coEvery { actions.getEmailSync(EMAIL_ID) } returns email().copy(messageClass = "IPM.Post.RSS")
+        createViewModel()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { actions.ensureListUnsubscribe(any()) }
+    }
+
+    @Test
     fun `failed header check does not break opening the email`() = runTest(dispatcher) {
         coEvery { actions.ensureListUnsubscribe(EMAIL_ID) } throws IllegalStateException("db closed")
         val vm = createViewModel()

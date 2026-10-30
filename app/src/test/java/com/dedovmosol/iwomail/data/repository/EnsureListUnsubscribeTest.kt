@@ -62,11 +62,18 @@ class EnsureListUnsubscribeTest {
         db.close()
     }
 
-    private fun email(folder: String = "2", serverId: String = "$folder:1", listUnsubscribe: String? = null): String {
+    private fun email(
+        folder: String = "2",
+        serverId: String = "$folder:1",
+        listUnsubscribe: String? = null,
+        messageClass: String = "IPM.Note",
+        body: String = "<p>cached</p>",
+        dateReceived: Long = 1_000L
+    ): String {
         val entity = EmailEntity(
             id = "${accountId}_$serverId", accountId = accountId, folderId = "${accountId}_$folder", serverId = serverId,
-            from = "news@shop.example", to = "me@corp.example", subject = "Sale", body = "<p>cached</p>",
-            dateReceived = 1_000L, read = true, listUnsubscribe = listUnsubscribe
+            from = "news@shop.example", to = "me@corp.example", subject = "Sale", body = body,
+            dateReceived = dateReceived, read = true, listUnsubscribe = listUnsubscribe, messageClass = messageClass
         )
         runBlocking { db.emailDao().insert(entity) }
         return entity.id
@@ -107,6 +114,37 @@ class EnsureListUnsubscribeTest {
         service.ensureListUnsubscribe(id)
 
         assertThat(stored(id).listUnsubscribe).isNull()
+    }
+
+    @Test
+    fun `RSS feed items are never asked for unsubscribe headers`() = runBlocking<Unit> {
+        val id = email(messageClass = "IPM.Post.RSS")
+
+        service.ensureListUnsubscribe(id)
+
+        coVerify(exactly = 0) { client.fetchTopLevelHeaders(any(), any()) }
+    }
+
+    @Test
+    fun `opening an RSS item loads its body without the MIME header request`() = runBlocking<Unit> {
+        val id = email(messageClass = "IPM.Post.RSS", body = "")
+        coEvery { client.fetchEmailBodyWithMdn(any(), any(), any()) } returns
+            EasResult.Success(com.dedovmosol.iwomail.eas.EmailBodyResult("<p>item</p>"))
+
+        service.loadEmailBody(id)
+
+        // Отчёта о прочтении и отписки у записи канала нет — второй запрос (MIME) лишний
+        coVerify(exactly = 1) { client.fetchEmailBodyWithMdn("2", "2:1", false) }
+    }
+
+    @Test
+    fun `RSS items delivered to the Inbox do not raise new-mail notifications`() = runBlocking<Unit> {
+        email(serverId = "2:10", messageClass = "IPM.Post.RSS", dateReceived = 5_000L)
+        email(serverId = "2:11", messageClass = "IPM.Note", dateReceived = 6_000L)
+
+        val ids = db.emailDao().getNewEmailsForNotification(accountId, 2_000L).map { it.id }
+
+        assertThat(ids).containsExactly("${accountId}_2:11")
     }
 
     @Test

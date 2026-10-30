@@ -513,6 +513,7 @@ interface EmailDao {
         WHERE e.accountId = :accountId
         AND f.type = 2
         AND e.dateReceived > :afterTime
+        AND e.messageClass NOT LIKE 'IPM.Post.RSS%'
         ORDER BY e.dateReceived DESC
     """)
     suspend fun getNewEmailsForNotification(accountId: Long, afterTime: Long): List<NotificationEmailSummary>

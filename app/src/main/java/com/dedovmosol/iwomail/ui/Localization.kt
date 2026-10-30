@@ -727,6 +727,10 @@ object Strings {
     val accountNotificationSettings: String @Composable get() =
         if (isRussian()) "Звук и вибрация уведомлений" else "Notification sound and vibration"
 
+    // RSS-каналы Outlook
+    val rssFeed: String @Composable get() = if (isRussian()) "RSS-канал" else "RSS feed"
+    val openArticle: String @Composable get() = if (isRussian()) "Открыть статью" else "View article"
+
     // Печать, PDF, .eml
     val printOrPdf: String @Composable get() = if (isRussian()) "Печать или PDF" else "Print or PDF"
     val saveAsEml: String @Composable get() = if (isRussian()) "Сохранить как .eml" else "Save as .eml"

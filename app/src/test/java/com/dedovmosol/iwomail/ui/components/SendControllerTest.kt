@@ -200,7 +200,7 @@ class SendControllerTest {
         val work = WorkManager.getInstance(context).getWorkInfosForUniqueWork(ScheduledSend.workName(entry.dir)).get()
         assertThat(work.map { it.state }).contains(WorkInfo.State.ENQUEUED)
         // Ждёт связи уже как обычное ожидающее письмо: видно в списке запланированных, его можно отменить
-        // стаётся письмом с отменой отправки: уведомление — «отправлено», не «запланированное»
+        // Остаётся письмом с отменой отправки: уведомление — «отправлено», не «запланированное»
         assertThat(entry.undo).isTrue()
         assertThat(entry.listed(System.currentTimeMillis())).isTrue()
         assertThat(env.returned).isEmpty()

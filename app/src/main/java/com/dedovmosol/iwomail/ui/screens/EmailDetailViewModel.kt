@@ -285,7 +285,7 @@ class EmailDetailViewModel(
                 }
                 if (current.body.isEmpty() && !_uiState.value.isLoadingBody) {
                     loadBodyInitial(current)
-                } else if (current.listUnsubscribe == null) {
+                } else if (current.listUnsubscribe == null && !com.dedovmosol.iwomail.eas.RssItems.isRss(current.messageClass)) {
                     // Тело загружено раньше, заголовки отписки не проверялись — проверить фоном, один раз
                     checkListUnsubscribe()
                 }

@@ -246,7 +246,8 @@ class EmailOperationsService(
             return when (val result = client.fetchEmailBodyWithMdn(
                 folderServerId,
                 email.serverId,
-                fetchMimeHeaders = folder?.type != FolderType.SENT_ITEMS
+                // Заголовки MIME (отчёт о прочтении, отписка) — не для своих писем и не для записей RSS-каналов
+                fetchMimeHeaders = folder?.type != FolderType.SENT_ITEMS && !com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)
             )) {
                 is EasResult.Success -> {
                     var bodyContent = result.data.body
@@ -442,7 +443,7 @@ class EmailOperationsService(
      */
     suspend fun ensureListUnsubscribe(emailId: String) {
         val email = emailDao.getEmail(emailId) ?: return
-        if (email.listUnsubscribe != null || email.serverId.isBlank()) return
+        if (email.listUnsubscribe != null || email.serverId.isBlank() || com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)) return
         if (com.dedovmosol.iwomail.eas.DraftIds.isLocal(email.serverId) || com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(email.serverId)) return
         val folder = folderDao.getFolder(email.folderId) ?: return
         if (!com.dedovmosol.iwomail.eas.ListUnsubscribe.offeredIn(folder.type)) return
