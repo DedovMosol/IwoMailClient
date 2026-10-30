@@ -305,13 +305,15 @@ fun BoxScope.ScrollColumnScrollbar(scrollState: ScrollState) {
  * @param itemKeys ключи элементов в порядке отображения (должны совпадать с key { } в items())
  * @param selectedIds текущий набор выделенных ключей
  * @param onSelectionChange callback при изменении выделения
+ * @param expand что выделяет строка с ключом: по умолчанию — сам ключ; строка-группа (цепочка писем) — все свои
  */
 @Composable
 fun rememberDragSelectModifier(
     listState: LazyListState,
     itemKeys: List<String>,
     selectedIds: Set<String>,
-    onSelectionChange: (Set<String>) -> Unit
+    onSelectionChange: (Set<String>) -> Unit,
+    expand: (String) -> Collection<String> = { listOf(it) }
 ): Modifier {
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -325,6 +327,7 @@ fun rememberDragSelectModifier(
     // rememberUpdatedState — closure всегда видит актуальные значения
     val currentSelectedIds by rememberUpdatedState(selectedIds)
     val currentOnChange by rememberUpdatedState(onSelectionChange)
+    val currentExpand by rememberUpdatedState(expand)
 
     val indexMap = remember(itemKeys) {
         itemKeys.withIndex().associate { (index, key) -> key to index }
@@ -340,7 +343,7 @@ fun rememberDragSelectModifier(
             }
             val start = minOf(dragStartIndex, dragCurrentIndex)
             val end = minOf(maxOf(dragStartIndex, dragCurrentIndex), itemKeys.size - 1)
-            val rangeIds = itemKeys.subList(start, end + 1).toSet()
+            val rangeIds = itemKeys.subList(start, end + 1).flatMapTo(HashSet()) { currentExpand(it) }
             currentOnChange(initialSelection + rangeIds)
         }
     }
@@ -385,7 +388,7 @@ fun rememberDragSelectModifier(
                     dragCurrentIndex = index
                     initialSelection = currentSelectedIds
                     lastPointerY = offset.y
-                    currentOnChange(initialSelection + itemKeys[index])
+                    currentOnChange(initialSelection + currentExpand(itemKeys[index]))
                 }
             },
             onDrag = { change, _ ->

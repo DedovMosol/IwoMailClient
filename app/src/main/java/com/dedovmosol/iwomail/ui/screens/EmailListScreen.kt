@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,6 +50,7 @@ import com.dedovmosol.iwomail.domain.SwipeAction
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.MailFlag
+import com.dedovmosol.iwomail.ui.screens.emaillist.MailRow
 import com.dedovmosol.iwomail.ui.screens.emaillist.SwipeableEmailRow
 import com.dedovmosol.iwomail.ui.screens.emaillist.SwipeRules
 import com.dedovmosol.iwomail.ui.LocalLanguage
@@ -149,6 +152,10 @@ fun EmailListScreen(
     // Свайпы по папке каждого письма (в «Избранном» и «Сегодня» папки разные); в режиме выбора свайпов нет
     val swipeSettings by remember { RepositoryProvider.getSettingsRepository(context).swipeActions }
         .collectAsStateWithLifecycle(initialValue = SwipeAction.DEFAULT_START to SwipeAction.DEFAULT_END)
+    // Цепочки писем (настройка); в черновиках — нет: каждый черновик открывается в редакторе отдельно
+    val listSettings = remember { RepositoryProvider.getSettingsRepository(context) }
+    val conversationView by remember { listSettings.conversationView }
+        .collectAsStateWithLifecycle(initialValue = listSettings.getConversationViewSync())
     val swipeRules = remember(swipeSettings, folders, isSelectionMode) {
         if (isSelectionMode) SwipeRules.NONE else SwipeRules.of(swipeSettings.first, swipeSettings.second, folders)
     }
@@ -623,7 +630,8 @@ fun EmailListScreen(
                 onSelectAll = { viewModel.selectAll(filteredEmails.map { it.id }) },
                 onRetry = { refresh() },
                 onDismissError = { viewModel.dismissError() },
-                onDragSelect = { newIds -> viewModel.setSelection(newIds) }
+                onDragSelect = { newIds -> viewModel.setSelection(newIds) },
+                threaded = conversationView && !isDraftsFolder
             )
         }
     }
@@ -843,7 +851,8 @@ private fun EmailList(
     onSelectAll: () -> Unit,
     onRetry: () -> Unit,
     onDismissError: () -> Unit,
-    onDragSelect: (Set<String>) -> Unit = {}
+    onDragSelect: (Set<String>) -> Unit = {},
+    threaded: Boolean = false
 ) {
     val listState = rememberLazyListState()
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -915,7 +924,8 @@ private fun EmailList(
                         onSwipe = onSwipe,
                         onSelectAll = onSelectAll,
                         onDismissError = onDismissError,
-                        onDragSelect = onDragSelect
+                        onDragSelect = onDragSelect,
+                        threaded = threaded
                     )
 
                     // Скроллбар
@@ -1051,7 +1061,8 @@ private fun EmailListContent(
     onSwipe: (EmailEntity, SwipeAction) -> Unit,
     onSelectAll: () -> Unit,
     onDismissError: () -> Unit,
-    onDragSelect: (Set<String>) -> Unit = {}
+    onDragSelect: (Set<String>) -> Unit = {},
+    threaded: Boolean = false
 ) {
     val context = LocalContext.current
     val mailRepo = remember { RepositoryProvider.getMailRepository(context) }
@@ -1121,14 +1132,30 @@ private fun EmailListContent(
         }
     }
 
-    // === Drag Selection (переиспользуемый модификатор) ===
-    val emailKeys = remember(emails) { emails.map { it.id } }
+    // === Цепочки писем: группировка — не в главном потоке. До первой группировки список не показывается (не мелькает
+    // плоским); при обновлении писем видна прежняя группировка, пока не готова новая ===
+    val threads by androidx.compose.runtime.produceState<List<com.dedovmosol.iwomail.domain.EmailThread>?>(null, emails, threaded) {
+        value = if (threaded) withContext(Dispatchers.Default) { com.dedovmosol.iwomail.domain.EmailThreads.group(emails) } else null
+    }
+    var expandedThreads by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val rows = remember(emails, threaded, threads, expandedThreads) {
+        if (!threaded) MailRow.flat(emails) else threads?.let { MailRow.threaded(it, expandedThreads.toSet()) }
+    } ?: return
+
+    // === Drag Selection (переиспользуемый модификатор); строка цепочки выделяет все свои письма ===
+    val rowKeys = remember(rows) { rows.map { it.key } }
+    val threadSelection = remember(rows) { MailRow.selectionOf(rows) }
     val dragSelectModifier = com.dedovmosol.iwomail.ui.components.rememberDragSelectModifier(
         listState = listState,
-        itemKeys = emailKeys,
+        itemKeys = rowKeys,
         selectedIds = selectedIds,
-        onSelectionChange = onDragSelect
+        onSelectionChange = onDragSelect,
+        expand = { key -> threadSelection[key] ?: listOf(key) }
     )
+    val haptic = LocalHapticFeedback.current
+    val currentSelectedIds by rememberUpdatedState(selectedIds)
+    val currentSelectionMode by rememberUpdatedState(isSelectionMode)
+    val stableOnDragSelect by rememberUpdatedState(onDragSelect)
 
     LazyColumn(
         state = listState,
@@ -1152,7 +1179,40 @@ private fun EmailListContent(
             item { ErrorBanner(message = errorMessage, onDismiss = onDismissError) }
         }
 
-        items(emails, key = { it.id }) { email ->
+        items(rows, key = { it.key }, contentType = { it::class }) { row ->
+            if (row is MailRow.Header) {
+                // Нажатие — раскрыть или свернуть; в режиме выбора нажатие и долгое нажатие — выбрать все письма цепочки.
+                // Свайпа и флажка нет: действие над всей цепочкой легко принять за действие над одним письмом
+                val latestHeader by rememberUpdatedState(row)
+                EmailListItem(
+                    email = row.email,
+                    mailRepo = mailRepo,
+                    isSelected = selectedIds.containsAll(row.thread.ids),
+                    isSelectionMode = isSelectionMode,
+                    showStar = false,
+                    isSent = isSent,
+                    isDrafts = isDrafts,
+                    thread = row.thread,
+                    expanded = row.expanded,
+                    onClickLabel = if (isSelectionMode) null else if (row.expanded) Strings.collapseThread else Strings.expandThread,
+                    onClick = remember {
+                        {
+                            val thread = latestHeader.thread
+                            if (currentSelectionMode) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                stableOnDragSelect(MailRow.toggleThread(currentSelectedIds, thread.ids))
+                            } else {
+                                expandedThreads = if (thread.key in expandedThreads) expandedThreads - thread.key else expandedThreads + thread.key
+                            }
+                        }
+                    },
+                    onLongClick = remember { { stableOnDragSelect(currentSelectedIds + latestHeader.thread.ids) } },
+                    onStarClick = {},
+                    onFlagChosen = {}
+                )
+                return@items
+            }
+            val email = row.email
             val latestEmail by rememberUpdatedState(email)
             SwipeableEmailRow(
                 startAction = swipeRules.start(email.folderId),
@@ -1169,6 +1229,7 @@ private fun EmailListContent(
                     showStar = !isTrashOrSpam && !isDrafts,
                     isSent = isSent,
                     isDrafts = isDrafts,
+                    nested = row is MailRow.Child,
                     imagePreview = imagePreviewCache[email.id],
                     onClick = remember { { stableOnEmailClick(latestEmail) } },
                     onLongClick = remember { { stableOnLongClick(latestEmail) } },
@@ -1191,6 +1252,12 @@ private fun EmailListItem(
     isSent: Boolean = false,
     isDrafts: Boolean = false,
     imagePreview: com.dedovmosol.iwomail.ui.screens.emaillist.ListPreview? = null,
+    /** Строка цепочки: число писем, сводный флажок, стрелка вместо флажка. */
+    thread: com.dedovmosol.iwomail.domain.EmailThread? = null,
+    expanded: Boolean = false,
+    /** Письмо раскрытой цепочки — с отступом. */
+    nested: Boolean = false,
+    onClickLabel: String? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onStarClick: () -> Unit,
@@ -1216,6 +1283,7 @@ private fun EmailListItem(
                 Modifier.clickable(onClick = onClick)
             } else {
                 Modifier.combinedClickable(
+                    onClickLabel = onClickLabel,
                     onClick = onClick,
                     onLongClick = longClickHandler
                 )
@@ -1224,7 +1292,7 @@ private fun EmailListItem(
         color = backgroundColor
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.padding(start = if (nested) 16.dp + NESTED_INDENT else 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.Top
         ) {
             // Отправленные и черновики — «Кому»: отправитель в них вы сами (как в Outlook). У черновика из Outlook
@@ -1280,6 +1348,16 @@ private fun EmailListItem(
                 cachedSenderName ?: cleanFromName ?: email.from
             }
             val avatarColor = getAvatarColor(avatarName)
+            // Адрес для фото из адресной книги: получатель (Отправленные, черновики) или отправитель
+            val avatarAddress = remember(email.from, email.to, showsRecipient) {
+                if (showsRecipient) {
+                    email.to.split(',', ';').firstNotNullOfOrNull { part ->
+                        com.dedovmosol.iwomail.util.extractEmailAddress(part.trim()).takeIf { it.contains('@') }
+                    }.orEmpty()
+                } else {
+                    com.dedovmosol.iwomail.util.extractEmailAddress(email.from)
+                }
+            }
 
             // Первая буква/цифра для аватара
             val avatarInitial = avatarName
@@ -1296,20 +1374,13 @@ private fun EmailListItem(
                         onLongClick = longClickHandler
                     )
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(avatarColor)
-                        .align(Alignment.Center),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = avatarInitial,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
+                com.dedovmosol.iwomail.ui.components.SenderAvatar(
+                    accountId = email.accountId,
+                    address = avatarAddress,
+                    initial = avatarInitial,
+                    color = avatarColor,
+                    modifier = Modifier.size(40.dp).align(Alignment.Center)
+                )
                 if (isSelectionMode) {
                     DragSelectionIndicator(
                         selected = isSelected,
@@ -1324,14 +1395,28 @@ private fun EmailListItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = if (email.read) FontWeight.Normal else FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    // Имя и число писем цепочки сразу за ним; дата и значки — у правого края
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = displayName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = if (email.read) FontWeight.Normal else FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (thread != null) ThreadCountBadge(count = thread.emails.size, unread = thread.unreadCount > 0)
+                    }
+                    // Флажок хотя бы у одного письма цепочки — только знак: отмечается отдельное письмо
+                    if (thread?.anyFlagged == true) {
+                        Icon(
+                            AppIcons.Star,
+                            contentDescription = Strings.starred,
+                            modifier = Modifier.size(16.dp),
+                            tint = com.dedovmosol.iwomail.ui.theme.AppColors.favorites
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     // Запись RSS-канала из Outlook (отправитель — название канала)
                     if (com.dedovmosol.iwomail.eas.RssItems.isRss(email.messageClass)) {
                         Icon(
@@ -1406,7 +1491,17 @@ private fun EmailListItem(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            if (showStar) {
+            if (thread != null) {
+                // Стрелка на месте флажка; нажимается вся строка (её действие — в onClickLabel)
+                Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            } else if (showStar) {
                 // Нажатие — отметить/снять; долгое нажатие — срок, напоминание, «выполнено»
                 val flag = email.flag
                 var flagMenuOpen by remember { mutableStateOf(false) }
@@ -1445,7 +1540,30 @@ private fun EmailListItem(
             }
         }
     }
-    HorizontalDivider(modifier = Modifier.padding(start = 68.dp))
+    HorizontalDivider(modifier = Modifier.padding(start = if (nested) 68.dp + NESTED_INDENT else 68.dp))
+}
+
+/** Отступ писем раскрытой цепочки. */
+private val NESTED_INDENT = 24.dp
+
+/** Число писем цепочки; есть непрочитанные — цветом темы. */
+@Composable
+private fun ThreadCountBadge(count: Int, unread: Boolean) {
+    val description = "$count ${Strings.pluralEmails(count)}"
+    Surface(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        color = if (unread) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier
+            .padding(start = 6.dp)
+            .semantics { contentDescription = description }
+    ) {
+        Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (unread) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+        )
+    }
 }
 
 @Composable

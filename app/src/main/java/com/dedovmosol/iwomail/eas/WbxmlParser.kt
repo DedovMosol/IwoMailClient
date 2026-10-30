@@ -36,6 +36,9 @@ class WbxmlParser {
         private const val MAX_OPAQUE_SIZE = 16 * 1024 * 1024 // 16MB
         private const val MAX_STRING_SIZE = 16 * 1024 * 1024 // 16MB
 
+        /** Кодовая страница ResolveRecipients ([MS-ASWBXML]). */
+        private const val PAGE_RESOLVE_RECIPIENTS = 10
+
         private val BINARY_OPAQUE_TAGS = setOf(
             "Timezone", "CompressedRTF", "MIMEData",
             "StartTimeZone", "EndTimeZone",
@@ -113,7 +116,9 @@ class WbxmlParser {
                     val bytes = ByteArray(length)
                     DataInputStream(input).readFully(bytes)
                     val currentTag = tagStack.lastOrNull() ?: ""
-                    if (isBinaryOpaqueTag(currentTag)) {
+                    // Data фото контакта (ResolveRecipients, страница 10) — массив байтов [MS-ASCMD]; Data тела
+                    // письма (AirSyncBase) — текст, поэтому решает страница, а не одно имя тега
+                    if (isBinaryOpaqueTag(currentTag) || (codePage == PAGE_RESOLVE_RECIPIENTS && currentTag == "Data")) {
                         result.append(android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
                     } else {
                         result.append(escapeXmlContent(String(bytes, Charsets.UTF_8)))

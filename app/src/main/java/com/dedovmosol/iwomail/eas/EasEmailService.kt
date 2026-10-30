@@ -1380,7 +1380,9 @@ $deleteCommands
             attachments = attachments,
             flag = flag,
             messageClass = messageClass,
-            bodyTruncated = bodySectionAdd?.let { deps.extractValue(it, "Truncated") == "1" } ?: false
+            bodyTruncated = bodySectionAdd?.let { deps.extractValue(it, "Truncated") == "1" } ?: false,
+            // email2:ConversationId (EAS 14.0+, OPAQUE → base64 при разборе WBXML); на Exchange 2007 его нет
+            conversationId = deps.extractValue(xml, "ConversationId")?.trim()?.takeIf { it.isNotEmpty() }
         )
     }
 

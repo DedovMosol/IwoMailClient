@@ -665,27 +665,21 @@ fun EmailDetailScreen(
                     } catch (_: Exception) {
                         Color(0xFF1976D2)
                     }
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(accountColor),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // Берём первую букву из имени или email
-                        val displayName = currentEmail.fromName.ifEmpty { extractDisplayName(currentEmail.from) }
-                        val displayEmail = extractEmailAddress(currentEmail.from)
-                        val avatarLetter = when {
-                            displayName.isNotEmpty() && !displayName.contains("@") -> displayName.first().uppercase()
-                            displayEmail.isNotEmpty() -> displayEmail.first().uppercase()
-                            else -> "?"
-                        }
-                        Text(
-                            text = avatarLetter,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                    // Первая буква имени или адреса; фото из адресной книги — поверх (если включено и есть)
+                    val avatarName = currentEmail.fromName.ifEmpty { extractDisplayName(currentEmail.from) }
+                    val avatarAddress = extractEmailAddress(currentEmail.from)
+                    val avatarLetter = when {
+                        avatarName.isNotEmpty() && !avatarName.contains("@") -> avatarName.first().uppercase()
+                        avatarAddress.isNotEmpty() -> avatarAddress.first().uppercase()
+                        else -> "?"
                     }
+                    com.dedovmosol.iwomail.ui.components.SenderAvatar(
+                        accountId = currentEmail.accountId,
+                        address = avatarAddress,
+                        initial = avatarLetter,
+                        color = accountColor,
+                        modifier = Modifier.size(40.dp)
+                    )
 
                     Spacer(modifier = Modifier.width(12.dp))
 

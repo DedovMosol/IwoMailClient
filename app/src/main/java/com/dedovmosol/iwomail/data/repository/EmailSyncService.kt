@@ -567,7 +567,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                                 dateReceived = effectiveDate,
                                 read = email.read,
                                 importance = email.importance,
-                                hasAttachments = email.attachments.isNotEmpty()
+                                hasAttachments = email.attachments.isNotEmpty(),
+                                conversationId = email.conversationId
                             ).withFlag(email.flag)
                         }
                         if (emailEntities.any { it.flagReminder != null }) {
@@ -1211,7 +1212,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             read = email.read,
             importance = email.importance,
             hasAttachments = email.attachments.isNotEmpty(),
-            messageClass = email.messageClass
+            messageClass = email.messageClass,
+            conversationId = email.conversationId
         ).withFlag(email.flag)
     }
 

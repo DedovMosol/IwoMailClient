@@ -222,7 +222,7 @@ interface EmailDao {
                flagged, importance, hasAttachments, originalFolderId,
                mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
                flagStartDate, flagDueDate, flagReminder, flagCompleted,
-               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt
+               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt, conversationId
         FROM emails
         WHERE folderId = :folderId
         ORDER BY dateReceived DESC
@@ -462,7 +462,7 @@ interface EmailDao {
                flagged, importance, hasAttachments, originalFolderId,
                mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
                flagStartDate, flagDueDate, flagReminder, flagCompleted,
-               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt
+               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt, conversationId
         FROM emails
         WHERE accountId = :accountId AND flagged = 1
         ORDER BY dateReceived DESC
@@ -653,7 +653,7 @@ interface EmailDao {
                e.originalFolderId, e.mdnRequestedBy, e.mdnSent, e.messageClass,
                e.internetMessageId, e.bcc, e.replacesServerId,
                e.flagStartDate, e.flagDueDate, e.flagReminder, e.flagCompleted,
-               e.listUnsubscribe, e.listUnsubscribeOneClick, e.requestReadReceipt, e.requestDeliveryReceipt
+               e.listUnsubscribe, e.listUnsubscribeOneClick, e.requestReadReceipt, e.requestDeliveryReceipt, e.conversationId
         FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
         WHERE e.accountId = :accountId

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -31,7 +32,7 @@ import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import kotlinx.coroutines.launch
 
-/** Настройки почты: картинки из интернета, отмена отправки, свайпы в списке писем. */
+/** Настройки почты: картинки из интернета, фото из адресной книги, цепочки, отмена отправки, свайпы в списке писем. */
 @Composable
 internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -40,6 +41,8 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
     val swipes by settingsRepo.swipeActions.collectAsStateWithLifecycle(
         initialValue = SwipeAction.DEFAULT_START to SwipeAction.DEFAULT_END
     )
+    val galPhotos by settingsRepo.galPhotosEnabled.collectAsStateWithLifecycle(initialValue = null)
+    val conversations by settingsRepo.conversationView.collectAsStateWithLifecycle(initialValue = null)
     // Открытый выбор: "undo", "start", "end" (переживает поворот)
     var choice by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -63,6 +66,21 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
                 )
             }
         )
+        SwitchSetting(
+            title = Strings.galPhotosSetting,
+            description = Strings.galPhotosSettingDesc,
+            icon = { Icon(AppIcons.Person, null) },
+            checked = galPhotos,
+            onChange = { on -> scope.launch { settingsRepo.setGalPhotosEnabled(on) } }
+        )
+        SwitchSetting(
+            title = Strings.conversationViewSetting,
+            description = Strings.conversationViewSettingDesc,
+            icon = { Icon(AppIcons.Reply, null) },
+            checked = conversations,
+            onChange = { on -> scope.launch { settingsRepo.setConversationView(on) } }
+        )
+
         val trusted = images?.trustedSenders.orEmpty()
         if (trusted.isNotEmpty()) {
             ListItem(
@@ -117,6 +135,29 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
             )
         }
     }
+}
+
+/** Настройка-переключатель: нажатие на всю строку; [checked] null — значение ещё не прочитано. */
+@Composable
+private fun SwitchSetting(
+    title: String,
+    description: String,
+    icon: @Composable () -> Unit,
+    checked: Boolean?,
+    onChange: (Boolean) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(description) },
+        leadingContent = icon,
+        trailingContent = { Switch(checked = checked == true, enabled = checked != null, onCheckedChange = null) },
+        modifier = Modifier.toggleable(
+            value = checked == true,
+            enabled = checked != null,
+            role = Role.Switch,
+            onValueChange = onChange
+        )
+    )
 }
 
 /** Выбор одного варианта из списка (радиокнопки). */
