@@ -227,6 +227,21 @@ object MimeHtmlProcessor {
         mimeData
     }
 
+    /**
+     * MIME письма байтами — для файла .eml. Base64-обёртка (так Exchange иногда отдаёт MIME в ItemOperations)
+     * раскодируется без потерь, остальное — тем же UTF-8, которым его прочитал разбор WBXML.
+     */
+    fun mimeBytes(mimeData: String): ByteArray {
+        if (mimeData.length > 100 && mimeData.matches(BASE64_DETECT)) {
+            try {
+                return java.util.Base64.getMimeDecoder().decode(mimeData)
+            } catch (_: IllegalArgumentException) {
+                // не base64 — как есть
+            }
+        }
+        return mimeData.toByteArray(Charsets.UTF_8)
+    }
+
     private fun decodeText(bytes: ByteArray, charsetName: String?): String {
         val declaredCharset = charsetName
             ?.trim()

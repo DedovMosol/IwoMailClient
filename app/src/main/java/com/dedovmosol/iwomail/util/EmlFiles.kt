@@ -11,7 +11,14 @@ object EmlFiles {
     /** Имя файла по теме: без недопустимых в именах символов, не длиннее [MAX_NAME_CHARS]; темы нет — «email». */
     fun fileName(subject: String): String {
         // Сначала пробелы (табуляция, переносы строк темы — один пробел), потом запрещённые символы
-        val base = subject.replace(WHITESPACE, " ").replace(FORBIDDEN, "_").trim().trim('.').take(MAX_NAME_CHARS).trim()
+        val clean = subject.replace(WHITESPACE, " ").replace(FORBIDDEN, "_").trim().trim('.')
+        // Не резать суррогатную пару (эмодзи в теме): половина символа — недопустимое имя файла
+        val cut = if (clean.length > MAX_NAME_CHARS && Character.isHighSurrogate(clean[MAX_NAME_CHARS - 1])) {
+            MAX_NAME_CHARS - 1
+        } else {
+            MAX_NAME_CHARS
+        }
+        val base = clean.take(cut).trim()
         return "${base.ifEmpty { "email" }}.eml"
     }
 }

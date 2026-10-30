@@ -17,6 +17,7 @@ import com.dedovmosol.iwomail.ui.screens.emaildetail.EmailDetailActions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -130,9 +131,23 @@ class EmailDetailViewModel(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /** Отписка от рассылки (null — недоступна, например в тестах без сети). */
     private val unsubscriber: com.dedovmosol.iwomail.domain.Unsubscriber? = null,
-    /** Записать байты в выбранный пользователем файл (SAF); false — не записалось. */
-    private val writeFile: (suspend (android.net.Uri, ByteArray) -> Boolean)? = null
+    /** Файл .eml, выбранный пользователем (SAF): записать или убрать (null — недоступно). */
+    private val documents: DocumentSink? = null,
+    /**
+     * Отписка и сохранение .eml доводятся до конца и после выхода с экрана: «Отписаться» и сразу «Назад» не
+     * обрывает запрос или письмо на середине. null — [viewModelScope] (тесты).
+     */
+    private val detachedScope: kotlinx.coroutines.CoroutineScope? = null
 ) : ViewModel() {
+
+    /** Файл, выбранный пользователем через системный диалог: записать письмо или убрать файл, если письма нет. */
+    interface DocumentSink {
+        /** false — не записалось (поставщик документа отказал). */
+        suspend fun write(uri: android.net.Uri, bytes: ByteArray): Boolean
+        suspend fun discard(uri: android.net.Uri)
+    }
+
+    private val workScope: kotlinx.coroutines.CoroutineScope get() = detachedScope ?: viewModelScope
 
     private val _uiState = MutableStateFlow(EmailDetailUiState())
     val uiState: StateFlow<EmailDetailUiState> = _uiState.asStateFlow()
@@ -545,7 +560,8 @@ class EmailDetailViewModel(
         _uiState.update { it.copy(isUnsubscribing = true) }
         viewModelScope.launch {
             try {
-                when (val result = unsubscriber.unsubscribe(email.accountId, target)) {
+                val work = workScope.async { unsubscriber.unsubscribe(email.accountId, target) }
+                when (val result = work.await()) {
                     com.dedovmosol.iwomail.domain.UnsubscribeResult.Done -> {
                         _uiState.update { it.copy(unsubscribed = true) }
                         sendEvent(EmailDetailEvent.Unsubscribed)
@@ -571,27 +587,41 @@ class EmailDetailViewModel(
 
     /** Сохранить письмо целиком (.eml, с вложениями — как на сервере) в файл [uri], выбранный пользователем. */
     fun saveEml(uri: android.net.Uri) {
-        val writeFile = writeFile ?: return
+        val documents = documents ?: return
         if (_uiState.value.isSavingEml) return
         _uiState.update { it.copy(isSavingEml = true) }
         viewModelScope.launch {
             try {
-                when (val mime = withContext(ioDispatcher) { mailRepo.fetchMessageMime(emailId) }) {
-                    is EasResult.Success -> when {
-                        mime.data.isEmpty() -> sendEvent(EmailDetailEvent.EmlFailed(null))
-                        withContext(ioDispatcher) { writeFile(uri, mime.data) } -> sendEvent(EmailDetailEvent.EmlSaved)
-                        else -> sendEvent(EmailDetailEvent.EmlFailed(null))
-                    }
-                    is EasResult.Error -> sendEvent(EmailDetailEvent.EmlFailed(mime.message))
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                sendEvent(EmailDetailEvent.EmlFailed(e.message))
+                sendEvent(workScope.async { exportEml(documents, uri) }.await())
             } finally {
                 _uiState.update { it.copy(isSavingEml = false) }
             }
         }
+    }
+
+    /** Письмо — в файл; не вышло — файл, созданный выбором места, не остаётся пустым или недописанным. */
+    private suspend fun exportEml(documents: DocumentSink, uri: android.net.Uri): EmailDetailEvent {
+        val failure = try {
+            when (val mime = withContext(ioDispatcher) { mailRepo.fetchMessageMime(emailId) }) {
+                is EasResult.Success -> when {
+                    mime.data.isEmpty() -> EmailDetailEvent.EmlFailed(null)
+                    withContext(ioDispatcher) { documents.write(uri, mime.data) } -> return EmailDetailEvent.EmlSaved
+                    else -> EmailDetailEvent.EmlFailed(null)
+                }
+                is EasResult.Error -> EmailDetailEvent.EmlFailed(mime.message)
+            }
+        } catch (e: CancellationException) {
+            withContext(kotlinx.coroutines.NonCancellable + ioDispatcher) { documents.discard(uri) }
+            throw e
+        } catch (e: Exception) {
+            EmailDetailEvent.EmlFailed(e.message)
+        } catch (e: OutOfMemoryError) {
+            // Письмо в десятки мегабайт на устройстве с малой памятью — не падать, а сообщить
+            Log.e("EmailDetailViewModel", "EML export: out of memory", e)
+            EmailDetailEvent.EmlFailed(null)
+        }
+        withContext(ioDispatcher) { documents.discard(uri) }
+        return failure
     }
 
     suspend fun deleteEmailPermanently(
@@ -617,16 +647,31 @@ class EmailDetailViewModel(
                     val calendarRepo = RepositoryProvider.getCalendarRepository(application)
                     val taskRepo = RepositoryProvider.getTaskRepository(application)
                     val actions = EmailDetailActions(mailRepo, accountRepo, calendarRepo, taskRepo)
-                    val resolver = application.contentResolver
                     return EmailDetailViewModel(
                         emailId, actions, mailRepo, accountRepo,
                         unsubscriber = com.dedovmosol.iwomail.domain.Unsubscriber.forApp(application),
-                        writeFile = { uri, bytes ->
-                            // "wt": файл перезаписывается целиком, а не дописывается к прежнему содержимому
-                            resolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } != null
-                        }
+                        documents = ContentResolverSink(application.contentResolver),
+                        detachedScope = DETACHED_WORK
                     ) as T
                 }
             }
+
+        /** Процессная область для работы, которая не должна обрываться с закрытием экрана. */
+        private val DETACHED_WORK = com.dedovmosol.iwomail.util.supervisedScope(Dispatchers.Main.immediate, "EmailDetailWork")
+    }
+
+    private class ContentResolverSink(private val resolver: android.content.ContentResolver) : DocumentSink {
+        // "wt": файл перезаписывается целиком, а не дописывается к прежнему содержимому
+        override suspend fun write(uri: android.net.Uri, bytes: ByteArray): Boolean =
+            resolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } != null
+
+        override suspend fun discard(uri: android.net.Uri) {
+            try {
+                android.provider.DocumentsContract.deleteDocument(resolver, uri)
+            } catch (e: Exception) {
+                // Поставщик не умеет удалять (или файла уже нет) — остаётся пустой файл
+                Log.w("EmailDetailViewModel", "Can't remove unsaved document: ${e.message}")
+            }
+        }
     }
 }
