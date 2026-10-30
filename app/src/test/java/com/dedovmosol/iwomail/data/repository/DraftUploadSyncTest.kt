@@ -60,6 +60,8 @@ class DraftUploadSyncTest {
         coEvery { accountRepo.createEasClient(accountId) } returns easClient
         // Сервер ничего нового не прислал
         coEvery { easClient.sync(any(), any(), any(), any(), any()) } returns EasResult.Success(SyncResponse("K2", 1, emptyList()))
+        // EWS по умолчанию не отвечает: скрытые копии и флажки прежних версий не прочитать
+        coEvery { easClient.findDraftDetails(any(), any()) } returns null
         service = EmailSyncService(
             context, db.folderDao(), db.emailDao(), db.attachmentDao(), db.accountDao(), accountRepo, db,
             deleteServerDraft = { _, serverId, exclude ->
@@ -83,6 +85,9 @@ class DraftUploadSyncTest {
 
     private fun drafts() = runBlocking { db.emailDao().getEmailsByFolderList(folderId) }
 
+    private fun details(bcc: String? = null, receipts: com.dedovmosol.iwomail.eas.ReceiptRequests? = null) =
+        com.dedovmosol.iwomail.eas.EwsDraftXml.DraftDetails(body = "", bcc = bcc, lastModified = null, receipts = receipts)
+
     @Test
     fun `device draft is uploaded with Bcc and importance and replaces the old server version`() = runBlocking<Unit> {
         val local = draft(DraftIds.newDeviceOnly(), replaces = "5:9")
@@ -103,7 +108,7 @@ class DraftUploadSyncTest {
     @Test
     fun `unknown Bcc of an offline edit is read from the replaced version before upload`() = runBlocking<Unit> {
         db.emailDao().insert(draft(DraftIds.newDeviceOnly(), replaces = "5:9", bcc = null))
-        coEvery { easClient.findDraftBcc("5", "5:9") } returns "boss@corp.example"
+        coEvery { easClient.findDraftDetails("5", "5:9") } returns details(bcc = "boss@corp.example")
         val bcc = slot<String>()
         coEvery { easClient.createDraft(any(), any(), capture(bcc), any(), any(), any(), any()) } returns EasResult.Success("AAMkNEW=")
 
@@ -117,7 +122,7 @@ class DraftUploadSyncTest {
     @Test
     fun `replaced version whose Bcc cannot be read is still replaced, not left as a second draft`() = runBlocking<Unit> {
         db.emailDao().insert(draft(DraftIds.newDeviceOnly(), replaces = "5:9", bcc = null))
-        coEvery { easClient.findDraftBcc(any(), any()) } returns null
+        coEvery { easClient.findDraftDetails(any(), any()) } returns null
         val bcc = slot<String>()
         coEvery { easClient.createDraft(any(), any(), capture(bcc), any(), any(), any(), any()) } returns EasResult.Success("AAMkNEW=")
 
@@ -126,6 +131,41 @@ class DraftUploadSyncTest {
         assertThat(bcc.captured).isEmpty()
         assertThat(deletedServerDrafts).containsExactly("5:9" to "AAMkNEW=")
         assertThat(drafts().single().replacesServerId).isNull()
+    }
+
+    @Test
+    fun `unknown receipt requests of an offline edit come from the replaced version`() = runBlocking<Unit> {
+        // Правка черновика из Outlook без связи: флажки «запросить отчёт» EAS не передаёт — они на сервере
+        db.emailDao().insert(draft(DraftIds.newDeviceOnly(), replaces = "5:9"))
+        val serverReceipts = com.dedovmosol.iwomail.eas.ReceiptRequests(read = true, delivery = false)
+        coEvery { easClient.findDraftDetails("5", "5:9") } returns details(bcc = "", receipts = serverReceipts)
+        val receipts = slot<com.dedovmosol.iwomail.eas.ReceiptRequests>()
+        coEvery {
+            easClient.createDraft(any(), any(), any(), any(), any(), any(), any(), capture(receipts))
+        } returns EasResult.Success("AAMkNEW=")
+
+        service.syncDraftsFull(accountId, folderId)
+
+        assertThat(receipts.captured).isEqualTo(serverReceipts)
+        val uploaded = drafts().single()
+        assertThat(uploaded.requestReadReceipt).isTrue()
+        assertThat(uploaded.requestDeliveryReceipt).isFalse()
+        // Скрытые копии записи известны — EWS спрашивали только ради флажков, один раз
+        coVerify(exactly = 1) { easClient.findDraftDetails(any(), any()) }
+    }
+
+    @Test
+    fun `known receipts and Bcc need no EWS request`() = runBlocking<Unit> {
+        db.emailDao().insert(draft(DraftIds.newDeviceOnly(), replaces = "5:9").copy(requestReadReceipt = false, requestDeliveryReceipt = true))
+        val receipts = slot<com.dedovmosol.iwomail.eas.ReceiptRequests>()
+        coEvery {
+            easClient.createDraft(any(), any(), any(), any(), any(), any(), any(), capture(receipts))
+        } returns EasResult.Success("AAMkNEW=")
+
+        service.syncDraftsFull(accountId, folderId)
+
+        assertThat(receipts.captured).isEqualTo(com.dedovmosol.iwomail.eas.ReceiptRequests(read = false, delivery = true))
+        coVerify(exactly = 0) { easClient.findDraftDetails(any(), any()) }
     }
 
     @Test
@@ -149,8 +189,8 @@ class DraftUploadSyncTest {
         )
         val local = draft(DraftIds.newDeviceOnly(), replaces = "5:9\n5:8", bcc = null)
         db.emailDao().insert(local)
-        coEvery { easClient.findDraftBcc("5", "5:9") } returns "boss@corp.example"
-        coEvery { easClient.findDraftBcc("5", "5:8") } returns null // не прочитать — не ждём
+        coEvery { easClient.findDraftDetails("5", "5:9") } returns details(bcc = "boss@corp.example")
+        coEvery { easClient.findDraftDetails("5", "5:8") } returns null // не прочитать — не ждём
 
         service.syncDraftsFull(accountId, folderId)
 

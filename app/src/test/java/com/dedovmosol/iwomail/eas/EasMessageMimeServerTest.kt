@@ -53,7 +53,9 @@ class EasMessageMimeServerTest {
             "<airsyncbase:EstimatedDataSize>${data.length}</airsyncbase:EstimatedDataSize>" +
             "<airsyncbase:Data>${XmlUtils.escape(data)}</airsyncbase:Data></airsyncbase:Body></Properties></Fetch></Response></ItemOperations>"
 
-    private val mime = "From: News <news@shop.example>\r\n" +
+    private val mime = "DKIM-Signature: v=1; a=rsa-sha256; d=shop.example; s=s1;\r\n" +
+        " h=From:Subject:List-Unsubscribe:List-Unsubscribe-Post; bh=x; b=y\r\n" +
+        "From: News <news@shop.example>\r\n" +
         "List-Unsubscribe: <mailto:leave@shop.example>,\r\n <https://shop.example/u/1>\r\n" +
         "List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n" +
         "Subject: Sale\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Скидки</p>\r\n"
@@ -99,6 +101,50 @@ class EasMessageMimeServerTest {
         assertThat((bytes as EasResult.Success).data.toString(Charsets.UTF_8)).isEqualTo(mime)
         val request = exchange.calls.single().xml
         assertThat(request).contains("<MIMESupport>2</MIMESupport>")
+    }
+
+    @Test
+    fun `headers without List-Unsubscribe are remembered as checked`() = runBlocking<Unit> {
+        val plain = "From: a@corp.example\r\nSubject: Hi\r\nContent-Type: text/plain\r\n\r\nHello\r\n"
+        val exchange = FakeExchange(route(plain))
+
+        val body = (exchange.emailService().fetchEmailBodyWithMdn("5", "5:1") as EasResult.Success).data
+
+        // "" — заголовки получены, отписки нет: при следующем открытии не спрашивать снова
+        assertThat(body.listUnsubscribe).isEmpty()
+    }
+
+    @Test
+    fun `failed header request leaves List-Unsubscribe unknown to ask later`() = runBlocking<Unit> {
+        val exchange = FakeExchange { call ->
+            // Сервер не выполнил запрос заголовков (Fetch Status 3 — ошибка сервера): это не «заголовков нет»
+            if (call.xml.contains("<Type>4</Type>")) {
+                Reply.Wbxml(
+                    """<?xml version="1.0" encoding="utf-8"?><ItemOperations xmlns="ItemOperations"><Status>1</Status>""" +
+                        "<Response><Fetch><Status>3</Status></Fetch></Response></ItemOperations>"
+                )
+            } else {
+                Reply.Wbxml(fetchResponse(2, "<p>x</p>"))
+            }
+        }
+
+        val body = (exchange.emailService().fetchEmailBodyWithMdn("5", "5:1") as EasResult.Success).data
+
+        assertThat(body.body).isEqualTo("<p>x</p>")
+        assertThat(body.listUnsubscribe).isNull()
+    }
+
+    @Test
+    fun `header-only request asks for a truncated MIME and returns just the headers`() = runBlocking<Unit> {
+        val exchange = FakeExchange(route(mime))
+
+        val headers = (exchange.emailService().fetchTopLevelHeaders("5", "5:1") as EasResult.Success).data
+
+        assertThat(headers).contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click")
+        assertThat(headers).doesNotContain("Скидки")
+        val request = exchange.calls.single().xml
+        assertThat(request).contains("<MIMESupport>2</MIMESupport>")
+        assertThat(request).contains("<TruncationSize>65536</TruncationSize>")
     }
 
     @Test

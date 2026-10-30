@@ -178,6 +178,9 @@ class EmailDetailActions(
     suspend fun pendingReadReceipt(emailId: String): String? =
         mailRepo.pendingReadReceipt(emailId)
 
+    suspend fun ensureListUnsubscribe(emailId: String) =
+        mailRepo.ensureListUnsubscribe(emailId)
+
     suspend fun answerReadReceipt(emailId: String, send: Boolean): EasResult<Unit> =
         mailRepo.answerReadReceipt(emailId, send).toUnit()
 

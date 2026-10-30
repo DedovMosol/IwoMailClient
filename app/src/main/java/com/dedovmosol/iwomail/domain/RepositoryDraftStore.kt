@@ -79,7 +79,8 @@ class RepositoryDraftStore(
     override suspend fun carryAttachments(rows: List<AttachmentEntity>, toEmailId: String) =
         mailRepository.carryDraftAttachments(rows, toEmailId)
 
-    override suspend fun serverBcc(accountId: Long, serverId: String): String? = mailRepository.serverDraftBcc(accountId, serverId)
+    override suspend fun serverExtras(accountId: Long, serverId: String): DraftSaver.ServerExtras? =
+        mailRepository.serverDraftDetails(accountId, serverId)?.let { DraftSaver.ServerExtras(it.bcc, it.receipts) }
 
     override suspend fun serverReachable(accountId: Long): Boolean {
         // Состояние — до пробы: параллельная синхронизация могла переключить адрес, пока проба шла.

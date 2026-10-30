@@ -7,10 +7,9 @@ import com.dedovmosol.iwomail.eas.ListUnsubscribe
 import com.dedovmosol.iwomail.util.escapeHtml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -57,7 +56,7 @@ class Unsubscriber(
         val request = try {
             Request.Builder()
                 .url(url)
-                .post(ListUnsubscribe.ONE_CLICK_BODY.toRequestBody(FORM))
+                .post(ONE_CLICK_FORM)
                 .build()
         } catch (_: IllegalArgumentException) {
             return@withContext false
@@ -71,7 +70,17 @@ class Unsubscriber(
     }
 
     companion object {
-        private val FORM = "application/x-www-form-urlencoded".toMediaType()
+        /**
+         * Ключ и значение из List-Unsubscribe-Post как поле формы: RFC 8058 §3.2 — SHOULD multipart/form-data
+         * (application/x-www-form-urlencoded — лишь MAY).
+         */
+        private val ONE_CLICK_FORM: MultipartBody = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart(
+                ListUnsubscribe.ONE_CLICK_BODY.substringBefore('='),
+                ListUnsubscribe.ONE_CLICK_BODY.substringAfter('=')
+            )
+            .build()
 
         internal val DEFAULT_HTTP: OkHttpClient by lazy {
             OkHttpClient.Builder()

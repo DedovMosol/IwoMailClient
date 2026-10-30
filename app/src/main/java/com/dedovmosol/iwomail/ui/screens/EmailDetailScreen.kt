@@ -141,7 +141,7 @@ fun EmailDetailScreen(
     // Отписка от рассылки — не для своих писем и не для спама: отписка от спама лишь подтверждает, что адрес живой
     val listUnsubscribe = remember(email?.listUnsubscribe, email?.listUnsubscribeOneClick) {
         com.dedovmosol.iwomail.eas.ListUnsubscribe.parse(email?.listUnsubscribe, email?.listUnsubscribeOneClick == true)
-    }.takeUnless { isInSent || isInDrafts || uiState.isInJunk || uiState.unsubscribed }
+    }.takeIf { uiState.unsubscribeOffered && !uiState.unsubscribed }
     var showUnsubscribeDialog by rememberSaveable { mutableStateOf(false) }
 
     // Важный отправитель: уведомления о его письмах звучат и в тихие часы

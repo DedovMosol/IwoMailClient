@@ -6,7 +6,11 @@ import org.junit.Test
 /** List-Unsubscribe (RFC 2369) и отписка одним запросом (RFC 8058) из верхних заголовков MIME. */
 class ListUnsubscribeTest {
 
-    private val headers = """
+    private val dkim = "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=shop.example; s=s1;\r\n" +
+        " h=From:To:Subject:List-Unsubscribe:List-Unsubscribe-Post; bh=47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=;\r\n" +
+        " b=AbCd\r\n"
+
+    private val headers = dkim + """
         From: News <news@shop.example>
         List-Unsubscribe: <mailto:unsub@shop.example?subject=unsubscribe%20me>,
          <https://shop.example/u/abc123>
@@ -83,6 +87,47 @@ class ListUnsubscribeTest {
     @Test
     fun `List-Unsubscribe-Post alone is not mistaken for List-Unsubscribe`() {
         assertThat(ListUnsubscribe.fromHeaders("List-Unsubscribe-Post: List-Unsubscribe=One-Click")).isNull()
+    }
+
+    @Test
+    fun `one-click needs a DKIM signature that covers both unsubscribe headers`() {
+        val unsigned = headers.removePrefix(dkim)
+        assertThat(ListUnsubscribe.fromHeaders(unsigned)?.second).isFalse()
+
+        // Подпись есть, но List-Unsubscribe-Post дописан после неё — не охвачен
+        val partly = headers.replace("List-Unsubscribe:List-Unsubscribe-Post", "List-Unsubscribe")
+        assertThat(ListUnsubscribe.fromHeaders(partly)?.second).isFalse()
+
+        // Без one-click отписка остаётся — письмом или на странице
+        assertThat(ListUnsubscribe.parse(ListUnsubscribe.fromHeaders(unsigned)?.first, oneClick = false)?.method)
+            .isInstanceOf(ListUnsubscribe.Method.Mail::class.java)
+    }
+
+    @Test
+    fun `any of several signatures may cover the headers, case and spaces ignored`() {
+        val signatures = "DKIM-Signature: v=1; d=esp.example; h=From:Subject; bh=x; b=y\r\n" +
+            "DKIM-Signature: v=1; d=shop.example; H=x; h = from : list-unsubscribe : LIST-UNSUBSCRIBE-POST ; b=z\r\n"
+        val signed = signatures + headers.removePrefix(dkim)
+
+        assertThat(ListUnsubscribe.dkimCoversUnsubscribe(signed)).isTrue()
+        assertThat(ListUnsubscribe.fromHeaders(signed)?.second).isTrue()
+    }
+
+    @Test
+    fun `body hash tag is not mistaken for the header list`() {
+        val tricky = "DKIM-Signature: v=1; bh=List-Unsubscribe:List-Unsubscribe-Post; h=From; b=x\r\n"
+
+        assertThat(ListUnsubscribe.dkimCoversUnsubscribe(tricky)).isFalse()
+    }
+
+    @Test
+    fun `unsubscribe is not offered in own mail and junk`() {
+        assertThat(ListUnsubscribe.offeredIn(FolderType.INBOX)).isTrue()
+        assertThat(ListUnsubscribe.offeredIn(FolderType.DELETED_ITEMS)).isTrue()
+        assertThat(ListUnsubscribe.offeredIn(null)).isTrue()
+        for (type in listOf(FolderType.SENT_ITEMS, FolderType.DRAFTS, FolderType.OUTBOX, FolderType.JUNK_EMAIL)) {
+            assertThat(ListUnsubscribe.offeredIn(type)).isFalse()
+        }
     }
 
     @Test
