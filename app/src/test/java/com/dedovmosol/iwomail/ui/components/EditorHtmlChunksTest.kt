@@ -46,6 +46,17 @@ class EditorHtmlChunksTest {
     }
 
     @Test
+    fun `insertImage stores mime and base64 chunks without a JS literal`() {
+        val controller = RichTextEditorController()
+        controller.insertImage("QUJDRA==", "image/png; charset=x")
+        assertThat(controller.editorImageMime()).isEqualTo("image/png")
+        val rebuilt = (0 until controller.editorImageChunkCount()).joinToString("") {
+            controller.editorImageChunk(it)
+        }
+        assertThat(rebuilt).isEqualTo("QUJDRA==")
+    }
+
+    @Test
     fun `setHtml bumps generation so a stale JS read can retry`() {
         val controller = RichTextEditorController()
         val before = controller.editorHtmlGeneration()

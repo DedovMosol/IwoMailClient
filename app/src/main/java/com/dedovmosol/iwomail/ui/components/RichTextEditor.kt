@@ -131,6 +131,11 @@ class RichTextEditorController {
     @Volatile
     private var editorHtmlPayload: EditorHtmlPayload = EditorHtmlPayload(0, arrayOf(""))
     private val editorHtmlGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile
+    private var editorImagePayload: EditorHtmlPayload = EditorHtmlPayload(0, arrayOf(""))
+    @Volatile
+    private var editorImageMime: String = "image/jpeg"
+    private val editorImageGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val pendingFlushCallbacks = linkedMapOf<Long, (String?) -> Unit>()
     private var pendingFlushId = 0L
 
@@ -179,9 +184,14 @@ class RichTextEditorController {
         execJs("removeHighlight()")
     }
     fun insertImage(base64: String, mimeType: String) {
-        // base64 не содержит спецсимволов, но mimeType может
-        val escapedMime = mimeType.replace("\\", "\\\\").replace("'", "\\'")
-        execJs("insertImageBase64('$base64', '$escapedMime')")
+        editorImageMime = mimeType.substringBefore(';')
+            .filter { it.isLetterOrDigit() || it == '/' || it == '+' || it == '.' || it == '-' }
+            .ifBlank { "image/jpeg" }
+        editorImagePayload = EditorHtmlPayload(
+            editorImageGeneration.incrementAndGet(),
+            htmlToEditorChunks(base64)
+        )
+        execJs("insertAndroidImage()")
     }
     fun setHtml(html: String) {
         val sanitized = stripDangerousTags(html)
@@ -197,6 +207,10 @@ class RichTextEditorController {
     fun editorHtmlGeneration(): Int = editorHtmlPayload.generation
     fun editorHtmlChunkCount(): Int = editorHtmlPayload.chunks.size
     fun editorHtmlChunk(index: Int): String = editorHtmlPayload.chunks.getOrElse(index) { "" }
+    fun editorImageGeneration(): Int = editorImagePayload.generation
+    fun editorImageMime(): String = editorImageMime
+    fun editorImageChunkCount(): Int = editorImagePayload.chunks.size
+    fun editorImageChunk(index: Int): String = editorImagePayload.chunks.getOrElse(index) { "" }
     fun flushHtml(onHtml: (String?) -> Unit): Long? {
         val targetWebView = webView ?: return null
         if (!isLoaded) return null
@@ -786,6 +800,19 @@ fun RichTextEditor(
                     execCmd('insertImage', src);
                 }
 
+                function insertAndroidImage() {
+                    var gen = Android.editorImageGeneration();
+                    var mime = Android.editorImageMime();
+                    var n = Android.editorImageChunkCount();
+                    var s = '';
+                    for (var i = 0; i < n; i++) {
+                        if (Android.editorImageGeneration() !== gen) { setTimeout(insertAndroidImage, 0); return; }
+                        s += Android.editorImageChunk(i);
+                    }
+                    if (Android.editorImageGeneration() !== gen) { setTimeout(insertAndroidImage, 0); return; }
+                    insertImageBase64(s, mime);
+                }
+
                 function insertImageBase64(base64, mimeType) {
                     var img = document.createElement('img');
                     img.src = 'data:' + mimeType + ';base64,' + base64;
@@ -1045,6 +1072,18 @@ fun RichTextEditor(
 
             @JavascriptInterface
             fun editorHtmlChunk(index: Int): String = controller.editorHtmlChunk(index)
+
+            @JavascriptInterface
+            fun editorImageGeneration(): Int = controller.editorImageGeneration()
+
+            @JavascriptInterface
+            fun editorImageMime(): String = controller.editorImageMime()
+
+            @JavascriptInterface
+            fun editorImageChunkCount(): Int = controller.editorImageChunkCount()
+
+            @JavascriptInterface
+            fun editorImageChunk(index: Int): String = controller.editorImageChunk(index)
 
             @JavascriptInterface
             fun cacheHtml(html: String) {
