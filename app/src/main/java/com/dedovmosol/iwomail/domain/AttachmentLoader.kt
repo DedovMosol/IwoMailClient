@@ -152,6 +152,7 @@ class AttachmentLoader(
 
             val fileAttachments = mutableListOf<AttachmentInfo>()
             val inlineImages = mutableMapOf<String, String>()
+            val inlineBudget = EditorInlineBudget()
             var skippedCount = 0
             val unloadedIds = mutableListOf<Long>()
             // Inline — только картинка, на которую ссылается тело (MIME — по его HTML-части); Content-ID
@@ -178,22 +179,11 @@ class AttachmentLoader(
                     ) ?: return@forEachIndexed
                     val inline = role == com.dedovmosol.iwomail.data.repository.DraftAttachmentRole.INLINE &&
                         !att.contentId.isNullOrBlank()
-                    // Проверка лимита inline-картинок (CS-4)
-                    if (inline) {
-                        if (inlineImages.size >= MAX_INLINE_IMAGES) {
-                            android.util.Log.w(
-                                TAG,
-                                "$source: Inline limit reached (max $MAX_INLINE_IMAGES), skipping ${att.displayName}"
-                            )
-                            skippedCount++
-                            return@forEachIndexed
-                        }
-                    }
 
                     // Попытка 1: localPath существует
                     val localPath = att.localPath
                     if (localPath != null && File(localPath).exists()) {
-                        processLocalAttachment(att, source, inline, fileAttachments, inlineImages)
+                        processLocalAttachment(att, source, inline, fileAttachments, inlineImages, inlineBudget)
                         return@forEachIndexed
                     }
 
@@ -211,7 +201,7 @@ class AttachmentLoader(
                         else -> null
                     }
                     if (downloaded != null) {
-                        processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, inline, fileAttachments, inlineImages)
+                        processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, inline, fileAttachments, inlineImages, inlineBudget)
                         return@forEachIndexed
                     }
                     if (att.fileReference.isNotBlank()) unloadedIds += att.id
@@ -243,6 +233,9 @@ class AttachmentLoader(
 
         } catch (e: CancellationException) {
             throw e
+        } catch (e: OutOfMemoryError) {
+            android.util.Log.e(TAG, "$source: OOM while loading attachments")
+            LoadResult.Error(e.message ?: "Failed to load attachments")
         } catch (e: Exception) {
             LoadResult.Error(e.message ?: "Failed to load attachments")
         }
@@ -257,32 +250,36 @@ class AttachmentLoader(
         source: AttachmentSource,
         inline: Boolean,
         fileAttachments: MutableList<AttachmentInfo>,
-        inlineImages: MutableMap<String, String>
+        inlineImages: MutableMap<String, String>,
+        inlineBudget: EditorInlineBudget
     ) {
         val file = File(att.localPath!!)
 
         if (inline && !att.contentId.isNullOrBlank()) {
-            // Inline-картинка: читать в base64
-            val bytes = file.readBytes()
-            val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
-            inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
-
-            android.util.Log.d(TAG, "$source: Loaded inline image cid:${att.contentId} (${bytes.size} bytes)")
-        } else {
-            // Файловое вложение: получить content URI через инжектированную
-            // стратегию (прод-дефолт — FileProvider)
-            val uri = fileUriResolver(file)
-            val attInfo = AttachmentInfo(
+            val len = file.length()
+            if (len > 0L && len <= Int.MAX_VALUE && inlineBudget.offer(len.toInt())) {
+                try {
+                    val bytes = file.readBytes()
+                    val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
+                    inlineImages[att.contentId] = "data:$mimeType;base64,$base64"
+                    android.util.Log.d(TAG, "$source: Loaded inline image cid:${att.contentId} (${bytes.size} bytes)")
+                    return
+                } catch (_: OutOfMemoryError) {
+                    android.util.Log.w(TAG, "$source: OOM inlining ${att.displayName}, attaching as file")
+                }
+            }
+        }
+        val uri = fileUriResolver(file)
+        fileAttachments.add(
+            AttachmentInfo(
                 uri = uri,
                 name = att.displayName,
                 size = att.estimatedSize,
                 mimeType = att.contentType.ifBlank { "application/octet-stream" }
             )
-            fileAttachments.add(attInfo)
-
-            android.util.Log.d(TAG, "$source: Loaded file attachment ${att.displayName} (${att.estimatedSize} bytes)")
-        }
+        )
+        android.util.Log.d(TAG, "$source: Loaded file attachment ${att.displayName} (${att.estimatedSize} bytes)")
     }
 
     /**

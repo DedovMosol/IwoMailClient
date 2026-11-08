@@ -1089,6 +1089,7 @@ fun ComposeScreen(
         )
     }
     val draftAttachmentsNotLoadedMsg = Strings.draftAttachmentsNotLoaded
+    val draftLoadErrorMsg = Strings.draftLoadError
     var initialDraftSubject by rememberSaveable { mutableStateOf("") }
     val initialDraftBodySaver = remember { createLargeStringSaver(context.cacheDir, "draft_body") }
     var initialDraftBody by rememberSaveable(stateSaver = initialDraftBodySaver) { mutableStateOf("") }
@@ -1108,6 +1109,7 @@ fun ComposeScreen(
             showCcBcc = false
             attachmentStrings = emptyList()
 
+            try {
             mailRepo.getEmailSync(draftId)?.let { draft ->
                 to = normalizeRecipients(draft.to)
                 cc = normalizeRecipients(draft.cc)
@@ -1174,6 +1176,7 @@ fun ComposeScreen(
                 }
                 val draftAttachments = withContext(Dispatchers.IO) { mailRepo.getAttachmentsSync(draftId) }
                 // Не загрузились (есть ссылка на сервере, но скачать не вышло): сохранение их перенесёт
+                val inlineBudget = com.dedovmosol.iwomail.domain.EditorInlineBudget()
                 val unloadedRoles = HashMap<Long, DraftAttachmentRole>()
                 // Картинки тела, загруженные с сервера или с устройства: data URL → Content-ID
                 val imageKeys = HashMap<String, String>()
@@ -1210,13 +1213,27 @@ fun ComposeScreen(
                                 val localPath = att.localPath
                                 if (localPath != null && java.io.File(localPath).exists()) {
                                     val file = java.io.File(localPath)
-                                    if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
-                                        val bytes = file.readBytes()
-                                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                        val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
-                                        val dataUrl = "data:$mimeType;base64,$base64"
-                                        inlineImages[att.contentId] = dataUrl
-                                        if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(att.contentId, dataUrl)
+                                    val cid = att.contentId?.takeIf { it.isNotBlank() }
+                                    val fileLen = file.length()
+                                    val asInline = role == DraftAttachmentRole.INLINE && cid != null &&
+                                        fileLen > 0L && fileLen <= Int.MAX_VALUE && inlineBudget.offer(fileLen.toInt())
+                                    if (asInline && cid != null) {
+                                        try {
+                                            val bytes = file.readBytes()
+                                            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                            val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(bytes, att.contentType, att.displayName)
+                                            val dataUrl = "data:$mimeType;base64,$base64"
+                                            inlineImages[cid] = dataUrl
+                                            if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(cid, dataUrl)
+                                        } catch (_: OutOfMemoryError) {
+                                            android.util.Log.w("ComposeScreen", "OOM inlining '${att.displayName}', attaching as file")
+                                            val uri = androidx.core.content.FileProvider.getUriForFile(
+                                                context,
+                                                "${context.packageName}.fileprovider",
+                                                file
+                                            )
+                                            newAttachmentStrings.add(AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType).toSaveableString())
+                                        }
                                     } else {
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
@@ -1236,12 +1253,15 @@ fun ComposeScreen(
                                             java.io.FileOutputStream(file).use { it.write(result.data) }
                                             // Скачанное — к записи: следующее открытие возьмёт его с устройства
                                             mailRepo.updateAttachmentPath(att.id, file.absolutePath)
-                                            if (role == DraftAttachmentRole.INLINE && !att.contentId.isNullOrBlank()) {
+                                            val cid = att.contentId
+                                            if (role == DraftAttachmentRole.INLINE && !cid.isNullOrBlank() &&
+                                                inlineBudget.offer(result.data.size)
+                                            ) {
                                                 val base64 = android.util.Base64.encodeToString(result.data, android.util.Base64.NO_WRAP)
                                                 val mimeType = com.dedovmosol.iwomail.util.dataUrlImageMimeType(result.data, att.contentType, att.displayName)
                                                 val dataUrl = "data:$mimeType;base64,$base64"
-                                                inlineImages[att.contentId] = dataUrl
-                                                if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(att.contentId, dataUrl)
+                                                inlineImages[cid] = dataUrl
+                                                if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(cid, dataUrl)
                                             } else {
                                                 val uri = androidx.core.content.FileProvider.getUriForFile(
                                                     context,
@@ -1303,8 +1323,9 @@ fun ComposeScreen(
                                 when (fetchResult) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         if (fetchResult.data.isNotEmpty()) {
-                                            body = replaceCidWithDataUrl(body, fetchResult.data)
-                                            fetchResult.data.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
+                                            val kept = inlineBudget.filterDataUrls(fetchResult.data)
+                                            body = replaceCidWithDataUrl(body, kept)
+                                            kept.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
                                         }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
@@ -1317,8 +1338,9 @@ fun ComposeScreen(
                                 when (val ewsResult = withContext(Dispatchers.IO) { fbClient.fetchInlineImagesEws(easServerId) }) {
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         if (ewsResult.data.isNotEmpty()) {
-                                            body = replaceCidWithDataUrl(body, ewsResult.data)
-                                            ewsResult.data.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
+                                            val kept = inlineBudget.filterDataUrls(ewsResult.data)
+                                            body = replaceCidWithDataUrl(body, kept)
+                                            kept.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
                                         }
                                     }
                                     is com.dedovmosol.iwomail.eas.EasResult.Error -> {
@@ -1367,6 +1389,15 @@ fun ComposeScreen(
                 initialDraftSubject = subject
                 initialDraftBody = body
                 initialDraftAttachments = attachmentStrings
+            }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: OutOfMemoryError) {
+                android.util.Log.e("ComposeScreen", "OOM opening draft", e)
+                SafeToast.long(context, draftLoadErrorMsg)
+            } catch (e: Exception) {
+                android.util.Log.e("ComposeScreen", "Failed to open draft: ${e.message}", e)
+                SafeToast.long(context, draftLoadErrorMsg)
             }
         }
     }

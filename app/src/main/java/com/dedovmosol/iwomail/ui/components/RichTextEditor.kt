@@ -32,6 +32,21 @@ import com.dedovmosol.iwomail.util.sanitizeEmailHtml
 import kotlin.coroutines.resume
 
 internal const val RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS = 2_000L
+/** Чанк HTML в JavascriptInterface: ниже лимита Binder (~1 МБ), без экранирования JS-строки. */
+internal const val EDITOR_HTML_CHUNK_CHARS = 200_000
+
+/** Нарезка тела редактора для передачи из Java в WebView без гигантского evaluateJavascript. */
+internal class EditorHtmlPayload(val generation: Int, val chunks: Array<String>)
+
+internal fun htmlToEditorChunks(html: String, chunkChars: Int = EDITOR_HTML_CHUNK_CHARS): Array<String> {
+    if (html.isEmpty()) return arrayOf("")
+    if (chunkChars <= 0 || html.length <= chunkChars) return arrayOf(html)
+    val n = (html.length + chunkChars - 1) / chunkChars
+    return Array(n) { i ->
+        val start = i * chunkChars
+        html.substring(start, minOf(start + chunkChars, html.length))
+    }
+}
 
 // L-3: `<base>`/`<link>` не покрываются `sanitizeEmailHtml`, но опасны в contenteditable-редакторе
 // (перебазирование относительных URL / внешние стили). Предкомпилированы для производительности.
@@ -113,6 +128,9 @@ class RichTextEditorController {
     internal var isLoaded = false
     @Volatile
     internal var latestHtml: String = ""
+    @Volatile
+    private var editorHtmlPayload: EditorHtmlPayload = EditorHtmlPayload(0, arrayOf(""))
+    private val editorHtmlGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val pendingFlushCallbacks = linkedMapOf<Long, (String?) -> Unit>()
     private var pendingFlushId = 0L
 
@@ -167,9 +185,18 @@ class RichTextEditorController {
     }
     fun setHtml(html: String) {
         val sanitized = stripDangerousTags(html)
-        val escaped = sanitized.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
-        execJs("setHtml(\"$escaped\")")
+        latestHtml = sanitized
+        editorHtmlPayload = EditorHtmlPayload(
+            editorHtmlGeneration.incrementAndGet(),
+            htmlToEditorChunks(sanitized)
+        )
+        execJs("applyAndroidHtml()")
     }
+
+    /** Снимок чанков: JS перечитывает, если generation сменился во время сборки (setHtml с другого потока). */
+    fun editorHtmlGeneration(): Int = editorHtmlPayload.generation
+    fun editorHtmlChunkCount(): Int = editorHtmlPayload.chunks.size
+    fun editorHtmlChunk(index: Int): String = editorHtmlPayload.chunks.getOrElse(index) { "" }
     fun flushHtml(onHtml: (String?) -> Unit): Long? {
         val targetWebView = webView ?: return null
         if (!isLoaded) return null
@@ -852,6 +879,18 @@ fun RichTextEditor(
                     }, 100);
                 }
 
+                function applyAndroidHtml() {
+                    var gen = Android.editorHtmlGeneration();
+                    var n = Android.editorHtmlChunkCount();
+                    var s = '';
+                    for (var i = 0; i < n; i++) {
+                        if (Android.editorHtmlGeneration() !== gen) { setTimeout(applyAndroidHtml, 0); return; }
+                        s += Android.editorHtmlChunk(i);
+                    }
+                    if (Android.editorHtmlGeneration() !== gen) { setTimeout(applyAndroidHtml, 0); return; }
+                    setHtml(s);
+                }
+
                 function getHtml() {
                     return editor.innerHTML;
                 }
@@ -999,6 +1038,15 @@ fun RichTextEditor(
     val jsInterface = remember(controller) {
         object {
             @JavascriptInterface
+            fun editorHtmlGeneration(): Int = controller.editorHtmlGeneration()
+
+            @JavascriptInterface
+            fun editorHtmlChunkCount(): Int = controller.editorHtmlChunkCount()
+
+            @JavascriptInterface
+            fun editorHtmlChunk(index: Int): String = controller.editorHtmlChunk(index)
+
+            @JavascriptInterface
             fun cacheHtml(html: String) {
                 controller.latestHtml = html
             }
@@ -1135,16 +1183,8 @@ fun RichTextEditor(
                             else -> initialHtmlRef.value
                         }
                         if (currentInitialHtml.isNotEmpty()) {
-                            controller.latestHtml = currentInitialHtml
                             lastHtmlFromWebView[0] = currentInitialHtml
-                            val sanitizedHtml = controller.stripDangerousTags(currentInitialHtml)
-                            val escapedHtml = sanitizedHtml
-                                .replace("\\", "\\\\")
-                                .replace("\"", "\\\"")
-                                .replace("'", "\\'")
-                                .replace("\n", "\\n")
-                                .replace("\r", "")
-                            evaluateJavascript("setHtml(\"$escapedHtml\");", null)
+                            controller.setHtml(currentInitialHtml)
                             // Синхронизируем родительский body с восстановленным содержимым.
                             // Иначе LaunchedEffect(initialHtml) увидит устаревший body и перезапишет
                             // редактор им (теряя текст, оставляя только подпись) после поворота.
@@ -1157,8 +1197,8 @@ fun RichTextEditor(
                     }
                 }
 
-                loadDataWithBaseURL(null, editorHtml, "text/html", "UTF-8", null)
                 controller.webView = this
+                loadDataWithBaseURL(null, editorHtml, "text/html", "UTF-8", null)
             }
         },
         modifier = modifier,
