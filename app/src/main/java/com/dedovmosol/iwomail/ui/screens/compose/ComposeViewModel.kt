@@ -1441,6 +1441,10 @@ class ComposeViewModel(
 
         } catch (e: CancellationException) {
             throw e
+        } catch (e: OutOfMemoryError) {
+            android.util.Log.e(TAG, "OOM opening draft")
+            _events.send(ComposeEvent.Error(failedToLoadDraftMessage()))
+            _uiState.update { it.copy(isLoading = false) }
         } catch (e: Exception) {
             _events.send(ComposeEvent.Error(e.message ?: failedToLoadDraftMessage()))
             _uiState.update { it.copy(isLoading = false) }
@@ -1655,16 +1659,17 @@ class ComposeViewModel(
         collectionId: String?,
         draftServerId: String
     ): String {
-        var resolved = replaceCidWithDataUrl(body, localInlineImages)
+        val inlineBudget = com.dedovmosol.iwomail.domain.EditorInlineBudget()
+        var resolved = replaceCidWithDataUrl(body, inlineBudget.filterDataUrls(localInlineImages))
         if (!resolved.contains("cid:", ignoreCase = true)) return resolved
         if (easClient == null || draftServerId.isBlank() ||
-            draftServerId.startsWith("local_draft_")
+            com.dedovmosol.iwomail.eas.DraftIds.isLocal(draftServerId)
         ) {
             return resolved
         }
 
-        // Эталонный роутинг: длинные EWS ItemId (с "=") — только через EWS GetItem
-        val isEwsItemId = draftServerId.length > 50 && draftServerId.contains("=")
+        // EAS ServerId — «папка:элемент»; EWS ItemId (Exchange 2007–2013 drafts) — без двоеточия.
+        val isEwsItemId = com.dedovmosol.iwomail.eas.DraftIds.isEwsItemId(draftServerId)
 
         try {
             val fetchResult = if (isEwsItemId) {
@@ -1675,7 +1680,7 @@ class ComposeViewModel(
                 null
             }
             if (fetchResult is EasResult.Success && fetchResult.data.isNotEmpty()) {
-                resolved = replaceCidWithDataUrl(resolved, fetchResult.data)
+                resolved = replaceCidWithDataUrl(resolved, inlineBudget.filterDataUrls(fetchResult.data))
             }
         } catch (e: CancellationException) {
             throw e

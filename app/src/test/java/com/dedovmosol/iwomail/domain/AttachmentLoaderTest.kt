@@ -351,7 +351,36 @@ class AttachmentLoaderTest {
         assertThat(result).isInstanceOf(AttachmentLoader.LoadResult.Success::class.java)
         val success = result as AttachmentLoader.LoadResult.Success
         assertThat(success.inlineImages).hasSize(AttachmentLoader.MAX_INLINE_IMAGES)
-        assertThat(success.skippedCount).isEqualTo(5) // 25 - 20 = 5 пропущено
+        // Сверх лимита — обычные вложения (видны в редакторе), а не молчаливый skip.
+        assertThat(success.fileAttachments).hasSize(5)
+        assertThat(success.skippedCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `inline image over per-image budget becomes a file attachment`() = runTest {
+        val huge = File(tempDir, "photo.jpg").apply {
+            writeBytes(ByteArray(EditorInlineBudget.MAX_BYTES_PER_IMAGE + 1) { 1 })
+        }
+        val email = createEmail(id = "1", body = """<img src="cid:photo1">""")
+        coEvery { mockMailRepo.getAttachmentsSync("1") } returns listOf(
+            AttachmentEntity(
+                id = 1,
+                emailId = "1",
+                displayName = "photo.jpg",
+                estimatedSize = huge.length(),
+                contentType = "image/jpeg",
+                isInline = true,
+                contentId = "photo1",
+                fileReference = "",
+                localPath = huge.absolutePath,
+            )
+        )
+        val success = loader.loadAttachments(
+            AttachmentLoader.AttachmentSource.Draft, email, null, null, null
+        ) as AttachmentLoader.LoadResult.Success
+        assertThat(success.inlineImages).isEmpty()
+        assertThat(success.fileAttachments).hasSize(1)
+        assertThat(success.fileAttachments[0].name).isEqualTo("photo.jpg")
     }
 
     @Test

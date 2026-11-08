@@ -548,6 +548,7 @@ object Strings {
     val saveDraft: String @Composable get() = if (isRussian()) "Сохранить" else "Save"
     val draftSaved: String @Composable get() = if (isRussian()) "Черновик сохранён" else "Draft saved"
     val draftSaveError: String @Composable get() = if (isRussian()) "Ошибка сохранения черновика" else "Draft save error"
+    val draftLoadError: String @Composable get() = if (isRussian()) "Не удалось открыть черновик" else "Could not open the draft"
     val draftSavedOffline: String @Composable get() = if (isRussian())
         "Нет связи с сервером: черновик сохранён на устройстве и загрузится на сервер при подключении"
         else "No connection to the server: the draft is saved on the device and will be uploaded when online"
