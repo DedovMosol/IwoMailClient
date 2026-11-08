@@ -41,11 +41,15 @@ import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
 import com.dedovmosol.iwomail.ui.screens.compressImageForInline
 import com.dedovmosol.iwomail.data.repository.CategoryColors
 import com.dedovmosol.iwomail.util.CalendarCategories
+import com.dedovmosol.iwomail.util.LimitedCopyResult
+import com.dedovmosol.iwomail.util.copyStreamLimited
+import com.dedovmosol.iwomail.util.openableDisplayName
 import com.dedovmosol.iwomail.util.referencedContentIds
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.graphics.luminance
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -103,6 +107,8 @@ private val StringListSaver = listSaver<List<String>, String>(
 
 /** Общий лимит вложений события: файлы и inline-картинки описания (сервер принимает до 10 МБ). */
 private const val MAX_EVENT_ATTACHMENTS_BYTES = 10L * 1024 * 1024
+/** Один файл: лимит Exchange на вложение встречи. */
+private const val MAX_EVENT_SINGLE_FILE_BYTES = 7L * 1024 * 1024
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -157,11 +163,17 @@ internal fun CreateEventDialog(
         if (value != null || event == null) return@produceState
         val images = try {
             calendarRepo.loadInlineImages(event)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: OutOfMemoryError) {
+            emptyMap()
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
             emptyMap()
         }
-        value = EventBodyEditing.forEditor(originalBody, images)
+        value = EventBodyEditing.forEditor(
+            originalBody,
+            com.dedovmosol.iwomail.domain.EditorInlineBudget().filterDataUrls(images)
+        )
     }
     // Текущее содержимое редактора: переживает поворот (крупное — через файл, как в письмах) и служит
     // initialHtml редактора, поэтому восстановление после поворота не затирает правки.
@@ -256,6 +268,8 @@ internal fun CreateEventDialog(
             val file = File(attachment.filePath)
             val bytes = try {
                 if (!file.exists()) null else file.readBytes()
+            } catch (_: OutOfMemoryError) {
+                null
             } catch (_: Exception) {
                 null
             }
@@ -277,76 +291,107 @@ internal fun CreateEventDialog(
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        val maxSingleFile = 7L * 1024 * 1024 // 7 MB — лимит сервера
-        val maxTotal = MAX_EVENT_ATTACHMENTS_BYTES // 10 MB суммарно (с inline-картинками — при сохранении)
-        var currentTotal = pendingAttachments.sumOf { it.sizeBytes }
-        uris.forEach { uri ->
-            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    val name = if (nameIndex >= 0) cursor.getString(nameIndex) else "file"
-                    val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
-                    if (size > maxSingleFile) {
-                        val sizeMB = size / 1024 / 1024
-                        SafeToast.long(context, Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback))
-                        return@use
-                    }
-                    if (currentTotal + size > maxTotal) {
-                        SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
-                        return@use
-                    }
-                    val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                    var streamExceededSingleLimit = false
-                    var streamExceededTotalLimit = false
-                    val attachmentsDir = File(context.cacheDir, "calendar_event_attachments").apply { mkdirs() }
-                    val tempFile = File(attachmentsDir, "event_${UUID.randomUUID().toString().replace("-", "")}")
-                    val copiedSize = context.contentResolver.openInputStream(uri)?.use { input ->
-                        tempFile.outputStream().use outputStream@{ output ->
-                        val buffer = ByteArray(8 * 1024)
-                        var totalRead = 0L
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            totalRead += read
-                            if (totalRead > maxSingleFile) {
-                                streamExceededSingleLimit = true
-                                return@outputStream null
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val startingTotal = pendingAttachments.sumOf { it.sizeBytes }
+        saveScope.launch {
+            val copied = mutableListOf<PendingCalendarAttachment>()
+            var currentTotal = startingTotal
+            withContext(Dispatchers.IO) {
+                val attachmentsDir = File(context.cacheDir, "calendar_event_attachments").apply { mkdirs() }
+                for (uri in uris) {
+                    try {
+                        var name = "file"
+                        var reportedSize = 0L
+                        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                                name = openableDisplayName(if (nameIndex >= 0) cursor.getString(nameIndex) else null)
+                                reportedSize = if (sizeIndex >= 0) cursor.getLong(sizeIndex).coerceAtLeast(0L) else 0L
                             }
-                            if (currentTotal + totalRead > maxTotal) {
-                                streamExceededTotalLimit = true
-                                return@outputStream null
+                        }
+                        if (reportedSize > MAX_EVENT_SINGLE_FILE_BYTES) {
+                            withContext(Dispatchers.Main) {
+                                SafeToast.long(
+                                    context,
+                                    Strings.fileTooLargeMessage(name, reportedSize / 1024 / 1024, isRussianCallback)
+                                )
                             }
-                            output.write(buffer, 0, read)
+                            continue
                         }
-                        totalRead
+                        if (reportedSize > 0L && currentTotal + reportedSize > MAX_EVENT_ATTACHMENTS_BYTES) {
+                            withContext(Dispatchers.Main) {
+                                SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
+                            }
+                            continue
+                        }
+                        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                        val tempFile = File(attachmentsDir, "event_${UUID.randomUUID().toString().replace("-", "")}")
+                        val copyResult = context.contentResolver.openInputStream(uri)?.use { input ->
+                            tempFile.outputStream().use { output ->
+                                copyStreamLimited(
+                                    input, output,
+                                    MAX_EVENT_SINGLE_FILE_BYTES, currentTotal, MAX_EVENT_ATTACHMENTS_BYTES
+                                )
+                            }
+                        }
+                        when (copyResult) {
+                            is LimitedCopyResult.Ok -> {
+                                currentTotal += copyResult.bytesCopied
+                                copied += PendingCalendarAttachment(
+                                    filePath = tempFile.absolutePath,
+                                    name = name,
+                                    mimeType = mimeType,
+                                    sizeBytes = copyResult.bytesCopied
+                                )
+                            }
+                            LimitedCopyResult.ExceededSingle -> {
+                                deletePendingAttachmentFile(tempFile.absolutePath)
+                                withContext(Dispatchers.Main) {
+                                    SafeToast.long(
+                                        context,
+                                        Strings.fileTooLargeMessage(
+                                            name, MAX_EVENT_SINGLE_FILE_BYTES / 1024 / 1024, isRussianCallback
+                                        )
+                                    )
+                                }
+                            }
+                            LimitedCopyResult.ExceededTotal -> {
+                                deletePendingAttachmentFile(tempFile.absolutePath)
+                                withContext(Dispatchers.Main) {
+                                    SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
+                                }
+                            }
+                            null -> {
+                                deletePendingAttachmentFile(tempFile.absolutePath)
+                                withContext(Dispatchers.Main) {
+                                    SafeToast.long(
+                                        context,
+                                        if (isRussianCallback) "Не удалось прочитать вложение" else "Failed to read attachment"
+                                    )
+                                }
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: OutOfMemoryError) {
+                        withContext(Dispatchers.Main) {
+                            SafeToast.long(
+                                context,
+                                if (isRussianCallback) "Не удалось прочитать вложение" else "Failed to read attachment"
+                            )
+                        }
+                    } catch (_: Exception) {
+                        withContext(Dispatchers.Main) {
+                            SafeToast.long(
+                                context,
+                                if (isRussianCallback) "Не удалось прочитать вложение" else "Failed to read attachment"
+                            )
                         }
                     }
-                    if (copiedSize == null && streamExceededSingleLimit) {
-                        deletePendingAttachmentFile(tempFile.absolutePath)
-                        val sizeMB = maxSingleFile / 1024 / 1024
-                        SafeToast.long(context, Strings.fileTooLargeMessage(name, sizeMB, isRussianCallback))
-                        return@use
-                    }
-                    if (copiedSize == null && streamExceededTotalLimit) {
-                        deletePendingAttachmentFile(tempFile.absolutePath)
-                        SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
-                        return@use
-                    }
-                    if (copiedSize == null) {
-                        deletePendingAttachmentFile(tempFile.absolutePath)
-                        SafeToast.long(context, if (isRussianCallback) "Не удалось прочитать вложение" else "Failed to read attachment")
-                        return@use
-                    }
-                    currentTotal += copiedSize
-                    pendingAttachments = pendingAttachments + PendingCalendarAttachment(
-                        filePath = tempFile.absolutePath,
-                        name = name,
-                        mimeType = mimeType,
-                        sizeBytes = copiedSize
-                    )
                 }
             }
+            if (copied.isNotEmpty()) pendingAttachments = pendingAttachments + copied
         }
     }
 
@@ -366,16 +411,23 @@ internal fun CreateEventDialog(
                         quality = ImageQuality.MEDIUM.jpegQuality
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: OutOfMemoryError) {
+                null
             } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
                 null
             }
             if (compressed == null) {
                 SafeToast.long(context, if (isRussianCallback) "Не удалось вставить изображение" else "Failed to insert image")
                 return@launch
             }
-            val (bytes, mimeType) = compressed
-            bodyEditorController.insertImage(android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP), mimeType)
+            try {
+                val (bytes, mimeType) = compressed
+                bodyEditorController.insertImage(android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP), mimeType)
+            } catch (_: OutOfMemoryError) {
+                SafeToast.long(context, if (isRussianCallback) "Не удалось вставить изображение" else "Failed to insert image")
+            }
         }
     }
 
