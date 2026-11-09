@@ -34,7 +34,7 @@ import kotlinx.coroutines.launch
 
 /** Настройки почты: картинки из интернета, фото из адресной книги, цепочки, отмена отправки, свайпы в списке писем. */
 @Composable
-internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
+internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: Boolean = true) {
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val images by settingsRepo.remoteImagesPrefs.collectAsStateWithLifecycle(initialValue = null)
     val undoSeconds by settingsRepo.undoSendSeconds.collectAsStateWithLifecycle(initialValue = UndoSend.DEFAULT_SECONDS)
@@ -47,12 +47,14 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository) {
     var choice by rememberSaveable { mutableStateOf<String?>(null) }
 
     Column {
-        Text(
-            text = Strings.mailSection,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(16.dp)
-        )
+        if (showHeader) {
+            Text(
+                text = Strings.mailSection,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
 
         ListItem(
             headlineContent = { Text(Strings.remoteImagesSetting) },

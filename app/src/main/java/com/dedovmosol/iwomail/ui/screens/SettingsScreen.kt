@@ -45,433 +45,78 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBackClick: () -> Unit,
-    onAddAccount: () -> Unit = {},
+    onNavigateToAccounts: () -> Unit = {},
+    onNavigateToMail: () -> Unit = {},
+    onNavigateToNotifications: () -> Unit = {},
     onNavigateToPersonalization: () -> Unit = {},
-    onNavigateToAccountSettings: (Long) -> Unit = {},
+    onNavigateToSecurity: () -> Unit = {},
+    onNavigateToAbout: () -> Unit = {},
     onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val accountRepo = remember { RepositoryProvider.getAccountRepository(context) }
-
     val accounts by accountRepo.accounts.collectAsStateWithLifecycle(initialValue = emptyList())
-    var accountToDeleteId by rememberSaveable { mutableStateOf<Long?>(null) }
-    val accountToDelete = accountToDeleteId?.let { id -> accounts.find { it.id == id } }
-    
-    // ─── Блокировка приложения: пароль + отпечаток пальца (цель релиза) ───
-    val settingsRepo = remember { RepositoryProvider.getSettingsRepository(context) }
-    val appLockEnabled by settingsRepo.appLockEnabled.collectAsStateWithLifecycle(
-        initialValue = false
-    )
-    val appLockBiometricEnabled by settingsRepo.appLockBiometricEnabled.collectAsStateWithLifecycle(
-        initialValue = settingsRepo.getAppLockBiometricEnabledSync()
-    )
-    // Пароль задан — читаем синхронно из шифрованного хранилища (дёшево: чтение строки).
-    var lockPasswordSet by remember { mutableStateOf(com.dedovmosol.iwomail.data.security.AppLockManager.isPasswordSet()) }
-    // Какой диалог пароля открыт: установка / смена / отключение.
-    var lockDialog by remember { mutableStateOf<LockDialogType?>(null) }
-    
-    // Доступность биометрии на устройстве (для переключателя).
-    val biometricAvailable = remember {
-        androidx.biometric.BiometricManager.from(context)
-            .canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
-            androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
+    val accountsSubtitle = when {
+        accounts.isEmpty() -> Strings.addAccount
+        accounts.size == 1 -> accounts[0].email
+        else -> accounts[0].email + " · " + accounts.size.toString()
     }
 
-    // Диалог подтверждения удаления — стиль единый с удалением писем, событий, задач и т.д.
-    accountToDelete?.let { account ->
-        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
-            onDismissRequest = { accountToDeleteId = null },
-            icon = { Icon(AppIcons.Delete, null) },
-            title = { Text(Strings.deleteAccount) },
-            text = { Text("${account.displayName}: ${Strings.deleteAccountConfirm}") },
-            confirmButton = {
-                com.dedovmosol.iwomail.ui.theme.DeleteButton(
-                    onClick = {
-                        scope.launch {
-                            accountRepo.deleteAccount(account.id)
-                            accountToDeleteId = null
-                        }
-                    },
-                    text = Strings.delete
-                )
-            },
-            dismissButton = {
-                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
-                    onClick = { accountToDeleteId = null },
-                    text = Strings.cancel
-                )
-            }
-        )
-    }
-    
-    // Диалоги пароля блокировки (установка / смена / отключение).
-    // Единый компонент — разница только в наборе полей и финальном действии (DRY).
-    when (lockDialog) {
-        LockDialogType.SetPassword -> LockPasswordDialog(
-            title = Strings.appLockSetPassword,
-            requireCurrentPassword = false,
-            requireNewPassword = true,
-            onCancel = { lockDialog = null },
-            onSubmit = { _, newPassword ->
-                // Диалог уже проверил длину и совпадение — здесь только коммит.
-                if (com.dedovmosol.iwomail.data.security.AppLockManager.setPassword(newPassword)) {
-                    lockPasswordSet = true
-                    lockDialog = null
-                    scope.launch { settingsRepo.setAppLockEnabled(true) }
-                }
-            }
-        )
-        LockDialogType.ChangePassword -> LockPasswordDialog(
-            title = Strings.appLockChangePassword,
-            requireCurrentPassword = true,
-            requireNewPassword = true,
-            onCancel = { lockDialog = null },
-            onSubmit = { _, newPassword ->
-                // Текущий пароль уже проверен диалогом (один проход PBKDF2) — коммит.
-                com.dedovmosol.iwomail.data.security.AppLockManager.setPassword(newPassword)
-                lockDialog = null
-            }
-        )
-        LockDialogType.Disable -> LockPasswordDialog(
-            title = Strings.appLockDisable,
-            requireCurrentPassword = true,
-            requireNewPassword = false,
-            hint = Strings.appLockRemoveHint,
-            onCancel = { lockDialog = null },
-            onSubmit = { _, _ ->
-                // Текущий пароль уже проверен диалогом — снимаем блокировку полностью.
-                com.dedovmosol.iwomail.data.security.AppLockManager.removePassword()
-                lockPasswordSet = false
-                lockDialog = null
-                scope.launch {
-                    settingsRepo.setAppLockBiometricEnabled(false)
-                    settingsRepo.setAppLockEnabled(false)
-                }
-            }
-        )
-        null -> Unit
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(Strings.settings, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (accounts.isEmpty()) {
-                            onNoAccountsLeft()
-                        } else {
-                            onBackClick()
-                        }
-                    }) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            LocalColorTheme.current.gradientStart,
-                            LocalColorTheme.current.gradientEnd
-                        )
-                    )
-                )
+    SettingsPageScaffold(
+        title = Strings.settings,
+        onBackClick = {
+            if (accounts.isEmpty()) onNoAccountsLeft() else onBackClick()
+        }
+    ) {
+        item {
+            SettingsHubRow(
+                title = Strings.accounts,
+                subtitle = accountsSubtitle,
+                icon = AppIcons.Person,
+                onClick = onNavigateToAccounts
             )
         }
-    ) { padding ->
-        val listState = rememberLazyListState()
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            item {
-                Text(
-                    text = Strings.accounts,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-
-            items(accounts, key = { it.id }) { account ->
-                AccountCard(
-                    account = account,
-                    onDeleteClick = { accountToDeleteId = account.id },
-                    onSettingsClick = { onNavigateToAccountSettings(account.id) }
-                )
-            }
-
-            // Кнопка добавления аккаунта
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.addAccount) },
-                    leadingContent = {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                AppIcons.Add,
-                                null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    },
-                    modifier = Modifier.clickable(onClick = onAddAccount)
-                )
-            }
-
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-
-            // === СЕКЦИЯ: ВНЕШНИЙ ВИД ===
-            item {
-                Text(
-                    text = Strings.appearance,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-
-            // Персонализация интерфейса - открывает отдельный экран
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.interfacePersonalization) },
-                    supportingContent = { Text(Strings.interfacePersonalizationDesc) },
-                    leadingContent = { Icon(AppIcons.Palette, null) },
-                    trailingContent = {
-                        Icon(AppIcons.ChevronRight, null)
-                    },
-                    modifier = Modifier.clickable { onNavigateToPersonalization() }
-                )
-            }
-            
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-            
-            // === СЕКЦИЯ: ПОЧТА (картинки из интернета, отмена отправки, свайпы) ===
-            item {
-                MailSettingsSection(settingsRepo)
-            }
-
-            // === СЕКЦИЯ: УВЕДОМЛЕНИЯ О ПОЧТЕ (тихие часы, важные отправители, звук аккаунтов) ===
-            item {
-                MailAlertsSettingsSection(settingsRepo, accounts)
-            }
-
-            item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-
-            // === СЕКЦИЯ: БЕЗОПАСНОСТЬ (блокировка паролем + отпечаток пальца) ===
-            item {
-                Text(
-                    text = Strings.appLockSection,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-            
-            // Главный переключатель блокировки приложения.
-            // Включение открывает диалог установки пароля (блокировка без пароля
-            // не имеет смысла); отключение требует подтверждения текущим паролем.
-            item {
-                ListItem(
-                    headlineContent = { Text(Strings.appLockTitle) },
-                    supportingContent = { Text(Strings.appLockDesc) },
-                    leadingContent = { Icon(AppIcons.Lock, null) },
-                    trailingContent = {
-                        Switch(
-                            checked = appLockEnabled,
-                            onCheckedChange = { enabled ->
-                                if (enabled) {
-                                    if (lockPasswordSet) {
-                                        // Пароль уже задан (остался от прошлого включения) —
-                                        // сразу включаем без повторного ввода.
-                                        scope.launch { settingsRepo.setAppLockEnabled(true) }
-                                    } else {
-                                        lockDialog = LockDialogType.SetPassword
-                                    }
-                                } else {
-                                    lockDialog = LockDialogType.Disable
-                                }
-                            }
-                        )
-                    }
-                )
-            }
-            
-            // Кнопка смены пароля — видна только при включённой блокировке.
-            if (appLockEnabled) {
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.appLockChangePassword) },
-                        leadingContent = { Icon(AppIcons.Security, null) },
-                        trailingContent = { Icon(AppIcons.ChevronRight, null) },
-                        modifier = Modifier.clickable { lockDialog = LockDialogType.ChangePassword }
-                    )
-                }
-                
-                // Переключатель входа по отпечатку пальца.
-                item {
-                    ListItem(
-                        headlineContent = { Text(Strings.appLockFingerprintTitle) },
-                        supportingContent = {
-                            Text(
-                                if (biometricAvailable) Strings.appLockFingerprintDesc
-                                else Strings.appLockBiometricUnavailable
-                            )
-                        },
-                        leadingContent = { Icon(AppIcons.Fingerprint, null) },
-                        trailingContent = {
-                            Switch(
-                                checked = appLockBiometricEnabled,
-                                enabled = biometricAvailable,
-                                onCheckedChange = { enabled ->
-                                    scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
-                                }
-                            )
-                        }
-                    )
-                }
-            }
-
+        item {
+            SettingsHubRow(
+                title = Strings.mailSection,
+                subtitle = Strings.remoteImagesSetting,
+                icon = AppIcons.Email,
+                onClick = onNavigateToMail
+            )
         }
-        LazyColumnScrollbar(
-            listState = listState,
-            alwaysVisible = true
-        )
+        item {
+            SettingsHubRow(
+                title = Strings.mailAlertsSection,
+                subtitle = Strings.quietHours,
+                icon = AppIcons.Notifications,
+                onClick = onNavigateToNotifications
+            )
         }
-    }
-}
-
-/**
- * Компактная карточка аккаунта с кнопкой настроек
- */
-@Composable
-private fun AccountCard(
-    account: AccountEntity,
-    onDeleteClick: () -> Unit,
-    onSettingsClick: () -> Unit
-) {
-    val accountType = try {
-        AccountType.valueOf(account.accountType)
-    } catch (_: Exception) {
-        AccountType.EXCHANGE
-    }
-
-    val accountColor = try {
-        Color(account.color)
-    } catch (_: Exception) {
-        MaterialTheme.colorScheme.primary
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        Column {
-            // Заголовок аккаунта
-            ListItem(
-                headlineContent = {
-                    Text(
-                        account.displayName,
-                        fontWeight = if (account.isActive) FontWeight.Bold else FontWeight.Normal
-                    )
-                },
-                supportingContent = {
-                    Column {
-                        Text(account.email)
-                        // Показываем сертификат если есть (кликабельный — ведёт в настройки аккаунта)
-                        if (!account.certificatePath.isNullOrBlank()) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .padding(top = 2.dp)
-                                    .clickable { onSettingsClick() }
-                            ) {
-                                Icon(
-                                    AppIcons.Lock,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = Strings.serverCertificate,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    AppIcons.ChevronRight,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                        Text(
-                            accountType.displayName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                },
-                leadingContent = {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(accountColor),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = account.displayName.firstOrNull()?.uppercase() ?: "?",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                },
-                trailingContent = {
-                    Row {
-                        IconButton(onClick = onSettingsClick) {
-                            Icon(AppIcons.Settings, Strings.accountSettings)
-                        }
-                        IconButton(onClick = onDeleteClick) {
-                            Icon(
-                                AppIcons.Delete,
-                                Strings.delete,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                },
-                colors = ListItemDefaults.colors(
-                    containerColor = Color.Transparent
-                ),
-                modifier = Modifier.padding(horizontal = 0.dp)
+        item {
+            SettingsHubRow(
+                title = Strings.appearance,
+                subtitle = Strings.interfacePersonalization,
+                icon = AppIcons.Palette,
+                onClick = onNavigateToPersonalization
+            )
+        }
+        item {
+            SettingsHubRow(
+                title = Strings.appLockSection,
+                subtitle = Strings.appLockTitle,
+                icon = AppIcons.Lock,
+                onClick = onNavigateToSecurity
+            )
+        }
+        item {
+            SettingsHubRow(
+                title = Strings.aboutApp,
+                subtitle = null,
+                icon = AppIcons.Info,
+                onClick = onNavigateToAbout
             )
         }
     }
@@ -1280,7 +925,7 @@ private fun SignatureEditDialog(
 // ─── Блокировка приложения: диалог пароля (установка / смена / отключение) ───
 
 /** Какой режим диалога пароля блокировки открыт. */
-private enum class LockDialogType { SetPassword, ChangePassword, Disable }
+internal enum class LockDialogType { SetPassword, ChangePassword, Disable }
 
 /**
  * Единый диалог пароля блокировки приложения (цель релиза «пароль + дактилоскопия»).
@@ -1296,7 +941,7 @@ private enum class LockDialogType { SetPassword, ChangePassword, Disable }
  * колбэка на IO безопасна (снапшот-система потокобезопасна).
  */
 @Composable
-private fun LockPasswordDialog(
+internal fun LockPasswordDialog(
     title: String,
     requireCurrentPassword: Boolean,
     requireNewPassword: Boolean,
