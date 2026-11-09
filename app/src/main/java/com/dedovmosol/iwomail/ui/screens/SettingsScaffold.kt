@@ -3,8 +3,10 @@ package com.dedovmosol.iwomail.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -64,6 +66,7 @@ internal fun SettingsPageScaffold(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(vertical = 8.dp),
                 content = content
             )
             LazyColumnScrollbar(
@@ -87,6 +90,6 @@ internal fun SettingsHubRow(
         supportingContent = if (subtitle.isNullOrBlank()) null else ({ Text(subtitle) }),
         leadingContent = { Icon(icon, contentDescription = null) },
         trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier.clickable(onClickLabel = title, onClick = onClick)
     )
 }
