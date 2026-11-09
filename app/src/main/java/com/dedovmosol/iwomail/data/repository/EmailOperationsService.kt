@@ -626,10 +626,14 @@ class EmailOperationsService(
                     folderDao.updateSyncKey(email.folderId, result.data)
                 }
                 is EasResult.Error -> {
-                    // Сервер не принял (например Status 6) или ответа нет — локально как было: иначе на устройстве и
-                    // в Outlook флаги разошлись бы навсегда (изменения флага сервер сам не пришлёт).
-                    android.util.Log.w("SetFlag", "Server rejected flag: ${result.message}, rolling back")
-                    emailDao.saveFlag(emailId, email.flag)
+                    // Status 6 и пр. — неверный флаг, откат. Сеть/таймаут — оставляем локально (комментарий
+                    // toggleFlag), иначе звезда мигает и сразу гаснет.
+                    if (isEasStatusReject(result.message)) {
+                        android.util.Log.w("SetFlag", "Server rejected flag: ${result.message}, rolling back")
+                        emailDao.saveFlag(emailId, email.flag)
+                    } else {
+                        android.util.Log.w("SetFlag", "Flag sync failed, keeping local: ${result.message}")
+                    }
                     return EasResult.Error(result.message)
                 }
             }
@@ -1311,3 +1315,8 @@ class EmailOperationsService(
         }
     }
 }
+
+private val EAS_STATUS_EQ = Regex("Status\\s*=\\s*\\d+", RegexOption.IGNORE_CASE)
+
+/** Откат оптимистичного флага только при явном Status сервера, не при обрыве сети. */
+internal fun isEasStatusReject(message: String): Boolean = EAS_STATUS_EQ.containsMatchIn(message)
