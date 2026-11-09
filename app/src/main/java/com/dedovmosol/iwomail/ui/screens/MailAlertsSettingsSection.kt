@@ -64,17 +64,13 @@ internal fun MailAlertsSettingsSection(
         }
 
         val quiet = prefs?.quietHours ?: QuietHours(false, QuietHours.DEFAULT_START, QuietHours.DEFAULT_END)
-        ListItem(
-            headlineContent = { Text(Strings.quietHours) },
-            supportingContent = { Text(Strings.quietHoursDesc("${time(quiet.startMinutes)}–${time(quiet.endMinutes)}")) },
-            leadingContent = { Icon(AppIcons.Notifications, null) },
-            trailingContent = {
-                Switch(
-                    checked = quiet.enabled,
-                    enabled = prefs != null,
-                    onCheckedChange = { enabled -> scope.launch { settingsRepo.setQuietHours(quiet.copy(enabled = enabled)) } }
-                )
-            }
+        SettingsSwitchRow(
+            title = Strings.quietHours,
+            description = Strings.quietHoursDesc("${time(quiet.startMinutes)}–${time(quiet.endMinutes)}"),
+            icon = { Icon(AppIcons.Notifications, null) },
+            checked = quiet.enabled,
+            enabled = prefs != null,
+            onChange = { enabled -> scope.launch { settingsRepo.setQuietHours(quiet.copy(enabled = enabled)) } }
         )
         if (quiet.enabled) {
             Row(modifier = Modifier.fillMaxWidth().padding(start = 56.dp)) {

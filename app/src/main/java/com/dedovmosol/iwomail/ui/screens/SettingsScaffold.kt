@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +16,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -28,6 +31,28 @@ import com.dedovmosol.iwomail.ui.components.LazyColumnScrollbar
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SettingsTopBar(title: String, onBackClick: () -> Unit) {
+    TopAppBar(
+        title = { Text(title, color = Color.White) },
+        navigationIcon = {
+            IconButton(onClick = onBackClick) {
+                Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+        modifier = Modifier.background(
+            Brush.horizontalGradient(
+                colors = listOf(
+                    LocalColorTheme.current.gradientStart,
+                    LocalColorTheme.current.gradientEnd
+                )
+            )
+        )
+    )
+}
+
 /** Общий каркас экрана настроек (корень и разделы): градиентный app bar, список, скроллбар. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,25 +62,7 @@ internal fun SettingsPageScaffold(
     content: LazyListScope.() -> Unit
 ) {
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(title, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            LocalColorTheme.current.gradientStart,
-                            LocalColorTheme.current.gradientEnd
-                        )
-                    )
-                )
-            )
-        }
+        topBar = { SettingsTopBar(title, onBackClick) }
     ) { padding ->
         val listState = rememberLazyListState()
         Box(
@@ -91,5 +98,31 @@ internal fun SettingsHubRow(
         leadingContent = { Icon(icon, contentDescription = null) },
         trailingContent = { Icon(AppIcons.ChevronRight, contentDescription = null) },
         modifier = Modifier.clickable(onClickLabel = title, onClick = onClick)
+    )
+}
+
+/** Переключатель на всю строку (M3 Settings); свитч справа без своего onClick — иначе двойное срабатывание. */
+@Composable
+internal fun SettingsSwitchRow(
+    title: String,
+    description: String? = null,
+    icon: @Composable (() -> Unit)? = null,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = if (description.isNullOrBlank()) null else ({ Text(description) }),
+        leadingContent = icon,
+        trailingContent = {
+            Switch(checked = checked, enabled = enabled, onCheckedChange = null)
+        },
+        modifier = Modifier.toggleable(
+            value = checked,
+            enabled = enabled,
+            role = Role.Switch,
+            onValueChange = onChange
+        )
     )
 }

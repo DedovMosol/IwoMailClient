@@ -56,25 +56,7 @@ fun AboutScreen(
 
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(Strings.aboutApp, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            LocalColorTheme.current.gradientStart,
-                            LocalColorTheme.current.gradientEnd
-                        )
-                    )
-                )
-            )
-        },
+        topBar = { SettingsTopBar(title = Strings.aboutApp, onBackClick = onBackClick) },
     ) { padding ->
         val scrollState = rememberScrollState()
         BoxWithConstraints(
