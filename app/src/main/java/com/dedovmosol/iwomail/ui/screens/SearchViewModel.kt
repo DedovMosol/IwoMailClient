@@ -203,11 +203,22 @@ class SearchViewModel(
         if (ids.isEmpty()) return
         viewModelScope.launch {
             try {
-                ids.forEach { id -> mailRepo.toggleFlag(id) }
+                val flipped = mutableSetOf<String>()
+                ids.forEach { id ->
+                    when (val result = mailRepo.toggleFlag(id)) {
+                        is EasResult.Success -> flipped += id
+                        is EasResult.Error -> {
+                            sendEvent(SearchEvent.ShowError(result.message))
+                            if (!com.dedovmosol.iwomail.data.repository.isEasStatusReject(result.message)) {
+                                flipped += id
+                            }
+                        }
+                    }
+                }
                 _uiState.update { state ->
                     state.copy(
                         allResults = state.allResults.map { e ->
-                            if (e.id in ids) e.copy(flagged = !e.flagged) else e
+                            if (e.id in flipped) e.copy(flagged = !e.flagged) else e
                         },
                         selectedIds = emptySet()
                     )

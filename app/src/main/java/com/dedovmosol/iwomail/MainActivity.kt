@@ -22,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -399,7 +400,12 @@ class MainActivity : FragmentActivity() {
                 ExchangeMailTheme(darkTheme = darkTheme, fontScale = fontSize.scale, colorTheme = colorTheme, animationsEnabled = animationsEnabled, scrollbarColor = scrollbarColor) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         Surface(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(
+                                    if (isLocked) Modifier.clearAndSetSemantics { }
+                                    else Modifier
+                                ),
                             color = MaterialTheme.colorScheme.background
                         ) {
                             // Навигация всегда в композиции: после разблокировки тот же экран
