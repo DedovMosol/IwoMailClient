@@ -79,7 +79,9 @@ class AttachmentLoader(
             val inlineImages: Map<String, String>,
             val skippedCount: Int = 0,
             val unloadedAttachmentIds: List<Long> = emptyList(),
-            val embeddedImages: Map<String, String> = emptyMap()
+            val embeddedImages: Map<String, String> = emptyMap(),
+            /** Content-ID картинок тела, ушедших в список файлов (бюджет/OOM) — вычистить cid из HTML. */
+            val demotedInlineCids: Set<String> = emptySet()
         ) : LoadResult()
 
         /**
@@ -152,6 +154,7 @@ class AttachmentLoader(
 
             val fileAttachments = mutableListOf<AttachmentInfo>()
             val inlineImages = mutableMapOf<String, String>()
+            val demotedInlineCids = mutableSetOf<String>()
             val inlineBudget = EditorInlineBudget()
             var skippedCount = 0
             val unloadedIds = mutableListOf<Long>()
@@ -183,7 +186,7 @@ class AttachmentLoader(
                     // Попытка 1: localPath существует
                     val localPath = att.localPath
                     if (localPath != null && File(localPath).exists()) {
-                        processLocalAttachment(att, source, inline, fileAttachments, inlineImages, inlineBudget)
+                        processLocalAttachment(att, source, inline, fileAttachments, inlineImages, inlineBudget, demotedInlineCids)
                         return@forEachIndexed
                     }
 
@@ -201,7 +204,7 @@ class AttachmentLoader(
                         else -> null
                     }
                     if (downloaded != null) {
-                        processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, inline, fileAttachments, inlineImages, inlineBudget)
+                        processLocalAttachment(att.copy(localPath = downloaded.absolutePath), source, inline, fileAttachments, inlineImages, inlineBudget, demotedInlineCids)
                         return@forEachIndexed
                     }
                     if (att.fileReference.isNotBlank()) unloadedIds += att.id
@@ -228,7 +231,8 @@ class AttachmentLoader(
                 inlineImages = inlineImages,
                 skippedCount = skippedCount,
                 unloadedAttachmentIds = unloadedIds,
-                embeddedImages = embeddedImages
+                embeddedImages = embeddedImages,
+                demotedInlineCids = demotedInlineCids
             )
 
         } catch (e: CancellationException) {
@@ -251,7 +255,8 @@ class AttachmentLoader(
         inline: Boolean,
         fileAttachments: MutableList<AttachmentInfo>,
         inlineImages: MutableMap<String, String>,
-        inlineBudget: EditorInlineBudget
+        inlineBudget: EditorInlineBudget,
+        demotedInlineCids: MutableSet<String>
     ) {
         val file = File(att.localPath!!)
 
@@ -269,6 +274,9 @@ class AttachmentLoader(
                     android.util.Log.w(TAG, "$source: OOM inlining ${att.displayName}, attaching as file")
                 }
             }
+        }
+        if (inline && !att.contentId.isNullOrBlank()) {
+            demotedInlineCids += att.contentId
         }
         val uri = fileUriResolver(file)
         fileAttachments.add(

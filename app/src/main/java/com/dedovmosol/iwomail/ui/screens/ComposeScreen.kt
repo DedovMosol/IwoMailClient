@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import android.net.Uri
+import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import android.provider.OpenableColumns
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.activity.compose.BackHandler
@@ -82,9 +83,16 @@ import com.dedovmosol.iwomail.ui.screens.compose.formatHtmlSignature
 import com.dedovmosol.iwomail.ui.screens.compose.looksLikeHtml
 import com.dedovmosol.iwomail.ui.screens.compose.replaceCidWithDataUrl
 import com.dedovmosol.iwomail.ui.screens.compose.replaceSignatureHtml
+import com.dedovmosol.iwomail.util.COMPOSE_ATTACHMENTS_DIR
+import com.dedovmosol.iwomail.util.LimitedCopyResult
+import com.dedovmosol.iwomail.util.MAX_PICKED_FILE_BYTES
+import com.dedovmosol.iwomail.util.copyOpenableToFile
+import com.dedovmosol.iwomail.util.deletePickedAttachmentIfOwned
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.queryOpenableFileMeta
+import com.dedovmosol.iwomail.util.stripContentIdImages
 import com.dedovmosol.iwomail.util.readUriBytesLimited
+import com.dedovmosol.iwomail.util.uniquePickedFileName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -603,19 +611,88 @@ fun ComposeScreen(
         }
     }
 
-    // Лаунчер для выбора файлов
+    val isRussianCompose = currentLanguage == AppLanguage.RUSSIAN
+    val pickerLimitExceededMsg = Strings.attachmentLimitExceeded
+    val pickerUnreadableMsg = Strings.attachmentUnreadable
+
+    // Лаунчер для выбора файлов: сразу копия в filesDir/compose_attachments (URI пикера
+    // отзывается после выхода из DocumentsUI — иначе отправка/черновик ломаются).
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val existing = attachmentStrings.mapNotNull { AttachmentInfo.fromSaveableString(it) }
+        val startingTotal = totalAttachmentBytes(context, existing)
         scope.launch {
-            val added = withContext(Dispatchers.IO) {
-                uris.mapNotNull { uri ->
+            val added = mutableListOf<String>()
+            withContext(Dispatchers.IO) {
+                val attachmentsDir = java.io.File(context.filesDir, COMPOSE_ATTACHMENTS_DIR).apply { mkdirs() }
+                var currentTotal = startingTotal
+                for (uri in uris) {
                     try {
-                        val meta = queryOpenableFileMeta(context.contentResolver, uri) ?: return@mapNotNull null
-                        AttachmentInfo(uri, meta.name, meta.size, meta.mimeType).toSaveableString()
+                        val meta = queryOpenableFileMeta(context.contentResolver, uri) ?: continue
+                        if (meta.size > MAX_PICKED_FILE_BYTES) {
+                            withContext(Dispatchers.Main) {
+                                SafeToast.long(
+                                    context,
+                                    Strings.fileTooLargeMessage(
+                                        meta.name, MAX_PICKED_FILE_BYTES / 1024 / 1024, isRussianCompose
+                                    )
+                                )
+                            }
+                            continue
+                        }
+                        if (meta.size > 0L && currentTotal + meta.size > MAX_TOTAL_ATTACHMENT_BYTES) {
+                            withContext(Dispatchers.Main) {
+                                SafeToast.long(context, pickerLimitExceededMsg)
+                            }
+                            continue
+                        }
+                        val dest = java.io.File(attachmentsDir, uniquePickedFileName(meta.name))
+                        when (val copyResult = copyOpenableToFile(
+                            context.contentResolver, uri, dest,
+                            MAX_PICKED_FILE_BYTES, currentTotal, MAX_TOTAL_ATTACHMENT_BYTES
+                        )) {
+                            is LimitedCopyResult.Ok -> {
+                                currentTotal += copyResult.bytesCopied
+                                val localUri = androidx.core.content.FileProvider.getUriForFile(
+                                    context, "${context.packageName}.fileprovider", dest
+                                )
+                                added += AttachmentInfo(
+                                    localUri, meta.name, copyResult.bytesCopied, meta.mimeType
+                                ).toSaveableString()
+                            }
+                            LimitedCopyResult.ExceededSingle -> {
+                                withContext(Dispatchers.Main) {
+                                    SafeToast.long(
+                                        context,
+                                        Strings.fileTooLargeMessage(
+                                            meta.name, MAX_PICKED_FILE_BYTES / 1024 / 1024, isRussianCompose
+                                        )
+                                    )
+                                }
+                            }
+                            LimitedCopyResult.ExceededTotal -> {
+                                withContext(Dispatchers.Main) {
+                                    SafeToast.long(context, pickerLimitExceededMsg)
+                                }
+                            }
+                            LimitedCopyResult.Unreadable -> {
+                                withContext(Dispatchers.Main) {
+                                    SafeToast.long(context, pickerUnreadableMsg)
+                                }
+                            }
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: OutOfMemoryError) {
+                        withContext(Dispatchers.Main) {
+                            SafeToast.long(context, pickerUnreadableMsg)
+                        }
                     } catch (_: Exception) {
-                        null
+                        withContext(Dispatchers.Main) {
+                            SafeToast.long(context, pickerUnreadableMsg)
+                        }
                     }
                 }
             }
@@ -1180,6 +1257,7 @@ fun ComposeScreen(
                 if (draftAttachments.isNotEmpty()) {
                     val newAttachmentStrings = mutableListOf<String>()
                     val inlineImages = mutableMapOf<String, String>()
+                    val demotedInlineCids = mutableSetOf<String>()
                     val account = accountRepo.getAccount(draft.accountId)
                     val easClient = account?.let { accountRepo.createEasClient(it.id) }
                     val bodyForRoles = body
@@ -1220,6 +1298,7 @@ fun ComposeScreen(
                                             if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(cid, dataUrl)
                                         } catch (_: OutOfMemoryError) {
                                             android.util.Log.w("ComposeScreen", "OOM inlining '${att.displayName}', attaching as file")
+                                            cid?.let { demotedInlineCids += it }
                                             val uri = androidx.core.content.FileProvider.getUriForFile(
                                                 context,
                                                 "${context.packageName}.fileprovider",
@@ -1228,6 +1307,7 @@ fun ComposeScreen(
                                             newAttachmentStrings.add(AttachmentInfo(uri, att.displayName, att.estimatedSize, att.contentType).toSaveableString())
                                         }
                                     } else {
+                                        if (role == DraftAttachmentRole.INLINE) cid?.let { demotedInlineCids += it }
                                         val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
                                             "${context.packageName}.fileprovider",
@@ -1256,6 +1336,9 @@ fun ComposeScreen(
                                                 inlineImages[cid] = dataUrl
                                                 if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(cid, dataUrl)
                                             } else {
+                                                if (role == DraftAttachmentRole.INLINE && !cid.isNullOrBlank()) {
+                                                    demotedInlineCids += cid
+                                                }
                                                 val uri = androidx.core.content.FileProvider.getUriForFile(
                                                     context,
                                                     "${context.packageName}.fileprovider",
@@ -1290,6 +1373,9 @@ fun ComposeScreen(
                     }
                     if (inlineImages.isNotEmpty() && body.contains("cid:", ignoreCase = true)) {
                         body = replaceCidWithDataUrl(body, inlineImages)
+                    }
+                    if (demotedInlineCids.isNotEmpty()) {
+                        body = stripContentIdImages(body, demotedInlineCids)
                     }
                 }
 
@@ -2091,7 +2177,7 @@ fun ComposeScreen(
                             Icon(AppIcons.Draw, contentDescription = if (currentLanguage == AppLanguage.RUSSIAN) "Подпись" else "Signature", tint = Color.White)
                         }
                     }
-                    IconButton(onClick = { filePickerLauncher.launch(arrayOf("*/*")) }) {
+                    IconButton(onClick = { filePickerLauncher.launchLeavingApp(arrayOf("*/*")) }) {
                         Icon(AppIcons.Attachment, Strings.attach, tint = Color.White)
                     }
                     IconButton(
@@ -2179,7 +2265,7 @@ fun ComposeScreen(
                     HorizontalDivider()
                     RichTextToolbar(
                         controller = richTextController,
-                        onInsertImage = { imagePickerLauncher.launch("image/*") },
+                        onInsertImage = { imagePickerLauncher.launchLeavingApp("image/*") },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -2592,6 +2678,7 @@ fun ComposeScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 IconButton(onClick = {
+                                    deletePickedAttachmentIfOwned(context, att.uri)
                                     attachmentStrings = attachmentStrings - att.toSaveableString()
                                 }) {
                                     Icon(AppIcons.Close, Strings.delete, modifier = Modifier.size(20.dp))

@@ -68,7 +68,7 @@ object ShareIntentData {
     var attachments: List<android.net.Uri> = emptyList()
     
     fun copyToLocal(context: android.content.Context, uris: List<android.net.Uri>): List<android.net.Uri> = synchronized(this) {
-        val shareDir = java.io.File(context.cacheDir, "share_attachments")
+        val shareDir = java.io.File(context.cacheDir, com.dedovmosol.iwomail.util.SHARE_ATTACHMENTS_DIR)
         shareDir.mkdirs()
         val usedNames = mutableSetOf<String>()
         uris.mapNotNull { uri ->

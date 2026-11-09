@@ -1,6 +1,7 @@
 package com.dedovmosol.iwomail.ui.screens
 
 import android.content.ClipData
+import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import android.content.Intent
 import android.net.Uri
 import android.view.View
@@ -524,7 +525,7 @@ fun EmailDetailScreen(
                                         text = { Text(Strings.saveAsEml) },
                                         onClick = {
                                             showOverflowMenu = false
-                                            emlLauncher.launch(com.dedovmosol.iwomail.util.EmlFiles.fileName(target.subject))
+                                            emlLauncher.launchLeavingApp(com.dedovmosol.iwomail.util.EmlFiles.fileName(target.subject))
                                         },
                                         leadingIcon = { Icon(AppIcons.Download, null) },
                                         enabled = !uiState.isSavingEml
@@ -1465,7 +1466,7 @@ fun EmailDetailScreen(
                                                 setDataAndType(uri, mimeType)
                                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                             }
-                                            previewLauncher.launch(intent)
+                                            previewLauncher.launchLeavingApp(intent)
 
                                             scope.launch {
                                                 kotlinx.coroutines.delay(60 * 60 * 1000L)
@@ -1536,7 +1537,7 @@ fun EmailDetailScreen(
                         },
                         onSaveAsClick = { attachment ->
                             pendingSaveAsAttachmentId = attachment.id
-                            saveAsLauncher.launch(attachment.displayName)
+                            saveAsLauncher.launchLeavingApp(attachment.displayName)
                         },
                         onShareClick = { attachment ->
                             scope.launch {

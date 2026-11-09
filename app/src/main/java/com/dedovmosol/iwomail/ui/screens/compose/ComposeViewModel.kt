@@ -38,6 +38,7 @@ import com.dedovmosol.iwomail.ui.screens.isValidRecipientList
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.loggingExceptionHandler
 import com.dedovmosol.iwomail.util.queryOpenableFileMeta
+import com.dedovmosol.iwomail.util.stripContentIdImages
 import com.dedovmosol.iwomail.util.readUriBytesLimited
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -1098,7 +1099,8 @@ class ComposeViewModel(
                     // cid: резолвятся сначала из локальных вложений, затем — дозагрузка
                     // с сервера (эталонный fallback для писем, где вложения не скачаны)
                     val resolvedOriginalBody = resolveRemainingCids(
-                        originalBody, attachmentResult.inlineImages, easClient, collectionId, emailServerId
+                        originalBody, attachmentResult.inlineImages, easClient, collectionId, emailServerId,
+                        attachmentResult.demotedInlineCids
                     )
 
                     val replyBody = formatHtmlQuote(
@@ -1203,7 +1205,8 @@ class ComposeViewModel(
 
                     // cid: резолвятся из локальных вложений + дозагрузка с сервера (эталон)
                     val resolvedOriginalBody = resolveRemainingCids(
-                        originalBody, attachmentResult.inlineImages, easClient, collectionId, emailServerId
+                        originalBody, attachmentResult.inlineImages, easClient, collectionId, emailServerId,
+                        attachmentResult.demotedInlineCids
                     )
 
                     val forwardBody = formatHtmlQuote(
@@ -1355,7 +1358,8 @@ class ComposeViewModel(
                     // тогда нужен fetchInlineImagesEws (эталонный роутинг, критично для
                     // черновиков, созданных в Outlook/OWA на Exchange 2007).
                     draftBody = resolveDraftCids(
-                        draftBody, attachmentResult.inlineImages, easClient, collectionId, draft.serverId
+                        draftBody, attachmentResult.inlineImages, easClient, collectionId, draft.serverId,
+                        attachmentResult.demotedInlineCids
                     )
 
                     // КРИТИЧНО (эталон): сохраняем резолвленное тело (data: URLs) обратно
@@ -1599,9 +1603,13 @@ class ComposeViewModel(
         localInlineImages: Map<String, String>,
         easClient: EasClient?,
         collectionId: String?,
-        emailServerId: String?
+        emailServerId: String?,
+        demotedInlineCids: Set<String> = emptySet()
     ): String {
-        var resolved = replaceCidWithDataUrl(body, localInlineImages)
+        var resolved = stripContentIdImages(
+            replaceCidWithDataUrl(body, localInlineImages),
+            demotedInlineCids
+        )
         if (!resolved.contains("cid:", ignoreCase = true)) return resolved
         if (easClient == null || collectionId == null || emailServerId.isNullOrBlank()) {
             return resolved
@@ -1647,10 +1655,14 @@ class ComposeViewModel(
         localInlineImages: Map<String, String>,
         easClient: EasClient?,
         collectionId: String?,
-        draftServerId: String
+        draftServerId: String,
+        demotedInlineCids: Set<String> = emptySet()
     ): String {
         val inlineBudget = com.dedovmosol.iwomail.domain.EditorInlineBudget()
-        var resolved = replaceCidWithDataUrl(body, inlineBudget.filterDataUrls(localInlineImages))
+        var resolved = stripContentIdImages(
+            replaceCidWithDataUrl(body, inlineBudget.filterDataUrls(localInlineImages)),
+            demotedInlineCids
+        )
         if (!resolved.contains("cid:", ignoreCase = true)) return resolved
         if (easClient == null || draftServerId.isBlank() ||
             com.dedovmosol.iwomail.eas.DraftIds.isLocal(draftServerId)
