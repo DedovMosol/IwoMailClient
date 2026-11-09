@@ -99,3 +99,15 @@ internal fun copyUriLimited(
     if (!ok) dest.delete()
     return ok
 }
+
+/** Байты URI с потолком (отправка письма). null — нет доступа, OOM или файл больше лимита. */
+internal fun readUriBytesLimited(resolver: ContentResolver, uri: Uri, maxBytes: Long): ByteArray? {
+    if (maxBytes <= 0L) return null
+    return try {
+        resolver.openInputStream(uri)?.use { readStreamLimited(it, maxBytes) }
+    } catch (_: OutOfMemoryError) {
+        null
+    } catch (_: Exception) {
+        null
+    }
+}
