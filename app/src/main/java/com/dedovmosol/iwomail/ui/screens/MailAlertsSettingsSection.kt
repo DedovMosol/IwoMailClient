@@ -33,7 +33,11 @@ import kotlinx.coroutines.launch
 
 /** Уведомления о почте: тихие часы, важные отправители, звук и вибрация каждого аккаунта (каналы системы). */
 @Composable
-internal fun MailAlertsSettingsSection(settingsRepo: SettingsRepository, accounts: List<AccountEntity>) {
+internal fun MailAlertsSettingsSection(
+    settingsRepo: SettingsRepository,
+    accounts: List<AccountEntity>,
+    showHeader: Boolean = true
+) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
     val prefs by settingsRepo.mailAlertPrefs.collectAsStateWithLifecycle(initialValue = null)
@@ -50,12 +54,14 @@ internal fun MailAlertsSettingsSection(settingsRepo: SettingsRepository, account
     val sameTimeText = Strings.quietHoursSameTime
 
     Column {
-        Text(
-            text = Strings.mailAlertsSection,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(16.dp)
-        )
+        if (showHeader) {
+            Text(
+                text = Strings.mailAlertsSection,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
 
         val quiet = prefs?.quietHours ?: QuietHours(false, QuietHours.DEFAULT_START, QuietHours.DEFAULT_END)
         ListItem(

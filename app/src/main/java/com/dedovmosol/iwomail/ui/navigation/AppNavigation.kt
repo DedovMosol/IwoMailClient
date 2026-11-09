@@ -303,6 +303,10 @@ sealed class Screen(val route: String) {
         }
     }
     object Settings : Screen("settings")
+    object SettingsAccounts : Screen("settings/accounts")
+    object SettingsMail : Screen("settings/mail")
+    object SettingsNotifications : Screen("settings/notifications")
+    object SettingsSecurity : Screen("settings/security")
     object AccountSettings : Screen("accountSettings/{accountId}") {
         fun createRoute(accountId: Long): String = "accountSettings/$accountId"
     }
@@ -1093,12 +1097,23 @@ fun AppNavigation(
         composable(Screen.Settings.route) {
             SettingsScreen(
                 onBackClick = { navController.popBackStack() },
-                onAddAccount = {
-                    navController.navigate(Screen.Setup.createRoute())
-                },
-                onNavigateToPersonalization = {
-                    navController.navigate(Screen.Personalization.route)
-                },
+                onNavigateToAccounts = { navController.navigate(Screen.SettingsAccounts.route) },
+                onNavigateToMail = { navController.navigate(Screen.SettingsMail.route) },
+                onNavigateToNotifications = { navController.navigate(Screen.SettingsNotifications.route) },
+                onNavigateToPersonalization = { navController.navigate(Screen.Personalization.route) },
+                onNavigateToSecurity = { navController.navigate(Screen.SettingsSecurity.route) },
+                onNavigateToAbout = { navController.navigate(Screen.About.route) },
+                onNoAccountsLeft = {
+                    navController.navigate(Screen.Setup.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+        composable(Screen.SettingsAccounts.route) {
+            SettingsAccountsScreen(
+                onBackClick = { navController.popBackStack() },
+                onAddAccount = { navController.navigate(Screen.Setup.createRoute()) },
                 onNavigateToAccountSettings = { accountId ->
                     navController.navigate(Screen.AccountSettings.createRoute(accountId))
                 },
@@ -1108,6 +1123,15 @@ fun AppNavigation(
                     }
                 }
             )
+        }
+        composable(Screen.SettingsMail.route) {
+            SettingsMailScreen(onBackClick = { navController.popBackStack() })
+        }
+        composable(Screen.SettingsNotifications.route) {
+            SettingsNotificationsScreen(onBackClick = { navController.popBackStack() })
+        }
+        composable(Screen.SettingsSecurity.route) {
+            SettingsSecurityScreen(onBackClick = { navController.popBackStack() })
         }
         
         composable(
