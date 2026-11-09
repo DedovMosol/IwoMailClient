@@ -82,7 +82,7 @@ fun SettingsScreen(
         item {
             SettingsHubRow(
                 title = Strings.mailSection,
-                subtitle = Strings.remoteImagesSetting,
+                subtitle = null,
                 icon = AppIcons.Email,
                 onClick = onNavigateToMail
             )
@@ -90,7 +90,7 @@ fun SettingsScreen(
         item {
             SettingsHubRow(
                 title = Strings.mailAlertsSection,
-                subtitle = Strings.quietHours,
+                subtitle = null,
                 icon = AppIcons.Notifications,
                 onClick = onNavigateToNotifications
             )
@@ -98,7 +98,7 @@ fun SettingsScreen(
         item {
             SettingsHubRow(
                 title = Strings.appearance,
-                subtitle = Strings.interfacePersonalization,
+                subtitle = null,
                 icon = AppIcons.Palette,
                 onClick = onNavigateToPersonalization
             )
