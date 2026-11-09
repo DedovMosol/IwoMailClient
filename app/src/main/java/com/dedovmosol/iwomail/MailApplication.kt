@@ -58,8 +58,11 @@ class MailApplication : Application() {
         // Подписка живёт весь процесс (не отменяется) — сбор при смерти процесса.
         applicationScope.launch(Dispatchers.Main.immediate) {
             com.dedovmosol.iwomail.sync.AppForegroundTracker.inForeground.collect { inForeground ->
-                if (!inForeground && settingsRepository.getAppLockEnabledSync()) {
-                    com.dedovmosol.iwomail.data.security.AppLockManager.lock()
+                if (!settingsRepository.getAppLockEnabledSync()) return@collect
+                if (inForeground) {
+                    com.dedovmosol.iwomail.data.security.AppLockManager.onProcessForeground()
+                } else {
+                    com.dedovmosol.iwomail.data.security.AppLockManager.onProcessBackground()
                 }
             }
         }

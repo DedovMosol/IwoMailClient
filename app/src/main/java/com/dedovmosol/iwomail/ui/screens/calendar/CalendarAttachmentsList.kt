@@ -1,6 +1,7 @@
 ﻿package com.dedovmosol.iwomail.ui.screens.calendar
 
 import android.content.ContentValues
+import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import android.content.Intent
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -170,7 +171,7 @@ internal fun CalendarAttachmentsList(
                                         setDataAndType(uri, mimeType)
                                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
-                                    previewLauncher.launch(intent)
+                                    previewLauncher.launchLeavingApp(intent)
 
                                     // Fallback: если внешнее приложение не вернёт result, чистим позже
                                     scope.launch {
@@ -324,7 +325,7 @@ internal fun CalendarAttachmentsList(
                         onClick = {
                             showSaveMenu = false
                             pendingSaveAsAtt = att
-                            saveAsLauncher.launch(att.name)
+                            saveAsLauncher.launchLeavingApp(att.name)
                         },
                         leadingIcon = { Icon(AppIcons.Folder, contentDescription = null) }
                     )

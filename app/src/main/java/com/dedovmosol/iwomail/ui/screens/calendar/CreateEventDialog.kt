@@ -1,6 +1,7 @@
 ﻿package com.dedovmosol.iwomail.ui.screens.calendar
 
 import android.provider.OpenableColumns
+import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -362,7 +363,7 @@ internal fun CreateEventDialog(
                                     SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
                                 }
                             }
-                            null -> {
+                            LimitedCopyResult.Unreadable, null -> {
                                 deletePendingAttachmentFile(tempFile.absolutePath)
                                 withContext(Dispatchers.Main) {
                                     SafeToast.long(
@@ -920,7 +921,7 @@ internal fun CreateEventDialog(
                                     Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
                                         RichTextToolbar(
                                             controller = bodyEditorController,
-                                            onInsertImage = { imagePickerLauncher.launch("image/*") },
+                                            onInsertImage = { imagePickerLauncher.launchLeavingApp("image/*") },
                                             showInsertImage = !isOccurrenceEdit
                                         )
                                     }
@@ -1031,7 +1032,7 @@ internal fun CreateEventDialog(
 
                         OutlinedButton(
                             onClick = {
-                                filePickerLauncher.launch(arrayOf("*/*"))
+                                filePickerLauncher.launchLeavingApp(arrayOf("*/*"))
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {

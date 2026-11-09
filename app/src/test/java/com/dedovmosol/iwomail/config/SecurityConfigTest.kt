@@ -133,6 +133,7 @@ class SecurityConfigTest {
             "forward_attachments",
             "reply_attachments",
             "draft_attachments",
+            "compose_attachments",
             "updates"
         )
     }

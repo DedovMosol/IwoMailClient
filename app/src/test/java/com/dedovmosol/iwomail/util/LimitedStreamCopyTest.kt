@@ -59,4 +59,33 @@ class LimitedStreamCopyTest {
         val over = readUtf8Limited(ByteArrayInputStream(ByteArray(20) { 'a'.code.toByte() }), 8)
         assertThat(over).isNull()
     }
+
+    @Test
+    fun `unique picked names are distinct and strip path chars`() {
+        val a = uniquePickedFileName("a/b:c.txt")
+        val b = uniquePickedFileName("a/b:c.txt")
+        assertThat(a).isNotEqualTo(b)
+        assertThat(a).doesNotContain("/")
+        assertThat(a).doesNotContain(":")
+        assertThat(a).endsWith("_a_b_c.txt")
+        assertThat(uniquePickedFileName("  ")).contains("_file")
+    }
+
+    @Test
+    fun `deleteIfUnderDir only removes files inside the root`() {
+        val root = java.nio.file.Files.createTempDirectory("iwo-att").toFile()
+        try {
+            val inside = java.io.File(root, "ok.bin")
+            inside.writeText("x")
+            val outside = java.io.File(root.parentFile, "outside.bin")
+            outside.writeText("y")
+            deleteIfUnderDir(inside, root)
+            deleteIfUnderDir(outside, root)
+            assertThat(inside.exists()).isFalse()
+            assertThat(outside.exists()).isTrue()
+            outside.delete()
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

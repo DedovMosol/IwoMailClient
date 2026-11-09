@@ -99,4 +99,19 @@ class InlineImagesTest {
         assertThat(detectImageMimeType(byteArrayOf(0x89.toByte()))).isNull()
         assertThat(detectImageMimeType(ByteArray(0))).isNull()
     }
+
+    @Test
+    fun `stripContentIdImages removes only listed cid img tags`() {
+        val html = """<p>x</p><img src="cid:big@x" alt="a"><img src="cid:keep@x"><img src="https://h/i.png">"""
+        val out = stripContentIdImages(html, listOf("<BIG@x>"))
+        assertThat(out).doesNotContain("cid:big@x")
+        assertThat(out).contains("cid:keep@x")
+        assertThat(out).contains("https://h/i.png")
+        assertThat(out).contains("<p>x</p>")
+        // img1 не трогает img10
+        val prefixed = stripContentIdImages("""<img src="cid:img10"><img src="cid:img1">""", listOf("img1"))
+        assertThat(prefixed).contains("cid:img10")
+        assertThat(prefixed).doesNotContain("cid:img1>")
+        assertThat(stripContentIdImages(html, emptyList())).isEqualTo(html)
+    }
 }

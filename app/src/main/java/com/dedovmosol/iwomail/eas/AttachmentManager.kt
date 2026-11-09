@@ -54,7 +54,8 @@ class AttachmentManager(
         // порог (7 дней) исключает удаление файлов активной сессии написания письма.
         private const val DRAFT_ATTACHMENTS_DIR = "draft_attachments"
         private val ATTACHMENT_TEMP_DIRS = listOf(
-            "attachments", "reply_attachments", "forward_attachments", DRAFT_ATTACHMENTS_DIR
+            "attachments", "reply_attachments", "forward_attachments", DRAFT_ATTACHMENTS_DIR,
+            com.dedovmosol.iwomail.util.COMPOSE_ATTACHMENTS_DIR
         )
 
         /**

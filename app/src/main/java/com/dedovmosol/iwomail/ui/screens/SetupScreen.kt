@@ -2,6 +2,7 @@ package com.dedovmosol.iwomail.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -1119,7 +1120,7 @@ fun SetupScreen(
                             OutlinedButton(
                                 onClick = {
                                     // MIME-типы для сертификатов + общий для файлов без типа
-                                    certificatePicker.launch(arrayOf(
+                                    certificatePicker.launchLeavingApp(arrayOf(
                                         "application/x-x509-ca-cert",      // .cer, .crt
                                         "application/x-pem-file",          // .pem
                                         "application/pkix-cert",           // .cer
@@ -1215,7 +1216,7 @@ fun SetupScreen(
                         // Кнопка выбора сертификата
                         OutlinedButton(
                             onClick = {
-                                clientCertificatePicker.launch(arrayOf(
+                                clientCertificatePicker.launchLeavingApp(arrayOf(
                                     "application/x-pkcs12",    // .p12, .pfx
                                     "application/pkcs12",      // .p12, .pfx
                                     "application/octet-stream", // общий бинарный

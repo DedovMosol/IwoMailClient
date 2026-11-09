@@ -24,6 +24,36 @@ fun referencedContentIds(html: String): Set<String> {
  * `img10`), без угловых скобок и без учёта регистра: регистр Content-ID в ссылке тела и в заголовке
  * вложения у разных почтовых клиентов расходится, а картинка — та же.
  */
+
+/** Тег `<img …>` целиком (атрибуты в любом порядке, в т.ч. самозакрывающийся). */
+private val IMG_TAG_REGEX = Regex("""<img\b[^>]*>""", RegexOption.IGNORE_CASE)
+
+/**
+ * Удаляет `<img>` со ссылкой `cid:` из [contentIds].
+ * Крупная картинка тела, ушедшая в список файлов: иначе в редакторе битая картинка + чип,
+ * а при сохранении роль снова INLINE (тело всё ещё ссылается на cid).
+ */
+fun stripContentIdImages(html: String, contentIds: Collection<String>): String {
+    if (contentIds.isEmpty() || !html.contains("cid:", ignoreCase = true)) return html
+    val wanted = HashSet<String>()
+    val wantedLower = HashSet<String>()
+    for (raw in contentIds) {
+        val id = normalizeContentId(raw)
+        if (id.isEmpty()) continue
+        wanted += id
+        wantedLower += id.lowercase(java.util.Locale.ROOT)
+    }
+    if (wanted.isEmpty()) return html
+    fun listed(token: String): Boolean {
+        val id = normalizeContentId(decodeCidToken(token))
+        return id in wanted || id.lowercase(java.util.Locale.ROOT) in wantedLower
+    }
+    return IMG_TAG_REGEX.replace(html) { match ->
+        val cid = CID_TOKEN_REGEX.find(match.value) ?: return@replace match.value
+        if (listed(cid.groupValues[1])) "" else match.value
+    }
+}
+
 fun containsContentId(refs: Set<String>, contentId: String?): Boolean {
     val cid = contentId?.let(::normalizeContentId)?.takeIf { it.isNotEmpty() } ?: return false
     return cid in refs || refs.any { it.equals(cid, ignoreCase = true) }

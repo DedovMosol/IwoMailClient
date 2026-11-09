@@ -4,6 +4,7 @@
     <files-path name="forward_attachments" path="forward_attachments/" />
     <files-path name="reply_attachments" path="reply_attachments/" />
     <files-path name="draft_attachments" path="draft_attachments/" />
+    <files-path name="compose_attachments" path="compose_attachments/" />
     <files-path name="updates" path="updates/" />
     <!-- Scoped cache paths - narrowed from path="/" per security best practice (audit N-14) -->
     <cache-path name="calendar_preview" path="calendar_preview/" />

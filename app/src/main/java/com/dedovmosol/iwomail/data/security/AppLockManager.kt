@@ -159,6 +159,78 @@ object AppLockManager {
     }
 
     /**
+     * SAF / GetContent / CreateDocument / внешний VIEW: наш процесс получает ON_STOP
+     * (DocumentsUI — другое приложение). Немедленный lock там ломает UX (пароль после каждого
+     * вложения). Помечаем «уходим во внешний UI»; [onProcessBackground] не блокирует.
+     *
+     * 2 с на любой ON_STOP не делаем: ProcessLifecycleOwner уже ~700 мс, а 2 с — дыра при
+     * переключении приложений. Порог — только для возврата из внешнего UI.
+     */
+    const val EXTERNAL_UI_MAX_UNLOCK_MS = 60_000L
+
+    @Volatile
+    private var leavingForExternalUi = false
+    @Volatile
+    private var notedExternalUiAtElapsed = 0L
+    @Volatile
+    private var backgroundedAtElapsed = 0L
+
+    @androidx.annotation.VisibleForTesting
+    internal var elapsedRealtimeMs: () -> Long = { android.os.SystemClock.elapsedRealtime() }
+
+    fun noteLeavingForExternalUi() {
+        leavingForExternalUi = true
+        notedExternalUiAtElapsed = elapsedRealtimeMs()
+    }
+
+    /** Колбэк пикера: если процесс так и не ушёл в фон — снять флаг (in-app документ-UI). */
+    fun onExternalUiReturned() {
+        if (backgroundedAtElapsed == 0L) {
+            leavingForExternalUi = false
+            notedExternalUiAtElapsed = 0L
+        }
+    }
+
+    /**
+     * Уход процесса в фон. Внешний UI, отмеченный недавно — не lock (сессия на том же экране).
+     * Просроченная отметка — обычный lock.
+     */
+    fun onProcessBackground() {
+        val now = elapsedRealtimeMs()
+        val external = leavingForExternalUi &&
+            (now - notedExternalUiAtElapsed) <= EXTERNAL_UI_MAX_UNLOCK_MS
+        if (external) {
+            backgroundedAtElapsed = now
+            return
+        }
+        leavingForExternalUi = false
+        notedExternalUiAtElapsed = 0L
+        backgroundedAtElapsed = 0L
+        lock()
+    }
+
+    /**
+     * Возврат в foreground. После пикера: если отсутствовали дольше [EXTERNAL_UI_MAX_UNLOCK_MS]
+     * (Home из DocumentsUI, забытый пикер) — lock. Иначе тот же экран без пароля.
+     */
+    fun onProcessForeground() {
+        val awayStart = backgroundedAtElapsed
+        val wasExternal = leavingForExternalUi
+        leavingForExternalUi = false
+        notedExternalUiAtElapsed = 0L
+        backgroundedAtElapsed = 0L
+        if (wasExternal && awayStart != 0L &&
+            shouldLockAfterExternalUi(elapsedRealtimeMs() - awayStart, EXTERNAL_UI_MAX_UNLOCK_MS)
+        ) {
+            lock()
+        }
+    }
+
+    /** Чистая функция: слишком долго во внешнем UI / после Home из пикера. */
+    fun shouldLockAfterExternalUi(awayMs: Long, maxUnlockedMs: Long = EXTERNAL_UI_MAX_UNLOCK_MS): Boolean =
+        awayMs >= maxUnlockedMs
+
+    /**
      * Стартовое состояние: заблокировано только если пароль реально задан.
      * Вызывается из [init] под synchronized.
      */
@@ -193,6 +265,10 @@ object AppLockManager {
         synchronized(this) {
             storage = null
             _locked.value = true
+            leavingForExternalUi = false
+            notedExternalUiAtElapsed = 0L
+            backgroundedAtElapsed = 0L
+            elapsedRealtimeMs = { android.os.SystemClock.elapsedRealtime() }
         }
     }
 

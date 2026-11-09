@@ -1,6 +1,7 @@
 ﻿package com.dedovmosol.iwomail.ui.screens
 
 import android.net.Uri
+import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -329,7 +330,7 @@ fun AccountSettingsScreen(
                         OutlinedButton(
                             onClick = {
                                 showCertificateDialog = false
-                                exportCertificatePicker.launch(certFile.name)
+                                exportCertificatePicker.launchLeavingApp(certFile.name)
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -340,7 +341,7 @@ fun AccountSettingsScreen(
                         OutlinedButton(
                             onClick = {
                                 showCertificateDialog = false
-                                certificatePicker.launch(arrayOf("*/*"))
+                                certificatePicker.launchLeavingApp(arrayOf("*/*"))
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -430,7 +431,7 @@ fun AccountSettingsScreen(
                         OutlinedButton(
                             onClick = {
                                 showClientCertificateDialog = false
-                                exportClientCertificatePicker.launch(certFile.name)
+                                exportClientCertificatePicker.launchLeavingApp(certFile.name)
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -441,7 +442,7 @@ fun AccountSettingsScreen(
                         OutlinedButton(
                             onClick = {
                                 showClientCertificateDialog = false
-                                clientCertificatePicker.launch(arrayOf("*/*"))
+                                clientCertificatePicker.launchLeavingApp(arrayOf("*/*"))
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {

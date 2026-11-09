@@ -1,6 +1,7 @@
 ﻿package com.dedovmosol.iwomail.ui.screens
 
 import com.dedovmosol.iwomail.util.SafeToast
+import com.dedovmosol.iwomail.ui.components.launchLeavingApp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -1426,7 +1427,7 @@ fun ContactsScreen(
                                         text = { Text(Strings.importFromVCard) },
                                         onClick = {
                                             showMoreMenu = false
-                                            importVCardLauncher.launch("text/vcard")
+                                            importVCardLauncher.launchLeavingApp("text/vcard")
                                         },
                                         leadingIcon = { Icon(AppIcons.Download, null) }
                                     )
@@ -1434,7 +1435,7 @@ fun ContactsScreen(
                                         text = { Text(Strings.importFromCSV) },
                                         onClick = {
                                             showMoreMenu = false
-                                            importCSVLauncher.launch("text/*")
+                                            importCSVLauncher.launchLeavingApp("text/*")
                                         },
                                         leadingIcon = { Icon(AppIcons.Download, null) }
                                     )

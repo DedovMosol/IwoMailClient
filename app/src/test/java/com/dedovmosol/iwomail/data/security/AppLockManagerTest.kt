@@ -222,4 +222,42 @@ class AppLockManagerTest {
         assertThat(AppLockManager.canRequestBiometricUnlock(true, false, false)).isFalse()
         assertThat(AppLockManager.canRequestBiometricUnlock(false, false, false)).isFalse()
     }
+
+    @Test
+    fun `picker onStop does not lock if returned within a minute`() {
+        AppLockManager.unlock()
+        var now = 1_000L
+        AppLockManager.elapsedRealtimeMs = { now }
+        AppLockManager.noteLeavingForExternalUi()
+        AppLockManager.onProcessBackground()
+        assertThat(AppLockManager.isLocked()).isFalse()
+        now += 5_000L
+        AppLockManager.onProcessForeground()
+        assertThat(AppLockManager.isLocked()).isFalse()
+    }
+
+    @Test
+    fun `long absence after picker locks on resume`() {
+        AppLockManager.unlock()
+        var now = 1_000L
+        AppLockManager.elapsedRealtimeMs = { now }
+        AppLockManager.noteLeavingForExternalUi()
+        AppLockManager.onProcessBackground()
+        now += AppLockManager.EXTERNAL_UI_MAX_UNLOCK_MS
+        AppLockManager.onProcessForeground()
+        assertThat(AppLockManager.isLocked()).isTrue()
+    }
+
+    @Test
+    fun `background without picker locks immediately`() {
+        AppLockManager.unlock()
+        AppLockManager.onProcessBackground()
+        assertThat(AppLockManager.isLocked()).isTrue()
+    }
+
+    @Test
+    fun `shouldLockAfterExternalUi uses inclusive threshold`() {
+        assertThat(AppLockManager.shouldLockAfterExternalUi(59_999L, 60_000L)).isFalse()
+        assertThat(AppLockManager.shouldLockAfterExternalUi(60_000L, 60_000L)).isTrue()
+    }
 }

@@ -40,6 +40,7 @@ internal sealed class LimitedCopyResult {
     class Ok(val bytesCopied: Long) : LimitedCopyResult()
     object ExceededSingle : LimitedCopyResult()
     object ExceededTotal : LimitedCopyResult()
+    object Unreadable : LimitedCopyResult()
 }
 
 /**
@@ -109,5 +110,71 @@ internal fun readUriBytesLimited(resolver: ContentResolver, uri: Uri, maxBytes: 
         null
     } catch (_: Exception) {
         null
+    }
+}
+
+internal const val COMPOSE_ATTACHMENTS_DIR = "compose_attachments"
+internal const val SHARE_ATTACHMENTS_DIR = "share_attachments"
+
+private val UNSAFE_PICKED_FILENAME = Regex("[\\/:*?\"<>|]")
+
+/** Имя копии в каталоге приложения: UUID + безопасное имя, без коллизий и path traversal. */
+internal fun uniquePickedFileName(displayName: String): String {
+    val safe = openableDisplayName(displayName).replace(UNSAFE_PICKED_FILENAME, "_")
+    return "${java.util.UUID.randomUUID().toString().replace("-", "")}_$safe"
+}
+
+/**
+ * Копия content URI в [dest] с потолками «один файл» и «сумма».
+ * При любой неудаче [dest] удаляется.
+ */
+internal fun copyOpenableToFile(
+    resolver: ContentResolver,
+    uri: Uri,
+    dest: java.io.File,
+    maxSingleFile: Long,
+    currentTotal: Long,
+    maxTotal: Long
+): LimitedCopyResult {
+    var result: LimitedCopyResult? = null
+    try {
+        resolver.openInputStream(uri)?.use { input ->
+            dest.outputStream().use { output ->
+                result = copyStreamLimited(input, output, maxSingleFile, currentTotal, maxTotal)
+            }
+        }
+    } catch (_: Exception) {
+        result = null
+    }
+    val finalResult = result
+    if (finalResult !is LimitedCopyResult.Ok) dest.delete()
+    return finalResult ?: LimitedCopyResult.Unreadable
+}
+
+internal fun deleteIfUnderDir(file: java.io.File, dir: java.io.File) {
+    try {
+        val canonical = file.canonicalFile
+        val root = dir.canonicalFile
+        val prefix = root.path + java.io.File.separator
+        if (canonical.path.startsWith(prefix) && canonical.isFile) canonical.delete()
+    } catch (_: Exception) {
+    }
+}
+
+/** Удаляет локальную копию вложения (picker / share), если URI принадлежит FileProvider приложения. */
+internal fun deletePickedAttachmentIfOwned(context: android.content.Context, uri: Uri) {
+    if (uri.authority != "${context.packageName}.fileprovider") return
+    val name = uri.lastPathSegment ?: return
+    if (name.contains("..") || name.contains("/") || name.contains("\\")) return
+    val dirs = listOf(
+        java.io.File(context.filesDir, COMPOSE_ATTACHMENTS_DIR),
+        java.io.File(context.cacheDir, SHARE_ATTACHMENTS_DIR)
+    )
+    for (dir in dirs) {
+        val candidate = java.io.File(dir, name)
+        if (candidate.exists()) {
+            deleteIfUnderDir(candidate, dir)
+            return
+        }
     }
 }
