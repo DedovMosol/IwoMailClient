@@ -539,37 +539,10 @@ fun PersonalizationScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(Strings.interfacePersonalization, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            LocalColorTheme.current.gradientStart,
-                            LocalColorTheme.current.gradientEnd
-                        )
-                    )
-                )
-            )
-        }
-    ) { padding ->
-        val listState = rememberLazyListState()
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize()
-        ) {
+    SettingsPageScaffold(
+        title = Strings.interfacePersonalization,
+        onBackClick = onBackClick
+    ) {
             // Выбор языка
             item {
                 ListItem(
@@ -664,17 +637,13 @@ fun PersonalizationScreen(
             
             // Темы по дням недели
             item {
-                ListItem(
-                    headlineContent = { Text(Strings.dailyThemes) },
-                    supportingContent = { Text(Strings.dailyThemesDesc) },
-                    leadingContent = { Icon(AppIcons.CalendarMonth, null) },
-                    trailingContent = {
-                        Switch(
-                            checked = dailyThemesEnabled,
-                            onCheckedChange = { enabled ->
-                                scope.launch { settingsRepo.setDailyThemesEnabled(enabled) }
-                            }
-                        )
+                SettingsSwitchRow(
+                    title = Strings.dailyThemes,
+                    description = Strings.dailyThemesDesc,
+                    icon = { Icon(AppIcons.CalendarMonth, null) },
+                    checked = dailyThemesEnabled,
+                    onChange = { enabled ->
+                        scope.launch { settingsRepo.setDailyThemesEnabled(enabled) }
                     }
                 )
             }
@@ -696,23 +665,16 @@ fun PersonalizationScreen(
             
             // Анимации интерфейса
             item {
-                ListItem(
-                    headlineContent = { Text(Strings.animations) },
-                    supportingContent = { Text(Strings.animationsDesc) },
-                    leadingContent = { Icon(AppIcons.Animation, null) },
-                    trailingContent = {
-                        Switch(
-                            checked = animationsEnabled,
-                            onCheckedChange = { enabled ->
-                                scope.launch { settingsRepo.setAnimationsEnabled(enabled) }
-                            }
-                        )
+                SettingsSwitchRow(
+                    title = Strings.animations,
+                    description = Strings.animationsDesc,
+                    icon = { Icon(AppIcons.Animation, null) },
+                    checked = animationsEnabled,
+                    onChange = { enabled ->
+                        scope.launch { settingsRepo.setAnimationsEnabled(enabled) }
                     }
                 )
             }
-        }
-        LazyColumnScrollbar(listState)
-        }
     }
 }
 

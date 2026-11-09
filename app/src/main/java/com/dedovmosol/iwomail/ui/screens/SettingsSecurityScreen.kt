@@ -82,25 +82,21 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
 
     SettingsPageScaffold(title = Strings.appLockSection, onBackClick = onBackClick) {
         item {
-            ListItem(
-                headlineContent = { Text(Strings.appLockTitle) },
-                supportingContent = { Text(Strings.appLockDesc) },
-                leadingContent = { Icon(AppIcons.Lock, null) },
-                trailingContent = {
-                    Switch(
-                        checked = appLockEnabled,
-                        onCheckedChange = { enabled ->
-                            if (enabled) {
-                                if (lockPasswordSet) {
-                                    scope.launch { settingsRepo.setAppLockEnabled(true) }
-                                } else {
-                                    lockDialog = LockDialogType.SetPassword
-                                }
-                            } else {
-                                lockDialog = LockDialogType.Disable
-                            }
+            SettingsSwitchRow(
+                title = Strings.appLockTitle,
+                description = Strings.appLockDesc,
+                icon = { Icon(AppIcons.Lock, null) },
+                checked = appLockEnabled,
+                onChange = { enabled ->
+                    if (enabled) {
+                        if (lockPasswordSet) {
+                            scope.launch { settingsRepo.setAppLockEnabled(true) }
+                        } else {
+                            lockDialog = LockDialogType.SetPassword
                         }
-                    )
+                    } else {
+                        lockDialog = LockDialogType.Disable
+                    }
                 }
             )
         }
@@ -114,23 +110,15 @@ internal fun SettingsSecurityScreen(onBackClick: () -> Unit) {
                 )
             }
             item {
-                ListItem(
-                    headlineContent = { Text(Strings.appLockFingerprintTitle) },
-                    supportingContent = {
-                        Text(
-                            if (biometricAvailable) Strings.appLockFingerprintDesc
-                            else Strings.appLockBiometricUnavailable
-                        )
-                    },
-                    leadingContent = { Icon(AppIcons.Fingerprint, null) },
-                    trailingContent = {
-                        Switch(
-                            checked = appLockBiometricEnabled,
-                            enabled = biometricAvailable,
-                            onCheckedChange = { enabled ->
-                                scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
-                            }
-                        )
+                SettingsSwitchRow(
+                    title = Strings.appLockFingerprintTitle,
+                    description = if (biometricAvailable) Strings.appLockFingerprintDesc
+                    else Strings.appLockBiometricUnavailable,
+                    icon = { Icon(AppIcons.Fingerprint, null) },
+                    checked = appLockBiometricEnabled,
+                    enabled = biometricAvailable,
+                    onChange = { enabled ->
+                        scope.launch { settingsRepo.setAppLockBiometricEnabled(enabled) }
                     }
                 )
             }

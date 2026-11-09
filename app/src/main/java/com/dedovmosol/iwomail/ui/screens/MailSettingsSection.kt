@@ -7,12 +7,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -56,30 +54,28 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: B
             )
         }
 
-        ListItem(
-            headlineContent = { Text(Strings.remoteImagesSetting) },
-            supportingContent = { Text(Strings.remoteImagesSettingDesc) },
-            leadingContent = { Icon(AppIcons.Image, null) },
-            trailingContent = {
-                Switch(
-                    checked = images?.alwaysLoad == true,
-                    enabled = images != null,
-                    onCheckedChange = { always -> scope.launch { settingsRepo.setRemoteImagesAlways(always) } }
-                )
-            }
+        SettingsSwitchRow(
+            title = Strings.remoteImagesSetting,
+            description = Strings.remoteImagesSettingDesc,
+            icon = { Icon(AppIcons.Image, null) },
+            checked = images?.alwaysLoad == true,
+            enabled = images != null,
+            onChange = { always -> scope.launch { settingsRepo.setRemoteImagesAlways(always) } }
         )
-        SwitchSetting(
+        SettingsSwitchRow(
             title = Strings.galPhotosSetting,
             description = Strings.galPhotosSettingDesc,
             icon = { Icon(AppIcons.Person, null) },
-            checked = galPhotos,
+            checked = galPhotos == true,
+            enabled = galPhotos != null,
             onChange = { on -> scope.launch { settingsRepo.setGalPhotosEnabled(on) } }
         )
-        SwitchSetting(
+        SettingsSwitchRow(
             title = Strings.conversationViewSetting,
             description = Strings.conversationViewSettingDesc,
             icon = { Icon(AppIcons.Reply, null) },
-            checked = conversations,
+            checked = conversations == true,
+            enabled = conversations != null,
             onChange = { on -> scope.launch { settingsRepo.setConversationView(on) } }
         )
 
@@ -137,29 +133,6 @@ internal fun MailSettingsSection(settingsRepo: SettingsRepository, showHeader: B
             )
         }
     }
-}
-
-/** Настройка-переключатель: нажатие на всю строку; [checked] null — значение ещё не прочитано. */
-@Composable
-private fun SwitchSetting(
-    title: String,
-    description: String,
-    icon: @Composable () -> Unit,
-    checked: Boolean?,
-    onChange: (Boolean) -> Unit
-) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(description) },
-        leadingContent = icon,
-        trailingContent = { Switch(checked = checked == true, enabled = checked != null, onCheckedChange = null) },
-        modifier = Modifier.toggleable(
-            value = checked == true,
-            enabled = checked != null,
-            role = Role.Switch,
-            onValueChange = onChange
-        )
-    )
 }
 
 /** Выбор одного варианта из списка (радиокнопки). */
