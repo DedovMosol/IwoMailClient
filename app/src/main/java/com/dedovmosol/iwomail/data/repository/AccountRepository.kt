@@ -319,7 +319,8 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         return EasResult.Success(Unit)
     }
     
-    suspend fun deleteAccount(accountId: Long) {
+    /** @return сколько аккаунтов осталось (0 — пора Setup). */
+    suspend fun deleteAccount(accountId: Long): Int {
         // Очищаем кэшированный клиент и выбор сервера
         easClients.forget(accountId)
         
@@ -402,6 +403,7 @@ class AccountRepository(private val context: Context) : com.dedovmosol.iwomail.s
         
         // Обновляем виджет (покажет NoAccountView если аккаунтов не осталось)
         com.dedovmosol.iwomail.widget.updateMailWidget(context)
+        return afterAccounts.size
     }
     
     private suspend fun testExchangeServer(
