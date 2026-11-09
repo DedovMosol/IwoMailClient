@@ -1,3 +1,9 @@
+# WebView JavascriptInterface: имена методов читает Chromium (чанки HTML редактора).
+-keepattributes JavascriptInterface
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
 # OkHttp
 -dontwarn okhttp3.**
 -dontwarn okio.**

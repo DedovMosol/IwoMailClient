@@ -34,6 +34,10 @@ class EmailPrinter internal constructor(private val activity: Activity) {
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.blockNetworkImage = !remoteAllowed
+            settings.blockNetworkLoads = !remoteAllowed
+            settings.mixedContentMode =
+                if (remoteAllowed) android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                else android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
         webView.webViewClient = object : WebViewClient() {
             // Ссылки на странице печати не открываем

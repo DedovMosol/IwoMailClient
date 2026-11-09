@@ -4,8 +4,9 @@ package com.dedovmosol.iwomail.domain
  * Бюджет inline-картинок в редакторе черновика: подписи/логотипы остаются в теле,
  * крупные фото не раздувают HTML (OOM / краш WebView) и уходят как обычные вложения.
  *
- * Лимит числа совпадает с [AttachmentLoader.MAX_INLINE_IMAGES] (Exchange 2007 может
- * прислать десятки cid:). Байты — декодированные, до base64.
+ * Единый бюджет просмотра и редактора (письма и события). Лимит числа —
+ * [AttachmentLoader.MAX_INLINE_IMAGES] (Exchange 2007 может прислать десятки cid:).
+ * Байты — декодированные, до base64. Крупнее — вложение в списке, не data URL.
  */
 internal class EditorInlineBudget(
     private val maxCount: Int = AttachmentLoader.MAX_INLINE_IMAGES,
