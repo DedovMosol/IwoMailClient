@@ -181,17 +181,8 @@ fun SetupScreen(
         uri?.let { selectedUri ->
             scope.launch {
                 try {
-                    var originalFileName: String? = null
-                    withContext(Dispatchers.IO) {
-                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                        cursor?.use {
-                            if (it.moveToFirst()) {
-                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                                if (nameIndex >= 0) {
-                                    originalFileName = it.getString(nameIndex)
-                                }
-                            }
-                        }
+                    val originalFileName = withContext(Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, selectedUri)?.name
                     }
 
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
@@ -207,12 +198,15 @@ fun SetupScreen(
                     val fileName = "cert_${System.currentTimeMillis()}.$extension"
                     val certFile = File(context.filesDir, fileName)
 
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(selectedUri)?.use { input ->
-                            certFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
+                    val copied = withContext(Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.copyUriLimited(
+                            context.contentResolver, selectedUri, certFile,
+                            com.dedovmosol.iwomail.util.MAX_CERTIFICATE_BYTES
+                        )
+                    }
+                    if (!copied) {
+                        errorMessage = NotificationStrings.getCertificateLoadingError(isRussianLang)
+                        return@launch
                     }
 
                     // Удаляем старый файл ТОЛЬКО после успешного копирования нового
@@ -240,17 +234,8 @@ fun SetupScreen(
         uri?.let { selectedUri ->
             scope.launch {
                 try {
-                    var originalFileName: String? = null
-                    withContext(Dispatchers.IO) {
-                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                        cursor?.use {
-                            if (it.moveToFirst()) {
-                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                                if (nameIndex >= 0) {
-                                    originalFileName = it.getString(nameIndex)
-                                }
-                            }
-                        }
+                    val originalFileName = withContext(Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, selectedUri)?.name
                     }
 
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
@@ -269,12 +254,15 @@ fun SetupScreen(
                     // Сохраняем старый путь для удаления ПОСЛЕ успешного копирования
                     val oldCertPath = clientCertificatePath
 
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(selectedUri)?.use { input ->
-                            certFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
+                    val copied = withContext(Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.copyUriLimited(
+                            context.contentResolver, selectedUri, certFile,
+                            com.dedovmosol.iwomail.util.MAX_CERTIFICATE_BYTES
+                        )
+                    }
+                    if (!copied) {
+                        errorMessage = NotificationStrings.getCertificateLoadingError(isRussianLang)
+                        return@launch
                     }
 
                     // Удаляем старый файл ТОЛЬКО после успешного копирования нового

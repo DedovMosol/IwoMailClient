@@ -97,6 +97,8 @@ internal fun CalendarAttachmentsList(
                     }
                     is EasResult.Error -> SafeToast.long(context, result.message)
                 }
+            } catch (e: OutOfMemoryError) {
+                SafeToast.long(context, genericErrorText(isRussian))
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 SafeToast.long(context, e.message ?: genericErrorText(isRussian))

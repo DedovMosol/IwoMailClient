@@ -302,11 +302,17 @@ fun ContactsScreen(
                 try {
                     val content = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         context.contentResolver.openInputStream(it)?.use { stream ->
-                            stream.bufferedReader().readText()
-                        } ?: ""
+                            com.dedovmosol.iwomail.util.readUtf8Limited(stream, com.dedovmosol.iwomail.util.MAX_TEXT_IMPORT_BYTES)
+                        }
+                    }
+                    if (content == null) {
+                        SafeToast.long(context, genericErrorText(isRussian))
+                        return@launch
                     }
                     val count = contactRepo.importFromVCard(accountId, content)
                     SafeToast.short(context, "$importedMessage $count")
+                } catch (e: OutOfMemoryError) {
+                    SafeToast.long(context, genericErrorText(isRussian))
                 } catch (e: Exception) {
                     SafeToast.long(context, e.message ?: genericErrorText(isRussian))
                 }
@@ -322,11 +328,17 @@ fun ContactsScreen(
                 try {
                     val content = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         context.contentResolver.openInputStream(it)?.use { stream ->
-                            stream.bufferedReader().readText()
-                        } ?: ""
+                            com.dedovmosol.iwomail.util.readUtf8Limited(stream, com.dedovmosol.iwomail.util.MAX_TEXT_IMPORT_BYTES)
+                        }
+                    }
+                    if (content == null) {
+                        SafeToast.long(context, genericErrorText(isRussian))
+                        return@launch
                     }
                     val count = contactRepo.importFromCSV(accountId, content)
                     SafeToast.short(context, "$importedMessage $count")
+                } catch (e: OutOfMemoryError) {
+                    SafeToast.long(context, genericErrorText(isRussian))
                 } catch (e: Exception) {
                     SafeToast.long(context, e.message ?: genericErrorText(isRussian))
                 }
