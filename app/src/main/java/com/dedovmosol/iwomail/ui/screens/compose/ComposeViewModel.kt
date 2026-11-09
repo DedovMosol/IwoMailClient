@@ -2,7 +2,6 @@ package com.dedovmosol.iwomail.ui.screens.compose
 
 import android.content.Context
 import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -38,6 +37,7 @@ import com.dedovmosol.iwomail.ui.screens.formatEmailDate
 import com.dedovmosol.iwomail.ui.screens.isValidRecipientList
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.loggingExceptionHandler
+import com.dedovmosol.iwomail.util.queryOpenableFileMeta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -1497,15 +1497,8 @@ class ComposeViewModel(
         val items = withContext(dispatcher) {
             shareUris.mapNotNull { uri ->
                 try {
-                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                            val name = if (nameIndex >= 0) cursor.getString(nameIndex) ?: "file" else "file"
-                            val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
-                            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                            AttachmentItem(uri, name, mimeType, size)
-                        } else null
+                    queryOpenableFileMeta(context.contentResolver, uri)?.let { meta ->
+                        AttachmentItem(uri, meta.name, meta.mimeType, meta.size)
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e

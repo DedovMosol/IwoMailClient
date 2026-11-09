@@ -83,6 +83,7 @@ import com.dedovmosol.iwomail.ui.screens.compose.looksLikeHtml
 import com.dedovmosol.iwomail.ui.screens.compose.replaceCidWithDataUrl
 import com.dedovmosol.iwomail.ui.screens.compose.replaceSignatureHtml
 import com.dedovmosol.iwomail.util.escapeHtml
+import com.dedovmosol.iwomail.util.queryOpenableFileMeta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -260,20 +261,8 @@ fun ComposeScreen(
             val newAttachmentStrings = withContext(Dispatchers.IO) {
                 val collected = mutableListOf<String>()
                 for (uri in shareUris) {
-                    try {
-                        val cursor = context.contentResolver.query(uri, null, null, null, null)
-                        cursor?.use {
-                            if (it.moveToFirst()) {
-                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                                val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                                val name = if (nameIndex >= 0) it.getString(nameIndex) else "attachment"
-                                val size = if (sizeIndex >= 0) it.getLong(sizeIndex) else 0L
-                                val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                                val attInfo = AttachmentInfo(uri, name, size, mimeType)
-                                collected.add(attInfo.toSaveableString())
-                            }
-                        }
-                    } catch (_: Exception) { }
+                    val meta = queryOpenableFileMeta(context.contentResolver, uri) ?: continue
+                    collected.add(AttachmentInfo(uri, meta.name, meta.size, meta.mimeType).toSaveableString())
                 }
                 collected
             }
@@ -617,18 +606,19 @@ fun ComposeScreen(
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        uris.forEach { uri ->
-            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    val name = if (nameIndex >= 0) cursor.getString(nameIndex) else "file"
-                    val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
-                    val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                    val newAtt = AttachmentInfo(uri, name, size, mimeType)
-                    attachmentStrings = attachmentStrings + newAtt.toSaveableString()
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            val added = withContext(Dispatchers.IO) {
+                uris.mapNotNull { uri ->
+                    try {
+                        val meta = queryOpenableFileMeta(context.contentResolver, uri) ?: return@mapNotNull null
+                        AttachmentInfo(uri, meta.name, meta.size, meta.mimeType).toSaveableString()
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
             }
+            if (added.isNotEmpty()) attachmentStrings = attachmentStrings + added
         }
     }
 
@@ -663,8 +653,10 @@ fun ComposeScreen(
                     val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                     richTextController.insertImage(base64, outputMimeType)
                 }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: OutOfMemoryError) {
+            } catch (_: Exception) {
             }
         }
     }

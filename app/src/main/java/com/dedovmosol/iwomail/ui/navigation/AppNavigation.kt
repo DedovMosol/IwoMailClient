@@ -73,12 +73,8 @@ object ShareIntentData {
         val usedNames = mutableSetOf<String>()
         uris.mapNotNull { uri ->
             try {
-                val baseName = context.contentResolver.query(uri, null, null, null, null)?.use { c ->
-                    if (c.moveToFirst()) {
-                        val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                        if (idx >= 0) c.getString(idx) else null
-                    } else null
-                } ?: "share_${System.nanoTime()}"
+                val baseName = com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, uri)?.name
+                    ?: "share_${System.nanoTime()}"
                 val name = if (usedNames.add(baseName)) baseName else {
                     val dot = baseName.lastIndexOf('.')
                     val stem = if (dot > 0) baseName.substring(0, dot) else baseName
@@ -88,8 +84,12 @@ object ShareIntentData {
                     unique
                 }
                 val localFile = java.io.File(shareDir, name)
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    localFile.outputStream().use { output -> input.copyTo(output) }
+                if (!com.dedovmosol.iwomail.util.copyUriLimited(
+                        context.contentResolver, uri, localFile,
+                        com.dedovmosol.iwomail.util.MAX_PICKED_FILE_BYTES
+                    )
+                ) {
+                    return@mapNotNull null
                 }
                 androidx.core.content.FileProvider.getUriForFile(
                     context, "${context.packageName}.fileprovider", localFile

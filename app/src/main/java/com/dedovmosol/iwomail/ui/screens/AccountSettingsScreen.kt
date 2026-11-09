@@ -131,17 +131,8 @@ fun AccountSettingsScreen(
             scope.launch {
                 try {
                     val validExtensions = listOf("cer", "crt", "pem", "der", "p12", "pfx", "p7b", "p7c")
-                    var originalFileName: String? = null
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                        cursor?.use {
-                            if (it.moveToFirst()) {
-                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                                if (nameIndex >= 0) {
-                                    originalFileName = it.getString(nameIndex)
-                                }
-                            }
-                        }
+                    val originalFileName = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, selectedUri)?.name
                     }
 
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
@@ -150,19 +141,20 @@ fun AccountSettingsScreen(
                         return@launch
                     }
 
-                    currentAccount.certificatePath?.let { oldPath ->
-                        try { java.io.File(oldPath).delete() } catch (_: Exception) {}
-                    }
-
                     val fileName = "cert_${currentAccount.id}_${System.currentTimeMillis()}.$extension"
                     val certFile = java.io.File(context.filesDir, fileName)
-
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        context.contentResolver.openInputStream(selectedUri)?.use { input ->
-                            certFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
+                    val copied = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.copyUriLimited(
+                            context.contentResolver, selectedUri, certFile,
+                            com.dedovmosol.iwomail.util.MAX_CERTIFICATE_BYTES
+                        )
+                    }
+                    if (!copied) {
+                        SafeToast.short(context, com.dedovmosol.iwomail.ui.NotificationStrings.getCertificateLoadingError(isRu))
+                        return@launch
+                    }
+                    currentAccount.certificatePath?.let { oldPath ->
+                        try { java.io.File(oldPath).delete() } catch (_: Exception) {}
                     }
 
                     accountRepo.updateCertificatePath(accountId, certFile.absolutePath)
@@ -223,17 +215,8 @@ fun AccountSettingsScreen(
             scope.launch {
                 try {
                     val validExtensions = listOf("p12", "pfx")
-                    var originalFileName: String? = null
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        val cursor = context.contentResolver.query(selectedUri, null, null, null, null)
-                        cursor?.use {
-                            if (it.moveToFirst()) {
-                                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                                if (nameIndex >= 0) {
-                                    originalFileName = it.getString(nameIndex)
-                                }
-                            }
-                        }
+                    val originalFileName = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.queryOpenableFileMeta(context.contentResolver, selectedUri)?.name
                     }
 
                     val extension = originalFileName?.substringAfterLast('.', "")?.lowercase() ?: ""
@@ -242,19 +225,19 @@ fun AccountSettingsScreen(
                         return@launch
                     }
 
-                    // Копируем новый файл сертификата
                     val fileName = "client_cert_${currentAccount.id}_${System.currentTimeMillis()}.$extension"
                     val certFile = java.io.File(context.filesDir, fileName)
-
-                    // Сохраняем старый путь для удаления ПОСЛЕ успешного копирования
                     val oldCertPath = currentAccount.clientCertificatePath
 
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        context.contentResolver.openInputStream(selectedUri)?.use { input ->
-                            certFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
+                    val copied = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.dedovmosol.iwomail.util.copyUriLimited(
+                            context.contentResolver, selectedUri, certFile,
+                            com.dedovmosol.iwomail.util.MAX_CERTIFICATE_BYTES
+                        )
+                    }
+                    if (!copied) {
+                        SafeToast.short(context, NotificationStrings.getCertificateLoadingError(isRu))
+                        return@launch
                     }
 
                     // Запоминаем новый файл и просим пароль

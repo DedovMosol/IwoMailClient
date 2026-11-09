@@ -51,7 +51,17 @@ class EmailPrinter internal constructor(private val activity: Activity) {
             }
         }
         pending = webView
-        webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+        try {
+            webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+        } catch (_: OutOfMemoryError) {
+            pending = null
+            webView.destroy()
+            return false
+        } catch (_: Exception) {
+            pending = null
+            webView.destroy()
+            return false
+        }
         return true
     }
 

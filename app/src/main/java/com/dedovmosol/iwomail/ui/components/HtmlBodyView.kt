@@ -192,12 +192,12 @@ fun HtmlBodyView(
                 update = { webView ->
                     webViewRef = webView
                     if (html == lastLoadedHtml && remoteContentAllowed == lastRemoteAllowed) return@AndroidView
-                    lastLoadedHtml = html
                     lastRemoteAllowed = remoteContentAllowed
                     // Сеть закрыта дважды: CSP страницы и запрет загрузок самого WebView
                     webView.settings.blockNetworkImage = !remoteContentAllowed
                     webView.settings.blockNetworkLoads = !remoteContentAllowed
 
+                    try {
                     val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
 
                     // DOCTYPE XHTML Transitional — «почти стандартный» режим, как в вёрстке писем: без него (quirks)
@@ -354,7 +354,13 @@ fun HtmlBodyView(
                         <body>$html</body>
                         </html>
                     """.trimIndent()
-                    webView.loadDataWithBaseURL(null, styledHtml, "text/html", "UTF-8", null)
+                        webView.loadDataWithBaseURL(null, styledHtml, "text/html", "UTF-8", null)
+                        lastLoadedHtml = html
+                    } catch (_: OutOfMemoryError) {
+                        lastLoadedHtml = ""
+                    } catch (_: Exception) {
+                        lastLoadedHtml = ""
+                    }
                 },
                 modifier = Modifier
                     .fillMaxSize()
