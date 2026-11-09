@@ -201,12 +201,12 @@ fun HtmlBodyView(
                         else android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
 
                     try {
-                    val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
+                        val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
 
-                    // DOCTYPE XHTML Transitional — «почти стандартный» режим, как в вёрстке писем: без него (quirks)
-                    // body и height:100% растягиваются на высоту окна, и замер не меньше уже выставленной высоты —
-                    // карточка не уменьшается и внизу остаются пустые белые листы.
-                    val styledHtml = """
+                        // DOCTYPE XHTML Transitional — «почти стандартный» режим, как в вёрстке писем: без него (quirks)
+                        // body и height:100% растягиваются на высоту окна, и замер не меньше уже выставленной высоты —
+                        // карточка не уменьшается и внизу остаются пустые белые листы.
+                        val styledHtml = """
                         <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
                         <html>
                         <head>
@@ -356,7 +356,7 @@ fun HtmlBodyView(
                         </head>
                         <body>$html</body>
                         </html>
-                    """.trimIndent()
+                        """.trimIndent()
                         webView.loadDataWithBaseURL(null, styledHtml, "text/html", "UTF-8", null)
                         lastLoadedHtml = html
                     } catch (_: OutOfMemoryError) {
