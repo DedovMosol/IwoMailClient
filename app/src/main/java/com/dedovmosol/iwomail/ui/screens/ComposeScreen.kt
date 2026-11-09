@@ -84,6 +84,7 @@ import com.dedovmosol.iwomail.ui.screens.compose.replaceCidWithDataUrl
 import com.dedovmosol.iwomail.ui.screens.compose.replaceSignatureHtml
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.queryOpenableFileMeta
+import com.dedovmosol.iwomail.util.readUriBytesLimited
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1435,24 +1436,25 @@ fun ComposeScreen(
                     return@launch
                 }
 
-                // Файловые вложения — байты
+                // Файловые вложения — байты (потолок: не читаем файл целиком, если провайдер соврал size=0)
+                val bodyNow = body
                 val fileDraftAttachments = withContext(Dispatchers.IO) {
+                    var remaining = MAX_TOTAL_ATTACHMENT_BYTES - inlineImageBytes(bodyNow)
                     attachments.mapNotNull { att ->
-                        try {
-                            context.contentResolver.openInputStream(att.uri)?.use { input ->
-                                com.dedovmosol.iwomail.eas.DraftAttachmentData(
-                                    name = att.name,
-                                    mimeType = att.mimeType,
-                                    data = input.readBytes()
-                                )
-                            }
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            null
-                        }
+                        val bytes = readUriBytesLimited(context.contentResolver, att.uri, remaining)
+                            ?: return@mapNotNull null
+                        remaining -= bytes.size
+                        com.dedovmosol.iwomail.eas.DraftAttachmentData(
+                            name = att.name,
+                            mimeType = att.mimeType,
+                            data = bytes
+                        )
                     }
                 }
-                val bodyNow = body
+                if (fileDraftAttachments.size != attachments.size) {
+                    SafeToast.long(context, attachmentUnreadableMsg)
+                    return@launch
+                }
                 val knownKeys = draftKnownImageKeys
                 // Картинки тела, уже существующие на сервере: при правке только текста уходят ссылками на свои cid.
                 val knownImageCids = if (knownKeys.isEmpty()) emptyMap() else withContext(Dispatchers.Default) {
@@ -1548,14 +1550,11 @@ fun ComposeScreen(
                 // Вложения — байты; не прочитать хоть одно (файл удалён, доступ отозван) — не отправляем: письмо ушло бы
                 // без него, а пользователь не узнал бы (раньше такое вложение молча пропадало).
                 val readAttachments = withContext(Dispatchers.IO) {
+                    var remaining = MAX_TOTAL_ATTACHMENT_BYTES - inlineImageBytes(body)
                     attachments.map { att ->
-                        try {
-                            context.contentResolver.openInputStream(att.uri)?.use { it.readBytes() }
-                                ?.let { bytes -> Triple(att.name, att.mimeType, bytes) }
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            null
-                        }
+                        val bytes = readUriBytesLimited(context.contentResolver, att.uri, remaining)
+                        if (bytes != null) remaining -= bytes.size
+                        bytes?.let { Triple(att.name, att.mimeType, it) }
                     }
                 }
                 val unreadable = attachments.zip(readAttachments).firstOrNull { it.second == null }?.first

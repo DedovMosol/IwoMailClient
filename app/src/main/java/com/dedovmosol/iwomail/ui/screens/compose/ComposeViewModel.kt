@@ -38,6 +38,7 @@ import com.dedovmosol.iwomail.ui.screens.isValidRecipientList
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.loggingExceptionHandler
 import com.dedovmosol.iwomail.util.queryOpenableFileMeta
+import com.dedovmosol.iwomail.util.readUriBytesLimited
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -1569,15 +1570,11 @@ class ComposeViewModel(
     private suspend fun readRawAttachmentBytes(
         attachments: List<AttachmentItem>
     ): List<Triple<String, String, ByteArray>> = withContext(dispatcher) {
+        var remaining = MAX_TOTAL_ATTACHMENT_BYTES
         attachments.mapNotNull { att ->
-            try {
-                context.contentResolver.openInputStream(att.uri)?.use { input ->
-                    Triple(att.name, att.mimeType, input.readBytes())
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                null
-            }
+            val bytes = readUriBytesLimited(context.contentResolver, att.uri, remaining) ?: return@mapNotNull null
+            remaining -= bytes.size
+            Triple(att.name, att.mimeType, bytes)
         }
     }
 

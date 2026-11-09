@@ -391,7 +391,20 @@ internal fun CreateEventDialog(
                     }
                 }
             }
-            if (copied.isNotEmpty()) pendingAttachments = pendingAttachments + copied
+            if (copied.isNotEmpty()) {
+                var total = pendingAttachments.sumOf { it.sizeBytes }
+                val accepted = ArrayList<PendingCalendarAttachment>(copied.size)
+                for (item in copied) {
+                    if (total + item.sizeBytes > MAX_EVENT_ATTACHMENTS_BYTES) {
+                        deletePendingAttachmentFile(item.filePath)
+                        SafeToast.long(context, Strings.attachmentLimitExceeded(isRussianCallback))
+                    } else {
+                        total += item.sizeBytes
+                        accepted += item
+                    }
+                }
+                if (accepted.isNotEmpty()) pendingAttachments = pendingAttachments + accepted
+            }
         }
     }
 

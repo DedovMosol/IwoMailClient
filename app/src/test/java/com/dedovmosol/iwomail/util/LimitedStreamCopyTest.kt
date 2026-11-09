@@ -46,6 +46,13 @@ class LimitedStreamCopyTest {
     }
 
     @Test
+    fun `zero remaining budget rejects the next byte`() {
+        val out = ByteArrayOutputStream()
+        val result = copyStreamLimited(ByteArrayInputStream(byteArrayOf(1)), out, 0, 0, 0)
+        assertThat(result).isEqualTo(LimitedCopyResult.ExceededSingle)
+    }
+
+    @Test
     fun `readUtf8Limited returns text under cap and null when over`() {
         val ok = readUtf8Limited(ByteArrayInputStream("hello".toByteArray()), 16)
         assertThat(ok).isEqualTo("hello")
