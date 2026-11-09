@@ -50,7 +50,8 @@ fun AccountSettingsScreen(
     accountId: Long,
     onBackClick: () -> Unit,
     onEditCredentials: (Long) -> Unit = {},
-    onNavigateToSyncCleanup: (Long) -> Unit = {}
+    onNavigateToSyncCleanup: (Long) -> Unit = {},
+    onNoAccountsLeft: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = com.dedovmosol.iwomail.ui.components.rememberSafeScope()
@@ -87,6 +88,7 @@ fun AccountSettingsScreen(
 
 
     // Диалоги
+    var showDeleteAccount by rememberSaveable { mutableStateOf(false) }
     var showSignaturesDialog by rememberSaveable { mutableStateOf(false) }
     var showCertificateDialog by rememberSaveable { mutableStateOf(false) }
     var showClientCertificateDialog by rememberSaveable { mutableStateOf(false) }
@@ -569,6 +571,44 @@ fun AccountSettingsScreen(
     }
 
 
+    var deletingAccount by remember { mutableStateOf(false) }
+    if (showDeleteAccount) {
+        com.dedovmosol.iwomail.ui.theme.StyledAlertDialog(
+            onDismissRequest = { if (!deletingAccount) showDeleteAccount = false },
+            icon = { Icon(AppIcons.Delete, null) },
+            title = { Text(Strings.deleteAccount) },
+            text = { Text("${currentAccount.displayName}: ${Strings.deleteAccountConfirm}") },
+            confirmButton = {
+                DeleteButton(
+                    enabled = !deletingAccount,
+                    onClick = {
+                        if (deletingAccount) return@DeleteButton
+                        deletingAccount = true
+                        scope.launch {
+                            try {
+                                val remaining = accountRepo.deleteAccount(currentAccount.id)
+                                showDeleteAccount = false
+                                if (remaining == 0) onNoAccountsLeft() else onBackClick()
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                deletingAccount = false
+                            }
+                        }
+                    },
+                    text = Strings.delete
+                )
+            },
+            dismissButton = {
+                com.dedovmosol.iwomail.ui.theme.ThemeOutlinedButton(
+                    enabled = !deletingAccount,
+                    onClick = { showDeleteAccount = false },
+                    text = Strings.cancel
+                )
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -817,6 +857,23 @@ fun AccountSettingsScreen(
                     leadingContent = { Icon(AppIcons.Sync, null) },
                     trailingContent = { Icon(AppIcons.ChevronRight, null) },
                     modifier = Modifier.clickable { onNavigateToSyncCleanup(accountId) }
+                )
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
+            item {
+                ListItem(
+                    headlineContent = {
+                        Text(Strings.deleteAccountAction, color = MaterialTheme.colorScheme.error)
+                    },
+                    leadingContent = {
+                        Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error)
+                    },
+                    modifier = Modifier.clickable(
+                        onClickLabel = Strings.deleteAccountAction,
+                        onClick = { showDeleteAccount = true }
+                    )
                 )
             }
         }

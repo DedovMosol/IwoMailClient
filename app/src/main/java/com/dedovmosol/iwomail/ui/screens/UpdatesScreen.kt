@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.dedovmosol.iwomail.BuildConfig
 import com.dedovmosol.iwomail.data.repository.SettingsRepository
+import com.dedovmosol.iwomail.ui.OnboardingStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
@@ -138,22 +139,7 @@ fun UpdatesScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (isRu) "Обновления" else "Updates", color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(colorTheme.gradientStart, colorTheme.gradientEnd)
-                    )
-                )
-            )
-        }
+        topBar = { SettingsTopBar(title = OnboardingStrings.updatesTitle(isRu), onBackClick = onBackClick) }
     ) { padding ->
         // Dropdown для автопроверки
         var showIntervalMenu by rememberSaveable { mutableStateOf(false) }

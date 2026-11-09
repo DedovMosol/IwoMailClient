@@ -1128,11 +1128,6 @@ fun AppNavigation(
                 onAddAccount = { navController.navigate(Screen.Setup.createRoute()) },
                 onNavigateToAccountSettings = { accountId ->
                     navController.navigate(Screen.AccountSettings.createRoute(accountId))
-                },
-                onNoAccountsLeft = {
-                    navController.navigate(Screen.Setup.route) {
-                        popUpTo(0) { inclusive = true }
-                    }
                 }
             )
         }
@@ -1155,7 +1150,12 @@ fun AppNavigation(
                 accountId = accountId,
                 onBackClick = { navController.popBackStack() },
                 onEditCredentials = { id -> navController.navigate(Screen.Setup.createRoute(id)) },
-                onNavigateToSyncCleanup = { id -> navController.navigate(Screen.SyncCleanup.createRoute(id)) }
+                onNavigateToSyncCleanup = { id -> navController.navigate(Screen.SyncCleanup.createRoute(id)) },
+                onNoAccountsLeft = {
+                    navController.navigate(Screen.Setup.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
             )
         }
         
