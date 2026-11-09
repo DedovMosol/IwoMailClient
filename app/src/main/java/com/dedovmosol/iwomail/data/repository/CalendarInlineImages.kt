@@ -23,8 +23,8 @@ import java.security.MessageDigest
  * Байты кэшируются в `cacheDir/calendar_inline` (повторное открытие события — без сети); каталог
  * чистится по возрасту/размеру вместе с прочими временными вложениями.
  *
- * Ограничения как у писем (защита от OOM): картинка ≤ [MAX_IMAGE_BYTES], сумма ≤ [MAX_TOTAL_BYTES],
- * не больше [MAX_IMAGES] штук. Что не уложилось — остаётся `cid:` (плейсхолдер битой картинки).
+ * Ограничения — [com.dedovmosol.iwomail.domain.EditorInlineBudget] (как редактор письма).
+ * Что не уложилось — `cid:` в теле и файл в списке вложений.
  */
 internal class CalendarInlineImages(
     cacheRoot: File,
@@ -60,6 +60,7 @@ internal class CalendarInlineImages(
     private suspend fun bytesFor(accountId: Long, ref: InlineRef): ByteArray? {
         val file = File(cacheDir, cacheKey(accountId, ref.fileReference))
         if (file.isFile && file.length() > 0) {
+            if (file.length() > MAX_IMAGE_BYTES) return null
             try {
                 return file.readBytes()
             } catch (_: Exception) {
@@ -73,7 +74,7 @@ internal class CalendarInlineImages(
             return null
         }
         val bytes = (downloaded as? EasResult.Success)?.data ?: return null
-        if (bytes.isEmpty()) return null
+        if (bytes.isEmpty() || bytes.size > MAX_IMAGE_BYTES) return null
         writeCacheAtomically(file, bytes)
         return bytes
     }
@@ -97,9 +98,9 @@ internal class CalendarInlineImages(
 
     companion object {
         const val CACHE_DIR_NAME = "calendar_inline"
-        const val MAX_IMAGE_BYTES = 2L * 1024 * 1024
-        const val MAX_TOTAL_BYTES = 5L * 1024 * 1024
-        const val MAX_IMAGES = 20
+        val MAX_IMAGE_BYTES = com.dedovmosol.iwomail.domain.EditorInlineBudget.MAX_BYTES_PER_IMAGE.toLong()
+        val MAX_TOTAL_BYTES = com.dedovmosol.iwomail.domain.EditorInlineBudget.MAX_TOTAL_BYTES.toLong()
+        val MAX_IMAGES = com.dedovmosol.iwomail.domain.AttachmentLoader.MAX_INLINE_IMAGES
 
         /** Вложения с Content-ID из JSON события (формат CalendarXmlParser / CalendarAttachmentService). */
         internal fun parseInlineRefs(attachmentsJson: String): List<InlineRef> {

@@ -11,7 +11,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import com.dedovmosol.iwomail.domain.EditorInlineBudget
 import com.dedovmosol.iwomail.util.HtmlRegex
+import com.dedovmosol.iwomail.util.readStreamLimited
 import java.io.ByteArrayOutputStream
 
 // Предкомпилированные regex для stripHtml (производительность)
@@ -233,11 +235,15 @@ fun compressImageForInline(
         val originalWidth = options.outWidth
         val originalHeight = options.outHeight
         
-        // Если изображение маленькое — возвращаем как есть
+        // Маленькое по пикселям: оригинал, если влезает в бюджет редактора; иначе — JPEG ниже.
         if (originalWidth <= maxWidth && originalHeight <= maxHeight) {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
-            return bytes?.let { Pair(it, mimeType) }
+            val bytes = context.contentResolver.openInputStream(uri)?.use {
+                readStreamLimited(it, EditorInlineBudget.MAX_BYTES_PER_IMAGE.toLong())
+            }
+            if (bytes != null) {
+                val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
+                return Pair(bytes, mimeType)
+            }
         }
         
         // Вычисляем коэффициент масштабирования (степень двойки для эффективности)
@@ -264,15 +270,18 @@ fun compressImageForInline(
             bitmap
         }
         
-        // Сжимаем в JPEG
         val outputStream = ByteArrayOutputStream()
-        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
-        
+        var q = quality
+        do {
+            outputStream.reset()
+            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, q, outputStream)
+            q -= 10
+        } while (outputStream.size() > EditorInlineBudget.MAX_BYTES_PER_IMAGE && q >= 40)
+        if (outputStream.size() > EditorInlineBudget.MAX_BYTES_PER_IMAGE) return null
         return Pair(outputStream.toByteArray(), "image/jpeg")
-    } catch (e: Exception) {
+    } catch (_: OutOfMemoryError) {
         return null
-    } catch (e: OutOfMemoryError) {
-        System.gc()
+    } catch (_: Exception) {
         return null
     } finally {
         // Гарантированно освобождаем bitmap'ы

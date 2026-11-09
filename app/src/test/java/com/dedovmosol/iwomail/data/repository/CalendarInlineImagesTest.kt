@@ -73,6 +73,16 @@ class CalendarInlineImagesTest {
     }
 
     @Test
+    fun `limits match the compose editor budget`() {
+        assertThat(CalendarInlineImages.MAX_IMAGE_BYTES)
+            .isEqualTo(com.dedovmosol.iwomail.domain.EditorInlineBudget.MAX_BYTES_PER_IMAGE.toLong())
+        assertThat(CalendarInlineImages.MAX_TOTAL_BYTES)
+            .isEqualTo(com.dedovmosol.iwomail.domain.EditorInlineBudget.MAX_TOTAL_BYTES.toLong())
+        assertThat(CalendarInlineImages.MAX_IMAGES)
+            .isEqualTo(com.dedovmosol.iwomail.domain.AttachmentLoader.MAX_INLINE_IMAGES)
+    }
+
+    @Test
     fun `body without cid needs no work`() = runBlocking<Unit> {
         val loader = CalendarInlineImages(tmp.root) { _, _ -> error("must not download") }
         assertThat(loader.load(1L, "<p>no images</p>", attachments(Triple("a", "R", 1L)))).isEmpty()

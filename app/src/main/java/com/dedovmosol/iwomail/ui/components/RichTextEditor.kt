@@ -1198,6 +1198,7 @@ fun RichTextEditor(
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
+                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 settings.blockNetworkImage = !remoteImagesAllowed
                 setBackgroundColor(Color.TRANSPARENT)
                 // Скрываем WebView до загрузки чтобы не мерцал белый прямоугольник

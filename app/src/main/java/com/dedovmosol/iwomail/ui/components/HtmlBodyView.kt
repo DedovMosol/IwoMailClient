@@ -92,10 +92,10 @@ fun HtmlBodyView(
                             // Встроенные картинки (data:) — всегда; сеть — только с разрешения (см. update)
                             loadsImagesAutomatically = true
                             // Разрешаем смешанный контент (http изображения на https странице)
-                            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            // Дополнительные настройки для загрузки контента
-                            domStorageEnabled = true
-                            allowContentAccess = true
+                            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                            allowFileAccess = false
+                            allowContentAccess = false
+                            domStorageEnabled = false
                             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
                         }
                         setBackgroundColor(android.graphics.Color.WHITE)
@@ -196,6 +196,9 @@ fun HtmlBodyView(
                     // Сеть закрыта дважды: CSP страницы и запрет загрузок самого WebView
                     webView.settings.blockNetworkImage = !remoteContentAllowed
                     webView.settings.blockNetworkLoads = !remoteContentAllowed
+                    webView.settings.mixedContentMode =
+                        if (remoteContentAllowed) android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        else android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
 
                     try {
                     val nonce = java.util.UUID.randomUUID().toString().replace("-", "")

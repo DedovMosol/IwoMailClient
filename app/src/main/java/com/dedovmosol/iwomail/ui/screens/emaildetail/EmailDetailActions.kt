@@ -20,8 +20,10 @@ private fun <T> EasResult<T>.toUnit(): EasResult<Unit> = when (this) {
     is EasResult.Success -> EasResult.Success(Unit)
     is EasResult.Error -> this
 }
-private const val MAX_AUTO_INLINE_IMAGE_BYTES = 2_097_152L
-private const val MAX_AUTO_INLINE_TOTAL_BYTES = 5_242_880L
+private val MAX_AUTO_INLINE_IMAGE_BYTES =
+    com.dedovmosol.iwomail.domain.EditorInlineBudget.MAX_BYTES_PER_IMAGE.toLong()
+private val MAX_AUTO_INLINE_TOTAL_BYTES =
+    com.dedovmosol.iwomail.domain.EditorInlineBudget.MAX_TOTAL_BYTES.toLong()
 
 /**
  * Business logic holder for EmailDetailScreen.
