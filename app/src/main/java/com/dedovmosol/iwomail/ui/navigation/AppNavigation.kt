@@ -1097,12 +1097,24 @@ fun AppNavigation(
         composable(Screen.Settings.route) {
             SettingsScreen(
                 onBackClick = { navController.popBackStack() },
-                onNavigateToAccounts = { navController.navigate(Screen.SettingsAccounts.route) },
-                onNavigateToMail = { navController.navigate(Screen.SettingsMail.route) },
-                onNavigateToNotifications = { navController.navigate(Screen.SettingsNotifications.route) },
-                onNavigateToPersonalization = { navController.navigate(Screen.Personalization.route) },
-                onNavigateToSecurity = { navController.navigate(Screen.SettingsSecurity.route) },
-                onNavigateToAbout = { navController.navigate(Screen.About.route) },
+                onNavigateToAccounts = {
+                    navController.navigate(Screen.SettingsAccounts.route) { launchSingleTop = true }
+                },
+                onNavigateToMail = {
+                    navController.navigate(Screen.SettingsMail.route) { launchSingleTop = true }
+                },
+                onNavigateToNotifications = {
+                    navController.navigate(Screen.SettingsNotifications.route) { launchSingleTop = true }
+                },
+                onNavigateToPersonalization = {
+                    navController.navigate(Screen.Personalization.route) { launchSingleTop = true }
+                },
+                onNavigateToSecurity = {
+                    navController.navigate(Screen.SettingsSecurity.route) { launchSingleTop = true }
+                },
+                onNavigateToAbout = {
+                    navController.navigate(Screen.About.route) { launchSingleTop = true }
+                },
                 onNoAccountsLeft = {
                     navController.navigate(Screen.Setup.route) {
                         popUpTo(0) { inclusive = true }

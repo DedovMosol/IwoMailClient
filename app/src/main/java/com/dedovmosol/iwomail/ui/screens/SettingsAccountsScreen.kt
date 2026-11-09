@@ -128,14 +128,13 @@ private fun AccountCard(
         MaterialTheme.colorScheme.primary
     }
     Card(
-        modifier = Modifier
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .clickable(onClick = onOpenClick),
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
     ) {
         ListItem(
+            modifier = Modifier.clickable(onClickLabel = account.displayName, onClick = onOpenClick),
             headlineContent = {
                 Text(
                     account.displayName,
