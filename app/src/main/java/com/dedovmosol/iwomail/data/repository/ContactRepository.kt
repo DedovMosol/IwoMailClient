@@ -27,6 +27,11 @@ private fun extractCleanEmail(raw: String): String {
     return raw.trim()
 }
 
+/** GAL/EAS REPLACE не должен сбрасывать избранное и локальную группу. */
+internal fun keepLocalContactOverlay(incoming: ContactEntity, existing: ContactEntity?): ContactEntity =
+    if (existing == null) incoming
+    else incoming.copy(isFavorite = existing.isFavorite, groupId = existing.groupId)
+
 /** SHA-256 хеш строки (первые 16 символов hex) — без коллизий hashCode */
 private fun stableHash(input: String): String {
     val digest = MessageDigest.getInstance("SHA-256")
@@ -56,6 +61,14 @@ class ContactRepository internal constructor(
     
     private val contactDao = database.contactDao()
     private val groupDao = database.contactGroupDao()
+
+    private suspend fun insertAllKeepingLocalOverlay(contacts: List<ContactEntity>) {
+        if (contacts.isEmpty()) return
+        for (chunk in contacts.chunked(500)) {
+            val have = contactDao.getByIds(chunk.map { it.id }).associateBy { it.id }
+            contactDao.insertAll(chunk.map { keepLocalContactOverlay(it, have[it.id]) })
+        }
+    }
     
     // === Получение контактов ===
     
@@ -212,9 +225,7 @@ class ContactRepository internal constructor(
                         }
                         
                         if (contactEntities.isNotEmpty()) {
-                            for (chunk in contactEntities.chunked(500)) {
-                                contactDao.insertAll(chunk)
-                            }
+                            insertAllKeepingLocalOverlay(contactEntities)
                         }
                         
                         EasResult.Success(contactEntities.size)
@@ -334,9 +345,7 @@ class ContactRepository internal constructor(
                 }
                 
                 if (contactEntities.isNotEmpty()) {
-                    for (chunk in contactEntities.chunked(500)) {
-                        contactDao.insertAll(chunk)
-                    }
+                    insertAllKeepingLocalOverlay(contactEntities)
                 }
                 
                 // КРИТИЧНО: Возвращаем количество БЕЗ "себя" (как показывается в UI)

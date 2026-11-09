@@ -402,20 +402,8 @@ class MainActivity : FragmentActivity() {
                             modifier = Modifier.fillMaxSize(),
                             color = MaterialTheme.colorScheme.background
                         ) {
-                            // Гейт блокировки (пароль + отпечаток): замещает всю навигацию,
-                            // пока сессия заблокирована. Кнопка «назад» внутри перехвачена.
-                            if (isLocked) {
-                                com.dedovmosol.iwomail.ui.screens.LockScreen(
-                                    biometricAvailable = biometricAvailable,
-                                    biometricEnabled = appLockBiometricEnabled,
-                                    // Флаги передаются в промпт из актуального состояния —
-                                    // защита от гонки «флаг выключен в настройках между
-                                    // показом лок-экрана и тапом по отпечатку».
-                                    onBiometricRequest = {
-                                        showBiometricPrompt(appLockBiometricEnabled, biometricAvailable)
-                                    }
-                                )
-                            } else {
+                            // Навигация всегда в композиции: после разблокировки тот же экран
+                            // (файл-пикер и фон тоже ON_STOP — не уничтожаем back stack).
                             AppNavigation(
                                 openInboxUnreadIntentId = currentOpenInboxUnreadIntentId,
                                 openEmailId = emailIdToOpen,
@@ -455,20 +443,26 @@ class MainActivity : FragmentActivity() {
                                     checkPermissionsForDialogs()
                                 }
                             )
-                            }
                         }
-                        
-                        // Плашка прогресса удаления (внизу экрана)
                         com.dedovmosol.iwomail.ui.components.DeletionProgressBar(
                             controller = deletionController,
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )
-                        
-                        // Плашка прогресса отправки (внизу экрана, зелёная)
                         com.dedovmosol.iwomail.ui.components.SendProgressBar(
                             controller = sendController,
                             modifier = Modifier.align(Alignment.BottomCenter)
                         )
+                        if (isLocked) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                com.dedovmosol.iwomail.ui.screens.LockScreen(
+                                    biometricAvailable = biometricAvailable,
+                                    biometricEnabled = appLockBiometricEnabled,
+                                    onBiometricRequest = {
+                                        showBiometricPrompt(appLockBiometricEnabled, biometricAvailable)
+                                    }
+                                )
+                            }
+                        }
                     }
                     
                     val showBattery by showBatteryDialog
