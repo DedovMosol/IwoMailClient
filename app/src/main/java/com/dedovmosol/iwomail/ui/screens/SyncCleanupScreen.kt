@@ -1,6 +1,5 @@
 package com.dedovmosol.iwomail.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,8 +10,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -23,7 +20,6 @@ import com.dedovmosol.iwomail.ui.NotificationStrings
 import com.dedovmosol.iwomail.ui.Strings
 import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
-import com.dedovmosol.iwomail.ui.theme.LocalColorTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -198,25 +194,7 @@ fun SyncCleanupScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(Strings.syncAndCleanup, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            LocalColorTheme.current.gradientStart,
-                            LocalColorTheme.current.gradientEnd
-                        )
-                    )
-                )
-            )
-        }
+        topBar = { SettingsTopBar(title = Strings.syncAndCleanup, onBackClick = onBackClick) }
     ) { padding ->
         val listState = rememberLazyListState()
         Box(
