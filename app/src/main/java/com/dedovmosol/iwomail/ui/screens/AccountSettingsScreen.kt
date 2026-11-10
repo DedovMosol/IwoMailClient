@@ -610,25 +610,7 @@ fun AccountSettingsScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(Strings.accountSettings, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(AppIcons.ArrowBack, Strings.back, tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                modifier = Modifier.background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            LocalColorTheme.current.gradientStart,
-                            LocalColorTheme.current.gradientEnd
-                        )
-                    )
-                )
-            )
-        }
+        topBar = { SettingsTopBar(title = Strings.accountSettings, onBackClick = onBackClick) }
     ) { padding ->
         val listState = rememberLazyListState()
         Box(
@@ -638,7 +620,8 @@ fun AccountSettingsScreen(
         ) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 8.dp)
         ) {
             // Заголовок аккаунта
             item {

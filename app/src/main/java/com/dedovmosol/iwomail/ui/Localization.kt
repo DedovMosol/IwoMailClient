@@ -149,8 +149,8 @@ object Strings {
     val deleteAccount: String @Composable get() = if (isRussian()) "Удалить аккаунт?" else "Delete account?"
     val deleteAccountAction: String @Composable get() = if (isRussian()) "Удалить аккаунт" else "Delete account"
     val deleteAccountConfirm: String @Composable get() = if (isRussian())
-        "Аккаунт и все связанные данные будут удалены."
-        else "Account and all related data will be deleted."
+        "Аккаунт и его данные будут удалены с устройства. Почтовый ящик на сервере не затрагивается."
+        else "The account and its data will be removed from this device. Mail on the server is not affected."
     val general: String @Composable get() = if (isRussian()) "Общие" else "General"
     val appearance: String @Composable get() = if (isRussian()) "Внешний вид" else "Appearance"
     val syncSettings: String @Composable get() = if (isRussian()) "Синхронизация" else "Sync"
