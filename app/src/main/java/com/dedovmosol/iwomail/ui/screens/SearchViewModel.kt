@@ -8,6 +8,7 @@ import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.data.repository.isFlagRejected
 import com.dedovmosol.iwomail.eas.EasResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -209,9 +210,8 @@ class SearchViewModel(
                         is EasResult.Success -> flipped += id
                         is EasResult.Error -> {
                             sendEvent(SearchEvent.ShowError(result.message))
-                            if (!com.dedovmosol.iwomail.data.repository.isEasStatusReject(result.message)) {
-                                flipped += id
-                            }
+                            // Отказ сервера откатил флаг в БД; прочие ошибки (нет связи) оставили его локально
+                            if (!result.isFlagRejected()) flipped += id
                         }
                     }
                 }

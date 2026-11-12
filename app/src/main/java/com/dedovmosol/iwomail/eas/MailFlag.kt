@@ -36,6 +36,13 @@ data class MailFlag(
     }
 }
 
+/**
+ * Итог записи флага (Sync Change). [syncKey] — новый ключ коллекции: сервер выдаёт его и тогда, когда само изменение
+ * отклонил ([MS-ASCMD] Responses приходят только для неудавшихся изменений). [applied] — флаг, который сервер принял
+ * (может отличаться от запрошенного сроком — [MailFlags.dueToday]); null — отклонён со статусом [changeStatus].
+ */
+data class FlagWrite(val syncKey: String, val applied: MailFlag?, val changeStatus: Int? = null)
+
 /** Разбор и запись флага письма в XML EAS (до WBXML). */
 object MailFlags {
 
@@ -53,11 +60,28 @@ object MailFlags {
     }
 
     /**
+     * Активный флаг без срока → тот же флаг со сроком «сегодня» (быстрый флаг Outlook по умолчанию), напоминание
+     * сохраняется. Для сервера, который флаг без дат не принял (Sync Change Status 6).
+     */
+    fun dueToday(flag: MailFlag, now: Long = System.currentTimeMillis(), zone: TimeZone = TimeZone.getDefault()): MailFlag {
+        val today = Calendar.getInstance(zone).apply {
+            timeInMillis = now
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        return MailFlag.due(today, today, flag.reminderTime)
+    }
+
+    /**
      * `<Flag>` для Sync Change. Отсутствующий дочерний элемент сервер удаляет ([MS-ASEMAIL] 4.2: implicit deletes),
-     * поэтому флаг пишется целиком. Порядок элементов — как в [MS-ASEMAIL] 2.2.2.34.
+     * поэтому флаг пишется целиком. Порядок элементов — как в [MS-ASEMAIL] 2.2.2.34. Флага нет — пустой `<Flag/>`
+     * ([MS-ASEMAIL] 2.2.2.34: «SHOULD be included as an empty container element»).
      */
     fun toXml(flag: MailFlag, now: Long = System.currentTimeMillis(), zone: TimeZone = TimeZone.getDefault()): String =
-        buildString {
+        if (!flag.active && !flag.completed) "<Flag xmlns=\"Email\"/>"
+        else buildString {
             append("<Flag xmlns=\"Email\">")
             when (flag.status) {
                 MailFlag.STATUS_COMPLETE -> {
@@ -86,7 +110,6 @@ object MailFlags {
                         append("<tasks:ReminderSet>0</tasks:ReminderSet>")
                     }
                 }
-                else -> append("<FlagStatus>0</FlagStatus>")
             }
             append("</Flag>")
         }

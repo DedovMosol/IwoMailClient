@@ -125,7 +125,7 @@ fun SearchScreen(
                 SearchEvent.DeletedPermanently ->
                     SafeToast.short(context, NotificationStrings.getDeletedPermanently(isRussian))
                 is SearchEvent.ShowError ->
-                    SafeToast.long(context, event.message)
+                    SafeToast.long(context, NotificationStrings.localizeError(event.message, isRussian))
                 SearchEvent.ShowEasterEgg -> {
                     keyboardController?.hide()
                     showEasterEgg = true

@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -33,7 +32,9 @@ import com.dedovmosol.iwomail.util.SafeToast
  *
  * Высота: WebView без собственного скролла (скроллит родитель), высота карточки берётся из замера
  * содержимого после загрузки. [contentKey] — идентичность документа (id письма/события): при его
- * смене WebView пересоздаётся и корректно уничтожается (без утечки нативных ресурсов).
+ * смене WebView пересоздаётся и уничтожается в onRelease ([WebViewRenderer.release], без утечки нативных ресурсов).
+ * Жест: горизонтальная прокрутка и масштаб — WebView, вертикальная — экран ([TouchDirectionLock]).
+ * Смерть рендерера не роняет приложение ([WebViewRenderer], [RendererRecovery]).
  */
 @Composable
 fun HtmlBodyView(
@@ -50,24 +51,15 @@ fun HtmlBodyView(
     // PERF: Отслеживаем последний загруженный HTML чтобы не перезагружать WebView при каждой рекомпозиции
     var lastLoadedHtml by remember(contentKey) { mutableStateOf("") }
     var lastRemoteAllowed by remember(contentKey) { mutableStateOf(false) }
-    DisposableEffect(contentKey) {
-        onDispose {
-            webViewRef?.let { webView ->
-                try {
-                    webView.stopLoading()
-                    webView.loadUrl("about:blank")
-                    webView.clearHistory()
-                    (webView.parent as? android.view.ViewGroup)?.removeView(webView)
-                    webView.removeAllViews()
-                    webView.destroy()
-                } catch (_: Exception) { }
-            }
-            webViewRef = null
-        }
-    }
+    // Рендерер WebView умер: новый WebView (key) — после выгрузки ради памяти всегда, после падения — один раз;
+    // второе падение — вместо оформления текст письма ([HtmlBodyTextFallback])
+    var rendererGeneration by remember(contentKey) { mutableIntStateOf(0) }
+    val rendererRecovery = remember(contentKey) { RendererRecovery() }
+    var rendererFailed by remember(contentKey) { mutableStateOf(false) }
 
     key(contentKey) {
-        Card(
+        if (rendererFailed) HtmlBodyTextFallback(html)
+        else Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
@@ -76,6 +68,7 @@ fun HtmlBodyView(
                 containerColor = androidx.compose.ui.graphics.Color.White
             )
         ) {
+            key(rendererGeneration) {
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
@@ -102,32 +95,31 @@ fun HtmlBodyView(
                         // Отключаем скролл внутри WebView - скроллит родитель
                         isVerticalScrollBarEnabled = false
                         isHorizontalScrollBarEnabled = false
+                        // Вертикально WebView не прокручивается (высота — по содержимому): эффект края (растяжение
+                        // Android 12+) на вертикальном дрейфе пальца дёргал бы содержимое при горизонтальной прокрутке
+                        overScrollMode = android.view.View.OVER_SCROLL_NEVER
 
-                        // Умная обработка touch событий для горизонтального скролла
-                        var startX = 0f
-                        var startY = 0f
+                        // Горизонтальная прокрутка и масштаб — у WebView, вертикальная — у экрана; направление
+                        // решается один раз на жест ([TouchDirectionLock])
+                        val directionLock = TouchDirectionLock(
+                            android.view.ViewConfiguration.get(ctx).scaledTouchSlop.toFloat()
+                        )
                         setOnTouchListener { v, event ->
-                            when (event.action) {
-                                android.view.MotionEvent.ACTION_DOWN -> {
-                                    startX = event.x
-                                    startY = event.y
-                                    // Пока не знаем направление - разрешаем родителю
-                                    v.parent?.requestDisallowInterceptTouchEvent(false)
+                            when (event.actionMasked) {
+                                android.view.MotionEvent.ACTION_DOWN -> directionLock.onDown(event.x, event.y)
+                                android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                                    directionLock.onSecondPointer()
+                                    v.parent?.requestDisallowInterceptTouchEvent(true)
                                 }
                                 android.view.MotionEvent.ACTION_MOVE -> {
-                                    val deltaX = kotlin.math.abs(event.x - startX)
-                                    val deltaY = kotlin.math.abs(event.y - startY)
-
-                                    // Если горизонтальное движение больше вертикального - блокируем родителя
-                                    if (deltaX > deltaY && deltaX > 10) {
+                                    val before = directionLock.owner
+                                    val owner = directionLock.onMove(event.x, event.y)
+                                    if (owner == TouchDirectionLock.Owner.CHILD && before != owner) {
                                         v.parent?.requestDisallowInterceptTouchEvent(true)
-                                    } else if (deltaY > deltaX && deltaY > 10) {
-                                        // Вертикальное движение - разрешаем родителю
-                                        v.parent?.requestDisallowInterceptTouchEvent(false)
                                     }
                                 }
                                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                                    // Сбрасываем блокировку
+                                    directionLock.onEnd()
                                     v.parent?.requestDisallowInterceptTouchEvent(false)
                                 }
                             }
@@ -186,10 +178,33 @@ fun HtmlBodyView(
                                 view?.postDelayed({ measure(view) }, 500)
                                 view?.postDelayed({ measure(view) }, 2000)
                             }
+
+                            /**
+                             * Рендерер умер ([WebViewRenderer]): приложение продолжает работу, этот WebView уничтожается
+                             * (onRelease) и создаётся новый; второе падение на том же письме — текст вместо оформления.
+                             */
+                            override fun onRenderProcessGone(
+                                view: WebView?,
+                                detail: android.webkit.RenderProcessGoneDetail?
+                            ): Boolean {
+                                val crashed = WebViewRenderer.crashed(detail)
+                                android.util.Log.e("HtmlBodyView", "WebView renderer gone, crashed=$crashed")
+                                view?.let(WebViewRenderer::markGone)
+                                if (webViewRef === view) webViewRef = null
+                                // Новый WebView загрузит страницу заново
+                                lastLoadedHtml = ""
+                                if (rendererRecovery.onRendererGone(crashed)) rendererGeneration++ else rendererFailed = true
+                                return true
+                            }
                         }
                     }
                 },
+                onRelease = { webView ->
+                    if (webViewRef === webView) webViewRef = null
+                    WebViewRenderer.release(webView)
+                },
                 update = { webView ->
+                    if (WebViewRenderer.isGone(webView)) return@AndroidView
                     webViewRef = webView
                     if (html == lastLoadedHtml && remoteContentAllowed == lastRemoteAllowed) return@AndroidView
                     lastRemoteAllowed = remoteContentAllowed
@@ -369,8 +384,44 @@ fun HtmlBodyView(
                     .fillMaxSize()
                     .padding(8.dp)
             )
+            }
     }
 }
+}
+
+/** Сколько символов текста письма показывать без оформления: длинный Text раскладывается на главном потоке. */
+private const val TEXT_FALLBACK_MAX_CHARS = 100_000
+
+/**
+ * Письмо, на котором дважды упал рендерер WebView: вместо оформления — его текст (выделяемый), чтобы письмо можно
+ * было прочитать. Текст извлекается из HTML не на главном потоке.
+ */
+@Composable
+private fun HtmlBodyTextFallback(html: String) {
+    val text by androidx.compose.runtime.produceState<String?>(initialValue = null, html) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            com.dedovmosol.iwomail.util.stripHtml(html).take(TEXT_FALLBACK_MAX_CHARS)
+        }
+    }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+    ) {
+        androidx.compose.foundation.layout.Column(modifier = Modifier.padding(16.dp)) {
+            androidx.compose.material3.Text(
+                text = com.dedovmosol.iwomail.ui.Strings.htmlBodyUnavailable,
+                style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            text?.let {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    androidx.compose.material3.Text(it, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -381,7 +432,10 @@ internal const val MEASURE_CONTENT_JS =
     "(function(){var b=document.body;if(!b)return '';" +
         "var r=document.createRange();r.selectNodeContents(b);" +
         "var bottom=Math.ceil(r.getBoundingClientRect().bottom+(window.scrollY||0));" +
-        "var h=Math.max(b.scrollHeight||0,bottom);" +
+        // Высота корня с полями детей (поля последнего блока проходят сквозь body, но не сквозь html): без неё WebView
+        // был ниже страницы на эти поля и прокручивался внутри — горизонтальная прокрутка дёргалась по вертикали
+        "var root=Math.ceil(document.documentElement.getBoundingClientRect().height||0);" +
+        "var h=Math.max(b.scrollHeight||0,bottom,root);" +
         "var w=(window.visualViewport&&window.visualViewport.width)||window.innerWidth||0;" +
         "return h+','+w;})()"
 

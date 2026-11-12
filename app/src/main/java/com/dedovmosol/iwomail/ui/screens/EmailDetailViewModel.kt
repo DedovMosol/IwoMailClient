@@ -10,6 +10,7 @@ import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.data.repository.isFlagRejected
 import com.dedovmosol.iwomail.domain.ReadReceipts
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
@@ -516,10 +517,13 @@ class EmailDetailViewModel(
         }
     }
 
+    /** Звёздочка: нет связи — флаг остаётся локально без тоста; отказ сервера — тост (звезда вернулась к серверной). */
     fun toggleFlag() {
         viewModelScope.launch {
             try {
-                actions.toggleFlag(emailId)
+                if (actions.toggleFlag(emailId).isFlagRejected()) {
+                    sendEvent(EmailDetailEvent.Error(com.dedovmosol.iwomail.data.repository.RepositoryErrors.FLAG_REJECTED))
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

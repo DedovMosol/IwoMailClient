@@ -29,6 +29,7 @@ import com.dedovmosol.iwomail.ui.isRussian
 import com.dedovmosol.iwomail.ui.theme.AppIcons
 import com.dedovmosol.iwomail.util.escapeHtml
 import com.dedovmosol.iwomail.util.sanitizeEmailHtml
+import kotlinx.coroutines.launch
 import kotlin.coroutines.resume
 
 internal const val RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS = 2_000L
@@ -138,6 +139,15 @@ class RichTextEditorController {
     private val editorImageGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val pendingFlushCallbacks = linkedMapOf<Long, (String?) -> Unit>()
     private var pendingFlushId = 0L
+    /** Номер последнего setHtml/setHtmlAsync (главный поток): устаревший асинхронный результат не показывается. */
+    private var htmlRequest = 0
+
+    /**
+     * Текст не показать: рендерер WebView на нём падал или для подготовки не хватило памяти. Редактор тогда не
+     * показывается вовсе — пустой редактор затёр бы при вводе текст письма, который остаётся в [latestHtml].
+     */
+    var isContentUnavailable by mutableStateOf(false)
+        internal set
 
     // Состояние форматирования
     var isBold by mutableStateOf(false)
@@ -194,12 +204,42 @@ class RichTextEditorController {
         execJs("insertAndroidImage()")
     }
     fun setHtml(html: String) {
+        htmlRequest++
+        showHtml(prepareHtml(html))
+    }
+
+    /**
+     * То же, что [setHtml], но очистка и нарезка тела — не на главном потоке: многомегабайтный черновик с картинками
+     * (data:) иначе подвешивал бы экран (ANR). Вызывать с главного потока. Новый вызов отменяет результат прежнего.
+     * Не хватило памяти — текст не показывается ([isContentUnavailable]), а не роняет приложение.
+     */
+    suspend fun setHtmlAsync(html: String) {
+        val request = ++htmlRequest
+        val prepared = try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { prepareHtml(html) }
+        } catch (e: OutOfMemoryError) {
+            android.util.Log.e("RichTextEditor", "Not enough memory to prepare ${html.length} chars", e)
+            null
+        } catch (e: StackOverflowError) {
+            android.util.Log.e("RichTextEditor", "Sanitizer overflow on ${html.length} chars", e)
+            null
+        }
+        if (request != htmlRequest) return
+        if (prepared == null) {
+            isContentUnavailable = true
+            return
+        }
+        showHtml(prepared)
+    }
+
+    private fun prepareHtml(html: String): Pair<String, Array<String>> {
         val sanitized = stripDangerousTags(html)
-        latestHtml = sanitized
-        editorHtmlPayload = EditorHtmlPayload(
-            editorHtmlGeneration.incrementAndGet(),
-            htmlToEditorChunks(sanitized)
-        )
+        return sanitized to htmlToEditorChunks(sanitized)
+    }
+
+    private fun showHtml(prepared: Pair<String, Array<String>>) {
+        latestHtml = prepared.first
+        editorHtmlPayload = EditorHtmlPayload(editorHtmlGeneration.incrementAndGet(), prepared.second)
         execJs("applyAndroidHtml()")
     }
 
@@ -263,7 +303,13 @@ class RichTextEditorController {
     }
 
     companion object {
-        val Saver: androidx.compose.runtime.saveable.Saver<RichTextEditorController, Map<String, Any?>> =
+        /**
+         * Состояние контроллера для поворота и смерти процесса. Текст редактора — через [htmlSaver]: крупный (черновик
+         * с картинками) уходит в файл, а не в Bundle (иначе TransactionTooLargeException при сворачивании).
+         */
+        fun saver(
+            htmlSaver: androidx.compose.runtime.saveable.Saver<String, String>
+        ): androidx.compose.runtime.saveable.Saver<RichTextEditorController, Map<String, Any?>> =
             androidx.compose.runtime.saveable.Saver(
                 save = { controller ->
                     mapOf(
@@ -275,7 +321,7 @@ class RichTextEditorController {
                         "currentFontSize" to controller.currentFontSize,
                         "currentFontName" to controller.currentFontName,
                         "currentAlignment" to controller.currentAlignment,
-                        "latestHtml" to controller.latestHtml.takeIf { it.length < 500_000 }
+                        "latestHtml" to with(htmlSaver) { save(controller.latestHtml) }
                     )
                 },
                 restore = { saved ->
@@ -288,7 +334,7 @@ class RichTextEditorController {
                         currentFontSize = saved["currentFontSize"] as? String
                         currentFontName = saved["currentFontName"] as? String ?: "Arial"
                         currentAlignment = saved["currentAlignment"] as? String ?: "left"
-                        latestHtml = saved["latestHtml"] as? String ?: ""
+                        latestHtml = (saved["latestHtml"] as? String)?.let { htmlSaver.restore(it) } ?: ""
                     }
                 }
             )
@@ -297,7 +343,11 @@ class RichTextEditorController {
 
 @Composable
 fun rememberRichTextEditorController(): RichTextEditorController {
-    return rememberSaveable(saver = RichTextEditorController.Saver) {
+    val cacheDir = androidx.compose.ui.platform.LocalContext.current.cacheDir
+    val saver = remember(cacheDir) {
+        RichTextEditorController.saver(com.dedovmosol.iwomail.ui.utils.createLargeStringSaver(cacheDir, "editor_html"))
+    }
+    return rememberSaveable(saver = saver) {
         RichTextEditorController()
     }
 }
@@ -1048,8 +1098,14 @@ fun RichTextEditor(
         """.trimIndent()
     }
 
-    // Bundle для сохранения состояния WebView при повороте экрана
-    val webViewStateBundle = rememberSaveable { android.os.Bundle() }
+    // Текст редактора переживает поворот и смерть процесса через controller.latestHtml (Saver контроллера,
+    // крупный — файлом). Отдельная копия в Bundle не нужна: она дублировала текст в сохранённом состоянии и при
+    // черновике с картинками превышала лимит Binder (TransactionTooLargeException при сворачивании).
+
+    val scope = rememberCoroutineScope()
+    // Рендерер WebView умер: новый WebView (key) — один раз после падения; второе падение — текст не показывается
+    var rendererGeneration by remember { mutableIntStateOf(0) }
+    val rendererRecovery = remember { RendererRecovery() }
 
     // Храним актуальный callback в ref
     val onHtmlChangedRef = rememberUpdatedState(onHtmlChanged)
@@ -1095,9 +1151,6 @@ fun RichTextEditor(
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     controller.latestHtml = html
                     lastHtmlFromWebView[0] = html
-                    if (html.length < 500_000) {
-                        webViewStateBundle.putString("editor_html", html)
-                    }
                     onHtmlChangedRef.value(html)
                     controller.completePendingFlush(html)
                 }
@@ -1183,94 +1236,114 @@ fun RichTextEditor(
         if (isLoaded && initialHtml != lastHtmlFromWebView[0]) {
             controller.latestHtml = initialHtml
             lastHtmlFromWebView[0] = initialHtml // Обновляем чтобы избежать повторного вызова
-            controller.setHtml(initialHtml)
+            controller.setHtmlAsync(initialHtml)
         }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            WebView(ctx).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                settings.blockNetworkImage = !remoteImagesAllowed
-                setBackgroundColor(Color.TRANSPARENT)
-                // Скрываем WebView до загрузки чтобы не мерцал белый прямоугольник
-                alpha = 0f
+    // Текст не показать (рендерер падал или не хватило памяти): вместо пустого редактора — объяснение.
+    // Ввод в пустой редактор затёр бы текст письма; сам текст остаётся в controller.latestHtml и уйдёт при сохранении.
+    if (controller.isContentUnavailable) {
+        Text(
+            text = com.dedovmosol.iwomail.ui.Strings.editorContentUnavailable,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = modifier.padding(16.dp)
+        )
+        return
+    }
 
-                addJavascriptInterface(jsInterface, "Android")
+    key(rendererGeneration) {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
+                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                    settings.blockNetworkImage = !remoteImagesAllowed
+                    setBackgroundColor(Color.TRANSPARENT)
+                    // Скрываем WebView до загрузки чтобы не мерцал белый прямоугольник
+                    alpha = 0f
 
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        // Плавно показываем WebView после загрузки
-                        view?.animate()?.alpha(1f)?.setDuration(150)?.start()
-                        isLoaded = true
-                        controller.isLoaded = true
-                        // Приоритет восстановления: controller.latestHtml — самый свежий источник
-                        // (обновляется немедленно через cacheHtml на каждый ввод и сохраняется
-                        // через Saver), поэтому он надёжнее дебаунс-устаревшего webViewStateBundle.
-                        val savedHtml = webViewStateBundle.getString("editor_html")
-                        val currentInitialHtml = when {
-                            controller.latestHtml.isNotEmpty() -> controller.latestHtml
-                            !savedHtml.isNullOrEmpty() -> savedHtml
-                            else -> initialHtmlRef.value
-                        }
-                        if (currentInitialHtml.isNotEmpty()) {
-                            lastHtmlFromWebView[0] = currentInitialHtml
-                            controller.setHtml(currentInitialHtml)
-                            // Синхронизируем родительский body с восстановленным содержимым.
-                            // Иначе LaunchedEffect(initialHtml) увидит устаревший body и перезапишет
-                            // редактор им (теряя текст, оставляя только подпись) после поворота.
-                            if (currentInitialHtml != initialHtmlRef.value) {
-                                onHtmlChangedRef.value(currentInitialHtml)
+                    addJavascriptInterface(jsInterface, "Android")
+
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            // Плавно показываем WebView после загрузки
+                            view?.animate()?.alpha(1f)?.setDuration(150)?.start()
+                            isLoaded = true
+                            controller.isLoaded = true
+                            // Восстановление: controller.latestHtml — самый свежий источник (обновляется на каждый
+                            // ввод через cacheHtml и переживает поворот через Saver контроллера).
+                            val currentInitialHtml = controller.latestHtml.ifEmpty { initialHtmlRef.value }
+                            if (currentInitialHtml.isNotEmpty()) {
+                                lastHtmlFromWebView[0] = currentInitialHtml
+                                scope.launch { controller.setHtmlAsync(currentInitialHtml) }
+                                // Синхронизируем родительский body с восстановленным содержимым.
+                                // Иначе LaunchedEffect(initialHtml) увидит устаревший body и перезапишет
+                                // редактор им (теряя текст, оставляя только подпись) после поворота.
+                                if (currentInitialHtml != initialHtmlRef.value) {
+                                    onHtmlChangedRef.value(currentInitialHtml)
+                                }
                             }
+                            // Вызываем checkFormatState чтобы обновить состояние форматирования
+                            evaluateJavascript("checkFormatState();", null)
                         }
-                        // Вызываем checkFormatState чтобы обновить состояние форматирования
-                        evaluateJavascript("checkFormatState();", null)
-                    }
-                }
 
-                controller.webView = this
-                loadDataWithBaseURL(null, editorHtml, "text/html", "UTF-8", null)
-            }
-        },
-        modifier = modifier,
-        onRelease = { webView ->
-            try {
-                val cachedHtml = controller.latestHtml
-                if (cachedHtml.length < 500_000) {
-                    webViewStateBundle.putString("editor_html", cachedHtml)
+                        /**
+                         * Рендерер умер ([WebViewRenderer]): приложение продолжает работу, этот WebView уничтожается
+                         * (onRelease), на его месте создаётся новый; повторное падение на том же тексте — текст не
+                         * показывается ([RendererRecovery]). Сам текст остаётся в controller.latestHtml.
+                         */
+                        override fun onRenderProcessGone(
+                            view: WebView?,
+                            detail: android.webkit.RenderProcessGoneDetail?
+                        ): Boolean {
+                            val crashed = WebViewRenderer.crashed(detail)
+                            android.util.Log.e("RichTextEditor", "WebView renderer gone, crashed=$crashed")
+                            view?.let(WebViewRenderer::markGone)
+                            if (controller.webView === view) {
+                                controller.webView = null
+                                controller.isLoaded = false
+                            }
+                            controller.clearPendingFlush()
+                            isLoaded = false
+                            if (rendererRecovery.onRendererGone(crashed)) rendererGeneration++
+                            else controller.isContentUnavailable = true
+                            return true
+                        }
+                    }
+
+                    controller.webView = this
+                    loadDataWithBaseURL(null, editorHtml, "text/html", "UTF-8", null)
                 }
-                controller.clearPendingFlush()
-                // Правильно уничтожаем WebView чтобы избежать краша в RenderThread
-                webView.stopLoading()
-                webView.loadUrl("about:blank")
-                webView.clearHistory()
-                // Удаляем из parent
-                (webView.parent as? ViewGroup)?.removeView(webView)
-                webView.removeAllViews()
-                webView.destroy()
-            } catch (_: Exception) {
-            } finally {
-                controller.webView = null
-                controller.isLoaded = false
+            },
+            modifier = modifier,
+            onRelease = { webView ->
+                // Новый WebView (после падения рендерера) мог уже зарегистрироваться — его не сбрасываем
+                if (controller.webView === webView) {
+                    controller.clearPendingFlush()
+                    controller.webView = null
+                    controller.isLoaded = false
+                }
+                WebViewRenderer.release(webView)
+            },
+            update = { webView ->
+                if (WebViewRenderer.isGone(webView)) return@AndroidView
+                controller.webView = webView
+                // true → false: WebView сам догружает картинки уже открытой страницы, без перезагрузки редактора
+                if (webView.settings.blockNetworkImage == remoteImagesAllowed) {
+                    webView.settings.blockNetworkImage = !remoteImagesAllowed
+                }
             }
-        },
-        update = { webView ->
-            controller.webView = webView
-            // true → false: WebView сам догружает картинки уже открытой страницы, без перезагрузки редактора
-            if (webView.settings.blockNetworkImage == remoteImagesAllowed) {
-                webView.settings.blockNetworkImage = !remoteImagesAllowed
-            }
-        }
-    )
+        )
+    }
 }
 
 /**

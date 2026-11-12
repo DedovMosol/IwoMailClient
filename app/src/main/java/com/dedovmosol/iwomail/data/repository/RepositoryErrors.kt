@@ -11,6 +11,8 @@ package com.dedovmosol.iwomail.data.repository
 object RepositoryErrors {
     const val ACCOUNT_NOT_FOUND = "Аккаунт не найден"
     const val CLIENT_CREATE_FAILED = "Не удалось создать клиент"
+    /** Exchange отклонил флаг письма (Sync Change Status ≠ 1): звезда вернулась к значению на сервере. */
+    const val FLAG_REJECTED = "Сервер не принял флаг"
     
     // Exchange-only features
     const val TASKS_EXCHANGE_ONLY = "Задачи поддерживаются только для Exchange"
@@ -46,3 +48,7 @@ object RepositoryErrors {
     const val CONTACT_SYNC_ERROR = "Ошибка синхронизации контактов"
     const val GAL_SYNC_ERROR = "Ошибка синхронизации GAL"
 }
+
+/** Сервер отклонил флаг ([RepositoryErrors.FLAG_REJECTED]): в БД он уже откачен к значению сервера. */
+fun com.dedovmosol.iwomail.eas.EasResult<*>.isFlagRejected(): Boolean =
+    this is com.dedovmosol.iwomail.eas.EasResult.Error && message == RepositoryErrors.FLAG_REJECTED

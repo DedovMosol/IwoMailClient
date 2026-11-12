@@ -71,6 +71,9 @@ class SyncWorker(
         
         val accounts = database.accountDao().getAllAccountsList()
         if (accounts.isEmpty()) return Result.success()
+
+        // Правки без связи (флаг, «прочитано»), не отправленные прежней попыткой, — на отправку
+        PendingMailChangesWorker.enqueueIfPending(applicationContext)
         
         // КРИТИЧНО: Проверяем и запускаем PushService если нужно
         // Это дополнительная защита на случай если сервис был остановлен системой

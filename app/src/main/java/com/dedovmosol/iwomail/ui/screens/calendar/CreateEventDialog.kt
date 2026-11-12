@@ -38,7 +38,7 @@ import com.dedovmosol.iwomail.ui.components.RichTextToolbar
 import com.dedovmosol.iwomail.ui.components.awaitCurrentHtml
 import com.dedovmosol.iwomail.ui.components.rememberRichTextEditorController
 import com.dedovmosol.iwomail.ui.screens.compose.ImageQuality
-import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
+import com.dedovmosol.iwomail.ui.utils.createLargeStringSaver
 import com.dedovmosol.iwomail.ui.screens.compressImageForInline
 import com.dedovmosol.iwomail.data.repository.CategoryColors
 import com.dedovmosol.iwomail.util.CalendarCategories

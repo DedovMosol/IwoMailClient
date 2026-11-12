@@ -53,6 +53,20 @@ class EmailPrinter internal constructor(private val activity: Activity) {
                 }
                 manager.print(jobName, view.createPrintDocumentAdapter(jobName), PrintAttributes.Builder().build())
             }
+
+            /**
+             * Рендерер умер ([WebViewRenderer]): без true система завершила бы всё приложение. До создания задания
+             * WebView уничтожается; задание печати, уже созданное, без рендерера завершится ошибкой в диалоге печати.
+             */
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                android.util.Log.e("EmailPrinter", "Print WebView renderer gone, crashed=${WebViewRenderer.crashed(detail)}")
+                WebViewRenderer.markGone(view)
+                if (pending === view) {
+                    pending = null
+                    WebViewRenderer.release(view)
+                }
+                return true
+            }
         }
         pending = webView
         try {
@@ -74,8 +88,7 @@ class EmailPrinter internal constructor(private val activity: Activity) {
     fun release() {
         pending?.let { webView ->
             pending = null
-            webView.stopLoading()
-            webView.destroy()
+            WebViewRenderer.release(webView)
         }
     }
 }

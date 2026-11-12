@@ -115,15 +115,21 @@ class MailRepository(private val context: Context) {
             // Удаление прежней версии заменённого черновика — тем же путём, что и с экрана письма (DRY)
             deleteServerDraft = { accountId, serverId, excludeServerId ->
                 deleteDraft(accountId, serverId, excludeServerId, requireServerDeletion = true) is EasResult.Success
-            }
-        ) { email, name ->
-            cacheName(email, name)
-        }
+            },
+            onNameResolved = { email, name -> cacheName(email, name) }
+        )
     }
     
     private val emailOperationsService by lazy {
         EmailOperationsService(context, database, folderDao, emailDao, attachmentDao, accountRepo, emailSyncService)
     }
+
+    /** Отправить правки писем, сделанные без связи (флаг, «прочитано»). true — отправлять больше нечего. */
+    suspend fun flushPendingChanges(): Boolean = PendingMailChanges(
+        database.pendingEmailChangeDao(),
+        sendFlag = emailOperationsService::retryPendingFlag,
+        sendRead = emailOperationsService::retryPendingRead
+    ).flush()
     
     // === Делегирование к FolderSyncService ===
     
@@ -880,12 +886,7 @@ if (result is EasResult.Success) {
             // (его Add никогда не будет повторён сервером).
             // Используем текущий syncKey. Если он устарел — delete может вернуть ошибку,
             // но finalizeDraftDeletion() всё равно очистит локально.
-            val syncKey = folderDao.getFolder(draftsFolder.id)?.syncKey ?: draftsFolder.syncKey
-            val delResult = if (syncKey != "0") {
-                easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, syncKey)
-            } else {
-                EasResult.Error("SyncKey is 0")
-            }
+            val delResult = deleteDraftViaEas(easClient, draftsFolder, actualServerId)
             if (delResult is EasResult.Error) {
                 if (requireServerDeletion) return EasResult.Error(delResult.message)
                 android.util.Log.w("MailRepository", "EAS draft delete failed (will reappear on next sync): ${delResult.message}")
@@ -900,15 +901,11 @@ if (result is EasResult.Success) {
         // без их обработки → syncKey продвигается → новый черновик теряется.
         // Используем текущий syncKey. При INVALID_SYNCKEY — сбрасываем на "0"
         // через init-sync (без данных), затем повторяем.
-        var syncKey = folderDao.getFolder(draftsFolder.id)?.syncKey ?: draftsFolder.syncKey
-        
-        var deleteResult = if (syncKey != "0") {
-            easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, syncKey)
-        } else {
-            EasResult.Error("SyncKey is 0")
-        }
-        
-        if (deleteResult is EasResult.Error && (deleteResult.message.contains("INVALID_SYNCKEY") || syncKey == "0")) {
+        var deleteResult: EasResult<String> = deleteDraftViaEas(easClient, draftsFolder, actualServerId)
+
+        if (deleteResult is EasResult.Error &&
+            (deleteResult.message.contains("INVALID_SYNCKEY") || deleteResult.message == DRAFT_SYNC_KEY_ZERO)
+        ) deleteResult = FolderSyncGate.withFolder(draftsFolder.id) {
             // SyncKey устарел — получаем новый через init-sync.
             // КРИТИЧНО: сохраняем ТОЛЬКО начальный SyncKey (initSyncKey) в БД.
             // Продвинутый SyncKey (от refreshResult) используем ТОЛЬКО для Delete-операции,
@@ -931,7 +928,9 @@ if (result is EasResult.Success) {
                 } else {
                     initSyncKey
                 }
-                deleteResult = easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, deleteKey)
+                easClient.deleteEmailPermanently(draftsFolder.serverId, actualServerId, deleteKey)
+            } else {
+                initResult as? EasResult.Error ?: EasResult.Error("SyncKey is 0")
             }
         }
         
@@ -957,6 +956,27 @@ if (result is EasResult.Success) {
                 EasResult.Success(true)
             }
             is EasResult.Error -> deleteResult
+        }
+    }
+
+    /**
+     * EAS Sync Delete черновика с текущим ключом папки — под её шлюзом ([FolderSyncGate]): параллельный Sync той же
+     * папки (синхронизация, флаг, «прочитано») не уходит с тем же ключом. Delete идёт с GetChanges=0 — изменения
+     * сервера не забираются, поэтому новый ключ сохраняется (иначе следующий Sync шёл бы с прежним ключом → Status 3 →
+     * полная пересинхронизация «Черновиков»).
+     */
+    private suspend fun deleteDraftViaEas(
+        easClient: com.dedovmosol.iwomail.eas.EasClient,
+        draftsFolder: FolderEntity,
+        serverId: String
+    ): EasResult<String> = FolderSyncGate.withFolder(draftsFolder.id) {
+        val syncKey = folderDao.getFolder(draftsFolder.id)?.syncKey ?: draftsFolder.syncKey
+        if (syncKey == "0") {
+            EasResult.Error(DRAFT_SYNC_KEY_ZERO)
+        } else {
+            easClient.deleteEmailPermanently(draftsFolder.serverId, serverId, syncKey).also { result ->
+                if (result is EasResult.Success) folderDao.updateSyncKey(draftsFolder.id, result.data)
+            }
         }
     }
 
@@ -1047,3 +1067,6 @@ if (result is EasResult.Success) {
     }
 
 }
+
+/** Ключа «Черновиков» нет (папка ещё не синхронизировалась): EAS Delete не отправить. */
+private const val DRAFT_SYNC_KEY_ZERO = "SyncKey is 0"

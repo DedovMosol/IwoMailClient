@@ -261,6 +261,13 @@ interface EmailDao {
     @Query("UPDATE emails SET read = :read WHERE id = :id")
     suspend fun updateReadStatus(id: String, read: Boolean)
 
+    /** «Прочитано» с сервера — кроме писем, где своё «прочитано» ещё не отправлено ([PendingEmailChangeEntity]). */
+    @Query("""
+        UPDATE emails SET read = :read
+        WHERE id = :id AND NOT EXISTS (SELECT 1 FROM pending_email_changes WHERE emailId = :id AND read = 1)
+    """)
+    suspend fun updateReadStatusFromServer(id: String, read: Boolean)
+
     /** Флаг целиком ([com.dedovmosol.iwomail.eas.MailFlag]): активен, выполнен, срок, напоминание. */
     @Query("""
         UPDATE emails SET flagged = :flagged, flagCompleted = :completed, flagStartDate = :startDate,
@@ -268,6 +275,21 @@ interface EmailDao {
         WHERE id = :id
     """)
     suspend fun updateFlag(id: String, flagged: Boolean, completed: Boolean, startDate: Long?, dueDate: Long?, reminder: Long?)
+
+    /** Письмо для записи флага — без тела ([EmailFlagTarget]). */
+    @Query("""
+        SELECT id, accountId, folderId, serverId, flagged, flagCompleted, flagStartDate, flagDueDate, flagReminder
+        FROM emails WHERE id = :id
+    """)
+    suspend fun getFlagTarget(id: String): EmailFlagTarget?
+
+    /** Флаг с сервера — кроме писем, где свой флаг ещё не отправлен ([PendingEmailChangeEntity]). */
+    @Query("""
+        UPDATE emails SET flagged = :flagged, flagCompleted = :completed, flagStartDate = :startDate,
+            flagDueDate = :dueDate, flagReminder = :reminder
+        WHERE id = :id AND NOT EXISTS (SELECT 1 FROM pending_email_changes WHERE emailId = :id AND flag = 1)
+    """)
+    suspend fun updateFlagFromServer(id: String, flagged: Boolean, completed: Boolean, startDate: Long?, dueDate: Long?, reminder: Long?)
 
     /** Ближайшие напоминания по флагам писем (для будильников): только активные флаги. */
     @Query("""

@@ -35,10 +35,19 @@ class LocalOverlayAndFlagPolicyTest {
     }
 
     @Test
-    fun `rollback flag only on EAS Status reject`() {
-        assertThat(isEasStatusReject("setFlag failed: Change Status=6")).isTrue()
-        assertThat(isEasStatusReject("Collection Status=3")).isTrue()
-        assertThat(isEasStatusReject("timeout")).isFalse()
-        assertThat(isEasStatusReject("Unable to resolve host")).isFalse()
+    fun `local change is rolled back only when the server rejects the change itself`() {
+        // Отказ в самом изменении — откат
+        assertThat(isChangeRejected("Exception: markAsRead failed: Change Status=5")).isTrue()
+        assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=6")).isTrue()
+        assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=4")).isTrue()
+        assertThat(isChangeRejected("Exception: markAsReadBatch failed: Collection Status=8")).isTrue()
+        // Устаревший ключ, иерархия папок, сбой сервера, HTTP, сеть — отправить позже
+        assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=3")).isFalse()
+        assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=12")).isFalse()
+        assertThat(isChangeRejected("Exception: setFlag failed: Collection Status=5")).isFalse()
+        assertThat(isChangeRejected("HTTP 503: Service Unavailable")).isFalse()
+        assertThat(isChangeRejected("UNAUTHORIZED")).isFalse()
+        assertThat(isChangeRejected("[NET:TIMEOUT] SocketTimeoutException: timeout")).isFalse()
+        assertThat(isChangeRejected("[NET:DNS] UnknownHostException: Unable to resolve host")).isFalse()
     }
 }

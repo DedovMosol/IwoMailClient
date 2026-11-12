@@ -40,10 +40,11 @@ except to the configured Exchange server over TLS.
   can intercept Exchange traffic. Certificate pinning (below) removes that
   exposure for a given account.
 - **TLS versions.** TLS 1.3/1.2 are negotiated whenever the server supports
-  them. TLS 1.1/1.0 stay enabled (bundled Conscrypt; OkHttp `MODERN_TLS` with a
-  `COMPATIBLE_TLS` fallback) so that Exchange 2007 SP1 remains reachable; this
-  applies to every server, the negotiated version is the highest both sides
-  support.
+  them. TLS 1.1/1.0 stay enabled (bundled Conscrypt; Exchange clients offer
+  TLS 1.0–1.3 in one handshake with OkHttp `COMPATIBLE_TLS`, no separate
+  `MODERN_TLS` attempt) so that Exchange 2007 SP1 remains reachable; this
+  applies to every Exchange server, the negotiated version is the highest both
+  sides support. The update channel uses `MODERN_TLS` (TLS 1.2+).
 - **Certificate pinning** (per-account pinned certificate hash) and **client
   certificates / mTLS** (`clientCertificatePath`) are supported for self-signed
   or certificate-authenticated deployments.
@@ -84,10 +85,12 @@ except to the configured Exchange server over TLS.
 
 ## Untrusted input
 
-- All XML parsing goes through one hardened `XmlPullParser` factory
-  (`EasXmlParser.createParser`, DOCTYPE processing disabled); the remaining
-  EWS/SOAP handling reads values with regular expressions, which never expand
-  entities. Neither path can resolve external entities (no XXE).
+- `XmlPullParser` instances are created with DOCTYPE processing disabled:
+  the shared hardened factory `EasXmlParser.createParser`, and
+  `CalendarCategoryService.parseCategoryListXml` (category list, same
+  features set locally); the remaining EWS/SOAP handling reads values with
+  regular expressions, which never expand entities. Neither path can resolve
+  external entities (no XXE).
 - Sync paths that may delete local data (tasks, notes, contacts, calendar)
   delete only on a complete server snapshot. A truncated, failed or partial
   response is treated as incomplete, so a dropped connection cannot wipe local

@@ -245,9 +245,13 @@ class WbxmlParser {
                 is XmlEvent.StartTag -> {
                     val effectiveNamespace = event.namespace ?: currentNamespace
 
-                    namespaceStack.add(event.namespace)
-                    if (event.namespace != null) {
-                        currentNamespace = event.namespace
+                    // Пустой элемент (`<Flag xmlns="Email"/>`) закрывающего тега не имеет: его namespace
+                    // действует только на него самого, а не на следующие за ним элементы.
+                    if (event.hasContent) {
+                        namespaceStack.add(event.namespace)
+                        if (event.namespace != null) {
+                            currentNamespace = event.namespace
+                        }
                     }
 
                     val (targetPage, tagId) = getTagIdWithContext(event.name, effectiveNamespace, codePage)

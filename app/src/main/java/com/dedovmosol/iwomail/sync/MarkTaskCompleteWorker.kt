@@ -25,7 +25,7 @@ class MarkTaskCompleteWorker(
 
             if (task != null && !task.complete) {
                 val taskRepo = RepositoryProvider.getTaskRepository(applicationContext)
-                taskRepo.updateTask(
+                val result = taskRepo.updateTask(
                     task = task,
                     subject = task.subject,
                     body = task.body,
@@ -36,6 +36,12 @@ class MarkTaskCompleteWorker(
                     reminderSet = task.reminderSet,
                     reminderTime = task.reminderTime
                 )
+                // Сервер не принял (нет связи, таймаут — сеть «есть», но сервер недоступен): ошибка возвращается, а не
+                // бросается — раньше она глоталась, и «Выполнено» из уведомления молча пропадало
+                if (result is com.dedovmosol.iwomail.eas.EasResult.Error) {
+                    android.util.Log.w(TAG, "Task not completed on server: ${result.message}")
+                    return if (runAttemptCount < MAX_RETRIES) Result.retry() else Result.failure()
+                }
             }
             Result.success()
         } catch (e: Exception) {
@@ -48,7 +54,8 @@ class MarkTaskCompleteWorker(
     companion object {
         private const val TAG = "MarkTaskComplete"
         const val KEY_TASK_ID = "task_id"
-        private const val MAX_RETRIES = 3
+        /** Экспоненциальная пауза от 10 с: 10 попыток — около полутора часов недоступности сервера. */
+        private const val MAX_RETRIES = 10
 
         fun enqueue(context: Context, taskId: String) {
             val data = workDataOf(KEY_TASK_ID to taskId)
