@@ -67,6 +67,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Star (flag) turned itself off, or could not be removed after fast taps (2026-11-12)**
+  - The rollback after a server rejection restored the snapshot taken before the tap. With several taps in flight, that snapshot was the optimistic value of the previous tap, so the star ended up in a random state. `FlagWriteTracker` now sends only the latest tap, lets only it settle the DB, and rolls back to the last server-confirmed flag.
+  - The flag Sync Change, `markAsRead` and the folder sync loop sent requests with the same SyncKey in parallel (Status 3, then a full resync). `FolderSyncGate` allows one Sync request per folder at a time; the key is re-read from the DB inside the gate.
+  - A sync response requested before the tap no longer overwrites the new star.
+  - Protocol: a cleared flag is an empty `<Flag/>` ([MS-ASEMAIL] Flag); a dateless flag rejected with Status 6 is retried once with today's dates; the new SyncKey is saved even when the Change is rejected. The WBXML encoder no longer applies the namespace of an empty element to the elements after it.
+  - The server write is not cancelled by leaving the screen. A rejection shows a toast instead of the star silently going off; Search keeps its stars in line with the DB.
+- **Crash when opening drafts (2026-11-12)**
+  - The editor HTML was stored twice in the saved-state Bundle (up to 500 000 characters each). For a draft with pictures this exceeded the ~1 MB Binder limit, so the app crashed with `TransactionTooLargeException` when it was minimised. Text over 10 000 characters is now saved to a file per screen instance (`LargeStateSaver`). Files older than 24 h are deleted at start; before, all of them were deleted, so a large body was lost after process death.
+  - When the WebView renderer died, the whole app was terminated. `onRenderProcessGone` now recreates the editor once; a second crash shows a message instead of the editor, and the text is kept and can still be sent or saved.
+  - Sanitizing and chunking large HTML, and the heavy regex work on the draft body, run off the main thread (ANR). An out-of-memory or stack-overflow error on a huge body no longer crashes the app.
+
 - **Drafts: shared saving, offline edits, no lost attachments or Bcc (2026-10-26)** — `90e32e9`. One `DraftSaver` serves the compose screen and `ComposeViewModel`.
   - Text, subject, recipients or importance only → EWS UpdateItem: the draft keeps its id, server attachments are untouched, pictures already on the server are sent as their `cid:`. Anything else → the new version is created first, the previous ones are deleted by id afterwards.
   - Offline, the edit is saved on the device (`local_draft_d_`) and lists the server versions it replaces (DB v46 `emails.replacesServerId`). Sync uploads it and only then deletes them; meanwhile they are hidden from sync. A server that answers but refuses the new version keeps the old one.

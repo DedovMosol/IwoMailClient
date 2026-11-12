@@ -8,8 +8,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
-    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class],
-    version = 49,
+    entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class],
+    version = 50,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -26,6 +26,7 @@ abstract class MailDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
     abstract fun syncDao(): SyncDao
     abstract fun categoryColorDao(): CategoryColorDao
+    abstract fun pendingEmailChangeDao(): PendingEmailChangeDao
 
     companion object {
         private const val TAG = "MailDatabase"
@@ -274,6 +275,17 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `emails` ADD COLUMN `conversationId` TEXT")
             }
         }
+        /** Очередь правок писем без связи (флаг, «прочитано»), ждущих отправки. SQL — из schemas/50.json. */
+        private val MIGRATION_49_50 = object : Migration(49, 50) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `pending_email_changes` (`emailId` TEXT NOT NULL, `accountId` INTEGER NOT NULL, " +
+                        "`flag` INTEGER NOT NULL, `read` INTEGER NOT NULL, PRIMARY KEY(`emailId`), " +
+                        "FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_email_changes_accountId` ON `pending_email_changes` (`accountId`)")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -300,7 +312,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_45_46,
             MIGRATION_46_47,
             MIGRATION_47_48,
-            MIGRATION_48_49
+            MIGRATION_48_49,
+            MIGRATION_49_50
         )
 
         fun getInstance(context: Context): MailDatabase {

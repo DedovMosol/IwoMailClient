@@ -75,7 +75,8 @@ class MailDatabaseMigration48To49Test {
         }
         val raw = SQLiteDatabase.openDatabase(context.getDatabasePath(dbName).path, null, SQLiteDatabase.OPEN_READONLY)
         try {
-            assertThat(raw.version).isEqualTo(49)
+            // Дальше по цепочке миграций — до текущей версии.
+            assertThat(raw.version).isAtLeast(49)
         } finally {
             raw.close()
         }

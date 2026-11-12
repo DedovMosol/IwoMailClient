@@ -9,7 +9,9 @@ import com.dedovmosol.iwomail.data.database.EmailEntity
 import com.dedovmosol.iwomail.data.database.FolderEntity
 import com.dedovmosol.iwomail.data.repository.AccountRepository
 import com.dedovmosol.iwomail.data.repository.MailRepository
+import com.dedovmosol.iwomail.data.repository.RepositoryErrors
 import com.dedovmosol.iwomail.data.repository.RepositoryProvider
+import com.dedovmosol.iwomail.data.repository.isFlagRejected
 import com.dedovmosol.iwomail.eas.EasResult
 import com.dedovmosol.iwomail.eas.FolderType
 import kotlinx.coroutines.CancellationException
@@ -331,23 +333,30 @@ class EmailListViewModel(
         clearSelection()
         if (ids.isEmpty()) return
         viewModelScope.launch {
+            var rejected = false
             ids.forEach { id ->
                 try {
-                    withContext(ioDispatcher) { mailRepo.toggleFlag(id) }
+                    rejected = withContext(ioDispatcher) { mailRepo.toggleFlag(id) }.isFlagRejected() || rejected
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Log.e("EmailListViewModel", "toggleFlag failed for $id", e)
                 }
             }
+            // Один тост на всю пачку: звёзды, которые сервер не принял, вернулись к значению на сервере
+            if (rejected) sendEvent(EmailListEvent.Error(RepositoryErrors.FLAG_REJECTED))
         }
     }
 
-    /** Переключает флаг одного письма (звёздочка в строке списка). */
+    /**
+     * Переключает флаг одного письма (звёздочка в строке списка). Нет связи — флаг остаётся локально без тоста;
+     * отказ сервера — тост: иначе звезда «сама» гасла бы без объяснения.
+     */
     fun toggleFlag(emailId: String) {
         viewModelScope.launch {
             try {
-                withContext(ioDispatcher) { mailRepo.toggleFlag(emailId) }
+                val result = withContext(ioDispatcher) { mailRepo.toggleFlag(emailId) }
+                if (result.isFlagRejected()) sendEvent(EmailListEvent.Error(RepositoryErrors.FLAG_REJECTED))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

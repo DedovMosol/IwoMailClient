@@ -19,7 +19,7 @@
 
 > **Важно:** 🚧 Работа над проектом активно ведётся. Следующая версия в релизе — **1.7.0**. Отличия от 1.6.1 и последующих beta-сборок будут значительными.
 
-**Версия:** 1.6.3b · **Пакет:** `com.dedovmosol.iwomail` · **Разработчик:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
+**Версия:** 1.6.3b (beta, versionCode 26; последний опубликованный релиз — 1.6.2) · **Пакет:** `com.dedovmosol.iwomail` · **Разработчик:** DedovMosol · **Telegram:** [@i_wantout](https://t.me/i_wantout) · **Email:** andreyid@outlook.com
 
 ## 📖 О проекте
 
@@ -31,15 +31,18 @@
 
 ## ✨ Возможности
 
-- **📧 Почта:** синхронизация системных и пользовательских папок, отправка HTML-писем, вложения, inline-изображения, CC/BCC, важность, поиск, фильтры, избранное, мультивыбор, batch-операции.
+- **📧 Почта:** синхронизация системных и пользовательских папок, отправка HTML-писем, вложения, inline-изображения, CC/BCC, важность, поиск, фильтры, избранное, цепочки писем (по `ConversationId` на EAS 14.0+, по теме на Exchange 2007), мультивыбор, batch-операции, настраиваемые свайпы влево/вправо (в «Удалённые», прочитано/непрочитано, флаг).
+- **🚩 Флаги:** флаг к исполнению со сроком и напоминанием (`[MS-ASEMAIL] Flag`, как в Outlook); звезда ставится сразу, при отказе сервера возвращается к значению на сервере.
+- **📖 Чтение:** картинки из интернета по умолчанию не загружаются (показать для письма, доверенные отправители, «всегда загружать»), отписка от рассылок (`List-Unsubscribe`, one-click по RFC 8058), печать и сохранение в PDF через системный диалог печати, сохранение письма в `.eml`, ответ на запрос отчёта о прочтении (отказ — EWS `SuppressReadReceipt`), RSS-записи Outlook (`IPM.Post.RSS`) со ссылкой на статью.
 - **📝 Черновики:** серверный режим через Exchange/EWS и локальный beta-режим, выбор режима в онбординге и настройках аккаунта.
-- **📤 Отправка:** отложенная отправка, очередь исходящих для offline-сценариев, undo-send, MDN/DSN-запросы.
+- **📤 Отправка:** отложенная отправка (точный будильник + WorkManager) и экран запланированных писем (отправить сейчас, перенести, отменить), очередь исходящих для offline-сценариев, отмена отправки (0/5/10/20/30 с), запросы MDN/DSN.
 - **👥 Контакты:** локальные и Exchange-контакты, GAL, группы, избранное, импорт/экспорт vCard/CSV, автодополнение адресов.
-- **🗓 Календарь:** события, встречи, участники, ответы на приглашения, повторения, исключения, напоминания, вложения, онлайн-ссылки, локальная корзина, окончательное удаление только после подтверждения сервера.
-- **✅ Задачи:** активные/выполненные/важные/просроченные задачи, сроки, приоритеты, назначение, напоминания, корзина и восстановление.
-- **🗒 Заметки:** синхронизация Exchange Notes, создание/редактирование, корзина и восстановление.
-- **🔔 Уведомления:** Direct Push через EAS Ping, WorkManager-синхронизация, AlarmManager fallback, уведомления писем, календаря, задач, обновлений и исходящих.
-- **🎨 Интерфейс:** Jetpack Compose, Material 3, RU/EN локализация, тёмная/светлая тема, цветовые схемы, ежедневные темы, кастомные иконки файлов, drag selection.
+- **🗓 Календарь:** события, встречи, участники, ответы на приглашения, повторения, исключения, напоминания, вложения, онлайн-ссылки, цвета категорий (Master Category List на Exchange 2010+, стандартные цвета Outlook, ручное назначение), локальная корзина, окончательное удаление только после подтверждения сервера, сброс и повторная синхронизация.
+- **✅ Задачи:** активные/выполненные/важные/просроченные задачи, сроки, приоритеты, назначение, напоминания, корзина и восстановление, сброс и повторная синхронизация.
+- **🗒 Заметки:** синхронизация Exchange Notes, создание/редактирование, корзина и восстановление, сброс и повторная синхронизация.
+- **🔔 Уведомления:** Direct Push через EAS Ping, WorkManager-синхронизация, AlarmManager fallback, уведомления писем, календаря, задач, флагов, обновлений и исходящих; свои каналы уведомлений на каждый аккаунт (звук и важность — в системных настройках), тихие часы и важные отправители (их письма звучат и в тихие часы), уведомление о потере связи с сервером.
+- **🔐 Блокировка приложения:** пароль (хранится только PBKDF2-HMAC-SHA256-хеш, 600 000 итераций) и отпечаток пальца; блокировка при холодном старте и при уходе приложения в фон.
+- **🎨 Интерфейс:** Jetpack Compose, Material 3, RU/EN локализация, тема светлая/тёмная/как в системе, цветовые схемы, ежедневные темы, кастомные иконки файлов, drag selection; настройки разделены на «Аккаунты», «Почта», «Уведомления», «Персонализация», «Безопасность», «О приложении».
 - **📊 Виджет и shortcuts:** домашний виджет Glance, быстрый доступ к письмам, поиску, календарю, задачам и созданию письма; данные виджета читаются лёгкими Room-проекциями без загрузки тяжёлых тел писем/событий.
 - **⬆️ Обновления:** проверка `update.json` на GitHub, выбор APK по ABI, скачивание, установка и подготовка отката.
 
@@ -62,7 +65,7 @@
 - **Корректная логика непрочитанных:** список новых писем в виджете фильтруется по Inbox и `read = 0`.
 - **Защита от гонок:** `updateMailWidget()` сериализует `GlanceAppWidget.updateAll()` через общий mutex и использует `applicationContext`.
 - **Адаптивная раскладка:** нижний ряд действий подстраивается под ширину виджета (Glance `Row` не переносит содержимое) — на узких размерах меньше аватаров и без метки времени синхронизации, чтобы кнопки не обрезались; аватары масштабируются вместе с виджетом.
-- **Room v42:** индексы под горячие widget-запросы: unread Inbox, тип папки, активные задачи, текущие и ближайшие события календаря.
+- **Индексы Room (миграция 41→42):** индексы под горячие widget-запросы: unread Inbox, тип папки, активные задачи, текущие и ближайшие события календаря. Текущая версия схемы — v50.
 
 </details>
 
@@ -104,7 +107,7 @@
 
 - **Compile SDK:** 36 · **Target SDK:** 36 · **Java/Kotlin target:** JVM 17
 - **APK:** universal + ABI splits для `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`
-- **Сборка:** требуется JDK 17 (минимум JDK 11 для Android Gradle Plugin 8.7.3)
+- **Сборка:** требуется JDK 17 (минимальная версия для Android Gradle Plugin 8.x)
 
 ## 🔌 Поддерживаемые серверы
 
@@ -120,8 +123,10 @@
 - **Conscrypt:** добавлен для TLS 1.0/1.1 и совместимости со старыми Exchange 2007-инсталляциями.
 - **Сертификаты сервера:** поддержка системных, пользовательских и самоподписанных сертификатов.
 - **mTLS:** клиентские сертификаты PKCS#12 (`.p12`/`.pfx`) с кэшированием KeyManager.
-- **Certificate Pinning:** хранение SHA-256, CN/O и дат сертификата в аккаунте.
-- **Пароли:** `EncryptedSharedPreferences` (Android KeyStore, AES256-GCM) для основного пути; при недоступности KeyStore — fallback на PBKDF2-обфусцированное хранилище с уведомлением пользователя и опциональным fail-closed режимом.
+- **Certificate Pinning:** хранение SHA-256, CN/O и дат сертификата в аккаунте; у резервного сервера — свой пин.
+- **Hostname verification:** для импортированного сертификата сервера — `Rfc6125HostnameVerifier` (SAN dNSName/iPAddress, CN только при отсутствии SAN).
+- **Без cleartext:** `network_security_config.xml` запрещает HTTP (`cleartextTrafficPermitted="false"`).
+- **Пароли:** `EncryptedSharedPreferences` (Android KeyStore, AES256-SIV/AES256-GCM) для основного пути; при недоступности KeyStore — запасное `ObfuscatedSharedPreferences`: XOR с ключом, выведенным PBKDF2-HMAC-SHA256 из `ANDROID_ID` (обфускация, не шифрование). Пользователь получает однократное предупреждение; fail-closed режим есть в коде (`SecurityTelemetry`), но переключателя в настройках нет.
 - **Alternate URL:** основной и резервный URL Exchange с fallback при сетевых ошибках и последующим auto-switchback.
 - **XSS-защита тел писем:** `sanitizeEmailHtml` блокирует `<script>`, plugin-контейнеры (`iframe`/`object`/`embed`/`applet`), event-handlers, `meta http-equiv="refresh"`, `javascript:` и `data:text/html` URI во всех атрибутах с URL-контекстом; комбинируется с нонс-CSP и `loadDataWithBaseURL(null, ...)` в WebView для изоляции от cross-origin контекста.
 
@@ -139,15 +144,16 @@
 | Категория | Технологии |
 |-----------|------------|
 | Язык | Kotlin 1.9.22, Java 17 |
-| Android | AGP 8.7.3, minSdk 26, targetSdk 36 |
-| UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3 |
+| Сборка | Gradle 8.12, AGP 8.7.3, KSP 1.9.22-1.0.17, Kover 0.7.6, minSdk 26, targetSdk 36 |
+| UI | Jetpack Compose, Compose BOM 2024.06.00, Material 3, Navigation 2.7.6, Lifecycle/ViewModel 2.7.0 |
 | Асинхронность | Coroutines 1.7.3, Flow |
-| Хранилище | Room 2.6.1 (`MailDatabase` v42), DataStore Preferences |
+| Хранилище | Room 2.6.1 (`MailDatabase` v50), DataStore Preferences 1.1.1 |
 | Сеть | OkHttp 4.12.0, Conscrypt 2.5.2 |
-| Протоколы | EAS, EWS, JavaMail IMAP/POP3 |
+| Протоколы | EAS, EWS, JavaMail IMAP/POP3 (`android-mail` 1.6.7) |
 | Фоновые задачи | WorkManager 2.9.0, Foreground Service, AlarmManager |
-| Безопасность | AndroidX Security Crypto, TLS/mTLS, Certificate Pinning |
-| UI extras | Coil, Glance AppWidget |
+| Безопасность | AndroidX Security Crypto 1.1.0-alpha06, Biometric 1.1.0 (+ Fragment 1.8.6), TLS/mTLS, Certificate Pinning |
+| UI extras | Coil 2.5.0, Glance AppWidget 1.1.1 |
+| Тесты | JUnit 4.13.2, MockK 1.13.8, Truth 1.1.5, Robolectric 4.12.2 |
 | DI | Manual DI через `RepositoryProvider` |
 
 ## 🏗 Архитектура
@@ -155,7 +161,7 @@
 ```text
 UI Layer
   Jetpack Compose, Navigation, Theme, Localization
-  MainScreen, Setup/Verification, Mail, Compose, Contacts, Calendar, Notes, Tasks, Updates
+  MainScreen, Setup/Verification, Mail, Compose, Contacts, Calendar, Notes, Tasks, Settings, Lock, Updates
     ↓
 Repository Layer
   AccountRepository, MailRepository, CalendarRepository, ContactRepository,
@@ -167,11 +173,11 @@ Protocol Layer
   EasTransport + EAS services + EWS client + IMAP/POP3 beta clients
     ↓
 Persistence / Network
-  Room MailDatabase v42, DataStore
+  Room MailDatabase v50, DataStore
   HttpClientProvider, NetworkMonitor, NtlmAuthenticator
     ↓
 Background
-  PushService, SyncWorker, OutboxWorker, reminders, notifications, watchdogs
+  PushService, SyncWorker, OutboxWorker, scheduled send, reminders, notifications, watchdogs
 ```
 
 Подробно: [Архитектура проекта](docs/ARCHITECTURE.md)
@@ -197,6 +203,7 @@ Background
 - [История изменений RU](docs/CHANGELOG_RU.md)
 - [История изменений EN](docs/CHANGELOG_EN.md)
 - [Архитектура проекта](docs/ARCHITECTURE.md)
+- [Модель безопасности](docs/SECURITY.md) · [Сообщить об уязвимости](SECURITY.md)
 - [Политика конфиденциальности](docs/PRIVACY_POLICY.md)
 - [План миграции XML-парсинга](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 

@@ -67,6 +67,8 @@ class EasEmailService internal constructor(
         private val DATA_PATTERN = "<Data>(.*?)</Data>".toRegex(RegexOption.DOT_MATCHES_ALL)
         /** Элемент Flag в изменении — в том числе пустой (<Flag/>: флаг снят). */
         private val FLAG_ELEMENT = Regex("<(?:email:)?Flag(?:\\s[^>]*)?/?>")
+        /** [MS-ASCMD] Sync Status 6: ошибка преобразования объекта (неверные данные изменения). */
+        private const val CHANGE_STATUS_INVALID = 6
         private val DATA_IMAGE_SRC_REGEX = Regex("""src="data:image/[^;]+;base64,[^"]+"""")
     }
 
@@ -844,14 +846,37 @@ $itemChanges
 
     /**
      * Флаг письма ([MS-ASEMAIL] Flag): отметка, срок, напоминание или «выполнено» — Sync Change с флагом целиком
-     * ([MailFlags.toXml]). Ответ проверяется: Status коллекции и изменения ≠ 1 (например 6 — неверный флаг) — ошибка.
+     * ([MailFlags.toXml]). Status коллекции ≠ 1 (3 — устаревший SyncKey) — ошибка; отказ в самом изменении — успех
+     * команды с [FlagWrite.applied] = null: новый SyncKey сервер выдал и тогда, его нужно сохранить.
+     *
+     * Активный флаг без срока, не принятый со Status 6 (ошибка преобразования: часть серверов Exchange требует даты
+     * у флага), повторяется один раз со сроком «сегодня» — как быстрый флаг Outlook ([MailFlags.dueToday]).
      */
     suspend fun setFlag(
         collectionId: String,
         serverId: String,
         syncKey: String,
         flag: MailFlag
-    ): EasResult<String> {
+    ): EasResult<FlagWrite> {
+        val first = writeFlag(collectionId, serverId, syncKey, flag)
+        val rejected = (first as? EasResult.Success)?.data ?: return first
+        if (rejected.applied != null || rejected.changeStatus != CHANGE_STATUS_INVALID || !flag.active || flag.dueDate != null) {
+            return first
+        }
+        android.util.Log.w("EasEmailService", "setFlag: dateless flag rejected (Status 6), retrying with today's dates")
+        return when (val retry = writeFlag(collectionId, serverId, rejected.syncKey, MailFlags.dueToday(flag))) {
+            is EasResult.Success -> retry
+            // Ключ первого ответа сервер уже выдал — не теряем его; изменение не подтверждено
+            is EasResult.Error -> first
+        }
+    }
+
+    private suspend fun writeFlag(
+        collectionId: String,
+        serverId: String,
+        syncKey: String,
+        flag: MailFlag
+    ): EasResult<FlagWrite> {
         val xml = """<?xml version="1.0" encoding="UTF-8"?>
 <Sync xmlns="AirSync" xmlns:tasks="Tasks">
     <Collections>
@@ -874,11 +899,16 @@ $itemChanges
             if (collectionStatus != null && collectionStatus != "1") {
                 throw Exception("setFlag failed: Collection Status=$collectionStatus")
             }
-            XmlUtils.extractTopLevelBlocks(responseXml, "Change")
+            val newSyncKey = deps.extractValue(responseXml, "SyncKey") ?: syncKey
+            val changeStatus = XmlUtils.extractTopLevelBlocks(responseXml, "Change")
                 .firstNotNullOfOrNull { deps.extractValue(it, "Status") }
-                ?.takeIf { it != "1" }
-                ?.let { throw Exception("setFlag failed: Change Status=$it") }
-            deps.extractValue(responseXml, "SyncKey") ?: syncKey
+                ?.toIntOrNull()
+            if (changeStatus == null || changeStatus == 1) {
+                FlagWrite(newSyncKey, flag)
+            } else {
+                android.util.Log.w("EasEmailService", "setFlag: server rejected the change, Status=$changeStatus")
+                FlagWrite(newSyncKey, applied = null, changeStatus = changeStatus)
+            }
         }
     }
 
@@ -1116,9 +1146,9 @@ $deleteCommands
         // с Subject-based поиском, что безопаснее batch позиционного подхода.
         if (deps.isExchange2007()) {
             android.util.Log.w("EasEmailService", "EAS batch delete failed (${(easResult as? EasResult.Error)?.message}), caller will handle EWS fallback per-item")
-            // Результат сброса синхронизации не важен: сообщаем caller'у, что пакетное
-            // удаление не применено — он выполнит безопасный поэлементный EWS fallback.
-            sync(collectionId, "0")
+            // Сообщаем вызывающему, что пакетное удаление не применено — он синхронизирует папку и повторит, затем
+            // выполнит поэлементный EWS fallback. Состояние синхронизации здесь НЕ сбрасывается (Sync с ключом "0"):
+            // ключ в БД остался бы прежним, и следующая синхронизация получила бы Status 3 — полную пересинхронизацию.
             return EasResult.Error("DELETE_NOT_APPLIED")
         }
 

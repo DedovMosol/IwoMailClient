@@ -2,28 +2,6 @@ package com.dedovmosol.iwomail.ui.screens.compose
 
 import com.dedovmosol.iwomail.util.escapeHtml
 
-internal const val BODY_SAVE_THRESHOLD = 100_000
-
-internal fun createLargeStringSaver(cacheDir: java.io.File, tag: String) =
-    androidx.compose.runtime.saveable.Saver<String, String>(
-        save = { value ->
-            if (value.length <= BODY_SAVE_THRESHOLD) value
-            else try {
-                val file = java.io.File(cacheDir, "compose_state_$tag.tmp")
-                file.writeText(value)
-                "\u0000FILE:${file.absolutePath}"
-            } catch (_: Exception) { value.take(BODY_SAVE_THRESHOLD) }
-        },
-        restore = { saved ->
-            if (saved.startsWith("\u0000FILE:")) {
-                try {
-                    val file = java.io.File(saved.removePrefix("\u0000FILE:"))
-                    if (file.exists()) file.readText().also { file.delete() } else ""
-                } catch (_: Exception) { "" }
-            } else saved
-        }
-    )
-
 internal val HTML_SIGNATURE_REGEX = Regex(
     "<div class=\"signature\"[^>]*>.*</div><!--/signature-->",
     setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)

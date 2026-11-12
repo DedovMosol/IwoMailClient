@@ -51,14 +51,15 @@ class MailFlagTest {
     }
 
     @Test
-    fun `complete carries completion times, cleared is status 0`() {
+    fun `complete carries completion times, cleared is an empty Flag`() {
         val complete = MailFlags.toXml(MailFlag(MailFlag.STATUS_COMPLETE), now, moscow)
         assertThat(complete).contains("<FlagStatus>1</FlagStatus>")
         assertThat(complete).contains("<tasks:DateCompleted>2026-10-29T12:30:00.000Z</tasks:DateCompleted>")
         assertThat(complete).contains("<CompleteTime>2026-10-29T12:30:00.000Z</CompleteTime>")
         assertThat(complete).doesNotContain("DueDate")
 
-        assertThat(MailFlags.toXml(MailFlag.NONE, now, moscow)).isEqualTo("<Flag xmlns=\"Email\"><FlagStatus>0</FlagStatus></Flag>")
+        // [MS-ASEMAIL] Flag: флага нет — пустой элемент
+        assertThat(MailFlags.toXml(MailFlag.NONE, now, moscow)).isEqualTo("<Flag xmlns=\"Email\"/>")
     }
 
     @Test

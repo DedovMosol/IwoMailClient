@@ -550,6 +550,12 @@ object Strings {
     val draftSaved: String @Composable get() = if (isRussian()) "Черновик сохранён" else "Draft saved"
     val draftSaveError: String @Composable get() = if (isRussian()) "Ошибка сохранения черновика" else "Draft save error"
     val draftLoadError: String @Composable get() = if (isRussian()) "Не удалось открыть черновик" else "Could not open the draft"
+    val htmlBodyUnavailable: String @Composable get() = if (isRussian())
+        "Не удалось показать оформление письма — показан его текст."
+        else "Could not show the message formatting — showing its text."
+    val editorContentUnavailable: String @Composable get() = if (isRussian())
+        "Не удалось показать текст в редакторе. Он не потерян: письмо можно отправить или сохранить."
+        else "Could not show the text in the editor. It is not lost: the message can still be sent or saved."
     val draftSavedOffline: String @Composable get() = if (isRussian())
         "Нет связи с сервером: черновик сохранён на устройстве и загрузится на сервер при подключении"
         else "No connection to the server: the draft is saved on the device and will be uploaded when online"
@@ -1830,6 +1836,8 @@ object NotificationStrings {
             errorCode == "Пустой ответ" -> if (isRussian) errorCode else "Empty response"
             errorCode == "Письмо не найдено" -> if (isRussian) errorCode else "Email not found"
             errorCode == "Письма не найдены" -> if (isRussian) errorCode else "No emails found"
+            errorCode == com.dedovmosol.iwomail.data.repository.RepositoryErrors.FLAG_REJECTED ->
+                if (isRussian) "Сервер не принял флаг — оставлено как на сервере" else "The server did not accept the flag — kept as on the server"
             errorCode == "Не удалось получить SyncKey" -> if (isRussian) errorCode else "Failed to obtain SyncKey"
             errorCode == "Не удалось получить ChangeKey" -> if (isRussian) errorCode else "Failed to obtain ChangeKey"
             errorCode == "Не удалось создать клиент" -> if (isRussian) errorCode else "Failed to create client"

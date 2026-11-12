@@ -73,6 +73,13 @@ class MailApplication : Application() {
             com.dedovmosol.iwomail.eas.AttachmentManager.cleanupOldAttachments(this@MailApplication)
             // Очередь прежних версий — дослать
             com.dedovmosol.iwomail.sync.OutboxWorker.drainLegacyQueue(this@MailApplication)
+            // Правки писем без связи (флаг, «прочитано»), не отправленные до перезапуска
+            try {
+                com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueueIfPending(this@MailApplication)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.w(TAG, "Pending mail changes check failed", e)
+            }
         }
         applicationScope.launch(Dispatchers.IO) {
             try {
@@ -121,9 +128,12 @@ class MailApplication : Application() {
     }
     
     private fun cleanupStaleTempFiles() {
+        // Только устаревшие: свежий файл нужен экрану, который восстанавливается после смерти процесса
+        // (раньше удалялись все — и черновик крупнее порога терял текст).
         try {
+            val now = System.currentTimeMillis()
             cacheDir.listFiles()?.filter {
-                it.name.startsWith("compose_state_") && it.name.endsWith(".tmp")
+                com.dedovmosol.iwomail.ui.utils.isStaleLargeStateFile(it, now)
             }?.forEach { it.delete() }
         } catch (_: Exception) { }
     }

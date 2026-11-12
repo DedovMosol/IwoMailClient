@@ -1383,7 +1383,7 @@ $foldersXml
         serverId: String,
         syncKey: String,
         flag: MailFlag
-    ): EasResult<String> = emailService.setFlag(collectionId, serverId, syncKey, flag)
+    ): EasResult<FlagWrite> = emailService.setFlag(collectionId, serverId, syncKey, flag)
 
     /**
      * Удалить письмо (перемещает в корзину)

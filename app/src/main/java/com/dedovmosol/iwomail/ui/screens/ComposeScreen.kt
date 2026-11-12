@@ -72,7 +72,7 @@ import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_DIV_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.TRAILING_EMPTY_P_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.WHITESPACE_COLLAPSE_REGEX
 import com.dedovmosol.iwomail.ui.screens.compose.cleanOutgoingBody
-import com.dedovmosol.iwomail.ui.screens.compose.createLargeStringSaver
+import com.dedovmosol.iwomail.ui.utils.createLargeStringSaver
 import com.dedovmosol.iwomail.ui.screens.compose.extractEmailFromString
 import com.dedovmosol.iwomail.data.repository.DraftAttachmentRole
 import com.dedovmosol.iwomail.data.repository.draftAttachmentRole
@@ -1179,8 +1179,10 @@ fun ComposeScreen(
             showCcBcc = false
             attachmentStrings = emptyList()
 
+            // Тело черновика для редактора: HTML как есть, текст — экранированный с переносами
+            fun toEditorHtml(text: String) = if (text.looksLikeHtml()) text else text.escapeHtml().replace("\n", "<br>")
             try {
-            mailRepo.getEmailSync(draftId)?.let { draft ->
+            withContext(Dispatchers.IO) { mailRepo.getEmailSync(draftId) }?.let { draft ->
                 to = normalizeRecipients(draft.to)
                 cc = normalizeRecipients(draft.cc)
                 bcc = normalizeRecipients(draft.bcc.orEmpty())
@@ -1193,13 +1195,13 @@ fun ComposeScreen(
                 // Ответ, сохранённый черновиком, несёт цитату с картинками из интернета (пиксели отслеживания):
                 // их — по правилам просмотра; отправитель цитаты не известен — «всегда от отправителя» не предлагаем.
                 // До присвоения тела: редактор получит его уже с запретом сети.
-                if (quotedRemoteFrom == null && com.dedovmosol.iwomail.util.RemoteImages.present(draft.body)) quotedRemoteFrom = ""
-                // Черновик может быть HTML или plain text
-                body = if (draft.body.looksLikeHtml()) {
-                    draft.body
-                } else {
-                    draft.body.escapeHtml().replace("\n", "<br>")
+                // Регулярные выражения по телу (с картинками — мегабайты) — не на главном потоке: иначе ANR
+                val (draftHasRemote, draftHtml) = withContext(Dispatchers.Default) {
+                    com.dedovmosol.iwomail.util.RemoteImages.present(draft.body) to toEditorHtml(draft.body)
                 }
+                if (quotedRemoteFrom == null && draftHasRemote) quotedRemoteFrom = ""
+                // Черновик может быть HTML или plain text
+                body = draftHtml
                 if (cc.isNotBlank() || bcc.isNotBlank()) {
                     showCcBcc = true
                 }
@@ -1216,8 +1218,11 @@ fun ComposeScreen(
                         }
                     }
                     refresh?.body?.takeIf { it.isNotBlank() }?.let { fresh ->
-                        if (quotedRemoteFrom == null && com.dedovmosol.iwomail.util.RemoteImages.present(fresh)) quotedRemoteFrom = ""
-                        body = if (fresh.looksLikeHtml()) fresh else fresh.escapeHtml().replace("\n", "<br>")
+                        val (freshHasRemote, freshHtml) = withContext(Dispatchers.Default) {
+                            com.dedovmosol.iwomail.util.RemoteImages.present(fresh) to toEditorHtml(fresh)
+                        }
+                        if (quotedRemoteFrom == null && freshHasRemote) quotedRemoteFrom = ""
+                        body = freshHtml
                     }
                     // Скрытые копии черновика из Outlook (EAS их не передаёт) — узнаны по EWS
                     refresh?.bcc?.let { serverBcc ->
@@ -1258,13 +1263,12 @@ fun ComposeScreen(
                     val newAttachmentStrings = mutableListOf<String>()
                     val inlineImages = mutableMapOf<String, String>()
                     val demotedInlineCids = mutableSetOf<String>()
-                    val account = accountRepo.getAccount(draft.accountId)
-                    val easClient = account?.let { accountRepo.createEasClient(it.id) }
                     val bodyForRoles = body
-                    val embedded = com.dedovmosol.iwomail.util.EmbeddedImages(bodyForRoles)
                     val isServerDraft = !com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)
 
                     withContext(Dispatchers.IO) {
+                        val easClient = accountRepo.getAccount(draft.accountId)?.let { accountRepo.createEasClient(it.id) }
+                        val embedded = com.dedovmosol.iwomail.util.EmbeddedImages(bodyForRoles)
                         for (stored in draftAttachments) {
                             try {
                                 // Inline — только картинка, на которую ссылается тело; Content-ID без ссылки —
@@ -1298,7 +1302,7 @@ fun ComposeScreen(
                                             if (!com.dedovmosol.iwomail.eas.DraftIds.isLocal(draft.serverId)) rememberImage(cid, dataUrl)
                                         } catch (_: OutOfMemoryError) {
                                             android.util.Log.w("ComposeScreen", "OOM inlining '${att.displayName}', attaching as file")
-                                            cid?.let { demotedInlineCids += it }
+                                            demotedInlineCids += cid
                                             val uri = androidx.core.content.FileProvider.getUriForFile(
                                                 context,
                                                 "${context.packageName}.fileprovider",
@@ -1371,11 +1375,17 @@ fun ComposeScreen(
                     if (newAttachmentStrings.isNotEmpty()) {
                         attachmentStrings = newAttachmentStrings
                     }
-                    if (inlineImages.isNotEmpty() && body.contains("cid:", ignoreCase = true)) {
-                        body = replaceCidWithDataUrl(body, inlineImages)
-                    }
-                    if (demotedInlineCids.isNotEmpty()) {
-                        body = stripContentIdImages(body, demotedInlineCids)
+                    // Подстановка картинок собирает строку в мегабайты — не на главном потоке
+                    val bodyBefore = body
+                    body = withContext(Dispatchers.Default) {
+                        var resolved = bodyBefore
+                        if (inlineImages.isNotEmpty() && resolved.contains("cid:", ignoreCase = true)) {
+                            resolved = replaceCidWithDataUrl(resolved, inlineImages)
+                        }
+                        if (demotedInlineCids.isNotEmpty()) {
+                            resolved = stripContentIdImages(resolved, demotedInlineCids)
+                        }
+                        resolved
                     }
                 }
 
@@ -1384,8 +1394,9 @@ fun ComposeScreen(
                 // Критично когда body содержит серверные cid: ссылки (после sync),
                 // а локальные вложения отсутствуют или fileReference пустой.
                 if (body.contains("cid:", ignoreCase = true)) {
-                    val fbAccount = accountRepo.getAccount(draft.accountId)
-                    val fbClient = fbAccount?.let { accountRepo.createEasClient(it.id) }
+                    val fbClient = withContext(Dispatchers.IO) {
+                        accountRepo.getAccount(draft.accountId)?.let { accountRepo.createEasClient(it.id) }
+                    }
                     if (fbClient != null) {
                         val draftFolder = withContext(Dispatchers.IO) {
                             com.dedovmosol.iwomail.data.database.MailDatabase.getInstance(context)
@@ -1403,7 +1414,8 @@ fun ComposeScreen(
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         if (fetchResult.data.isNotEmpty()) {
                                             val kept = inlineBudget.filterDataUrls(fetchResult.data)
-                                            body = replaceCidWithDataUrl(body, kept)
+                                            val unresolved = body
+                                            body = withContext(Dispatchers.Default) { replaceCidWithDataUrl(unresolved, kept) }
                                             kept.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
                                         }
                                     }
@@ -1418,7 +1430,8 @@ fun ComposeScreen(
                                     is com.dedovmosol.iwomail.eas.EasResult.Success -> {
                                         if (ewsResult.data.isNotEmpty()) {
                                             val kept = inlineBudget.filterDataUrls(ewsResult.data)
-                                            body = replaceCidWithDataUrl(body, kept)
+                                            val unresolved = body
+                                            body = withContext(Dispatchers.Default) { replaceCidWithDataUrl(unresolved, kept) }
                                             kept.forEach { (cid, dataUrl) -> rememberImage(cid, dataUrl) }
                                         }
                                     }
@@ -1449,7 +1462,8 @@ fun ComposeScreen(
                     }
                 }
                 // Не загрузившаяся картинка, которую подставил запасной путь (MIME с сервера), — уже в теле.
-                val stillReferenced = com.dedovmosol.iwomail.util.referencedContentIds(body)
+                val bodyNow = body
+                val stillReferenced = withContext(Dispatchers.Default) { com.dedovmosol.iwomail.util.referencedContentIds(bodyNow) }
                 val rowsById = draftAttachments.associateBy { it.id }
                 val unloaded = unloadedRoles.filter { (id, role) ->
                     role == DraftAttachmentRole.FILE ||
@@ -1473,6 +1487,10 @@ fun ComposeScreen(
                 throw e
             } catch (e: OutOfMemoryError) {
                 android.util.Log.e("ComposeScreen", "OOM opening draft", e)
+                SafeToast.long(context, draftLoadErrorMsg)
+            } catch (e: StackOverflowError) {
+                // егулярное выражение на огромном теле: не роняем приложение
+                android.util.Log.e("ComposeScreen", "Stack overflow opening draft", e)
                 SafeToast.long(context, draftLoadErrorMsg)
             } catch (e: Exception) {
                 android.util.Log.e("ComposeScreen", "Failed to open draft: ${e.message}", e)

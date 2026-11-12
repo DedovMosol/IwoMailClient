@@ -28,6 +28,8 @@ class EmailSyncService(
     /** далить серверный черновик (true — удалён на сервере): прежние версии заменённых черновиков. */
     private val deleteServerDraft: suspend (accountId: Long, serverId: String, excludeServerId: String?) -> Boolean =
         { _, _, _ -> false },
+    /** Флаги, которые сейчас пишутся на сервер: синхронизация не перетирает их устаревшим ответом. */
+    private val flagWrites: FlagWriteTracker = FlagWriteTracker.shared,
     private val onNameResolved: ((email: String, name: String) -> Unit)? = null
 ) {
     // Данные сохранённых тел черновиков (для восстановления при full resync)
@@ -191,6 +193,9 @@ class EmailSyncService(
             if (emptyDataCount >= 5) return false
             return true
         }
+
+        /** Ответ Sync с этим Status обрабатывается и его SyncKey сохраняется (3/12 — сброс ключа, 4–8 — ошибка). */
+        internal fun isProcessableSyncStatus(status: Int): Boolean = status != 3 && status != 12 && status !in 4..8
     }
 
     init {
@@ -871,7 +876,16 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             val includeMime = folder.type == FolderType.SENT_ITEMS && !isFullResync
 
             if (syncKey == "0") {
-                when (val result = client.sync(folder.serverId, "0", windowSize, false)) {
+                // Через шлюз папки: локальное изменение с ключом "0" (ensureValidSyncKey) не сбросит состояние
+                // синхронизации на сервере между этим запросом и сохранением ключа.
+                val initResult = FolderSyncGate.withFolder(folderId) {
+                    client.sync(folder.serverId, "0", windowSize, false).also { response ->
+                        if (response is EasResult.Success && isProcessableSyncStatus(response.data.status)) {
+                            folderDao.updateSyncKey(folderId, response.data.syncKey)
+                        }
+                    }
+                }
+                when (val result = initResult) {
                     is EasResult.Success -> {
                         if (result.data.status == 12 || result.data.status == 3) {
                             folderDao.updateSyncKey(folderId, "0")
@@ -885,8 +899,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             android.util.Log.e("EmailSync", "Initial sync failed with status=${result.data.status} for folder=$folderId")
                             return EasResult.Error("Ошибка синхронизации папки: status=${result.data.status}")
                         }
-                        syncKey = result.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
+                        syncKey = result.data.syncKey // сохранён под шлюзом
                     }
                     is EasResult.Error -> return EasResult.Error(result.message)
                 }
@@ -904,6 +917,73 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
             var emptyDataCount = 0
             var syncLoopCompletedFully: Boolean
 
+            /** Обработка батча и сохранение его SyncKey; [requestedAt] — момент запроса (для флагов, [FlagWriteTracker]). */
+            suspend fun processSyncBatch(data: SyncResponse, requestedAt: Long) {
+                val newSyncKey = data.syncKey
+                moreAvailable = data.moreAvailable
+
+                // Защита от зацикливания: если сервер возвращает тот же syncKey
+                // 5 раз подряд — принудительно останавливаем цикл.
+                // Присваиваем moreAvailable ДО проверки, чтобы защита могла переопределить.
+                if (newSyncKey == previousSyncKey) {
+                    sameKeyCount++
+                    if (!shouldContinueSync(sameKeyCount, emptyDataCount)) {
+                        android.util.Log.w("EmailSync", "SyncKey not changing for $sameKeyCount iterations, breaking loop")
+                        moreAvailable = false
+                    }
+                } else {
+                    sameKeyCount = 0
+                    previousSyncKey = newSyncKey
+                }
+
+                if (moreAvailable && data.emails.isEmpty() && data.deletedIds.isEmpty() && data.changedEmails.isEmpty()) {
+                    emptyDataCount++
+                    android.util.Log.w("EmailSync", "Server says moreAvailable but no data (empty #$emptyDataCount), syncKey=$newSyncKey")
+                    if (!shouldContinueSync(sameKeyCount, emptyDataCount)) {
+                        android.util.Log.w("EmailSync", "No data for $emptyDataCount consecutive iterations, breaking loop")
+                        moreAvailable = false
+                    }
+                } else {
+                    emptyDataCount = 0
+                }
+
+                // === Обработка данных батча через extracted methods ===
+                var draftReplacements = emptyMap<String, String>()
+                var handledDraftDeletionIds = emptySet<String>()
+
+                if (data.emails.isNotEmpty()) {
+                    val batchResult = processNewEmailsBatch(
+                        data, accountId, folderId, folder,
+                        skipRecentEditCheck, serverDraftIdsInFullResync, serverSentIdsInFullResync,
+                        serverGenericIdsInFullResync
+                    )
+                    newEmailsCount += batchResult.insertedCount
+                    draftReplacements = batchResult.draftReplacements
+
+                    if (savedDraftBodies.isNotEmpty() && folder.type == FolderType.DRAFTS) {
+                        restoreSavedDraftBodies(savedDraftBodies, batchResult.allInserted)
+                    }
+                    if (folder.type == FolderType.DRAFTS && pendingDraftRestores.isNotEmpty()) {
+                        restoreFromPendingDraftRestores(accountId, batchResult.allInserted)
+                    }
+                    if (folder.type == FolderType.DRAFTS && data.deletedIds.isNotEmpty() && batchResult.allInserted.isNotEmpty()) {
+                        handledDraftDeletionIds = migrateDeleteAddDrafts(data.deletedIds, batchResult.allInserted, accountId)
+                    }
+                }
+
+                applyDraftReplacements(draftReplacements)
+                processServerDeletions(data.deletedIds, accountId, folder, handledDraftDeletionIds)
+                processServerChanges(data, accountId, folderId, folder, requestedAt, serverDraftIdsInFullResync, serverSentIdsInFullResync, serverGenericIdsInFullResync)
+
+                // КРИТИЧНО: Сохраняем SyncKey ПОСЛЕ успешной обработки
+                syncKey = newSyncKey
+                folderDao.updateSyncKey(folderId, syncKey)
+
+                val totalCount = emailDao.getCountByFolder(folderId)
+                val unreadCount = emailDao.getUnreadCount(folderId)
+                folderDao.updateCounts(folderId, unreadCount, totalCount)
+            }
+
             while (moreAvailable && iterations < maxIterations && consecutiveErrors < maxConsecutiveErrors) {
                 iterations++
 
@@ -914,10 +994,23 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
 
                 kotlinx.coroutines.yield()
 
-                when (val result = client.sync(
-                    folder.serverId, syncKey, windowSize, includeMime,
-                    fullBody = folder.type == FolderType.DRAFTS
-                )) {
+                // Запрос и обработка ответа — через шлюз папки: локальный Sync Change (флаг, прочитано) не
+                // уходит с тем же ключом параллельно и не продвигает ключ между запросом и его сохранением.
+                val result = FolderSyncGate.withFolder(folderId) {
+                    // Ключ мог продвинуть локальный Sync Change — продолжаем с него: запрос с прежним ключом
+                    // разошёлся бы с сервером (Status 3 → полная ресинхронизация).
+                    folderDao.getFolder(folderId)?.syncKey?.takeIf { it != "0" }?.let { syncKey = it }
+                    val requestedAt = flagWrites.now()
+                    client.sync(
+                        folder.serverId, syncKey, windowSize, includeMime,
+                        fullBody = folder.type == FolderType.DRAFTS
+                    ).also { response ->
+                        if (response is EasResult.Success && isProcessableSyncStatus(response.data.status)) {
+                            processSyncBatch(response.data, requestedAt)
+                        }
+                    }
+                }
+                when (result) {
                     is EasResult.Success -> {
                         consecutiveErrors = 0
 
@@ -926,74 +1019,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             return syncEmailsEas(accountId, folderId, skipRecentEditCheck, retryCount + 1)
                         }
 
-                        if (result.data.status in listOf(4, 5, 6, 7, 8)) {
+                        if (result.data.status in 4..8) {
                             android.util.Log.w("EmailSync", "Sync returned error status=${result.data.status} for folder=$folderId, breaking")
                             break
                         }
-
-                        val newSyncKey = result.data.syncKey
-                        moreAvailable = result.data.moreAvailable
-
-                        // Защита от зацикливания: если сервер возвращает тот же syncKey
-                        // 5 раз подряд — принудительно останавливаем цикл.
-                        // Присваиваем moreAvailable ДО проверки, чтобы защита могла переопределить.
-                        if (newSyncKey == previousSyncKey) {
-                            sameKeyCount++
-                            if (!shouldContinueSync(sameKeyCount, emptyDataCount)) {
-                                android.util.Log.w("EmailSync", "SyncKey not changing for $sameKeyCount iterations, breaking loop")
-                                moreAvailable = false
-                            }
-                        } else {
-                            sameKeyCount = 0
-                            previousSyncKey = newSyncKey
-                        }
-
-                        if (moreAvailable && result.data.emails.isEmpty() && result.data.deletedIds.isEmpty() && result.data.changedEmails.isEmpty()) {
-                            emptyDataCount++
-                            android.util.Log.w("EmailSync", "Server says moreAvailable but no data (empty #$emptyDataCount), syncKey=$newSyncKey")
-                            if (!shouldContinueSync(sameKeyCount, emptyDataCount)) {
-                                android.util.Log.w("EmailSync", "No data for $emptyDataCount consecutive iterations, breaking loop")
-                                moreAvailable = false
-                            }
-                        } else {
-                            emptyDataCount = 0
-                        }
-
-                        // === Обработка данных батча через extracted methods ===
-                        var draftReplacements = emptyMap<String, String>()
-                        var handledDraftDeletionIds = emptySet<String>()
-
-                        if (result.data.emails.isNotEmpty()) {
-                            val batchResult = processNewEmailsBatch(
-                                result.data, accountId, folderId, folder,
-                                skipRecentEditCheck, serverDraftIdsInFullResync, serverSentIdsInFullResync,
-                                serverGenericIdsInFullResync
-                            )
-                            newEmailsCount += batchResult.insertedCount
-                            draftReplacements = batchResult.draftReplacements
-
-                            if (savedDraftBodies.isNotEmpty() && folder.type == FolderType.DRAFTS) {
-                                restoreSavedDraftBodies(savedDraftBodies, batchResult.allInserted)
-                            }
-                            if (folder.type == FolderType.DRAFTS && pendingDraftRestores.isNotEmpty()) {
-                                restoreFromPendingDraftRestores(accountId, batchResult.allInserted)
-                            }
-                            if (folder.type == FolderType.DRAFTS && result.data.deletedIds.isNotEmpty() && batchResult.allInserted.isNotEmpty()) {
-                                handledDraftDeletionIds = migrateDeleteAddDrafts(result.data.deletedIds, batchResult.allInserted, accountId)
-                            }
-                        }
-
-                        applyDraftReplacements(draftReplacements)
-                        processServerDeletions(result.data.deletedIds, accountId, folder, handledDraftDeletionIds)
-                        processServerChanges(result.data, accountId, folderId, folder, serverDraftIdsInFullResync, serverSentIdsInFullResync, serverGenericIdsInFullResync)
-
-                        // КРИТИЧНО: Сохраняем SyncKey ПОСЛЕ успешной обработки
-                        syncKey = newSyncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-
-                        val totalCount = emailDao.getCountByFolder(folderId)
-                        val unreadCount = emailDao.getUnreadCount(folderId)
-                        folderDao.updateCounts(folderId, unreadCount, totalCount)
+                        // Батч обработан и ключ сохранён под шлюзом (processSyncBatch)
                     }
                     is EasResult.Error -> {
                         if (result.message.contains("INVALID_SYNCKEY") ||
@@ -1136,6 +1166,8 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
                             it.copy(id = 0, emailId = newEntity.id)
                         })
                     }
+                    // Правка без связи (флаг, «прочитано») переезжает вместе с письмом — иначе не отправится
+                    database.pendingEmailChangeDao().rename(oldId, newEntity.id)
                     android.util.Log.d("EmailSync",
                         "ServerId migrated: $oldId → ${newEntity.id} (subj='${oldEmail.subject.take(30)}')")
                 }
@@ -1705,6 +1737,7 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         accountId: Long,
         folderId: String,
         folder: FolderEntity,
+        requestedAt: Long,
         serverDraftIdsInFullResync: MutableSet<String>?,
         serverSentIdsInFullResync: MutableSet<String>?,
         serverGenericIdsInFullResync: MutableSet<String>?
@@ -1720,8 +1753,10 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
 
         syncData.changedEmails.forEach { change ->
             val emailId = "${accountId}_${change.serverId}"
-            change.read?.let { emailDao.updateReadStatus(emailId, it) }
-            change.flag?.let { emailDao.saveFlag(emailId, it) }
+            // Значение сервера — кроме полей, которые изменены на устройстве и ещё ждут отправки (PendingEmailChangeEntity)
+            change.read?.let { emailDao.updateReadStatusFromServer(emailId, it) }
+            // Звезду, которую пользователь только что переключил, ответ, запрошенный до записи, не возвращает
+            change.flag?.let { flag -> flagWrites.applyServerFlag(emailId, flag, requestedAt) { emailDao.saveServerFlag(emailId, it) } }
 
             if (folder.type == FolderType.DRAFTS) {
                 if (change.bodyTruncated || (change.body?.length ?: 0) > DraftUpload.MAX_LOCAL_BODY_CHARS) {

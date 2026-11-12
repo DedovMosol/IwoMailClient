@@ -26,11 +26,16 @@ class EmailOperationsService(
     private val emailDao: EmailDao,
     private val attachmentDao: AttachmentDao,
     private val accountRepo: AccountRepository,
-    private val emailSyncService: EmailSyncService
+    private val emailSyncService: EmailSyncService,
+    /** Флаги в процессе записи на сервер — общий с синхронизацией ([EmailSyncService]). */
+    private val flagWrites: FlagWriteTracker = FlagWriteTracker.shared
 ) {
 
     private val moveItemsStatusRegex = Regex("status=(\\d+)")
     private val previewWhitespaceRegex = Regex("\\s+")
+
+    /** Правки писем без связи, ждущие отправки (флаг, «прочитано»). */
+    private val pendingChanges get() = database.pendingEmailChangeDao()
 
     /** Тело из ItemOperations (TruncationSize = 1 МиБ) меньше этого — точно не обрезано. */
     private val EAS_COMPLETE_BODY_BYTES = 1_040_000
@@ -45,24 +50,15 @@ class EmailOperationsService(
     }
 
     /**
-     * Пометить письмо как прочитанное/непрочитанное
+     * Пометить письмо как прочитанное/непрочитанное. Локально — сразу; на сервер — Sync Change ([sendReadToServer]).
      */
     suspend fun markAsRead(emailId: String, read: Boolean): EasResult<Boolean> {
-        android.util.Log.d("SYNC_DIAG", "markAsRead START emailId=$emailId read=$read")
         val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
         val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error("Аккаунт не найден")
 
         if (AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
             val client = accountRepo.createEasClient(email.accountId) ?: return EasResult.Error("Не удалось создать клиент")
             val folder = folderDao.getFolder(email.folderId) ?: return EasResult.Error("Папка не найдена")
-
-            val currentSyncKey = ensureValidSyncKey(client, email.folderId, folder.serverId, folder.syncKey)
-            if (currentSyncKey == null) {
-                emailDao.updateReadStatus(emailId, read)
-                updateFolderCounts(email.folderId)
-                updateMailWidget(context)
-                return EasResult.Success(true)
-            }
 
             // Оптимистичное обновление — UI реагирует сразу
             emailDao.updateReadStatus(emailId, read)
@@ -74,54 +70,12 @@ class EmailOperationsService(
                 cancelNotificationForAccount(email.accountId)
             }
 
-            val result = client.markAsRead(folder.serverId, email.serverId, currentSyncKey, read, email.internetMessageId)
-            android.util.Log.d("SYNC_DIAG", "markAsRead result=${if (result is EasResult.Success) "OK newKey=${result.data.take(10)}" else "FAIL: ${(result as EasResult.Error).message}"} syncKey=${currentSyncKey.take(10)}")
-            return when (result) {
-                is EasResult.Success -> {
-                    folderDao.updateSyncKey(email.folderId, result.data)
-                    EasResult.Success(true)
-                }
-                is EasResult.Error -> {
-                    android.util.Log.w("EmailOps", "markAsRead failed (syncKey=$currentSyncKey): ${result.message}")
-
-                    // Повторяем только если параллельный sync уже успел сохранить
-                    // новый syncKey в БД. Самостоятельно делать GetChanges-sync здесь
-                    // нельзя: это может продвинуть SyncKey мимо необработанных дельт.
-                    val freshSyncKey = if (isLikelyStaleSyncKeyError(result.message)) {
-                        getRetrySyncKeyFromDatabase(email.folderId, currentSyncKey)
-                    } else {
-                        null
-                    }
-
-                    if (freshSyncKey != null) {
-                        folderDao.updateSyncKey(email.folderId, freshSyncKey)
-                        val retryResult = client.markAsRead(folder.serverId, email.serverId, freshSyncKey, read, email.internetMessageId)
-                        when (retryResult) {
-                            is EasResult.Success -> {
-                                folderDao.updateSyncKey(email.folderId, retryResult.data)
-                                return EasResult.Success(true)
-                            }
-                            is EasResult.Error -> {
-                                // Повторная ошибка — откатываем
-                                android.util.Log.e("EmailOps", "markAsRead retry also failed: ${retryResult.message}")
-                                emailDao.updateReadStatus(emailId, !read)
-                                updateFolderCounts(email.folderId)
-                                updateMailWidget(context)
-                                return EasResult.Error(retryResult.message)
-                            }
-                        }
-                    } else {
-                        // Не удалось получить syncKey вообще — откатываем
-                        android.util.Log.e("EmailOps", "markAsRead: cannot obtain valid syncKey, rolling back")
-                        emailDao.updateReadStatus(emailId, !read)
-                        updateFolderCounts(email.folderId)
-                        updateMailWidget(context)
-                        EasResult.Error(result.message)
-                    }
-                }
-            }
+            // Один Sync-запрос на папку за раз: ключ — из БД под шлюзом (см. FolderSyncGate)
+            return FolderSyncGate.withFolder(email.folderId) { sendReadToServer(client, folder, listOf(email), read) }
         } else {
             emailDao.updateReadStatus(emailId, read)
+            // Сервера, которому отправлять, нет (IMAP/POP3 — локально)
+            pendingChanges.clearRead(emailId)
             updateFolderCounts(email.folderId)
             updateMailWidget(context)
             if (read) {
@@ -162,54 +116,92 @@ class EmailOperationsService(
 
             val client = accountRepo.createEasClient(accountId) ?: continue
 
-            val byFolder = accountEmails.groupBy { it.folderId }
-
-            for ((folderId, folderEmails) in byFolder) {
+            for ((folderId, folderEmails) in accountEmails.groupBy { it.folderId }) {
                 val folder = folderDao.getFolder(folderId) ?: continue
-                val currentSyncKey = ensureValidSyncKey(client, folderId, folder.serverId, folder.syncKey)
-                    ?: continue
-
-                val serverIds = folderEmails.map { it.serverId }
-                val result = client.markAsReadBatch(folder.serverId, serverIds, currentSyncKey, read)
-
-                when (result) {
-                    is EasResult.Success -> {
-                        folderDao.updateSyncKey(folderId, result.data)
-                    }
-                    is EasResult.Error -> {
-                        android.util.Log.w("EmailOps", "markAsReadBatch failed for folder $folderId: ${result.message}")
-                        val freshSyncKey = if (isLikelyStaleSyncKeyError(result.message)) {
-                            getRetrySyncKeyFromDatabase(folderId, currentSyncKey)
-                        } else {
-                            null
-                        }
-                        if (freshSyncKey != null) {
-                            folderDao.updateSyncKey(folderId, freshSyncKey)
-                            val retry = client.markAsReadBatch(folder.serverId, serverIds, freshSyncKey, read)
-                            when (retry) {
-                                is EasResult.Success -> folderDao.updateSyncKey(folderId, retry.data)
-                                is EasResult.Error -> {
-                                    lastError = retry.message
-                                    // Откатываем только эту папку
-                                    folderEmails.forEach { emailDao.updateReadStatus(it.id, !read) }
-                                    updateFolderCounts(folderId)
-                                }
-                            }
-                        } else {
-                            lastError = result.message
-                            folderEmails.forEach { emailDao.updateReadStatus(it.id, !read) }
-                            updateFolderCounts(folderId)
-                        }
-                    }
-                }
-            } // for byFolder
-        } // for byAccount
+                val result = FolderSyncGate.withFolder(folderId) { sendReadToServer(client, folder, folderEmails, read) }
+                if (result is EasResult.Error) lastError = result.message
+            }
+        }
 
         updateMailWidget(context)
         if (read) {
             byAccount.keys.forEach { cancelNotificationForAccount(it) }
         }
-        return if (lastError != null) EasResult.Error(lastError) else EasResult.Success(true)
+        return lastError?.let { EasResult.Error(it) } ?: EasResult.Success(true)
+    }
+
+    /**
+     * Sync Change «прочитано» для [emails] одной папки — под её шлюзом; локально уже помечено. Ключ — свежий из БД
+     * (пока ждали шлюз, его мог продвинуть цикл синхронизации); устаревший — один повтор с ключом, который успел
+     * сохранить параллельный sync (самим делать GetChanges нельзя: ключ ушёл бы мимо необработанных изменений).
+     *
+     * - Сервер отказал в изменении ([isChangeRejected]) — откат.
+     * - Нет связи, нет ключа, временный сбой сервера — остаётся локально и ждёт отправки ([PendingMailChanges]):
+     *   прочитанное без связи письмо не становится снова непрочитанным.
+     *
+     * Одно письмо — [com.dedovmosol.iwomail.eas.EasClient.markAsRead] (с дублированием по EWS для Exchange 2007),
+     * несколько — один Sync с N изменениями.
+     */
+    private suspend fun sendReadToServer(
+        client: com.dedovmosol.iwomail.eas.EasClient,
+        folder: FolderEntity,
+        emails: List<EmailEntity>,
+        read: Boolean
+    ): EasResult<Boolean> {
+        val storedKey = folderDao.getFolder(folder.id)?.syncKey ?: folder.syncKey
+        val syncKey = ensureValidSyncKey(client, folder.id, folder.serverId, storedKey)
+        if (syncKey == null) {
+            deferRead(emails)
+            return EasResult.Success(true)
+        }
+        suspend fun send(key: String): EasResult<String> {
+            val single = emails.singleOrNull()
+            return if (single != null) {
+                client.markAsRead(folder.serverId, single.serverId, key, read, single.internetMessageId)
+            } else {
+                client.markAsReadBatch(folder.serverId, emails.map { it.serverId }, key, read)
+            }
+        }
+        var result = send(syncKey)
+        if (result is EasResult.Error && isLikelyStaleSyncKeyError(result.message)) {
+            getRetrySyncKeyFromDatabase(folder.id, syncKey)?.let { fresh -> result = send(fresh) }
+        }
+        return when (val outcome = result) {
+            is EasResult.Success -> {
+                folderDao.updateSyncKey(folder.id, outcome.data)
+                emails.forEach { pendingChanges.clearRead(it.id) }
+                EasResult.Success(true)
+            }
+            is EasResult.Error -> if (isChangeRejected(outcome.message)) {
+                android.util.Log.w("EmailOps", "Server rejected read=$read for ${emails.size} email(s): ${outcome.message}")
+                emails.forEach {
+                    emailDao.updateReadStatus(it.id, !read)
+                    pendingChanges.clearRead(it.id)
+                }
+                updateFolderCounts(folder.id)
+                updateMailWidget(context)
+                EasResult.Error(outcome.message)
+            } else {
+                android.util.Log.w("EmailOps", "Read state not sent, will retry: ${outcome.message}")
+                deferRead(emails)
+                EasResult.Success(true)
+            }
+        }
+    }
+
+    /** «Прочитано» осталось на устройстве — отправится, когда появится связь. */
+    private suspend fun deferRead(emails: List<EmailEntity>) {
+        emails.forEach { pendingChanges.markRead(it.id, it.accountId) }
+        com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueue(context)
+    }
+
+    /**
+     * Повторная отправка «прочитано» из очереди: текущее значение письма. Письма уже нет — запись очереди снимается.
+     * Под шлюзом папки, как и обычная пометка.
+     */
+    suspend fun retryPendingRead(emailId: String): EasResult<Boolean> {
+        val email = emailDao.getEmail(emailId) ?: return EasResult.Success(true).also { pendingChanges.clearRead(emailId) }
+        return markAsRead(emailId, email.read)
     }
 
     /**
@@ -582,64 +574,123 @@ class EmailOperationsService(
     }
 
     /**
-     * Переключить флаг письма (избранное)
-     * ОПТИМИСТИЧНОЕ ОБНОВЛЕНИЕ: сначала обновляем локально для мгновенного отклика UI,
-     * затем синхронизируем с сервером. При ошибке сервера локальное изменение сохраняется
-     * и будет скорректировано при следующей полной синхронизации.
+     * Переключить флаг письма (звёздочка): снять или поставить без срока. Новое значение считается от флага в БД под
+     * замком [FlagWriteTracker] — частые нажатия чередуются, а не повторяют одно и то же.
      */
-    suspend fun toggleFlag(emailId: String): EasResult<Boolean> {
-        val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
-        return setFlag(emailId, com.dedovmosol.iwomail.domain.FlagPresets.toggled(email.flag))
+    suspend fun toggleFlag(emailId: String): EasResult<Boolean> =
+        writeFlag(emailId) { com.dedovmosol.iwomail.domain.FlagPresets.toggled(it) }
+
+    /**
+     * Флаг письма: отметка, срок, напоминание, «выполнено» или снять ([MailFlag]).
+     */
+    suspend fun setFlag(emailId: String, flag: MailFlag): EasResult<Boolean> = writeFlag(emailId) { flag }
+
+    /**
+     * Повторная отправка флага из очереди: текущий флаг письма, тем же путём, что и нажатие. Письма уже нет — запись
+     * очереди снимается.
+     */
+    suspend fun retryPendingFlag(emailId: String): EasResult<Boolean> {
+        if (emailDao.getFlagTarget(emailId) == null) {
+            pendingChanges.clearFlag(emailId)
+            return EasResult.Success(true)
+        }
+        return writeFlag(emailId) { it }
     }
 
     /**
-     * Флаг письма: отметка, срок, напоминание, «выполнено» или снять ([MailFlag]). Локально — сразу, на сервер — Sync
-     * Change; напоминания на устройстве перепланируются.
+     * Локально — сразу (оптимистично), на сервер — Sync Change; напоминания на устройстве перепланируются.
+     *
+     * - Нет связи, нет ключа, временный сбой — флаг остаётся локально и ждёт отправки ([PendingMailChanges]); звезда не
+     *   мигает и не гаснет, результат — успех.
+     * - Сервер отказал в изменении ([isChangeRejected]) — откат к флагу, подтверждённому сервером, и
+     *   [RepositoryErrors.FLAG_REJECTED].
+     * - Серверная часть не отменяется уходом с экрана: запрос, оборванный на полпути, оставил бы флаг на сервере и
+     *   на устройстве неизвестно каким.
+     *
+     * Письмо читается лёгкой проекцией ([EmailDao.getFlagTarget]) — без тела, которое у письма с картинками — мегабайты.
      */
-    suspend fun setFlag(emailId: String, flag: MailFlag): EasResult<Boolean> {
-        val email = emailDao.getEmail(emailId) ?: return EasResult.Error("Письмо не найдено")
+    private suspend fun writeFlag(emailId: String, target: (MailFlag) -> MailFlag): EasResult<Boolean> {
+        val email = emailDao.getFlagTarget(emailId) ?: return EasResult.Error("Письмо не найдено")
         val account = accountRepo.getAccount(email.accountId) ?: return EasResult.Error("Аккаунт не найден")
 
-        // ОПТИМИСТИЧНОЕ ОБНОВЛЕНИЕ: сначала обновляем локально для мгновенного отклика UI
-        emailDao.saveFlag(emailId, flag)
-        if (flag.reminderTime != null || email.flagReminder != null) {
+        val started = flagWrites.start(
+            emailId,
+            read = { emailDao.getFlagTarget(emailId)?.flag },
+            target = target,
+            write = { emailDao.saveFlag(emailId, it) }
+        ) ?: return EasResult.Error("Письмо не найдено")
+        if (started.target.reminderTime != null || started.previous.reminderTime != null) {
             com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context)
         }
 
-        if (AccountType.valueOf(account.accountType) == AccountType.EXCHANGE) {
-            val client = accountRepo.createEasClient(email.accountId)
-            if (client == null) {
-                // Не удалось создать клиент — локально уже обновили
-                return EasResult.Success(true)
-            }
-            val folder = folderDao.getFolder(email.folderId)
-            if (folder == null) {
-                return EasResult.Success(true)
-            }
-
-            val currentSyncKey = ensureValidSyncKey(client, email.folderId, folder.serverId, folder.syncKey)
-                ?: return EasResult.Success(true)
-
-            val result = client.setFlag(folder.serverId, email.serverId, currentSyncKey, flag)
-            when (result) {
-                is EasResult.Success -> {
-                    folderDao.updateSyncKey(email.folderId, result.data)
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            var outcome: FlagWriteTracker.Outcome = FlagWriteTracker.Outcome.KeptLocal
+            try {
+                if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                    outcome = FlagWriteTracker.Outcome.Applied(started.target)
+                    return@withContext EasResult.Success(true)
                 }
-                is EasResult.Error -> {
-                    // Status 6 и пр. — неверный флаг, откат. Сеть/таймаут — оставляем локально (комментарий
-                    // toggleFlag), иначе звезда мигает и сразу гаснет.
-                    if (isEasStatusReject(result.message)) {
-                        android.util.Log.w("SetFlag", "Server rejected flag: ${result.message}, rolling back")
-                        emailDao.saveFlag(emailId, email.flag)
-                    } else {
-                        android.util.Log.w("SetFlag", "Flag sync failed, keeping local: ${result.message}")
+                val client = accountRepo.createEasClient(email.accountId)
+                    ?: return@withContext EasResult.Success(true) // клиент не создан — остаётся локально
+                val result = FolderSyncGate.withFolder(email.folderId) {
+                    // Пока ждали шлюз, пришло новое нажатие — итог на сервер отправит оно
+                    if (!flagWrites.isLatest(emailId, started.ticket)) null
+                    else writeFlagToServer(client, email, started.target)
+                } ?: return@withContext EasResult.Success(true)
+                when (result) {
+                    is EasResult.Success -> {
+                        val applied = result.data.applied
+                        if (applied != null) {
+                            outcome = FlagWriteTracker.Outcome.Applied(applied)
+                            EasResult.Success(true)
+                        } else {
+                            android.util.Log.w("SetFlag", "Server rejected flag: Status=${result.data.changeStatus}, rolling back")
+                            outcome = FlagWriteTracker.Outcome.Rejected
+                            EasResult.Error(RepositoryErrors.FLAG_REJECTED)
+                        }
                     }
-                    return EasResult.Error(result.message)
+                    is EasResult.Error -> if (isChangeRejected(result.message)) {
+                        android.util.Log.w("SetFlag", "Server rejected flag: ${result.message}, rolling back")
+                        outcome = FlagWriteTracker.Outcome.Rejected
+                        EasResult.Error(RepositoryErrors.FLAG_REJECTED)
+                    } else {
+                        android.util.Log.w("SetFlag", "Flag not sent, will retry: ${result.message}")
+                        EasResult.Success(true)
+                    }
+                }
+            } finally {
+                flagWrites.finish(emailId, started, outcome) { flag, settled ->
+                    if (flag != null) emailDao.saveFlag(emailId, flag)
+                    if (settled == FlagWriteTracker.Outcome.KeptLocal) {
+                        pendingChanges.markFlag(emailId, email.accountId)
+                        com.dedovmosol.iwomail.sync.PendingMailChangesWorker.enqueue(context)
+                    } else {
+                        pendingChanges.clearFlag(emailId)
+                    }
                 }
             }
         }
+    }
 
-        return EasResult.Success(true)
+    /**
+     * Sync Change флага под шлюзом папки: ключ — свежий из БД, устаревший (параллельный sync уже сохранил новый) —
+     * один повтор, как у [markAsRead]. Новый ключ сохраняется и при отказе в самом изменении. null — ключа нет.
+     */
+    private suspend fun writeFlagToServer(
+        client: com.dedovmosol.iwomail.eas.EasClient,
+        email: EmailFlagTarget,
+        flag: MailFlag
+    ): EasResult<com.dedovmosol.iwomail.eas.FlagWrite>? {
+        val folder = folderDao.getFolder(email.folderId) ?: return null
+        val syncKey = ensureValidSyncKey(client, email.folderId, folder.serverId, folder.syncKey) ?: return null
+        var result = client.setFlag(folder.serverId, email.serverId, syncKey, flag)
+        if (result is EasResult.Error && isLikelyStaleSyncKeyError(result.message)) {
+            getRetrySyncKeyFromDatabase(email.folderId, syncKey)?.let { fresh ->
+                result = client.setFlag(folder.serverId, email.serverId, fresh, flag)
+            }
+        }
+        (result as? EasResult.Success)?.let { folderDao.updateSyncKey(email.folderId, it.data.syncKey) }
+        return result
     }
 
     /**
@@ -676,15 +727,15 @@ class EmailOperationsService(
     /**
      * MS-ASCMD §2.2.3.166.8: На EAS 12.1 ServerIds НЕ стабильны после SyncKey=0 reset.
      * После sync emailIds могут указывать на мигрированные записи.
-     * Для каждого emailId: если запись существует — используем как есть.
+     * Для каждого снимка: если запись с его id существует — используем как есть.
      * Если нет — ищем по subject+from+dateReceived±2сек в исходной папке.
-     * @param emailIds текущие (возможно устаревшие) ID
+     * Id берутся из самих снимков: отдельный список id мог разойтись со снимками по индексу (письма, которого уже нет,
+     * снимка нет) — и сопоставлялось бы не то письмо.
      * @param snapshots снимки писем ДО sync (для content matching)
      * @param sourceFolderId папка для поиска
      * @return актуальные emailIds (могут отличаться от входных)
      */
     private suspend fun resolveEmailIds(
-        emailIds: List<String>,
         snapshots: List<EmailEntity>,
         sourceFolderId: String
     ): List<String> {
@@ -692,14 +743,14 @@ class EmailOperationsService(
         // PERF: используем lightweight projection (id, serverId, subject, from, to, dateReceived)
         // вместо полных EmailEntity (~30 полей с body) — экономия памяти на крупных папках.
         var folderDedup: List<EmailDedupInfo>? = null
-        for (i in emailIds.indices) {
-            val emailId = emailIds[i]
-            if (emailDao.getEmail(emailId) != null) {
+        for (snapshot in snapshots) {
+            val emailId = snapshot.id
+            // Только id — без чтения тела письма
+            if (emailDao.getExistingIds(listOf(emailId)).isNotEmpty()) {
                 resolved.add(emailId)
                 continue
             }
             // Запись мигрирована — ищем по содержимому (lazy load)
-            val snapshot = snapshots.getOrNull(i) ?: continue
             if (folderDedup == null) {
                 folderDedup = emailDao.getDedupInfoByFolder(sourceFolderId)
             }
@@ -727,6 +778,7 @@ class EmailOperationsService(
         val firstEmail = emailDao.getEmail(emailIds.first())
             ?: return EasResult.Error("Email not found")
 
+        // Снимки до синхронизации: по ним [resolveEmailIds] находит письма, если ServerId сменился
         val allEmails = emailIds.mapNotNull { emailDao.getEmail(it) }
         if (!allEmails.all { it.accountId == firstEmail.accountId }) {
             return EasResult.Error("All emails must belong to the same account")
@@ -757,7 +809,7 @@ class EmailOperationsService(
 
         // После pre-sync emailIds могут указывать на мигрированные записи (serverIdMigrations).
         // Перечитываем — если запись мигрирована, ищем по содержимому.
-        val resolvedEmailIds = resolveEmailIds(emailIds, allEmails, sourceFolderId)
+        val resolvedEmailIds = resolveEmailIds(allEmails, sourceFolderId)
         if (resolvedEmailIds.isEmpty()) return EasResult.Error("Emails not found after sync")
 
         val triples = buildMoveItems(resolvedEmailIds)
@@ -779,7 +831,7 @@ class EmailOperationsService(
             try {
                 emailSyncService.syncEmails(firstEmail.accountId, sourceFolderId, forceFullSync = false)
 
-                val retryIds = resolveEmailIds(resolvedEmailIds, allEmails, sourceFolderId)
+                val retryIds = resolveEmailIds(allEmails, sourceFolderId)
                 val freshTriples = buildMoveItems(retryIds)
                 if (freshTriples.isNotEmpty()) {
                     val freshItems = freshTriples.map { it.second to it.third }
@@ -799,7 +851,7 @@ class EmailOperationsService(
             val allResults = mutableMapOf<String, String>() // srcServerId → dstServerId
             val ghostEmailIds = mutableListOf<String>()     // emailIds для локальной очистки (только status=1)
             val ghostFolderIds = mutableSetOf<String>()     // folderIds для обновления счётчиков
-            val fallbackIds = resolveEmailIds(resolvedEmailIds, allEmails, sourceFolderId)
+            val fallbackIds = resolveEmailIds(allEmails, sourceFolderId)
             val freshTriples = buildMoveItems(fallbackIds)
 
             for ((emailId, serverId, srcFldId) in freshTriples) {
@@ -1001,6 +1053,46 @@ class EmailOperationsService(
         return moveEmails(emailIds, targetFolderId)
     }
 
+    /** Письмо к окончательному удалению: адрес на сервере и тема (для поиска по EWS). */
+    private data class EmailInfo(val emailId: String, val folderId: String, val serverId: String, val subject: String)
+
+    /**
+     * Синхронизация папки перед Delete (изменения сервера обрабатываются, ключ — актуальный) и письма [infos] — заново:
+     * на EAS 12.1 после SyncKey=0 ServerId могут смениться (запись переезжает, [resolveEmailIds] находит её по
+     * содержимому). Письма, которых больше нет (удалены на сервере), в результат не входят.
+     */
+    private suspend fun syncAndResolve(accountId: Long, folderId: String, infos: List<EmailInfo>): List<EmailInfo> {
+        // Снимки — по порядку id ([resolveEmailIds] сопоставляет по индексу)
+        val snapshots = infos.mapNotNull { info -> emailDao.getEmail(info.emailId) }
+        try {
+            emailSyncService.syncEmails(accountId, folderId, forceFullSync = false)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.w("EmailOps", "Sync before delete failed, deleting with the current key: ${e.message}")
+        }
+        return resolveEmailIds(snapshots, folderId).mapNotNull { id ->
+            emailDao.getEmail(id)?.let { EmailInfo(it.id, it.folderId, it.serverId, it.subject) }
+        }
+    }
+
+    /**
+     * Пакетный EAS Delete под шлюзом папки ([FolderSyncGate]) с ключом из БД; новый ключ сохраняется (Delete идёт с
+     * GetChanges=0 — изменения сервера не забираются). null — ключа нет (папка не синхронизирована).
+     */
+    private suspend fun deleteBatchUnderGate(
+        client: com.dedovmosol.iwomail.eas.EasClient,
+        folderId: String,
+        folderServerId: String,
+        emails: List<EmailInfo>
+    ): EasResult<String>? = FolderSyncGate.withFolder(folderId) {
+        val syncKey = folderDao.getFolder(folderId)?.syncKey?.takeIf { it != "0" }
+        syncKey?.let { key ->
+            client.deleteEmailsPermanentlyBatch(folderServerId, emails.map { it.serverId }, key).also { result ->
+                if (result is EasResult.Success) folderDao.updateSyncKey(folderId, result.data)
+            }
+        }
+    }
+
     suspend fun deleteEmailsPermanently(emailIds: List<String>): EasResult<Int> {
         return deleteEmailsPermanentlyWithProgress(emailIds) { _, _ -> }
     }
@@ -1057,7 +1149,6 @@ class EmailOperationsService(
 
             // === BATCH DELETE: группируем письма по папкам и удаляем пачкой ===
 
-            data class EmailInfo(val emailId: String, val folderId: String, val serverId: String, val subject: String)
             val emailInfos = mutableListOf<EmailInfo>()
             val alreadyDeleted = mutableListOf<String>()
 
@@ -1083,71 +1174,42 @@ class EmailOperationsService(
                 }
             }
 
-            for ((folderServerId, emails) in groupedByFolder) {
-                val folderId = emails.first().folderId
-                var syncKey = folderDao.getFolder(folderId)?.syncKey ?: "0"
-                ensureValidSyncKey(client, folderId, folderServerId, syncKey)?.let { syncKey = it }
+            for ((folderServerId, groupEmails) in groupedByFolder) {
+                val folderId = groupEmails.first().folderId
 
-                // Если syncKey всё ещё "0" — EWS fallback по одному
-                if (syncKey == "0") {
-                    if (client.isExchange2007()) {
-                        for (info in emails) {
-                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId, info.subject)
-                            if (ewsResult is EasResult.Success) {
-                                EmailSyncService.registerDeletedEmail(info.emailId, context)
-                                attachmentDao.deleteByEmail(info.emailId)
-                                emailDao.delete(info.emailId)
-                                deletedCount++
-                            }
-                            onProgress(deletedCount, total)
-                        }
-                    }
-                    continue
+                // MS-ASCMD 2.2.3.186.4: перед Delete клиент получает изменения папки — обычной синхронизацией, которая
+                // их обрабатывает. Прежние холостые Sync продвигали ключ мимо необработанных изменений: письма,
+                // попавшие в папку из Outlook, и удаления там терялись до полной пересинхронизации.
+                var emails = syncAndResolve(firstEmail.accountId, folderId, groupEmails)
+                deletedCount += groupEmails.size - emails.size // удалены на сервере — синхронизация их уже убрала
+                onProgress(deletedCount, total)
+                if (emails.isEmpty()) continue
+
+                var batchResult = deleteBatchUnderGate(client, folderId, folderServerId, emails)
+
+                // Ключ устарел или пакет не применён — синхронизация восстановит ключ (Status 3 → новая цепочка, с
+                // обработкой изменений), затем один повтор
+                if (batchResult is EasResult.Error &&
+                    (batchResult.message.contains("INVALID_SYNCKEY") || batchResult.message.contains("DELETE_NOT_APPLIED"))
+                ) {
+                    val before = emails.size
+                    emails = syncAndResolve(firstEmail.accountId, folderId, emails)
+                    deletedCount += before - emails.size
+                    onProgress(deletedCount, total)
+                    if (emails.isEmpty()) continue
+                    batchResult = deleteBatchUnderGate(client, folderId, folderServerId, emails)
                 }
 
-                // КРИТИЧНО: Полностью обновляем syncKey ПЕРЕД batch-удалением.
-                // EAS Sync Delete требует АКТУАЛЬНЫЙ SyncKey — иначе сервер
-                // вернёт Status=3 (INVALID_SYNCKEY) и удаление не произойдёт.
-                // Без этого цикла удаление было ТОЛЬКО ЛОКАЛЬНЫМ.
-                // MS-ASCMD 2.2.3.186.4: после получения начального SyncKey
-                // клиент ДОЛЖЕН выполнить Sync для получения всех изменений
-                // перед отправкой команд (Delete/Change).
-                var refreshSucceeded = false
-                for (refreshLoop in 0 until 10) {
-                    val refreshResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                    if (refreshResult is EasResult.Success) {
-                        syncKey = refreshResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-                        if (!refreshResult.data.moreAvailable) {
-                            refreshSucceeded = true
-                            break
-                        }
-                    } else {
-                        // Refresh failed — полный сброс syncKey с "0"
-                        val initResult = client.sync(folderServerId, "0")
-                        if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
-                            syncKey = initResult.data.syncKey
-                            folderDao.updateSyncKey(folderId, syncKey)
-                            for (innerLoop in 0 until 10) {
-                                val innerResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                                if (innerResult is EasResult.Success) {
-                                    syncKey = innerResult.data.syncKey
-                                    folderDao.updateSyncKey(folderId, syncKey)
-                                    if (!innerResult.data.moreAvailable) {
-                                        refreshSucceeded = true
-                                        break
-                                    }
-                                } else {
-                                    break
-                                }
-                            }
-                        }
-                        break
+                if (batchResult is EasResult.Success) {
+                    for (info in emails) {
+                        EmailSyncService.registerDeletedEmail(info.emailId, context)
+                        attachmentDao.deleteByEmail(info.emailId)
+                        emailDao.delete(info.emailId)
+                        deletedCount++
+                        onProgress(deletedCount, total)
                     }
-                }
-
-                // Если syncKey refresh полностью провалился — EWS fallback
-                if (!refreshSucceeded && client.isExchange2007()) {
+                } else if (batchResult != null || client.isExchange2007()) {
+                    // EAS не удалил (или ключа нет вовсе — только Exchange 2007): поэлементно через EWS
                     for (info in emails) {
                         val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId, info.subject)
                         if (ewsResult is EasResult.Success) {
@@ -1157,58 +1219,6 @@ class EmailOperationsService(
                             deletedCount++
                         }
                         onProgress(deletedCount, total)
-                    }
-                    continue
-                }
-
-                // BATCH DELETE: все письма из этой папки одним запросом
-                val serverIds = emails.map { it.serverId }
-                var batchResult = client.deleteEmailsPermanentlyBatch(folderServerId, serverIds, syncKey)
-
-                // Retry: INVALID_SYNCKEY или DELETE_NOT_APPLIED → полный сброс + catch-up + повтор
-                if (batchResult is EasResult.Error &&
-                    (batchResult.message.contains("INVALID_SYNCKEY") || batchResult.message.contains("DELETE_NOT_APPLIED"))) {
-                    val initResult = client.sync(folderServerId, "0")
-                    if (initResult is EasResult.Success && initResult.data.syncKey != "0") {
-                        syncKey = initResult.data.syncKey
-                        folderDao.updateSyncKey(folderId, syncKey)
-                        // Полный catch-up после сброса (не просто init sync!)
-                        for (retryRefresh in 0 until 10) {
-                            val refreshResult = client.sync(folderServerId, syncKey, windowSize = 50)
-                            if (refreshResult is EasResult.Success) {
-                                syncKey = refreshResult.data.syncKey
-                                folderDao.updateSyncKey(folderId, syncKey)
-                                if (!refreshResult.data.moreAvailable) break
-                            } else {
-                                break
-                            }
-                        }
-                        batchResult = client.deleteEmailsPermanentlyBatch(folderServerId, serverIds, syncKey)
-                    }
-                }
-
-                when {
-                    batchResult is EasResult.Success -> {
-                        folderDao.updateSyncKey(folderId, batchResult.data)
-                        for (info in emails) {
-                            EmailSyncService.registerDeletedEmail(info.emailId, context)
-                            attachmentDao.deleteByEmail(info.emailId)
-                            emailDao.delete(info.emailId)
-                            deletedCount++
-                            onProgress(deletedCount, total)
-                        }
-                    }
-                    batchResult is EasResult.Error -> {
-                        for (info in emails) {
-                            val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId, info.subject)
-                            if (ewsResult is EasResult.Success) {
-                                EmailSyncService.registerDeletedEmail(info.emailId, context)
-                                attachmentDao.deleteByEmail(info.emailId)
-                                emailDao.delete(info.emailId)
-                                deletedCount++
-                            }
-                            onProgress(deletedCount, total)
-                        }
                     }
                 }
             }
@@ -1316,7 +1326,22 @@ class EmailOperationsService(
     }
 }
 
-private val EAS_STATUS_EQ = Regex("Status\\s*=\\s*\\d+", RegexOption.IGNORE_CASE)
+private val CHANGE_STATUS = Regex("Change Status\\s*=\\s*\\d+", RegexOption.IGNORE_CASE)
+private val COLLECTION_STATUS = Regex("Collection Status\\s*=\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
-/** Откат оптимистичного флага только при явном Status сервера, не при обрыве сети. */
-internal fun isEasStatusReject(message: String): Boolean = EAS_STATUS_EQ.containsMatchIn(message)
+/**
+ * [MS-ASCMD] Sync Status коллекции, при которых повтор того же изменения не поможет: 4 — ошибка протокола (запрос
+ * неверен), 6 — ошибка преобразования данных, 7 — конфликт (побеждает сервер), 8 — объект не найден.
+ */
+private val REJECTING_COLLECTION_STATUSES = setOf(4, 6, 7, 8)
+
+/**
+ * Сервер отказал в самом локальном изменении (флаг, «прочитано»): откат. Всё остальное — устаревший SyncKey (3),
+ * изменилась иерархия папок (12), сбой сервера (5), HTTP-ошибки, нет связи — повод отправить изменение позже, а не
+ * терять его.
+ */
+internal fun isChangeRejected(message: String): Boolean {
+    if (CHANGE_STATUS.containsMatchIn(message)) return true
+    val status = COLLECTION_STATUS.find(message)?.groupValues?.get(1)?.toIntOrNull() ?: return false
+    return status in REJECTING_COLLECTION_STATUSES
+}

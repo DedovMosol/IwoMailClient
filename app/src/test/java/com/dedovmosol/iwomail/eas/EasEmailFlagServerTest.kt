@@ -62,7 +62,7 @@ class EasEmailFlagServerTest {
 
         val result = exchange.emailService().setFlag("5", "5:1", "K1", flag)
 
-        assertThat(result).isEqualTo(EasResult.Success("K2"))
+        assertThat(result).isEqualTo(EasResult.Success(FlagWrite("K2", flag)))
         val request = exchange.calls.single { it.command == "Sync" }.xml
         assertThat(request).contains("<ServerId>5:1</ServerId>")
         assertThat(request).contains("<FlagStatus>2</FlagStatus>")
@@ -71,13 +71,31 @@ class EasEmailFlagServerTest {
     }
 
     @Test
-    fun `flag the server rejects is an error`() = runBlocking<Unit> {
+    fun `rejected change keeps the new sync key, dateless flag is retried once with today's dates`() = runBlocking<Unit> {
         val exchange = FakeExchange { Reply.Wbxml(changeResponse(6)) }
 
         val result = exchange.emailService().setFlag("5", "5:1", "K1", MailFlag(MailFlag.STATUS_ACTIVE))
 
-        assertThat(result).isInstanceOf(EasResult.Error::class.java)
-        assertThat((result as EasResult.Error).message).contains("Change Status=6")
+        // Отказ в изменении — не ошибка команды: ключ K2 сервер выдал, его нужно сохранить
+        assertThat(result).isEqualTo(EasResult.Success(FlagWrite("K2", applied = null, changeStatus = 6)))
+        val requests = exchange.calls.filter { it.command == "Sync" }.map { it.xml }
+        assertThat(requests).hasSize(2)
+        assertThat(requests[0]).doesNotContain("DueDate")
+        // Повтор — с ключом из первого ответа и сроком
+        assertThat(requests[1]).contains("<SyncKey>K2</SyncKey>")
+        assertThat(requests[1]).contains("DueDate")
+    }
+
+    @Test
+    fun `cleared flag is sent as an empty Flag element`() = runBlocking<Unit> {
+        val exchange = FakeExchange { call -> if (call.command == "Sync") Reply.Wbxml(changeResponse(null)) else Reply.Http(500) }
+
+        val result = exchange.emailService().setFlag("5", "5:1", "K1", MailFlag.NONE)
+
+        assertThat(result).isEqualTo(EasResult.Success(FlagWrite("K2", MailFlag.NONE)))
+        val request = exchange.calls.single { it.command == "Sync" }.xml
+        assertThat(request).doesNotContain("FlagStatus")
+        assertThat(MailFlags.parse(XmlUtils.extractTagValue(request, "Flag"))).isEqualTo(MailFlag.NONE)
     }
 
     @Test
