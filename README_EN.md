@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.png" alt="iwo Mail Client" width="860">
+  <img src="docs/banner.png" alt="iwo Mail Client — Exchange ActiveSync (EAS 12.0, 12.1, 14.0, 14.1), EWS, Android" width="860">
 </p>
 
 <p align="center">
@@ -136,7 +136,8 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **Office 365:** typically does not work without Basic Auth.
 - **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
 - **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features. There is no SMTP sending: the outgoing server address is only stored in the account.
-- **Offline queue:** only for the star and read state. Tasks, notes, calendar, contacts, folder operations and message moves are server-first and are not deferred without a connection. Editing and deleting Exchange contacts is local-only for now.
+- **Offline queue:** only for the star and read state. Tasks, notes, calendar, contacts, folder operations and message moves are server-first and are not deferred without a connection.
+- **Exchange contacts:** read-only. They come from the server's Contacts folder (EAS Sync); edit and delete them in Outlook or OWA. In the app an Exchange contact can be copied to personal contacts, which are editable.
 - **On-device verification:** the horizontal-scroll fix in the message viewer and the WebView renderer-death recovery are covered by unit tests but have not been verified on a real device.
 - **S/MIME:** signing and encryption not implemented.
 - **EAS 16.x:** explicitly not a target version of the project; the code's main range is EAS 12.x-14.1.
