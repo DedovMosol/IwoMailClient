@@ -34,6 +34,9 @@ class EmailOperationsService(
     private val moveItemsStatusRegex = Regex("status=(\\d+)")
     private val previewWhitespaceRegex = Regex("\\s+")
 
+    /** SQLite ограничивает число параметров запроса (999 на Android 8): `IN (:ids)` — пачками. */
+    private val SQL_IN_CHUNK = 500
+
     /** Правки писем без связи, ждущие отправки (флаг, «прочитано»). */
     private val pendingChanges get() = database.pendingEmailChangeDao()
 
@@ -617,7 +620,8 @@ class EmailOperationsService(
             emailId,
             read = { emailDao.getFlagTarget(emailId)?.flag },
             target = target,
-            write = { emailDao.saveFlag(emailId, it) }
+            write = { emailDao.saveFlag(emailId, it) },
+            unconfirmed = pendingChanges.get(emailId)?.flag == true
         ) ?: return EasResult.Error("Письмо не найдено")
         if (started.target.reminderTime != null || started.previous.reminderTime != null) {
             com.dedovmosol.iwomail.sync.RescheduleRemindersWorker.enqueue(context)
@@ -736,17 +740,17 @@ class EmailOperationsService(
      * @return актуальные emailIds (могут отличаться от входных)
      */
     private suspend fun resolveEmailIds(
-        snapshots: List<EmailEntity>,
+        snapshots: List<EmailServerRef>,
         sourceFolderId: String
     ): List<String> {
+        if (snapshots.isEmpty()) return emptyList()
         val resolved = mutableListOf<String>()
-        // PERF: используем lightweight projection (id, serverId, subject, from, to, dateReceived)
-        // вместо полных EmailEntity (~30 полей с body) — экономия памяти на крупных папках.
+        // PERF: только id существующих (один запрос на пачку) и лёгкая проекция папки — без тел писем
+        val existing = snapshots.map { it.id }.chunked(SQL_IN_CHUNK).flatMap { emailDao.getExistingIds(it) }.toHashSet()
         var folderDedup: List<EmailDedupInfo>? = null
         for (snapshot in snapshots) {
             val emailId = snapshot.id
-            // Только id — без чтения тела письма
-            if (emailDao.getExistingIds(listOf(emailId)).isNotEmpty()) {
+            if (emailId in existing) {
                 resolved.add(emailId)
                 continue
             }
@@ -775,11 +779,10 @@ class EmailOperationsService(
     suspend fun moveEmails(emailIds: List<String>, targetFolderId: String, updateOriginalFolder: Boolean = true): EasResult<Int> {
         if (emailIds.isEmpty()) return EasResult.Success(0)
 
-        val firstEmail = emailDao.getEmail(emailIds.first())
+        // Снимки до синхронизации (без тел): по ним [resolveEmailIds] находит письма, если ServerId сменился
+        val allEmails = serverRefs(emailIds)
+        val firstEmail = allEmails.firstOrNull { it.id == emailIds.first() }
             ?: return EasResult.Error("Email not found")
-
-        // Снимки до синхронизации: по ним [resolveEmailIds] находит письма, если ServerId сменился
-        val allEmails = emailIds.mapNotNull { emailDao.getEmail(it) }
         if (!allEmails.all { it.accountId == firstEmail.accountId }) {
             return EasResult.Error("All emails must belong to the same account")
         }
@@ -1053,26 +1056,25 @@ class EmailOperationsService(
         return moveEmails(emailIds, targetFolderId)
     }
 
-    /** Письмо к окончательному удалению: адрес на сервере и тема (для поиска по EWS). */
-    private data class EmailInfo(val emailId: String, val folderId: String, val serverId: String, val subject: String)
+    /** Письма [ids] без тел, в порядке [ids] (отсутствующих в БД — нет в результате). */
+    private suspend fun serverRefs(ids: List<String>): List<EmailServerRef> {
+        val byId = ids.chunked(SQL_IN_CHUNK).flatMap { emailDao.getServerRefs(it) }.associateBy { it.id }
+        return ids.mapNotNull { byId[it] }
+    }
 
     /**
-     * Синхронизация папки перед Delete (изменения сервера обрабатываются, ключ — актуальный) и письма [infos] — заново:
+     * Синхронизация папки перед Delete (изменения сервера обрабатываются, ключ — актуальный) и письма [refs] — заново:
      * на EAS 12.1 после SyncKey=0 ServerId могут смениться (запись переезжает, [resolveEmailIds] находит её по
      * содержимому). Письма, которых больше нет (удалены на сервере), в результат не входят.
      */
-    private suspend fun syncAndResolve(accountId: Long, folderId: String, infos: List<EmailInfo>): List<EmailInfo> {
-        // Снимки — по порядку id ([resolveEmailIds] сопоставляет по индексу)
-        val snapshots = infos.mapNotNull { info -> emailDao.getEmail(info.emailId) }
+    private suspend fun syncAndResolve(accountId: Long, folderId: String, refs: List<EmailServerRef>): List<EmailServerRef> {
         try {
             emailSyncService.syncEmails(accountId, folderId, forceFullSync = false)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             android.util.Log.w("EmailOps", "Sync before delete failed, deleting with the current key: ${e.message}")
         }
-        return resolveEmailIds(snapshots, folderId).mapNotNull { id ->
-            emailDao.getEmail(id)?.let { EmailInfo(it.id, it.folderId, it.serverId, it.subject) }
-        }
+        return serverRefs(resolveEmailIds(refs, folderId))
     }
 
     /**
@@ -1083,7 +1085,7 @@ class EmailOperationsService(
         client: com.dedovmosol.iwomail.eas.EasClient,
         folderId: String,
         folderServerId: String,
-        emails: List<EmailInfo>
+        emails: List<EmailServerRef>
     ): EasResult<String>? = FolderSyncGate.withFolder(folderId) {
         val syncKey = folderDao.getFolder(folderId)?.syncKey?.takeIf { it != "0" }
         syncKey?.let { key ->
@@ -1111,58 +1113,43 @@ class EmailOperationsService(
             val total = emailIds.size
             var deletedCount = 0
 
-            // Ищем хотя бы одно существующее письмо для определения аккаунта
-            var firstEmail: com.dedovmosol.iwomail.data.database.EmailEntity? = null
-            for (id in emailIds) {
-                firstEmail = emailDao.getEmail(id)
-                if (firstEmail != null) break
-            }
-            if (firstEmail == null) {
+            // Письма без тел (очистка корзины — сотни писем, тела с картинками не нужны)
+            val emailInfos = serverRefs(emailIds)
+            if (emailInfos.isEmpty()) {
                 // Все письма уже удалены из БД (устаревшие ID)
                 emailIds.forEach { attachmentDao.deleteByEmail(it) }
                 onProgress(total, total)
                 return EasResult.Success(total)
             }
+            val accountId = emailInfos.first().accountId
 
-            val account = accountRepo.getAccount(firstEmail.accountId)
+            val account = accountRepo.getAccount(accountId)
                 ?: return EasResult.Error("Account not found")
 
             if (AccountType.valueOf(account.accountType) != AccountType.EXCHANGE) {
+                val existing = emailInfos.map { it.id }.toSet()
                 emailIds.forEach { emailId ->
-                    val email = emailDao.getEmail(emailId)
-                    if (email != null) {
-                        affectedFolderIds.add(email.folderId)
-                    }
                     attachmentDao.deleteByEmail(emailId)
-                    emailDao.delete(emailId)
+                    if (emailId in existing) emailDao.delete(emailId)
                     deletedCount++
                     onProgress(deletedCount, total)
                 }
+                emailInfos.forEach { affectedFolderIds.add(it.folderId) }
                 for (folderId in affectedFolderIds) {
                     updateFolderCounts(folderId)
                 }
                 return EasResult.Success(deletedCount)
             }
 
-            val client = accountRepo.createEasClient(firstEmail.accountId)
+            val client = accountRepo.createEasClient(accountId)
                 ?: return EasResult.Error("Failed to create client")
 
             // === BATCH DELETE: группируем письма по папкам и удаляем пачкой ===
 
-            val emailInfos = mutableListOf<EmailInfo>()
-            val alreadyDeleted = mutableListOf<String>()
-
-            for (emailId in emailIds) {
-                val email = emailDao.getEmail(emailId)
-                if (email == null) {
-                    attachmentDao.deleteByEmail(emailId)
-                    alreadyDeleted.add(emailId)
-                    continue
-                }
-                affectedFolderIds.add(email.folderId)
-                emailInfos.add(EmailInfo(emailId, email.folderId, email.serverId, email.subject))
-            }
-            deletedCount += alreadyDeleted.size
+            emailInfos.forEach { affectedFolderIds.add(it.folderId) }
+            // Письма, которых уже нет в БД, считаются удалёнными
+            deletedCount += emailIds.size - emailInfos.size
+            emailIds.minus(emailInfos.map { it.id }.toSet()).forEach { attachmentDao.deleteByEmail(it) }
             onProgress(deletedCount, total)
 
             // Группируем по folderServerId для batch-операций
@@ -1180,7 +1167,7 @@ class EmailOperationsService(
                 // MS-ASCMD 2.2.3.186.4: перед Delete клиент получает изменения папки — обычной синхронизацией, которая
                 // их обрабатывает. Прежние холостые Sync продвигали ключ мимо необработанных изменений: письма,
                 // попавшие в папку из Outlook, и удаления там терялись до полной пересинхронизации.
-                var emails = syncAndResolve(firstEmail.accountId, folderId, groupEmails)
+                var emails = syncAndResolve(accountId, folderId, groupEmails)
                 deletedCount += groupEmails.size - emails.size // удалены на сервере — синхронизация их уже убрала
                 onProgress(deletedCount, total)
                 if (emails.isEmpty()) continue
@@ -1193,29 +1180,34 @@ class EmailOperationsService(
                     (batchResult.message.contains("INVALID_SYNCKEY") || batchResult.message.contains("DELETE_NOT_APPLIED"))
                 ) {
                     val before = emails.size
-                    emails = syncAndResolve(firstEmail.accountId, folderId, emails)
+                    emails = syncAndResolve(accountId, folderId, emails)
                     deletedCount += before - emails.size
                     onProgress(deletedCount, total)
                     if (emails.isEmpty()) continue
                     batchResult = deleteBatchUnderGate(client, folderId, folderServerId, emails)
                 }
 
+                // Нет связи с сервером: поэлементный EWS-запрос на каждое письмо — это N таймаутов подряд (минуты
+                // и батарея) без шанса на успех; ошибку покажет итог (DELETE_FAILED)
+                val offline = (batchResult as? EasResult.Error)?.message
+                    ?.let { com.dedovmosol.iwomail.network.ConnectionFailure.fromMessage(it)?.connectionLevel } == true
+
                 if (batchResult is EasResult.Success) {
                     for (info in emails) {
-                        EmailSyncService.registerDeletedEmail(info.emailId, context)
-                        attachmentDao.deleteByEmail(info.emailId)
-                        emailDao.delete(info.emailId)
+                        EmailSyncService.registerDeletedEmail(info.id, context)
+                        attachmentDao.deleteByEmail(info.id)
+                        emailDao.delete(info.id)
                         deletedCount++
                         onProgress(deletedCount, total)
                     }
-                } else if (batchResult != null || client.isExchange2007()) {
+                } else if (!offline && (batchResult != null || client.isExchange2007())) {
                     // EAS не удалил (или ключа нет вовсе — только Exchange 2007): поэлементно через EWS
                     for (info in emails) {
                         val ewsResult = client.deleteEmailPermanentlyViaEWS(info.serverId, info.subject)
                         if (ewsResult is EasResult.Success) {
-                            EmailSyncService.registerDeletedEmail(info.emailId, context)
-                            attachmentDao.deleteByEmail(info.emailId)
-                            emailDao.delete(info.emailId)
+                            EmailSyncService.registerDeletedEmail(info.id, context)
+                            attachmentDao.deleteByEmail(info.id)
+                            emailDao.delete(info.id)
                             deletedCount++
                         }
                         onProgress(deletedCount, total)

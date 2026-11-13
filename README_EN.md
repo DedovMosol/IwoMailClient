@@ -32,7 +32,7 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 ## ✨ Features
 
 - **📧 Mail:** sync of system and user folders, HTML sending, attachments, inline images, CC/BCC, importance, search, filters, favorites, conversation threads (by `ConversationId` on EAS 14.0+, by subject on Exchange 2007), multi-select, batch operations, configurable left/right swipes (to Deleted Items, read/unread, flag).
-- **🚩 Flags:** follow-up flag with due date and reminder (`[MS-ASEMAIL] Flag`, as in Outlook); the star is set immediately and reverts to the server value if the server rejects it.
+- **🚩 Flags:** follow-up flag with due date and reminder (`[MS-ASEMAIL] Flag`, as in Outlook); the star is set immediately and reverts to the server value if the server rejects it. A star or read state set while offline is kept locally, queued in `pending_email_changes` and sent to the server later (`PendingMailChangesWorker`).
 - **📖 Reading:** remote images are not loaded by default (show for one message, trusted senders, "always load"), unsubscribe from mailing lists (`List-Unsubscribe`, one-click per RFC 8058), print and save as PDF via the system print dialog, save a message as `.eml`, answer read-receipt requests (decline — EWS `SuppressReadReceipt`), Outlook RSS items (`IPM.Post.RSS`) with a link to the article.
 - **📝 Drafts:** server mode via Exchange/EWS and a local beta mode, selectable in onboarding and account settings.
 - **📤 Sending:** scheduled send (exact alarm + WorkManager) and a scheduled mail screen (send now, reschedule, cancel), outbox queue for offline scenarios, undo send (0/5/10/20/30 s), MDN/DSN requests.
@@ -135,7 +135,9 @@ Android mail client focused on **Microsoft Exchange Server 2007 SP1+** through *
 - **OAuth 2.0 / Modern Auth:** not supported.
 - **Office 365:** typically does not work without Basic Auth.
 - **NTLM for EAS:** the EAS transport supports Basic Auth only (NTLMv2 applies to EWS operations only); the `/Microsoft-Server-ActiveSync` virtual directory must allow Basic Auth.
-- **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features.
+- **IMAP/POP3:** beta implementation, does not cover calendar, contacts, tasks, notes, Direct Push and EWS features. There is no SMTP sending: the outgoing server address is only stored in the account.
+- **Offline queue:** only for the star and read state. Tasks, notes, calendar, contacts, folder operations and message moves are server-first and are not deferred without a connection. Editing and deleting Exchange contacts is local-only for now.
+- **On-device verification:** the horizontal-scroll fix in the message viewer and the WebView renderer-death recovery are covered by unit tests but have not been verified on a real device.
 - **S/MIME:** signing and encryption not implemented.
 - **EAS 16.x:** explicitly not a target version of the project; the code's main range is EAS 12.x-14.1.
 
@@ -177,10 +179,10 @@ Persistence / Network
   HttpClientProvider, NetworkMonitor, NtlmAuthenticator
     ↓
 Background
-  PushService, SyncWorker, OutboxWorker, scheduled send, reminders, notifications, watchdogs
+  PushService, SyncWorker, OutboxWorker, PendingMailChangesWorker, scheduled send, reminders, notifications, watchdogs
 ```
 
-Details: [Project Architecture](docs/ARCHITECTURE.md)
+Details: [Project Architecture](docs/ARCHITECTURE_EN.md) · [RU](docs/ARCHITECTURE.md)
 
 ## 🛠 Build from source
 
@@ -202,7 +204,7 @@ On Windows:
 
 - [Changelog RU](docs/CHANGELOG_RU.md)
 - [Changelog EN](docs/CHANGELOG_EN.md)
-- [Project Architecture](docs/ARCHITECTURE.md)
+- [Project Architecture (EN)](docs/ARCHITECTURE_EN.md) · [Архитектура проекта (RU)](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md) · [Reporting a vulnerability](SECURITY.md)
 - [Privacy Policy](docs/PRIVACY_POLICY.md)
 - [XmlPullParser migration plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)

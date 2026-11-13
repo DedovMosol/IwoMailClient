@@ -108,6 +108,39 @@ class FlagWriteTrackerTest {
     }
 
     @Test
+    fun `unconfirmed local star rolls back to the likely server value when the record was forgotten`() = runTest {
+        // Процесс перезапущен: записи об этом письме нет, а звезда в БД ждёт отправки и не подтверждена сервером
+        db = on
+        val s = tracker.start("e", { db }, { it }, { db = it }, unconfirmed = true)!!
+
+        finish(s, Outcome.Rejected)
+
+        // Откат к значению в БД оставил бы отклонённую сервером звезду навсегда
+        assertThat(db).isEqualTo(MailFlag.NONE)
+    }
+
+    @Test
+    fun `unconfirmed cleared star rolls back to an active one`() = runTest {
+        db = MailFlag.NONE
+        val s = tracker.start("e", { db }, { it }, { db = it }, unconfirmed = true)!!
+
+        finish(s, Outcome.Rejected)
+
+        assertThat(db).isEqualTo(on)
+    }
+
+    @Test
+    fun `a record that exists keeps its confirmed flag even if the new tap is unconfirmed`() = runTest {
+        val first = tap()                    // сервер подтверждал: NONE
+        finish(first, Outcome.KeptLocal)     // звезда ждёт отправки
+        val retry = tracker.start("e", { db }, { it }, { db = it }, unconfirmed = true)!!
+
+        finish(retry, Outcome.Rejected)
+
+        assertThat(db).isEqualTo(MailFlag.NONE)
+    }
+
+    @Test
     fun `retrying the same flag does not rewrite the database`() = runTest {
         db = on
         val s = tracker.start("e", { db }, { it }, { pendingWrites++; db = it })!!

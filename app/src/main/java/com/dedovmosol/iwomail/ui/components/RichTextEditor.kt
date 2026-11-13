@@ -142,6 +142,10 @@ class RichTextEditorController {
     /** Номер последнего setHtml/setHtmlAsync (главный поток): устаревший асинхронный результат не показывается. */
     private var htmlRequest = 0
 
+    /** Текст готовится к показу в редакторе ([setHtmlAsync]) — содержимое редактора ещё не актуально. */
+    internal var isPreparingHtml = false
+        private set
+
     /**
      * Текст не показать: рендерер WebView на нём падал или для подготовки не хватило памяти. Редактор тогда не
      * показывается вовсе — пустой редактор затёр бы при вводе текст письма, который остаётся в [latestHtml].
@@ -215,6 +219,9 @@ class RichTextEditorController {
      */
     suspend fun setHtmlAsync(html: String) {
         val request = ++htmlRequest
+        // Пока текст готовится, в редакторе его ещё нет: сброс из редактора ([awaitCurrentHtml]) вернул бы пустоту и
+        // затёр бы тело письма — берётся сохранённый latestHtml
+        isPreparingHtml = true
         val prepared = try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { prepareHtml(html) }
         } catch (e: OutOfMemoryError) {
@@ -223,6 +230,9 @@ class RichTextEditorController {
         } catch (e: StackOverflowError) {
             android.util.Log.e("RichTextEditor", "Sanitizer overflow on ${html.length} chars", e)
             null
+        } finally {
+            // Отмена (экран закрыт) тоже снимает признак; новый вызов, начатый позже, выставит его заново
+            if (request == htmlRequest) isPreparingHtml = false
         }
         if (request != htmlRequest) return
         if (prepared == null) {
@@ -360,6 +370,8 @@ fun rememberRichTextEditorController(): RichTextEditorController {
 suspend fun RichTextEditorController.awaitCurrentHtml(
     timeoutMs: Long = RICH_TEXT_EDITOR_FLUSH_TIMEOUT_MS
 ): String? {
+    // Текст ещё готовится к показу: редактор пуст, актуален сохранённый
+    if (isPreparingHtml || isContentUnavailable) return latestHtml.takeIf { it.isNotEmpty() }
     var flushId: Long? = null
     val flushed = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
         kotlinx.coroutines.suspendCancellableCoroutine<String?> { continuation ->
