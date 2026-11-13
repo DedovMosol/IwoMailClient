@@ -53,14 +53,18 @@ class FlagWriteTracker(
         emailId: String,
         read: suspend () -> MailFlag?,
         target: (MailFlag) -> MailFlag,
-        write: suspend (MailFlag) -> Unit
+        write: suspend (MailFlag) -> Unit,
+        unconfirmed: Boolean = false
     ): Started? = mutex.withLock {
         evictIdle()
         val previous = read() ?: return@withLock null
         val wanted = target(previous)
         // Повторная отправка того же флага (очередь без связи) БД не трогает: лишняя запись перезапросила бы списки
         if (wanted != previous) write(wanted)
-        val entry = entries.getOrPut(emailId) { Entry(previous) }
+        // Флаг в БД ждёт отправки ([unconfirmed]) и записи об этом письме нет (процесс перезапущен, запись забыта):
+        // значение в БД — не то, что подтвердил сервер, откат к нему оставил бы отклонённый флаг. Сервер, скорее всего,
+        // держит противоположное ([serverGuess]).
+        val entry = entries.getOrPut(emailId) { Entry(if (unconfirmed) serverGuess(previous) else previous) }
         entry.latest = ++lastTicket
         entry.inFlight++
         entry.touchedAt = clock()
@@ -94,6 +98,12 @@ class FlagWriteTracker(
             }
         }
     }
+
+    /**
+     * Что, вероятнее всего, держит сервер, пока на устройстве ждёт отправки [local]: звезда ставится и снимается, поэтому
+     * противоположное (без срока — срок и напоминание сервера неизвестны).
+     */
+    private fun serverGuess(local: MailFlag): MailFlag = if (local.active) MailFlag.NONE else MailFlag(MailFlag.STATUS_ACTIVE)
 
     /** Флаг в БД по итогу: принятый сервером, подтверждённый (откат) или прежний (null). */
     private fun settledFlag(outcome: Outcome, confirmed: MailFlag): MailFlag? = when (outcome) {

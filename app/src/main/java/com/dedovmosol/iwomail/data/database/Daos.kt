@@ -238,6 +238,13 @@ interface EmailDao {
     @Query("SELECT id, serverId, subject, `from`, `to`, dateReceived FROM emails WHERE folderId = :folderId")
     suspend fun getDedupInfoByFolder(folderId: String): List<EmailDedupInfo>
 
+    /** Адрес писем на сервере без тел: SQLite ограничивает число параметров IN (999) — вызывать пачками ≤ 500. */
+    @Query("""
+        SELECT id, accountId, folderId, serverId, subject, `from`, `to`, dateReceived
+        FROM emails WHERE id IN (:ids)
+    """)
+    suspend fun getServerRefs(ids: List<String>): List<EmailServerRef>
+
     /** Черновики на устройстве (local_draft_) — целиком: их загружает синхронизация (тела остальных не читаются). */
     @Query("SELECT * FROM emails WHERE folderId = :folderId AND substr(serverId, 1, 12) = 'local_draft_'")
     suspend fun getLocalDrafts(folderId: String): List<EmailEntity>

@@ -560,6 +560,22 @@ data class EmailEntity(
     val conversationId: String? = null
 )
 
+/**
+ * Письмо для операций на сервере (перемещение, окончательное удаление) без тела: адрес на сервере и поля, по которым
+ * письмо находят после смены ServerId на EAS 12.1. Тело письма с картинками — мегабайты, а операция над сотнями писем
+ * (очистка корзины) не должна загружать их все.
+ */
+data class EmailServerRef(
+    val id: String,
+    val accountId: Long,
+    val folderId: String,
+    val serverId: String,
+    val subject: String,
+    val from: String,
+    val to: String,
+    val dateReceived: Long
+)
+
 data class EmailDedupInfo(
     val id: String,
     val serverId: String,

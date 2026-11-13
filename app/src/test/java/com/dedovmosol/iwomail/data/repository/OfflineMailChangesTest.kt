@@ -281,7 +281,89 @@ class OfflineMailChangesTest {
         assertThat(pending(id)!!.flag).isTrue()
     }
 
+    @Test
+    fun `queued star the server rejects after a restart is rolled back and leaves the queue`() = runBlocking<Unit> {
+        val id = email()
+        // Состояние после перезапуска процесса: звезда в БД и в очереди, записи трекера нет
+        db.emailDao().updateFlag(id, true, false, null, null, null)
+        db.pendingEmailChangeDao().markFlag(id, accountId)
+        coEvery { client.setFlag(any(), any(), any(), any()) } returns EasResult.Success(FlagWrite("K2", applied = null, changeStatus = 6))
+
+        assertThat(flushQueue()).isTrue()
+
+        assertThat(stored(id).flagged).isFalse()
+        assertThat(pending(id)).isNull()
+        assertThat(key(inbox)).isEqualTo("K2")
+    }
+
+    // ── Перемещение ─────────────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `move pairs each email with itself when one of the ids is already gone`() = runBlocking<Unit> {
+        val a = email(serverId = "2:1")
+        val b = email(serverId = "2:2")
+        coEvery { client.sync("2", any(), any(), any(), any()) } returns EasResult.Success(SyncResponse("K2", 1, emptyList()))
+        coEvery { client.moveItems(any(), "3") } returns EasResult.Success(mapOf("2:1" to "3:11", "2:2" to "3:12"))
+
+        val result = ops.moveEmails(listOf(a, "${accountId}_2:404", b), trash)
+
+        assertThat(result).isEqualTo(EasResult.Success(2))
+        assertThat(runBlocking { db.emailDao().getEmail("${accountId}_3:11") }!!.subject).isEqualTo("Смета")
+        assertThat(runBlocking { db.emailDao().getEmail("${accountId}_3:12") }).isNotNull()
+        assertThat(runBlocking { db.emailDao().getEmail(a) }).isNull()
+    }
+
     // ── Окончательное удаление ──────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `permanent delete of a large trash keeps order across the SQL chunks`() = runBlocking<Unit> {
+        val ids = (1..1_200).map { i ->
+            EmailEntity(
+                id = "${accountId}_3:$i", accountId = accountId, folderId = trash, serverId = "3:$i",
+                from = "a@corp.example", to = "me@corp.example", subject = "s$i", body = "", dateReceived = 1_000L + i, read = true
+            )
+        }
+        db.emailDao().insertAllIgnore(ids)
+        coEvery { client.sync("3", "T1", any(), any(), any()) } returns EasResult.Success(SyncResponse("T2", 1, emptyList()))
+        val sent = mutableListOf<String>()
+        coEvery { client.deleteEmailsPermanentlyBatch("3", any(), "T2") } coAnswers {
+            sent += arg<List<String>>(1)
+            EasResult.Success("T3")
+        }
+
+        val result = ops.deleteEmailsPermanently(ids.map { it.id })
+
+        assertThat(result).isEqualTo(EasResult.Success(1_200))
+        assertThat(sent).containsExactlyElementsIn(ids.map { it.serverId }).inOrder()
+        assertThat(db.emailDao().getEmailsByFolderList(trash)).isEmpty()
+    }
+
+    @Test
+    fun `permanent delete without a connection does not try every email over EWS`() = runBlocking<Unit> {
+        val id = email(folder = trash, serverId = "3:1")
+        coEvery { client.sync("3", "T1", any(), any(), any()) } returns EasResult.Success(SyncResponse("T2", 1, emptyList()))
+        coEvery { client.deleteEmailsPermanentlyBatch(any(), any(), any()) } returns offline
+
+        val result = ops.deleteEmailsPermanently(listOf(id))
+
+        // Раньше каждое письмо уходило отдельным EWS-запросом (N таймаутов подряд, батарея)
+        assertThat(result).isEqualTo(EasResult.Error("DELETE_FAILED"))
+        assertThat(runBlocking { db.emailDao().getEmail(id) }).isNotNull()
+        coVerify(exactly = 0) { client.deleteEmailPermanentlyViaEWS(any(), any()) }
+    }
+
+    @Test
+    fun `permanent delete rejected by the server falls back to EWS per email`() = runBlocking<Unit> {
+        val id = email(folder = trash, serverId = "3:1")
+        coEvery { client.sync("3", "T1", any(), any(), any()) } returns EasResult.Success(SyncResponse("T2", 1, emptyList()))
+        coEvery { client.deleteEmailsPermanentlyBatch(any(), any(), any()) } returns EasResult.Error("Batch delete failed: Status=5")
+        coEvery { client.deleteEmailPermanentlyViaEWS("3:1", "Смета") } returns EasResult.Success(Unit)
+
+        val result = ops.deleteEmailsPermanently(listOf(id))
+
+        assertThat(result).isEqualTo(EasResult.Success(1))
+        assertThat(runBlocking { db.emailDao().getEmail(id) }).isNull()
+    }
 
     @Test
     fun `permanent delete takes the folder changes by a real sync instead of dropping them`() = runBlocking<Unit> {

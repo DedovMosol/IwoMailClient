@@ -60,7 +60,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * ViewModel для экрана создания письма.
- * Следует MVVM-паттерну проекта (см. ARCHITECTURE.md §2.1, COMPOSESCREEN_MVVM_PLAN.md).
+ * Следует MVVM-паттерну проекта (см. docs/ARCHITECTURE.md §2.1).
  *
  * Инварианты:
  * - Протокол EAS/EWS не затрагивается (изменения только в presentation layer)
