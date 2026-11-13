@@ -4,6 +4,10 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Sent Items after sending: no separate full sync bypassing the folder gate (2026-11-13)
+- **SyncKey race**: when the regular Sent sync after sending failed, a separate full sync (`syncSentFull`) ran: `Sync` with key `0` and paging outside `FolderSyncGate`. A star or read change sent meanwhile used the old key and waited for the next attempt, and its own `Sync(0)` (`ensureValidSyncKey`) reset the server state again in the middle of the paging. The key was saved only at the end, overwriting the key saved under the gate, and the response Status was not checked
+- **Fix**: `syncSentFull` is removed (about 170 lines duplicating the regular sync). The regular sync already recovers from a stale key (Status 3/12) with a full resync under the gate and the `reconcileSentAfterFullResync` reconcile. On any other error (no connection, server failure) `refreshSentFolder` stops: a full sync without a connection would only reset the key
+- **Tests**: the full Sent sync waits for the folder gate (the "no gate" mutant is caught) and keeps the ConversationId of replies
 
 ### Star (flag) turned itself off, or could not be removed after fast taps (2026-11-12)
 - **Wrong state after fast taps**: the rollback after a server rejection restored the snapshot taken before the tap. With several taps in flight, that snapshot was the optimistic value of the previous tap, so the star ended up in a random state. `FlagWriteTracker` now sends only the latest tap, lets only it settle the DB, and rolls back to the last server-confirmed flag

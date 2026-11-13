@@ -153,8 +153,6 @@ class MailRepository(private val context: Context) {
         return emailSyncService.syncEmails(accountId, folderId, forceFullSync)
     }
     
-    suspend fun syncSentFull(accountId: Long, folderId: String): EasResult<Int> = 
-        emailSyncService.syncSentFull(accountId, folderId)
     
     // === Делегирование к EmailOperationsService ===
     

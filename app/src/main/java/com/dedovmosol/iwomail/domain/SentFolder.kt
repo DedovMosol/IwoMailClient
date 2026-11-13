@@ -11,8 +11,10 @@ private val SENT_REFRESH_DELAYS_MS = longArrayOf(3_000L, 6_000L, 10_000L)
 
 /**
  * После отправки — синхронизировать «Отправленные», иначе письмо появится в них только при следующей синхронизации
- * (через 15+ минут). Инкрементальная синхронизация, пока не придёт новое письмо; ошибка — одна полная (на случай
- * устаревшего ключа синхронизации). Не вышло — не беда: письмо уже отправлено.
+ * (через 15+ минут). Инкрементальная синхронизация, пока не придёт новое письмо. Ошибка — конец попыток: устаревший
+ * ключ (Status 3/12) обычная синхронизация уже сама исправила полной ресинхронизацией под шлюзом папки
+ * ([FolderSyncGate][com.dedovmosol.iwomail.data.repository.FolderSyncGate]), а без связи полная только сбросила бы
+ * ключ. Не вышло — не беда: письмо уже отправлено.
  */
 suspend fun refreshSentFolder(context: Context, accountId: Long) {
     try {
@@ -23,7 +25,7 @@ suspend fun refreshSentFolder(context: Context, accountId: Long) {
             when (val result = mailRepo.syncEmails(accountId, sent.id)) {
                 is EasResult.Success -> if (result.data > 0) return
                 is EasResult.Error -> {
-                    mailRepo.syncSentFull(accountId, sent.id)
+                    android.util.Log.w("SentFolder", "Sent folder sync failed: ${result.message}")
                     return
                 }
             }

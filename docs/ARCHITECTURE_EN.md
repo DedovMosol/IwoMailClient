@@ -295,6 +295,10 @@ The SyncKey ([MS-ASCMD] Sync) is a chain: every response issues the next key. Tw
 
 Inside the gate the SyncKey is re-read from the DB, so the loop continues from a key advanced by a local change. The mutex is not reentrant: the same folder's gate must not be taken inside the block.
 
+There is no separate full sync of Sent Items. After sending, `refreshSentFolder` runs up to three regular folder syncs; the regular sync itself recovers from a stale key (Status 3/12) with a full resync through the gate and the `reconcileSentAfterFullResync` reconcile. On any other error (no connection, server failure) it stops: a full sync without a connection would only reset the key.
+
+Only the new-account check (`VerificationScreen.findTestEmail`) stays outside the gate: it uses a temporary `EasClient` before the account is saved, writes nothing to the DB, and no other sync of that account exists yet.
+
 #### Optimistic flag writes (`FlagWriteTracker.shared`)
 
 A star/flag change is written to the DB immediately, then sent to the server as a Sync Change.
@@ -333,7 +337,6 @@ Lightweight DAO projections avoid loading full `EmailEntity` objects for large f
 
 | Use case | Projection |
 |----------|------------|
-| Orphan detection after a full resync of Sent (`syncSentFull`) | `EmailDedupInfo` (6 fields) |
 | Sent reconcile after a full resync (`reconcileSentAfterFullResync`) | `List<String>` ids only |
 | Generic folder reconcile after a full resync (`reconcileGenericFolderAfterFullResync`) | `List<String>` ids only |
 | ServerId content matching after a `SyncKey=0` reset (`resolveEmailIds`) | `EmailDedupInfo` |

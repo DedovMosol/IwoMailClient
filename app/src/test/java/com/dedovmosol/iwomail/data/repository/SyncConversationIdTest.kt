@@ -13,7 +13,13 @@ import com.dedovmosol.iwomail.eas.FolderType
 import com.dedovmosol.iwomail.eas.SyncResponse
 import com.google.common.truth.Truth.assertThat
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -25,6 +31,7 @@ import org.robolectric.annotation.Config
 /**
  * ConversationId из Sync попадает в письма на настоящей Room-БД — и обычной синхронизацией папки, и полной
  * синхронизацией «Отправленных» (ответы в цепочке). Письмо Exchange 2007 — без переписки. Подменён только [EasClient].
+ * Полная синхронизация «Отправленных» идёт через шлюз папки.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -86,9 +93,39 @@ class SyncConversationIdTest {
     fun `full Sent sync keeps the conversation of replies`() = runBlocking<Unit> {
         serverSends("5", mail("5:1", "RE: Смета", "AAQkADAwATM0MDAAMS1iNWM="))
 
-        service.syncSentFull(accountId, "${accountId}_5")
+        service.syncEmailsEas(accountId, "${accountId}_5", forceFullSync = true)
 
         val sent = db.emailDao().getEmailsByFolderList("${accountId}_5").single()
         assertThat(sent.conversationId).isEqualTo("AAQkADAwATM0MDAAMS1iNWM=")
+    }
+
+    /**
+     * Полная синхронизация «Отправленных» сбрасывает состояние на сервере (Sync с ключом 0). Пока шлюз папки занят
+     * (звезда или «прочитано» отправляются со старым ключом), она не начинается: иначе сервер отверг бы изменение, а
+     * ключ, сохранённый одним из запросов, разошёлся бы с сервером.
+     */
+    @Test
+    fun `full Sent sync waits for the folder gate`() = runBlocking<Unit> {
+        serverSends("5", mail("5:1", "Смета", null))
+        val folderId = "${accountId}_5"
+        val gateHeld = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val change = launch(Dispatchers.Default) {
+            FolderSyncGate.withFolder(folderId) {
+                gateHeld.complete(Unit)
+                release.await()
+            }
+        }
+        gateHeld.await()
+
+        val sync = async(Dispatchers.Default) { service.syncEmailsEas(accountId, folderId, forceFullSync = true) }
+        delay(300)
+        coVerify(exactly = 0) { easClient.sync("5", any(), any(), any(), any()) }
+
+        release.complete(Unit)
+        change.join()
+        assertThat(sync.await()).isInstanceOf(EasResult.Success::class.java)
+        coVerify(exactly = 1) { easClient.sync("5", "0", any(), any(), any()) }
+        assertThat(db.folderDao().getFolder(folderId)!!.syncKey).isEqualTo("K2")
     }
 }
