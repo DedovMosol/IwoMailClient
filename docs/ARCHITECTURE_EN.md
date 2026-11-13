@@ -473,7 +473,7 @@ Exchange 2007 SP1 exposes EAS 12.1. The app treats Exchange 2007 behavior as a f
 | Read receipts | The server sends them on mark-read (EAS/EWS) | Decline: EWS `SuppressReadReceipt` before marking read |
 | Category colors | Master Category List (Exchange 2010+) | Exchange 2007: standard Outlook names or a deterministic color by name; a manual override takes priority |
 | Direct Push | EAS Ping | Adaptive heartbeat; honors the server `HeartbeatInterval` on `Status=5` |
-| Contacts | EAS + GAL search | Local contacts are also supported |
+| Contacts | EAS + GAL search | Exchange contacts are read-only (Sync reads Add only; edit and delete buttons exist for personal contacts only); local contacts are also supported |
 | Notes | EWS on Exchange 2007 | The EAS Notes class is 14.0+ |
 | Tasks | EAS/EWS depending on version and path | EWS for Exchange 2007 task gaps |
 | Calendar sync | EAS primary | EWS supplements details, attachments and meeting paths |

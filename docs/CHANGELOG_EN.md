@@ -9,6 +9,10 @@ Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, r
 - **Fix**: `syncSentFull` is removed (about 170 lines duplicating the regular sync). The regular sync already recovers from a stale key (Status 3/12) with a full resync under the gate and the `reconcileSentAfterFullResync` reconcile. On any other error (no connection, server failure) `refreshSentFolder` stops: a full sync without a connection would only reset the key
 - **Tests**: the full Sent sync waits for the folder gate (the "no gate" mutant is caught) and keeps the ConversationId of replies
 
+### Documentation: Exchange contacts, EAS versions on the banner (2026-11-13)
+- **Corrected a wrong statement**, "editing and deleting Exchange contacts is local-only". In the code, edit and delete buttons (`ContactDetailsDialog`, the Personal tab, bulk delete) exist only for personal contacts. Exchange contacts are read-only in the app and can be copied to personal contacts. There is no local delete after which a contact would "come back"
+- **README banner**: the supported EAS versions, 12.0, 12.1, 14.0 and 14.1 (as in `EasVersionDetector`), are now shown under "Exchange ActiveSync"
+
 ### Star (flag) turned itself off, or could not be removed after fast taps (2026-11-12)
 - **Wrong state after fast taps**: the rollback after a server rejection restored the snapshot taken before the tap. With several taps in flight, that snapshot was the optimistic value of the previous tap, so the star ended up in a random state. `FlagWriteTracker` now sends only the latest tap, lets only it settle the DB, and rolls back to the last server-confirmed flag
 - **Parallel Sync requests with one SyncKey**: the flag Sync Change, `markAsRead` and the folder sync loop sent requests with the same SyncKey in parallel (Status 3, then a full resync). `FolderSyncGate` allows one Sync request per folder at a time; the key is re-read from the DB inside the gate
