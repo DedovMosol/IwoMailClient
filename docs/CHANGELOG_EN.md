@@ -4,6 +4,11 @@ The changelog is kept in two languages: the English version is this file, the Ru
 Version: MAJOR.MINOR.PATCH plus a pre-release letter (a — alpha, b — beta, rc — release candidate).
 
 ## v1.6.3b
+### Conversations: search, Inbox+Sent, In-Reply-To on 2007 (2026-11-14)
+- **Two “RE: Meeting”** messages without an original and without In-Reply-To no longer merge: subject grouping needs both a reply and a non-prefixed message
+- **In-Reply-To**: from MIME when the body is loaded and from EWS GetItem (`message:InReplyTo`) on Exchange 2007; column `emails.inReplyTo` (DB v53). Message-ID links beat subject
+- **Inbox and Sent**: an Inbox thread can include Sent replies and vice versa (not drafts)
+- **Search**: the same grouping when conversations are on
 ### Docs: published release is 1.6.1 (2026-11-14)
 - GitHub Releases Latest is **v1.6.1**. There is no 1.6.2 tag. README, ARCHITECTURE and `update.json` no longer point at missing 1.6.2 APKs
 ### ConversationIndex and offline task/note create (2026-11-14)

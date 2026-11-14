@@ -594,6 +594,7 @@ fun EmailListScreen(
             // Список писем
             EmailList(
                 emails = filteredEmails,
+                peerEmails = uiState.peerEmails,
                 selectedIds = selectedIds,
                 isSelectionMode = isSelectionMode,
                 isRefreshing = isRefreshing,
@@ -832,6 +833,7 @@ private fun SelectionTopBar(
 @Composable
 private fun EmailList(
     emails: List<EmailEntity>,
+    peerEmails: List<EmailEntity> = emptyList(),
     selectedIds: Set<String>,
     isSelectionMode: Boolean,
     isRefreshing: Boolean,
@@ -908,6 +910,7 @@ private fun EmailList(
                 ) {
                     EmailListContent(
                         emails = emails,
+                        peerEmails = peerEmails,
                         selectedIds = selectedIds,
                         isSelectionMode = isSelectionMode,
                         isTrashOrSpam = isTrashOrSpam,
@@ -1045,6 +1048,7 @@ private fun EnvelopeRefreshIndicator(
 @Composable
 private fun EmailListContent(
     emails: List<EmailEntity>,
+    peerEmails: List<EmailEntity> = emptyList(),
     selectedIds: Set<String>,
     isSelectionMode: Boolean,
     isTrashOrSpam: Boolean,
@@ -1133,8 +1137,15 @@ private fun EmailListContent(
 
     // === Цепочки писем: группировка — не в главном потоке. До первой группировки список не показывается (не мелькает
     // плоским); при обновлении писем видна прежняя группировка, пока не готова новая ===
-    val threads by androidx.compose.runtime.produceState<List<com.dedovmosol.iwomail.domain.EmailThread>?>(null, emails, threaded) {
-        value = if (threaded) withContext(Dispatchers.Default) { com.dedovmosol.iwomail.domain.EmailThreads.group(emails) } else null
+    val threads by androidx.compose.runtime.produceState<List<com.dedovmosol.iwomail.domain.EmailThread>?>(
+        null, emails, peerEmails, threaded
+    ) {
+        value = if (!threaded) null else withContext(Dispatchers.Default) {
+            val localIds = emails.mapTo(HashSet(emails.size)) { it.id }
+            val extra = peerEmails.filter { it.id !in localIds }
+            com.dedovmosol.iwomail.domain.EmailThreads.group(emails + extra)
+                .filter { thread -> thread.emails.any { it.id in localIds } }
+        }
     }
     var expandedThreads by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val rows = remember(emails, threaded, threads, expandedThreads) {

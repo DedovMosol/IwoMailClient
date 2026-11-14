@@ -222,7 +222,7 @@ interface EmailDao {
                flagged, importance, hasAttachments, originalFolderId,
                mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
                flagStartDate, flagDueDate, flagReminder, flagCompleted,
-               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt, conversationId, conversationIndex
+               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt, conversationId, conversationIndex, inReplyTo
         FROM emails
         WHERE folderId = :folderId
         ORDER BY dateReceived DESC
@@ -372,6 +372,9 @@ interface EmailDao {
     @Query("UPDATE emails SET internetMessageId = :internetMessageId WHERE id = :id")
     suspend fun updateInternetMessageId(id: String, internetMessageId: String)
 
+    @Query("UPDATE emails SET inReplyTo = :inReplyTo WHERE id = :id")
+    suspend fun updateInReplyTo(id: String, inReplyTo: String)
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAllIgnore(emails: List<EmailEntity>)
 
@@ -491,7 +494,7 @@ interface EmailDao {
                flagged, importance, hasAttachments, originalFolderId,
                mdnRequestedBy, mdnSent, messageClass, internetMessageId, bcc, replacesServerId,
                flagStartDate, flagDueDate, flagReminder, flagCompleted,
-               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt, conversationId, conversationIndex
+               listUnsubscribe, listUnsubscribeOneClick, requestReadReceipt, requestDeliveryReceipt, conversationId, conversationIndex, inReplyTo
         FROM emails
         WHERE accountId = :accountId AND flagged = 1
         ORDER BY dateReceived DESC
@@ -682,7 +685,7 @@ interface EmailDao {
                e.originalFolderId, e.mdnRequestedBy, e.mdnSent, e.messageClass,
                e.internetMessageId, e.bcc, e.replacesServerId,
                e.flagStartDate, e.flagDueDate, e.flagReminder, e.flagCompleted,
-               e.listUnsubscribe, e.listUnsubscribeOneClick, e.requestReadReceipt, e.requestDeliveryReceipt, e.conversationId, e.conversationIndex
+               e.listUnsubscribe, e.listUnsubscribeOneClick, e.requestReadReceipt, e.requestDeliveryReceipt, e.conversationId, e.conversationIndex, e.inReplyTo
         FROM emails e
         INNER JOIN folders f ON e.folderId = f.id
         WHERE e.accountId = :accountId

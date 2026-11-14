@@ -77,7 +77,11 @@ object EmailThreads {
         val members = LinkedHashMap<String, MutableList<EmailEntity>>()
         emails.forEachIndexed { index, email -> keys[index]?.let { members.getOrPut(it) { ArrayList(2) } += email } }
         val valid = members.filter { (key, group) ->
-            group.size > 1 && (key.startsWith(BY_CONVERSATION) || group.any { isReply(it.subject) })
+            group.size > 1 && (
+                key.startsWith(BY_CONVERSATION) ||
+                    key.startsWith(BY_MESSAGE) ||
+                    (key.startsWith(BY_SUBJECT) && group.any { isReply(it.subject) } && group.any { !isReply(it.subject) })
+                )
         }
         val result = ArrayList<EmailThread>(emails.size)
         val placed = HashSet<String>()
@@ -92,6 +96,7 @@ object EmailThreads {
 
     /** Ключ цепочки каждого письма; null — тема пустая, письмо само по себе. */
     private fun keysOf(emails: List<EmailEntity>): List<String?> {
+        val graph = messageGraphKeys(emails)
         val subjects = emails.map(::subjectKey)
         // Тема → переписка с ConversationId; у темы несколько переписок — присоединять не к чему
         val conversationBySubject = HashMap<String, String>()
@@ -104,7 +109,7 @@ object EmailThreads {
             }
         }
         return emails.mapIndexed { index, email ->
-            conversationKey(email) ?: subjects[index]?.let { subject ->
+            conversationKey(email) ?: graph[index] ?: subjects[index]?.let { subject ->
                 conversationBySubject[subject]
                     ?.takeIf { it != AMBIGUOUS && (isReply(email.subject) || it in conversationsWithReply) }
                     ?: subject
@@ -118,7 +123,51 @@ object EmailThreads {
     private fun subjectKey(email: EmailEntity): String? =
         normalizeSubject(email.subject).takeIf { it.isNotEmpty() }?.let { "$BY_SUBJECT${email.accountId}:$it" }
 
+    /**
+     * Связь по RFC 5322 In-Reply-To ↔ Message-ID. На Exchange 2007 нет ConversationId;
+     * заголовки появляются после загрузки MIME/EWS. Компонента из одного письма — не цепочка.
+     */
+    private fun messageGraphKeys(emails: List<EmailEntity>): List<String?> {
+        val n = emails.size
+        val parent = IntArray(n) { it }
+        fun find(i: Int): Int {
+            var x = i
+            while (parent[x] != x) {
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            }
+            return x
+        }
+        fun union(a: Int, b: Int) {
+            val pa = find(a)
+            val pb = find(b)
+            if (pa != pb) parent[pa] = pb
+        }
+        val byId = HashMap<String, Int>(n)
+        emails.forEachIndexed { i, email ->
+            normalizeMessageId(email.internetMessageId)?.let { byId.putIfAbsent(it, i) }
+        }
+        emails.forEachIndexed { i, email ->
+            val reply = normalizeMessageId(email.inReplyTo) ?: return@forEachIndexed
+            val parentIndex = byId[reply] ?: return@forEachIndexed
+            if (emails[i].accountId == emails[parentIndex].accountId) union(i, parentIndex)
+        }
+        val members = Array(n) { ArrayList<String>(1) }
+        emails.indices.forEach { i -> members[find(i)].add(emails[i].id) }
+        return emails.indices.map { i ->
+            val root = find(i)
+            val ids = members[root]
+            if (ids.size > 1) "$BY_MESSAGE${emails[i].accountId}:${ids.minOrNull()}" else null
+        }
+    }
+
+    private fun normalizeMessageId(value: String?): String? {
+        val t = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return if (t.startsWith("<") && t.endsWith(">")) t else "<$t>"
+    }
+
     private const val BY_CONVERSATION = "c:"
+    private const val BY_MESSAGE = "m:"
     private const val BY_SUBJECT = "s:"
     private const val AMBIGUOUS = ""
 }

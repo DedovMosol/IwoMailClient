@@ -17,11 +17,13 @@ class EmailThreadsTest {
         accountId: Long = 1,
         read: Boolean = true,
         flagged: Boolean = false,
-        attachments: Boolean = false
+        attachments: Boolean = false,
+        internetMessageId: String? = null,
+        inReplyTo: String? = null
     ) = EmailEntity(
         id = id, accountId = accountId, folderId = "${accountId}_2", serverId = id, from = "a@corp.example", to = "b@corp.example",
         subject = subject, body = "", dateReceived = time--, read = read, flagged = flagged, hasAttachments = attachments,
-        conversationId = conversationId
+        conversationId = conversationId, internetMessageId = internetMessageId, inReplyTo = inReplyTo
     )
 
     private fun List<EmailThread>.ids() = map { it.ids }
@@ -101,6 +103,28 @@ class EmailThreadsTest {
 
         // Два «Вопроса» без ответа — разные письма с одинаковой темой
         assertThat(threads.ids()).containsExactly(listOf("5", "3", "1"), listOf("4"), listOf("2")).inOrder()
+    }
+
+    @Test
+    fun `two independent replies with the same subject stay apart without In-Reply-To`() {
+        val threads = EmailThreads.group(
+            listOf(
+                email("2", "RE: Встреча"),
+                email("1", "RE: Встреча")
+            )
+        )
+        assertThat(threads.ids()).containsExactly(listOf("2"), listOf("1")).inOrder()
+    }
+
+    @Test
+    fun `In-Reply-To links a reply to its original on Exchange 2007`() {
+        val threads = EmailThreads.group(
+            listOf(
+                email("2", "RE: Встреча", internetMessageId = "<r@corp>", inReplyTo = "<o@corp>"),
+                email("1", "Встреча", internetMessageId = "<o@corp>")
+            )
+        )
+        assertThat(threads.ids()).containsExactly(listOf("2", "1"))
     }
 
     @Test

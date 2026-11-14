@@ -9,7 +9,7 @@ import com.dedovmosol.iwomail.BuildConfig
 
 @Database(
     entities = [AccountEntity::class, EmailEntity::class, FolderEntity::class, AttachmentEntity::class, ContactEntity::class, ContactGroupEntity::class, SignatureEntity::class, NoteEntity::class, CalendarEventEntity::class, TaskEntity::class, CategoryColorEntity::class, PendingEmailChangeEntity::class, PendingPimChangeEntity::class],
-    version = 52,
+    version = 53,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -306,6 +306,12 @@ abstract class MailDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `pending_pim_changes` ADD COLUMN `pendingCreate` INTEGER NOT NULL DEFAULT 0")
             }
         }
+        /** In-Reply-To из MIME (Exchange 2007 не даёт ConversationId). */
+        private val MIGRATION_52_53 = object : Migration(52, 53) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `emails` ADD COLUMN `inReplyTo` TEXT")
+            }
+        }
         internal val ALL_MIGRATIONS = arrayOf<Migration>(
             MIGRATION_23_24,
             MIGRATION_24_25,
@@ -335,7 +341,8 @@ abstract class MailDatabase : RoomDatabase() {
             MIGRATION_48_49,
             MIGRATION_49_50,
             MIGRATION_50_51,
-            MIGRATION_51_52
+            MIGRATION_51_52,
+            MIGRATION_52_53
         )
 
         fun getInstance(context: Context): MailDatabase {
@@ -581,7 +588,9 @@ data class EmailEntity(
     // на Exchange 2007 нет — цепочки тогда по теме. null — не известна (письмо пришло до поддержки или с 2007)
     val conversationId: String? = null,
     // Порядок в переписке ([MS-ASEMAIL] email2:ConversationIndex, base64). EAS 14.0+; на 2007 нет.
-    val conversationIndex: String? = null
+    val conversationIndex: String? = null,
+    // RFC 5322 In-Reply-To (из MIME при загрузке тела). На Exchange 2007 ConversationId нет — связь ответов по этому полю.
+    val inReplyTo: String? = null
 )
 
 /**
