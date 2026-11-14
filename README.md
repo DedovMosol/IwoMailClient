@@ -207,7 +207,7 @@ Background
 - [История изменений EN](docs/CHANGELOG_EN.md)
 - [Архитектура проекта (RU)](docs/ARCHITECTURE.md) · [Project Architecture (EN)](docs/ARCHITECTURE_EN.md)
 - [Модель безопасности](docs/SECURITY.md) · [Сообщить об уязвимости](SECURITY.md)
-- [Политика конфиденциальности](docs/PRIVACY_POLICY.md)
+- [Политика конфиденциальности](docs/PRIVACY_POLICY_RU.md) ([English](docs/PRIVACY_POLICY_EN.md))
 - [План миграции XML-парсинга](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 
 ## ♻️ Важно: переименование пакета

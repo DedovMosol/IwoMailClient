@@ -207,7 +207,7 @@ On Windows:
 - [Changelog EN](docs/CHANGELOG_EN.md)
 - [Project Architecture (EN)](docs/ARCHITECTURE_EN.md) · [Архитектура проекта (RU)](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md) · [Reporting a vulnerability](SECURITY.md)
-- [Privacy Policy](docs/PRIVACY_POLICY.md)
+- [Privacy Policy](docs/PRIVACY_POLICY_EN.md) ([Русский](docs/PRIVACY_POLICY_RU.md))
 - [XmlPullParser migration plan](docs/XMLPULLPARSER_MIGRATION_PLAN.md)
 
 ## ♻️ Important: package rename
