@@ -1239,7 +1239,11 @@ suspend fun syncDraftsFull(accountId: Long, folderId: String, skipRecentEditChec
         database.withTransaction {
             for (r in retargets) {
                 val old = emailDao.getEmail(r.oldId) ?: continue
-                if (emailDao.getEmail(r.newId) != null) continue
+                if (r.newId == r.oldId) continue
+                if (emailDao.getEmail(r.newId) != null) {
+                    attachmentDao.deleteByEmail(r.newId)
+                    emailDao.delete(r.newId)
+                }
                 val oldAttachments = attachmentDao.getAttachmentsList(r.oldId)
                 attachmentDao.deleteByEmail(r.oldId)
                 emailDao.delete(r.oldId)
