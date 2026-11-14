@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.activity.compose.BackHandler
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -85,6 +86,7 @@ fun SearchScreen(
     val isSearching = uiState.isSearching
     val selectedIds = uiState.selectedIds
     val isSelectionMode = selectedIds.isNotEmpty()
+    BackHandler(enabled = isSelectionMode) { viewModel.clearSelection() }
 
     var showEasterEgg by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }

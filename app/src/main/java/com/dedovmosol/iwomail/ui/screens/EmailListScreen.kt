@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -137,6 +138,7 @@ fun EmailListScreen(
     val showFilters = uiState.showFilters
     val selectedIds = uiState.selectedIds
     val isSelectionMode = uiState.isSelectionMode
+    BackHandler(enabled = isSelectionMode) { viewModel.clearSelection() }
     val isRefreshing = uiState.isRefreshing
     val errorMessage = uiState.errorMessage
 
@@ -1317,7 +1319,9 @@ private fun EmailListItem(
             // Отправленные и черновики — «Кому»: отправитель в них вы сами (как в Outlook). У черновика из Outlook
             // отправителя нет вовсе (From появляется при отправке), у созданного приложением — имя аккаунта в приложении.
             val showsRecipient = isSent || isDrafts
-            val recipientName = remember(email.to) { com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientName(email.to) }
+            val recipientName = remember(email.to, email.cc) {
+                com.dedovmosol.iwomail.ui.screens.emaillist.firstRecipientName(email.to, email.cc)
+            }
             val cachedSenderName = remember(email.from) {
                 if (isDrafts) {
                     null // своё имя в черновике — не имя отправителя для кэша имён
@@ -1368,9 +1372,10 @@ private fun EmailListItem(
             }
             val avatarColor = getAvatarColor(avatarName)
             // Адрес для фото из адресной книги: получатель (Отправленные, черновики) или отправитель
-            val avatarAddress = remember(email.from, email.to, showsRecipient) {
+            val avatarAddress = remember(email.from, email.to, email.cc, showsRecipient) {
                 if (showsRecipient) {
-                    email.to.split(',', ';').firstNotNullOfOrNull { part ->
+                    val field = email.to.ifBlank { email.cc }
+                    field.split(',', ';').firstNotNullOfOrNull { part ->
                         com.dedovmosol.iwomail.util.extractEmailAddress(part.trim()).takeIf { it.contains('@') }
                     }.orEmpty()
                 } else {

@@ -1,5 +1,6 @@
 package com.dedovmosol.iwomail.ui.screens
 
+import androidx.activity.compose.BackHandler
 import com.dedovmosol.iwomail.util.SafeToast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
@@ -92,6 +93,7 @@ fun TasksScreen(
     val selectedTaskIds = uiState.selectedActiveIds
     val selectedDeletedIds = uiState.selectedDeletedIds
     val isSelectionMode = uiState.isSelectionMode
+    BackHandler(enabled = isSelectionMode) { viewModel.clearSelection() }
     val hasDeletedSelected = selectedDeletedIds.isNotEmpty()
     val hasActiveSelected = selectedTaskIds.isNotEmpty()
     val isSyncing = uiState.isSyncing
